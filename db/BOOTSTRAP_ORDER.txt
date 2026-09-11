@@ -85,3 +85,4 @@ db/migrations/048_allow_deliberate_deep_analysis_purge.sql
 db/migrations/049_add_learned_lessons.sql
 db/migrations/050_add_channel_coding_bindings.sql
 db/migrations/051_allow_user_question_approvals.sql
+db/migrations/052_add_lesson_usage_metrics.sql

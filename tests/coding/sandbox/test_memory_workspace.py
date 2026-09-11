@@ -160,6 +160,79 @@ async def test_memory_search_text_includes_clamped_before_after_context(
     await provider.close()
 
 
+async def test_memory_search_text_skips_git_directory(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file("src/app.py", b"print('needle')\n")
+    git_dir = provider.workspace_path(sandbox.sandbox_id) / ".git"
+    (git_dir / "objects").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("needle\n", encoding="utf-8")
+    (git_dir / "objects" / "pack").write_text("needle\n", encoding="utf-8")
+
+    matches = await session.search_text("needle")
+    files = await session.search_text("needle", output_mode="files")
+    counts = await session.search_text("needle", output_mode="count")
+
+    assert [match.path for match in matches] == ["src/app.py"]
+    assert [match.path for match in files] == ["src/app.py"]
+    assert [(match.path, match.count) for match in counts] == [
+        ("src/app.py", 1)
+    ]
+    await provider.close()
+
+
+async def test_memory_search_text_files_and_count_modes(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file("src/a.py", b"needle\nkeep\nneedle\n")
+    await session.write_file("src/b.py", b"needle\n")
+    await session.write_file("README.md", b"other\n")
+
+    files = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        output_mode="files",
+    )
+    counts = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        output_mode="count",
+    )
+    limited = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        output_mode="files",
+        limit=1,
+    )
+    content = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        output_mode="content",
+        before=1,
+        after=1,
+    )
+
+    assert [match.path for match in files] == ["src/a.py", "src/b.py"]
+    assert [(match.path, match.count) for match in counts] == [
+        ("src/a.py", 2),
+        ("src/b.py", 1),
+    ]
+    assert [match.path for match in limited] == ["src/a.py"]
+    assert len(content) == 3
+    assert content[0].path == "src/a.py"
+    assert content[0].text == "needle"
+    assert content[0].after == ("keep",)
+    await provider.close()
+
+
 async def test_memory_glob_files_matches_limit_and_rejects_escape(
     tmp_path: Path,
 ) -> None:

@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 
 from neos.coding.tools.registry import ToolRisk
+
+_VERDICT_RE = re.compile(r"VERDICT:\s*(PASS|FAIL|PARTIAL)\b", re.IGNORECASE)
+_CRITICAL_HEADING_RE = re.compile(
+    r"(?im)^\s{0,3}(?:#{1,6}\s+)?(?:\*{0,2}|_{0,2})Critical Files?(?:\*{0,2}|_{0,2})\s*:?\s*$"
+)
+_CRITICAL_INLINE_RE = re.compile(r"(?im)Critical Files?\s*:\s*(\S.+)$")
+_CRITICAL_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$")
+_NEXT_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 
 
 class CodingAgentPhase(StrEnum):
@@ -31,6 +40,31 @@ _HIDDEN: dict[CodingAgentPhase, frozenset[str]] = {
     ),
     CodingAgentPhase.IMPLEMENT: frozenset(),
 }
+
+
+def parse_verify_verdict(text: str) -> str | None:
+    match = _VERDICT_RE.search(text or "")
+    return match.group(1).upper() if match else None
+
+
+def parse_plan_critical_files(text: str) -> list[str] | None:
+    blob = text or ""
+    heading = _CRITICAL_HEADING_RE.search(blob)
+    if heading is not None:
+        files: list[str] = []
+        for line in blob[heading.end() :].splitlines():
+            if _NEXT_HEADING_RE.match(line):
+                break
+            item = _CRITICAL_ITEM_RE.match(line)
+            if item:
+                files.append(item.group(1).strip().strip("`"))
+            elif line.strip() and files:
+                break
+        return files
+    inline = _CRITICAL_INLINE_RE.search(blob)
+    if inline is None:
+        return None
+    return [part.strip().strip("`") for part in inline.group(1).split(",") if part.strip()]
 
 
 def parse_phase(value: object) -> CodingAgentPhase:

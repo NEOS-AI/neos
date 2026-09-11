@@ -14,12 +14,17 @@ class HookDecision(TypedDict):
     reason: NotRequired[str]
 
 
+class StopDecision(TypedDict):
+    decision: Literal["allow", "prevent", "retry"]
+    reason: NotRequired[str]
+
+
 class CodingHookPort(Protocol):
     async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None: ...
 
     async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None: ...
 
-    async def stop(self, reason: str) -> None: ...
+    async def stop(self, reason: str) -> StopDecision | None: ...
 
     async def compact(
         self,
@@ -35,7 +40,7 @@ class NullCodingHooks:
     async def post_tool(self, call: ValidatedToolCall, result: Mapping[str, Any]) -> None:
         return None
 
-    async def stop(self, reason: str) -> None:
+    async def stop(self, reason: str) -> StopDecision | None:
         return None
 
     async def compact(

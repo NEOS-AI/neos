@@ -245,6 +245,19 @@ class SlackAdapter(ChannelAdapterBase):
         except Exception as e:
             logger.warning("[SlackAdapter] send_draft failed to %s: %s", channel_id, e)
 
+    async def send_file(
+        self,
+        channel_id: str,
+        path: str,
+        *,
+        allow_dirs: list[str] | None = None,
+        thread_id: str | None = None,
+    ) -> None:
+        from neos.api.channels.outbound import resolve_outbound_file
+
+        if resolve_outbound_file(path, allow_dirs) is None:
+            return
+
     def _register_handlers(self) -> None:
         if self._app is None:
             return

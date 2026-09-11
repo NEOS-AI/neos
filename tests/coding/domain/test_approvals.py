@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from neos.coding.domain.approvals import (
     ApprovalGate,
     ApprovalMode,
@@ -33,6 +35,77 @@ def binding(**overrides: object) -> dict[str, object]:
     }
     value.update(overrides)
     return value
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".env",
+        ".env.local",
+        ".env.production",
+        "svc/.env",
+        "svc/.env.staging",
+        ".git",
+        ".git/config",
+        ".git/HEAD",
+        ".git/credentials",
+        "pkg/.git/config",
+        "pkg/.git/credentials",
+        ".ssh/id_ed25519",
+        "home/.ssh/config",
+        "id_rsa",
+        "keys/id_rsa",
+        ".aws/credentials",
+        "svc/.aws/credentials",
+    ],
+)
+def test_secret_dotfile_paths_are_denied_even_when_read_only(path: str) -> None:
+    read = call("read_file.v1", {"path": path}, ToolRisk.READ_ONLY)
+    write = call(
+        "write_file.v1",
+        {"path": path, "content": "secret"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    auto_read = evaluate_approval(
+        read,
+        ApprovalGate(
+            mode=ApprovalMode.AUTO,
+            always_allow=frozenset({"read_file.v1"}),
+        ),
+    )
+    approved_write = evaluate_approval(
+        write,
+        ApprovalGate(approved_always=frozenset({"write_file.v1"})),
+    )
+
+    assert evaluate_approval(read) is ApprovalPolicyOutcome.DENY
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.DENY
+    assert auto_read is ApprovalPolicyOutcome.DENY
+    assert approved_write is ApprovalPolicyOutcome.DENY
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "README.md",
+        "src/main.py",
+        ".gitignore",
+        ".envrc",
+        "id_rsa.pub",
+        ".aws/config",
+        ".github/workflows/ci.yml",
+    ],
+)
+def test_non_secret_paths_keep_existing_approval_policy(path: str) -> None:
+    read = call("read_file.v1", {"path": path}, ToolRisk.READ_ONLY)
+    write = call(
+        "write_file.v1",
+        {"path": path, "content": "value"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert evaluate_approval(read) is ApprovalPolicyOutcome.ALLOW
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
 def test_policy_allows_reads_and_requires_exact_approval_for_mutations() -> None:

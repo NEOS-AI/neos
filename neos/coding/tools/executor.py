@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
+import inspect
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from neos.coding.sandbox.base import (
@@ -27,6 +29,47 @@ from neos.coding.tools.registry import CodingToolRegistry, ValidatedToolCall
 
 _WEB_FETCH_TIMEOUT_SEC = 15
 _WEB_FETCH_MAX_BYTES = 200_000
+_MISSING_PARENT_REASON = "workspace_path_not_resolvable"
+_PARENTS_FIX: dict[str, object] = {"parents": True}
+
+
+def _write_accepts_parents(write_file: Any) -> bool:
+    try:
+        return "parents" in inspect.signature(write_file).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _write_file_kwargs(write_file: Any, call: ValidatedToolCall) -> dict[str, bool]:
+    if call.input.get("parents") is not True and call.input.get(
+        "create_parents"
+    ) is not True:
+        return {}
+    if _write_accepts_parents(write_file):
+        return {"parents": True}
+    return {}
+
+
+def _is_missing_parent_error(error: BaseException) -> bool:
+    if isinstance(error, FileNotFoundError):
+        return True
+    if isinstance(error, SandboxPolicyViolation):
+        return str(error) == _MISSING_PARENT_REASON
+    return isinstance(error, OSError) and error.errno == errno.ENOENT
+
+
+def _missing_parent_result() -> ToolResult:
+    return ToolResult(
+        "error",
+        _MISSING_PARENT_REASON,
+        None,
+        None,
+        False,
+        None,
+        "unknown",
+        retryable=True,
+        fix=dict(_PARENTS_FIX),
+    )
 
 
 class _WebFetchHostDenied(Exception):
@@ -213,9 +256,16 @@ class SandboxToolExecutor:
         )
         if denied is not None:
             return denied
-        revision = await session.write_file(
-            path, str(call.input["content"]).encode()
-        )
+        try:
+            revision = await session.write_file(
+                path,
+                str(call.input["content"]).encode(),
+                **_write_file_kwargs(session.write_file, call),
+            )
+        except (FileNotFoundError, OSError, SandboxPolicyViolation) as error:
+            if _is_missing_parent_error(error):
+                return _missing_parent_result()
+            raise
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _edit_file(
@@ -249,7 +299,16 @@ class SandboxToolExecutor:
             if replace_all
             else text.replace(old_string, new_string, 1)
         )
-        revision = await session.write_file(path, updated.encode("utf-8"))
+        try:
+            revision = await session.write_file(
+                path,
+                updated.encode("utf-8"),
+                **_write_file_kwargs(session.write_file, call),
+            )
+        except (FileNotFoundError, OSError, SandboxPolicyViolation) as error:
+            if _is_missing_parent_error(error):
+                return _missing_parent_result()
+            raise
         return ToolResult.ok(workspace_revision=str(revision))
 
     async def _deny_unread_existing(
@@ -347,6 +406,7 @@ class SandboxToolExecutor:
             entry = await session.stat(str(call.input["path"]))
             return self._entry_result((entry,), await self._revision(session))
         if call.name == "search_text.v1":
+            output_mode = str(call.input.get("output_mode", "content"))
             matches = await session.search_text(
                 str(call.input["query"]),
                 paths=tuple(str(path) for path in call.input["paths"]),
@@ -354,8 +414,13 @@ class SandboxToolExecutor:
                 limit=int(call.input["limit"]),
                 before=int(call.input.get("before", 0)),
                 after=int(call.input.get("after", 0)),
+                output_mode=output_mode,
             )
-            return self._entry_result(matches, await self._revision(session))
+            return self._search_text_result(
+                matches,
+                await self._revision(session),
+                output_mode=output_mode,
+            )
         if call.name == "git_status.v1":
             result = await session.git_status()
             return self._command_result(result, await self._revision(session))
@@ -510,6 +575,75 @@ class SandboxToolExecutor:
             "truncated": already_truncated or len(content) > len(preview),
             "checksum": hashlib.sha256(content).hexdigest(),
         }
+
+    def _search_text_result(
+        self,
+        matches: tuple[SearchMatch, ...],
+        revision: str,
+        *,
+        output_mode: str,
+    ) -> ToolResult:
+        if output_mode == "files":
+            paths: list[str] = []
+            seen: set[str] = set()
+            for match in matches:
+                if match.path in seen:
+                    continue
+                seen.add(match.path)
+                paths.append(match.path)
+            entries = tuple({"path": path} for path in paths[: self._max_entries])
+            return ToolResult(
+                "ok",
+                "ok",
+                None,
+                None,
+                len(paths) > len(entries),
+                None,
+                revision,
+                entries,
+            )
+        if output_mode == "count":
+            counts: dict[str, int] = {}
+            order: list[str] = []
+            for match in matches:
+                increment = match.count if match.count is not None else 1
+                if match.path not in counts:
+                    order.append(match.path)
+                    counts[match.path] = increment
+                else:
+                    counts[match.path] += increment
+            entries = tuple(
+                {"path": path, "count": counts[path]}
+                for path in order[: self._max_entries]
+            )
+            return ToolResult(
+                "ok",
+                "ok",
+                None,
+                None,
+                len(order) > len(entries),
+                None,
+                revision,
+                entries,
+            )
+        entries = tuple(
+            {
+                key: value
+                for key, value in self._json_entry(match).items()
+                if key != "count"
+            }
+            for match in matches[: self._max_entries]
+        )
+        return ToolResult(
+            "ok",
+            "ok",
+            None,
+            None,
+            len(matches) > len(entries),
+            None,
+            revision,
+            entries,
+        )
 
     def _entry_result(
         self,

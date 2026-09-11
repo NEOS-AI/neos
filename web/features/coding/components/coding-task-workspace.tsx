@@ -70,6 +70,10 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
     (approval) => approval.status === "pending"
   );
   const waitingApproval = projection.taskStatus === "waiting_approval";
+  const todos = projection.todos.filter(
+    (todo) =>
+      typeof todo.content === "string" || typeof todo.status === "string"
+  );
 
   return (
     <main className="flex min-h-dvh flex-1 flex-col bg-background">
@@ -136,6 +140,38 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 SEQ {projection.appliedSeq}
               </span>
             </div>
+            {todos.length > 0 ? (
+              <section aria-label="Todos" className="mb-5 space-y-1">
+                <p className="font-mono text-[10px] text-amber-400 uppercase tracking-[0.22em]">
+                  Todos
+                </p>
+                <ul className="space-y-1">
+                  {todos.map((todo, index) => {
+                    const content =
+                      typeof todo.content === "string" ? todo.content : "";
+                    const status =
+                      typeof todo.status === "string" ? todo.status : "";
+                    const key =
+                      typeof todo.id === "string"
+                        ? todo.id
+                        : `${content}:${index}`;
+                    return (
+                      <li
+                        className="flex items-center justify-between gap-3 border border-border/70 px-3 py-2"
+                        key={key}
+                      >
+                        <span className="min-w-0 truncate text-sm">
+                          {content}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground uppercase tracking-[0.14em]">
+                          {status}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null}
             <CodingOutputLedger
               parts={projection.orderedTextPartIds.map(
                 (partId) => projection.textPartsById[partId]

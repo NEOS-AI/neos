@@ -73,6 +73,7 @@ class _SearchTextInput(_ToolInput):
     limit: int = Field(default=100, ge=1, le=100)
     before: int = Field(default=0, ge=0, le=20)
     after: int = Field(default=0, ge=0, le=20)
+    output_mode: Literal["files", "content", "count"] = "content"
 
 
 class _GlobFilesInput(_ToolInput):
@@ -204,6 +205,7 @@ class CodingToolRegistry:
             "search_text.v1",
             (
                 "Search workspace text. Use this instead of a shell search. "
+                "output_mode files returns unique paths; count returns path + match count. "
                 "Do not use execute.v1 with rg/grep/find. "
                 "On policy_* denial, do not retry the same query."
             ),

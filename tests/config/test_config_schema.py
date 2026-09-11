@@ -46,8 +46,10 @@ def test_channel_gate_defaults_are_fail_closed():
     assert config.channels.telegram.ignored_channels == []
     assert config.learn.write_approval is True
     assert config.learn.coding_lessons is False
+    assert config.learn.channel_learn is False
     assert config.learn.research_procedures is False
     assert config.learn.session_search_tool is False
+    assert config.channels.outbound_files is False
 
 
 def test_schema_defaults_match_current_runtime_policy():

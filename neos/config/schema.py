@@ -619,6 +619,7 @@ class MemoryConfig(StrictConfigModel):
 class LearnConfig(StrictConfigModel):
     write_approval: bool = True
     coding_lessons: bool = False
+    channel_learn: bool = False
     research_procedures: bool = False
     session_search_tool: bool = False
     curator: bool = True
@@ -1691,6 +1692,7 @@ class ChannelConfig(StrictConfigModel):
     coding_invoke: bool = False
     coding_owner_user_id: str = ""
     inbound_media: bool = False
+    outbound_files: bool = False
     draft_streaming: bool = False
     principals: list[ChannelPrincipal] = Field(default_factory=list)
 

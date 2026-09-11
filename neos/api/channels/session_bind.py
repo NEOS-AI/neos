@@ -51,6 +51,8 @@ class ChannelCodingBindStore(Protocol):
 
     async def get(self, session_id: str) -> ChannelCodingBinding | None: ...
 
+    async def unbind(self, session_id: str) -> None: ...
+
 
 class InMemoryChannelCodingBindStore:
     def __init__(
@@ -76,6 +78,9 @@ class InMemoryChannelCodingBindStore:
 
     async def get(self, session_id: str) -> ChannelCodingBinding | None:
         return self._items.get(session_id)
+
+    async def unbind(self, session_id: str) -> None:
+        self._items.pop(session_id, None)
 
 
 class PostgresChannelCodingBindStore:
@@ -150,3 +155,16 @@ class PostgresChannelCodingBindStore:
             created_at=row[3],
             updated_at=row[4],
         )
+
+    async def unbind(self, session_id: str) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        DELETE FROM channel_coding_bindings
+                        WHERE session_id = :session_id
+                        """
+                    ),
+                    {"session_id": session_id},
+                )

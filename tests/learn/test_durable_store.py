@@ -59,7 +59,14 @@ class FakeLessonSession:
         if "update learned_lessons" in sql:
             current = self._rows.get(values["lesson_id"])
             if current is not None:
-                current.update(values)
+                if "coalesce(inject_count" in sql:
+                    if current.get("status") != values.get("status"):
+                        return _FakeResult([])
+                    current["last_injected_at"] = values["now"]
+                    current["inject_count"] = int(current.get("inject_count") or 0) + 1
+                    current["updated_at"] = values["now"]
+                else:
+                    current.update(values)
             return _FakeResult([])
         if "where lesson_id" in sql:
             row = self._rows.get(values["lesson_id"])

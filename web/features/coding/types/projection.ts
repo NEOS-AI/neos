@@ -22,6 +22,8 @@ export type CodingToolView = {
   run_id: string;
   status: string;
   result: Record<string, unknown> | null;
+  name?: string | null;
+  preview?: string | null;
 };
 
 export type CodingApprovalView = {

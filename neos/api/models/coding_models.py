@@ -66,6 +66,8 @@ class CodingToolSnapshot(BaseModel):
     run_id: str
     status: str
     result: dict[str, Any] | None
+    name: str | None = None
+    preview: str | None = None
 
 
 class CodingApprovalDecisionRequest(BaseModel):

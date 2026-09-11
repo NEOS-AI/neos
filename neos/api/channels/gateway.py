@@ -18,7 +18,13 @@ if TYPE_CHECKING:
     from neos.workflow.graph import MultiAgentWorkflow
 
 from .base import ChannelMessage
-from .commands import ChannelCommandKind, parse_channel_command
+from .commands import (
+    ChannelCommandKind,
+    display_name_from_metadata,
+    neutralize_untrusted_inline,
+    parse_channel_command,
+    sender_prefix,
+)
 from .inflight import SessionInflightLock
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,29 @@ _CODE_DISABLED = "Coding invoke is disabled."
 _CODE_NO_OWNER = "Coding owner is not configured."
 _NO_OWNER = "Owner is not configured."
 _NO_TASK = "No coding task in this thread."
+_LEARN_DISABLED = "Learning is disabled."
+_LEARN_STAGED = "Lesson staged."
+_LEARN_USAGE = "Usage: /learn <text>"
+_SESSION_RESET = "Session reset."
+
+
+def _sender_label(message: ChannelMessage) -> str:
+    from .principals import platform_user_id_from_message
+
+    return sender_prefix(
+        platform_user_id_from_message(message),
+        display_name_from_metadata(message.metadata, message.channel_type),
+    )
+
+
+def _with_sender_prefix(message: ChannelMessage, text: str) -> str:
+    label = _sender_label(message)
+    body = text or ""
+    if not label:
+        return body
+    if not body:
+        return label
+    return f"{label} {body}"
 
 
 def _attachment_prompt(message: ChannelMessage) -> str:
@@ -39,7 +68,7 @@ def _attachment_prompt(message: ChannelMessage) -> str:
     for item in attachments:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "file")
+        name = neutralize_untrusted_inline(str(item.get("name") or "file")) or "file"
         content_type = str(item.get("content_type") or "application/octet-stream")
         data = item.get("data") or b""
         size = len(data) if isinstance(data, (bytes, bytearray)) else 0
@@ -140,6 +169,10 @@ class ChannelGateway:
         command = parse_channel_command(message.text)
         if command.kind is ChannelCommandKind.CHAT:
             return await self._run_workflow(message)
+        if command.kind is ChannelCommandKind.LEARN:
+            return await self._run_learn(message, command)
+        if command.kind is ChannelCommandKind.NEW:
+            return await self._run_new(message)
         return await self._run_coding_command(message, command)
 
     async def _run_workflow(self, message: ChannelMessage) -> str:
@@ -168,6 +201,7 @@ class ChannelGateway:
         query = (message.text or "").strip() + _attachment_prompt(message)
         if not query.strip():
             query = "The user sent a message with no text."
+        query = _with_sender_prefix(message, query)
 
         workflow_input: Dict[str, Any] = {
             "user_id": user_id,
@@ -231,7 +265,9 @@ class ChannelGateway:
                 if prior is not None:
                     return _BUSY
                 self._code_starts[start_key] = ""
-            prompt = command.rest + _attachment_prompt(message)
+            prompt = _with_sender_prefix(
+                message, command.rest + _attachment_prompt(message)
+            )
             coding = self._coding_port()
             try:
                 task_id = await coding.start_task(owner_id=owner, prompt=prompt)
@@ -262,6 +298,55 @@ class ChannelGateway:
             approval_id=command.rest,
         )
 
+    async def _run_learn(self, message: ChannelMessage, command) -> str:
+        from dataclasses import replace
+
+        from neos.config.settings import settings
+        from neos.learn.lessons import LessonStatus, get_lesson_store, new_lesson
+        from neos.learn.policy import clip_knowledge, namespace, write_approval_required
+
+        from .principals import platform_user_id_from_message, resolve_channel_principal
+
+        learn = settings.config.learn
+        if not (learn.channel_learn or learn.coding_lessons):
+            return _LEARN_DISABLED
+        rest = neutralize_untrusted_inline(command.rest, max_len=400)
+        if not rest:
+            return _LEARN_USAGE
+
+        channels = settings.config.channels
+        user_id = message.user_id
+        if channels.principals:
+            mapped = resolve_channel_principal(
+                platform=message.channel_type,
+                platform_user_id=platform_user_id_from_message(message),
+                channels=channels,
+            )
+            if not mapped:
+                return _NO_OWNER
+            user_id = mapped
+
+        body = clip_knowledge(rest)
+        lesson = new_lesson(
+            namespace=namespace(user_id),
+            title=body.split("\n", 1)[0][:60] or "channel-learn",
+            body=body,
+            kind="fact",
+        )
+        if not write_approval_required():
+            lesson = replace(lesson, status=LessonStatus.APPROVED)
+        get_lesson_store().add(lesson)
+        return _LEARN_STAGED
+
+    async def _run_new(self, message: ChannelMessage) -> str:
+        await self._binds.unbind(message.session_id)
+        self._code_starts = {
+            key: value
+            for key, value in self._code_starts.items()
+            if key[0] != message.session_id
+        }
+        return _SESSION_RESET
+
     async def bind_session(
         self, session_id: str, task_id: str, owner_id: str
     ) -> None:
@@ -269,6 +354,9 @@ class ChannelGateway:
 
     async def get_binding(self, session_id: str) -> Any:
         return await self._binds.get(session_id)
+
+    async def unbind_session(self, session_id: str) -> None:
+        await self._binds.unbind(session_id)
 
     def _coding_port(self):
         if self._coding is None:

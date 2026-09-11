@@ -4,19 +4,48 @@ from pathlib import Path
 
 import pytest
 
-from neos.skills.markdown_catalog import MarkdownSkillCatalog
+from neos.skills.markdown_catalog import (
+    MarkdownSkillCatalog,
+    default_skill_roots,
+    research_skill_roots,
+)
 
 pytestmark = pytest.mark.no_db
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RESEARCH_ONLY_NAMES = ("pdf", "biopython", "scikit-learn", "anndata")
 
 
-def _catalog() -> MarkdownSkillCatalog:
+def _coding_catalog() -> MarkdownSkillCatalog:
     return MarkdownSkillCatalog()
 
 
-def test_catalog_contains_repo_pdf() -> None:
-    skill = _catalog().get("pdf")
+def _research_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=research_skill_roots())
+
+
+def test_default_skill_roots_are_coding_only() -> None:
+    roots = default_skill_roots()
+    paths = {path.resolve() for _source, path in roots}
+
+    assert (REPO_ROOT / "neos" / "coding" / "skills").resolve() in paths
+    assert (REPO_ROOT / "skills").resolve() not in paths
+    assert all(source != "repo" for source, _path in roots)
+
+
+def test_coding_catalog_excludes_research_only_names() -> None:
+    names = {skill.name for skill in _coding_catalog().list_skills()}
+
+    assert "verify" in names
+    assert "commit" in names
+    for name in RESEARCH_ONLY_NAMES:
+        assert name not in names
+        assert _coding_catalog().get(name) is None
+        assert _coding_catalog().load_markdown(name) is None
+
+
+def test_research_catalog_contains_repo_pdf() -> None:
+    skill = _research_catalog().get("pdf")
 
     assert skill is not None
     assert skill.name == "pdf"
@@ -26,7 +55,7 @@ def test_catalog_contains_repo_pdf() -> None:
 
 
 def test_catalog_contains_verify_and_commit() -> None:
-    catalog = _catalog()
+    catalog = _coding_catalog()
     names = {skill.name for skill in catalog.list_skills()}
 
     assert "verify" in names
@@ -38,21 +67,21 @@ def test_catalog_contains_verify_and_commit() -> None:
 
 
 def test_load_markdown_pdf_returns_body() -> None:
-    body = _catalog().load_markdown("pdf")
+    body = _research_catalog().load_markdown("pdf")
 
     assert body is not None
     assert "PDF" in body
 
 
 def test_unknown_name_returns_none() -> None:
-    catalog = _catalog()
+    catalog = _coding_catalog()
 
     assert catalog.get("definitely-not-a-real-skill-xyz") is None
     assert catalog.load_markdown("definitely-not-a-real-skill-xyz") is None
 
 
 def test_get_does_not_escape_via_path_name() -> None:
-    catalog = _catalog()
+    catalog = _coding_catalog()
 
     assert catalog.get("../../../etc/passwd") is None
     assert catalog.load_markdown("../../../etc/passwd") is None
@@ -117,8 +146,21 @@ def test_skill_manager_exposes_catalog_without_registering() -> None:
     manager = SkillManager()
     names = {skill.name for skill in manager.markdown_skills()}
 
-    assert "pdf" in names
+    assert "verify" in names
+    assert "commit" in names
+    assert "pdf" not in names
     assert manager.registry.get_skill_info("pdf") is None
+    assert manager.registry.get_skill_info("verify") is None
+
+
+def test_skill_manager_still_registers_research_builtin_skills() -> None:
+    from neos.skills.manager.skill_manager import SkillManager
+
+    manager = SkillManager()
+    manager.register_builtin_skills()
+
+    assert manager.registry.get_skill_info("pdf") is not None
+    assert manager.registry.get_skill_info("verify") is None
 
 
 def test_load_markdown_refuses_path_outside_roots(tmp_path: Path) -> None:

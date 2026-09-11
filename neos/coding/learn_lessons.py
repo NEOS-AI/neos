@@ -8,7 +8,7 @@ from neos.config.settings import settings
 from neos.learn.extract import extract_coding_lesson
 from neos.learn.lessons import (
     Lesson,
-    approved_texts,
+    LessonStatus,
     get_lesson_store,
     resolve_lesson_session_factory,
 )
@@ -43,7 +43,7 @@ async def stage_coding_lesson(
     return await _persist_lesson(lesson)
 
 
-async def approved_lesson_texts(owner_id: str | None) -> tuple[str, ...]:
+async def _approved_lessons(owner_id: str | None) -> tuple[Lesson, ...]:
     if not settings.config.learn.coding_lessons:
         return ()
     owner = (owner_id or "").strip()
@@ -53,10 +53,32 @@ async def approved_lesson_texts(owner_id: str | None) -> tuple[str, ...]:
     try:
         factory = resolve_lesson_session_factory()
         if factory is not None:
-            return await PostgresLessonStore(factory).approved_texts(ns)
-        return approved_texts(get_lesson_store(), ns)
+            lessons = await PostgresLessonStore(factory).list(ns)
+        else:
+            lessons = get_lesson_store().list(ns)
     except Exception:
         return ()
+    return tuple(item for item in lessons if item.status is LessonStatus.APPROVED)
+
+
+async def _record_inject(lessons: Sequence[Lesson]) -> None:
+    if not lessons:
+        return
+    ids = tuple(item.lesson_id for item in lessons)
+    try:
+        factory = resolve_lesson_session_factory()
+        if factory is not None:
+            await PostgresLessonStore(factory).record_inject(ids)
+            return
+        get_lesson_store().record_inject(ids)
+    except Exception:
+        return
+
+
+async def approved_lesson_texts(owner_id: str | None) -> tuple[str, ...]:
+    approved = await _approved_lessons(owner_id)
+    await _record_inject(approved)
+    return tuple(item.body for item in approved)
 
 
 async def coding_turn_system(static_system: str, owner_id: str | None) -> str:

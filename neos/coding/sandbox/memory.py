@@ -562,10 +562,13 @@ class MemorySandboxSession:
         limit: int = 100,
         before: int = 0,
         after: int = 0,
+        output_mode: str = "content",
     ) -> tuple[SearchMatch, ...]:
         await self._require_running()
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
+        if output_mode not in {"files", "content", "count"}:
+            output_mode = "content"
         before = max(0, min(int(before), 20))
         after = max(0, min(int(after), 20))
         expression = re.compile(query if regex else re.escape(query))
@@ -574,15 +577,21 @@ class MemorySandboxSession:
             if not item.is_file() or item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
+            if self._is_git_path(relative):
+                continue
             if not any(self._matches_path(relative, pattern) for pattern in paths):
                 continue
             try:
                 lines = item.read_text(errors="replace").splitlines()
             except OSError:
                 continue
+            file_hits = 0
             for line_number, line in enumerate(lines, start=1):
                 match = expression.search(line)
                 if match is None:
+                    continue
+                file_hits += 1
+                if output_mode != "content":
                     continue
                 start = max(0, line_number - 1 - before)
                 matches.append(
@@ -597,6 +606,24 @@ class MemorySandboxSession:
                 )
                 if len(matches) >= limit:
                     return tuple(matches)
+            if file_hits == 0 or output_mode == "content":
+                continue
+            if output_mode == "files":
+                matches.append(
+                    SearchMatch(path=relative, line=0, column=0, text="")
+                )
+            else:
+                matches.append(
+                    SearchMatch(
+                        path=relative,
+                        line=0,
+                        column=0,
+                        text="",
+                        count=file_hits,
+                    )
+                )
+            if len(matches) >= limit:
+                return tuple(matches)
         return tuple(matches)
 
     async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
@@ -611,6 +638,8 @@ class MemorySandboxSession:
             if item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
+            if self._is_git_path(relative):
+                continue
             if self._matches_path(relative, pattern):
                 found.append(relative)
                 if len(found) >= limit:
@@ -806,6 +835,10 @@ class MemorySandboxSession:
             for path in sorted(before.keys() - after.keys())
         )
         return tuple(changes)
+
+    @staticmethod
+    def _is_git_path(path: str) -> bool:
+        return ".git" in PurePosixPath(path).parts
 
     @staticmethod
     def _ignore_watch_path(path: str) -> bool:

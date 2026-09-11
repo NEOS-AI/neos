@@ -38,6 +38,7 @@ def install_channel_settings(
     coding_owner_user_id: str = "",
     bot_user_id: str = "",
     inbound_media: bool = False,
+    outbound_files: bool = False,
     draft_streaming: bool = False,
     principals: list[ChannelPrincipal] | None = None,
 ) -> Settings:
@@ -56,6 +57,7 @@ def install_channel_settings(
             coding_owner_user_id=coding_owner_user_id,
             bot_user_id=bot_user_id,
             inbound_media=inbound_media,
+            outbound_files=outbound_files,
             draft_streaming=draft_streaming,
             principals=principals or [],
         )

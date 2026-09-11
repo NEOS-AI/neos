@@ -1,5 +1,8 @@
 import { FileCode2, GitCommitHorizontal, Wrench } from "lucide-react";
-import type { CodingProjectionState } from "@/features/coding/types/projection";
+import type {
+  CodingProjectionState,
+  CodingToolView,
+} from "@/features/coding/types/projection";
 
 export function CodingDetailPanel({
   phaseId,
@@ -25,20 +28,34 @@ export function CodingDetailPanel({
         </div>
         <div className="mt-6 space-y-2">
           {tools.length ? (
-            tools.map((tool) => (
-              <div
-                className="flex items-center justify-between border border-border/70 px-3 py-2"
-                key={tool.tool_call_id}
-              >
-                <span className="flex items-center gap-2 font-mono text-xs">
-                  <Wrench className="size-3 text-amber-400" />
-                  {tool.tool_call_id}
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  {tool.status}
-                </span>
-              </div>
-            ))
+            tools.map((tool) => {
+              const name = toolName(tool);
+              const preview = toolPreview(tool);
+              return (
+                <div
+                  className="border border-border/70 px-3 py-2"
+                  key={tool.tool_call_id}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="flex min-w-0 items-center gap-2 font-mono text-xs">
+                      <Wrench className="size-3 shrink-0 text-amber-400" />
+                      <span className="truncate">{name}</span>
+                    </span>
+                    <span className="shrink-0 text-muted-foreground text-xs">
+                      {tool.status}
+                    </span>
+                  </div>
+                  {preview ? (
+                    <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                      {preview}
+                    </p>
+                  ) : null}
+                  <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">
+                    {tool.tool_call_id}
+                  </p>
+                </div>
+              );
+            })
           ) : (
             <p className="text-muted-foreground text-sm">
               No tool activity recorded for this phase yet.
@@ -91,4 +108,23 @@ function DetailMetric({ label, value }: { label: string; value: string }) {
       <p className="mt-1 font-mono text-xs capitalize">{value}</p>
     </div>
   );
+}
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function toolName(tool: CodingToolView): string {
+  return (
+    asTrimmedString(tool.name) ??
+    asTrimmedString(tool.result?.name) ??
+    asTrimmedString(tool.result?.tool_name) ??
+    "tool"
+  );
+}
+
+function toolPreview(tool: CodingToolView): string | null {
+  const preview =
+    asTrimmedString(tool.preview) ?? asTrimmedString(tool.result?.preview);
+  return preview ? preview.slice(0, 200) : null;
 }

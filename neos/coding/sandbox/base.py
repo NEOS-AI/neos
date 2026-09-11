@@ -187,6 +187,7 @@ class SearchMatch:
     text: str
     before: tuple[str, ...] = ()
     after: tuple[str, ...] = ()
+    count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +254,7 @@ class SandboxSession(Protocol):
         limit: int = 100,
         before: int = 0,
         after: int = 0,
+        output_mode: str = "content",
     ) -> tuple[SearchMatch, ...]: ...
 
     async def glob_files(

@@ -44,6 +44,8 @@ class CodingToolProjection:
     run_id: str
     status: str
     result: Mapping[str, Any] | None
+    name: str | None = None
+    preview: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,15 +153,7 @@ class CodingSnapshotService:
             )
             for row in rows.phases
         )
-        tools = tuple(
-            CodingToolProjection(
-                tool_call_id=row.tool_call_id,
-                run_id=row.run_id,
-                status=row.status,
-                result=row.result,
-            )
-            for row in rows.tools
-        )
+        tools_rows = rows.tools
         approvals = tuple(
             CodingApprovalProjection(
                 approval_id=row["approval_id"],
@@ -197,6 +191,19 @@ class CodingSnapshotService:
             else None
         )
         loop_state = checkpoint.loop_state if checkpoint else {}
+        tool_names = _tool_names(loop_state)
+        tools = tuple(
+            CodingToolProjection(
+                tool_call_id=row.tool_call_id,
+                run_id=row.run_id,
+                status=row.status,
+                result=row.result,
+                name=tool_names.get(row.tool_call_id)
+                or _name_from_result(row.result),
+                preview=_preview_from_result(row.result),
+            )
+            for row in tools_rows
+        )
         workspace = CodingWorkspaceProjection(
             revision=checkpoint.workspace_revision if checkpoint else "uninitialized",
             git_head=loop_state.get("git_head"),
@@ -236,3 +243,43 @@ class CodingSnapshotService:
             latest_checkpoint=checkpoint,
             head_seq=rows.head_seq,
         )
+
+
+def _tool_names(loop_state: Mapping[str, Any]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for item in loop_state.get("pending_tool_calls") or ():
+        _remember_tool_name(names, item)
+    for message in loop_state.get("transcript") or ():
+        if not isinstance(message, Mapping):
+            continue
+        for item in message.get("content") or ():
+            _remember_tool_name(names, item)
+    return names
+
+
+def _remember_tool_name(names: dict[str, str], item: object) -> None:
+    if not isinstance(item, Mapping):
+        return
+    tool_call_id = item.get("tool_call_id")
+    name = item.get("name")
+    if isinstance(tool_call_id, str) and isinstance(name, str) and name:
+        names[tool_call_id] = name
+
+
+def _name_from_result(result: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(result, Mapping):
+        return None
+    for key in ("name", "tool_name", "tool"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _preview_from_result(result: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(result, Mapping):
+        return None
+    preview = result.get("preview")
+    if isinstance(preview, str) and preview.strip():
+        return preview.strip()[:200]
+    return None

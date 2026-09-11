@@ -240,12 +240,13 @@ async def test_session_search_context_and_glob_use_fixed_helpers() -> None:
     assert matches[0].before == ("alpha",)
     assert matches[0].after == ("gamma", "delta")
     assert found == ("src/app.py", "src/util.py")
-    assert runner.calls[-2][-6:] == (
+    assert runner.calls[-2][-7:] == (
         "needle",
         "0",
         "10",
         "1",
         "2",
+        "content",
         "src/**",
     )
     assert runner.calls[-1][-2:] == ("src/*.py", "500")

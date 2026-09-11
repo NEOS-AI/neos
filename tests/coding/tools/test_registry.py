@@ -100,6 +100,31 @@ def test_search_text_accepts_before_and_after_context() -> None:
     assert call.risk is ToolRisk.READ_ONLY
     assert call.input["before"] == 2
     assert call.input["after"] == 3
+    assert call.input["output_mode"] == "content"
+    assert denied.allowed is False
+    assert denied.reason_code == "policy_schema_invalid"
+
+
+def test_search_text_accepts_output_mode() -> None:
+    tools = registry()
+    defaulted = tools.validate("search_text.v1", {"query": "needle"})
+    files = tools.validate(
+        "search_text.v1", {"query": "needle", "output_mode": "files"}
+    )
+    count = tools.validate(
+        "search_text.v1", {"query": "needle", "output_mode": "count"}
+    )
+    content = tools.validate(
+        "search_text.v1", {"query": "needle", "output_mode": "content"}
+    )
+    denied = tools.decide(
+        "search_text.v1", {"query": "needle", "output_mode": "raw"}
+    )
+
+    assert defaulted.input["output_mode"] == "content"
+    assert files.input["output_mode"] == "files"
+    assert count.input["output_mode"] == "count"
+    assert content.input["output_mode"] == "content"
     assert denied.allowed is False
     assert denied.reason_code == "policy_schema_invalid"
 
@@ -397,6 +422,8 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("search_text.v1", {"query": "x", "limit": 0}),
         ("search_text.v1", {"query": "x", "before": 21}),
         ("search_text.v1", {"query": "x", "after": -1}),
+        ("search_text.v1", {"query": "x", "output_mode": "raw"}),
+        ("search_text.v1", {"query": "x", "output_mode": "grep"}),
         ("glob_files.v1", {"pattern": ""}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 0}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 501}),

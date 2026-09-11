@@ -393,6 +393,7 @@ memory:
 learn:
   write_approval: true
   coding_lessons: false
+  channel_learn: false
   research_procedures: false
   session_search_tool: false
   curator: true
@@ -603,6 +604,7 @@ channels:
   coding_invoke: false
   coding_owner_user_id: ""
   inbound_media: false
+  outbound_files: false
   draft_streaming: false
 
 context_assembly:

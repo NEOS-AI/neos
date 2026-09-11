@@ -4,7 +4,6 @@ import pytest
 
 from neos.coding.domain.durability import StaleExecutionLease
 from neos.coding.domain.text_parts import TextPartStatus
-from neos.coding.loop.anthropic import CodingLoopFailure
 from tests.coding.fakes import RecordingCodingAuditSink, text_turn, tool_turn
 
 pytestmark = pytest.mark.no_db
@@ -39,14 +38,22 @@ async def test_crash_after_write_has_unknown_outcome_without_second_write(
     await harness.advance(worker_id="worker-1")
     await harness.advance(worker_id="worker-1")
     await harness.advance(worker_id="worker-1")
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
-        await harness.advance(worker_id="worker-1")
+    await harness.advance(worker_id="worker-1")
     harness.elapse(timedelta(seconds=31))
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
-        await harness.advance(worker_id="worker-2")
+    await harness.advance(worker_id="worker-2")
 
     assert await harness.session.read_file("calc.py") == b"changed\n"
     assert harness.write_count == 1
+    transcript = harness.repository.checkpoints[-1].loop_state["transcript"]
+    results = [
+        item
+        for message in transcript
+        for item in message["content"]
+        if item.get("type") == "tool_result" and item.get("tool_call_id") == "tool_1"
+    ]
+    assert results
+    assert results[-1]["status"] == "error"
+    assert results[-1]["content"]["reason_code"] == "tool_outcome_unknown"
 
 
 @pytest.mark.asyncio
@@ -80,8 +87,7 @@ async def test_crash_after_durable_tool_completion_reuses_result(
     harness.repository.crash_after = None
     await harness.advance(worker_id="worker-1")
     harness.repository.crash_after = "complete_tool_execution"
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown"):
-        await harness.advance(worker_id="worker-1")
+    await harness.advance(worker_id="worker-1")
     harness.elapse(timedelta(seconds=31))
     harness.disable_crash()
     await harness.advance_until_complete(worker_id="worker-2")

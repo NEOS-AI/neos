@@ -85,7 +85,7 @@ async def test_code_command_does_not_start_workflow(monkeypatch):
     gateway, workflow, coding = _gateway(monkeypatch)
     reply = await gateway.dispatch(_message("<@U_BOT> /code fix the test"))
     assert "ct_channel" in reply
-    assert coding.started == [("u_owner", "fix the test")]
+    assert coding.started == [("u_owner", "[U_alice] fix the test")]
     assert workflow.calls == []
 
 
@@ -130,7 +130,7 @@ async def test_code_uses_mapped_principal_not_shared_owner(monkeypatch):
     )
     reply = await gateway.dispatch(_message("<@U_BOT> /code fix the test"))
     assert "ct_channel" in reply
-    assert coding.started == [("u_alice", "fix the test")]
+    assert coding.started == [("u_alice", "[U_alice] fix the test")]
 
 
 async def test_code_without_principal_is_refused_when_map_exists(monkeypatch):
@@ -208,7 +208,7 @@ async def test_duplicate_code_same_idempotency_key_starts_once(monkeypatch):
     reply2 = await gateway.dispatch(second)
     assert "ct_channel" in reply1
     assert "ct_channel" in reply2
-    assert coding.started == [("u_owner", "fix the test")]
+    assert coding.started == [("u_owner", "[U_alice] fix the test")]
     assert workflow.calls == []
 
 
@@ -220,7 +220,7 @@ async def test_second_code_in_same_session_reuses_bound_task(monkeypatch):
     second.metadata["idempotency_key"] = "2"
     reply1 = await gateway.dispatch(first)
     reply2 = await gateway.dispatch(second)
-    assert coding.started == [("u_owner", "one")]
+    assert coding.started == [("u_owner", "[U_alice] one")]
     assert reply1 == reply2
 
 
@@ -235,7 +235,7 @@ async def test_code_prompt_includes_attachment_names(monkeypatch):
         }
     ]
     await gateway.dispatch(message)
-    assert coding.started[0][1].startswith("fix from screenshot")
+    assert coding.started[0][1].startswith("[U_alice] fix from screenshot")
     assert "bug.png" in coding.started[0][1]
 
 
@@ -246,6 +246,7 @@ async def test_workflow_query_includes_attachment_names(monkeypatch):
         {"name": "note.txt", "content_type": "text/plain", "data": b"hi"}
     ]
     await gateway.dispatch(message)
+    assert workflow.calls[0]["query"].startswith("[U_alice] ")
     assert "note.txt" in workflow.calls[0]["query"]
 
 

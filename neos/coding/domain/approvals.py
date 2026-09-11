@@ -128,9 +128,38 @@ def evaluate_approval(
         return ApprovalPolicyOutcome.DENY
 
 
+def _posix_path_parts(path: str) -> tuple[str, ...]:
+    return tuple(
+        part
+        for part in path.replace("\\", "/").split("/")
+        if part not in {"", "."}
+    )
+
+
+def _is_denied_secret_path(path: object) -> bool:
+    if not isinstance(path, str) or not path:
+        return False
+    parts = _posix_path_parts(path)
+    if not parts:
+        return False
+    name = parts[-1]
+    if name == ".env" or name.startswith(".env."):
+        return True
+    if ".git" in parts or ".ssh" in parts:
+        return True
+    if name == "id_rsa":
+        return True
+    return any(
+        part == ".aws" and parts[index + 1] == "credentials"
+        for index, part in enumerate(parts[:-1])
+    )
+
+
 def _evaluate_approval(
     call: ValidatedToolCall, gate: ApprovalGate
 ) -> ApprovalPolicyOutcome:
+    if _is_denied_secret_path(call.input.get("path")):
+        return ApprovalPolicyOutcome.DENY
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY
     if call.name in gate.allow_tools:

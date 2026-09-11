@@ -5,6 +5,8 @@ from neos.coding.phases import (
     CodingAgentPhase,
     hidden_tools_for_phase,
     parse_phase,
+    parse_plan_critical_files,
+    parse_verify_verdict,
     phase_change_requires_approval,
     tool_allowed_in_phase,
     write_risk_blocked,
@@ -37,3 +39,24 @@ def test_plan_hides_writes_and_gates_implement() -> None:
     assert not phase_change_requires_approval("implement", "verify")
     assert write_risk_blocked(ToolRisk.WORKSPACE_WRITE, "plan")
     assert not write_risk_blocked(ToolRisk.WORKSPACE_WRITE, "implement")
+
+
+def test_parse_verify_verdict_reads_pass_fail_partial() -> None:
+    assert parse_verify_verdict("ran tests\nVERDICT: PASS\n") == "PASS"
+    assert parse_verify_verdict("VERDICT: FAIL") == "FAIL"
+    assert parse_verify_verdict("notes\nverdict: partial") == "PARTIAL"
+    assert parse_verify_verdict("looks good") is None
+    assert parse_verify_verdict("") is None
+
+
+def test_parse_plan_critical_files_requires_heading() -> None:
+    assert parse_plan_critical_files("I will edit src/app.py") is None
+    assert parse_plan_critical_files("") is None
+    files = parse_plan_critical_files(
+        "## Critical Files:\n- src/app.py\n- tests/test_app.py\n"
+    )
+    assert files == ["src/app.py", "tests/test_app.py"]
+    assert parse_plan_critical_files("Critical Files: src/a.py, src/b.py") == [
+        "src/a.py",
+        "src/b.py",
+    ]

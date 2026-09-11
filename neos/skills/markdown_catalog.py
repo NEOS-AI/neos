@@ -2,6 +2,9 @@
 
 Indexes SKILL.md (and coding *.md) by name + description without requiring
 skill.py. Bodies load on demand. Entries are never executed as BaseSkill.
+
+The default catalog is the coding index (``neos/coding/skills/``). Repo-root
+``skills/`` and builtin ``skill.py`` skills stay on the research SkillManager.
 """
 
 from __future__ import annotations
@@ -31,9 +34,14 @@ class MarkdownSkill:
 
 
 def default_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Coding catalog roots. Repo-root ``skills/`` is research-only."""
+    return (("coding", _REPO_ROOT / "neos" / "coding" / "skills"),)
+
+
+def research_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Research/chat markdown index. Not used by load_skill.v1."""
     return (
         ("repo", _REPO_ROOT / "skills"),
-        ("coding", _REPO_ROOT / "neos" / "coding" / "skills"),
         ("builtin", _REPO_ROOT / "neos" / "skills" / "builtin"),
     )
 

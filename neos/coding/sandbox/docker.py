@@ -72,27 +72,42 @@ p.write_bytes(sys.stdin.buffer.read())
 _SEARCH_TEXT_HELPER = """\
 import fnmatch, json, re, sys
 from pathlib import Path
-query, regex, limit, before, after, *patterns = sys.argv[1:]
+query, regex, limit, before, after, output_mode, *patterns = sys.argv[1:]
 expression = re.compile(query if regex == '1' else re.escape(query))
 before = max(0, min(int(before), 20))
 after = max(0, min(int(after), 20))
+if output_mode not in {'files', 'content', 'count'}:
+    output_mode = 'content'
 matches = []
 for p in sorted(Path('/workspace').rglob('*')):
     if not p.is_file() or p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
+    if '.git' in Path(relative).parts: continue
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
                for pattern in patterns): continue
     lines = p.read_text(errors='replace').splitlines()
+    file_hits = 0
     for number, line in enumerate(lines, 1):
         match = expression.search(line)
-        if match:
-            start = max(0, number - 1 - before)
-            matches.append({'path': relative, 'line': number,
-                            'column': match.start() + 1, 'text': line,
-                            'before': lines[start:number - 1],
-                            'after': lines[number:number + after]})
-            if len(matches) >= int(limit): break
+        if not match: continue
+        file_hits += 1
+        if output_mode != 'content': continue
+        start = max(0, number - 1 - before)
+        matches.append({'path': relative, 'line': number,
+                        'column': match.start() + 1, 'text': line,
+                        'before': lines[start:number - 1],
+                        'after': lines[number:number + after]})
+        if len(matches) >= int(limit): break
+    if output_mode == 'content':
+        if len(matches) >= int(limit): break
+        continue
+    if file_hits == 0: continue
+    if output_mode == 'files':
+        matches.append({'path': relative, 'line': 0, 'column': 0, 'text': ''})
+    else:
+        matches.append({'path': relative, 'line': 0, 'column': 0, 'text': '',
+                        'count': file_hits})
     if len(matches) >= int(limit): break
 sys.stdout.write(json.dumps(matches))
 """
@@ -107,6 +122,7 @@ found = []
 for p in sorted(Path('/workspace').rglob('*')):
     if p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
+    if '.git' in Path(relative).parts: continue
     if fnmatch.fnmatch(relative, pattern) or (
         pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
     ):
@@ -917,9 +933,12 @@ class DockerSandboxSession:
         limit: int = 100,
         before: int = 0,
         after: int = 0,
+        output_mode: str = "content",
     ) -> tuple[SearchMatch, ...]:
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
+        if output_mode not in {"files", "content", "count"}:
+            output_mode = "content"
         before = max(0, min(int(before), 20))
         after = max(0, min(int(after), 20))
         for path in paths:
@@ -931,6 +950,7 @@ class DockerSandboxSession:
             str(limit),
             str(before),
             str(after),
+            output_mode,
             *paths,
         )
         try:
@@ -943,6 +963,7 @@ class DockerSandboxSession:
                     text=value["text"],
                     before=tuple(value.get("before") or ()),
                     after=tuple(value.get("after") or ()),
+                    count=value.get("count"),
                 )
                 for value in values
             )

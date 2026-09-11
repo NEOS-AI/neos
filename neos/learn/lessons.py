@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -30,6 +30,8 @@ class Lesson:
     created_at: datetime
     pinned: bool = False
     kind: str = "fact"
+    last_injected_at: datetime | None = None
+    inject_count: int = 0
 
 
 class LessonStore(Protocol):
@@ -40,6 +42,10 @@ class LessonStore(Protocol):
     def list(self, namespace: str | None = None) -> tuple[Lesson, ...]: ...
 
     def update(self, lesson: Lesson) -> None: ...
+
+    def record_inject(
+        self, lesson_ids: Sequence[str], *, now: datetime | None = None
+    ) -> None: ...
 
 
 def force_stage_on_write(lesson: Lesson) -> Lesson:
@@ -68,6 +74,20 @@ class InMemoryLessonStore:
 
     def update(self, lesson: Lesson) -> None:
         self._items[lesson.lesson_id] = lesson
+
+    def record_inject(
+        self, lesson_ids: Sequence[str], *, now: datetime | None = None
+    ) -> None:
+        injected_at = now or datetime.now(UTC)
+        for lesson_id in lesson_ids:
+            current = self._items.get(lesson_id)
+            if current is None or current.status is not LessonStatus.APPROVED:
+                continue
+            self._items[lesson_id] = replace(
+                current,
+                last_injected_at=injected_at,
+                inject_count=current.inject_count + 1,
+            )
 
 
 def new_lesson(

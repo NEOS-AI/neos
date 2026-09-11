@@ -302,6 +302,19 @@ class TelegramAdapter(ChannelAdapterBase):
         except Exception as e:
             logger.warning("[TelegramAdapter] send_draft failed to %s: %s", channel_id, e)
 
+    async def send_file(
+        self,
+        channel_id: str,
+        path: str,
+        *,
+        allow_dirs: list[str] | None = None,
+        thread_id: str | None = None,
+    ) -> None:
+        from neos.api.channels.outbound import resolve_outbound_file
+
+        if resolve_outbound_file(path, allow_dirs) is None:
+            return
+
     async def _handle_message(self, update: Any, context: Any) -> None:
         """
         python-telegram-bot MessageHandler 콜백.

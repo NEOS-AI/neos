@@ -504,9 +504,18 @@ async def test_unknown_mutation_outcome_is_non_retryable() -> None:
         executor=Executor(fail_after_mutation=True),
         audit=audit,
     )
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
-        await collect(h)
-    assert caught.value.retryable is False
+    events = await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    results = [
+        item
+        for message in state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
+    assert results[-1]["status"] == "error"
+    assert results[-1]["content"]["reason_code"] == "tool_outcome_unknown"
+    assert state["pending_tool_index"] == 1
+    assert any(event.type == "tool.completed" for event in events)
     assert audit.events[-1]["outcome"] == "error"
     assert audit.events[-1]["error_code"] == "tool_outcome_unknown"
 
@@ -520,10 +529,18 @@ async def test_stale_mutation_bookkeeping_is_unknown_outcome() -> None:
         audit=audit,
     )
 
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
-        await collect(h)
+    events = await collect(h)
 
-    assert caught.value.retryable is False
+    state = h.repository.checkpoints[-1].loop_state
+    results = [
+        item
+        for message in state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
+    assert results[-1]["content"]["reason_code"] == "tool_outcome_unknown"
+    assert state["pending_tool_index"] == 1
+    assert any(event.type in {"tool.completed", "phase.completed"} for event in events)
     assert audit.events[-1]["error_code"] == "tool_outcome_unknown"
 
 
@@ -696,10 +713,20 @@ async def test_reclaimed_mutating_claim_is_never_executed() -> None:
         SimpleNamespace(disposition=ToolExecutionDisposition.CLAIMED),
         NOW - timedelta(seconds=1),
     )
-    with pytest.raises(CodingLoopFailure, match="tool_outcome_unknown") as caught:
-        await collect(h)
-    assert caught.value.retryable is False
+    events = await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    results = [
+        item
+        for message in state["transcript"]
+        for item in message["content"]
+        if item.get("type") == "tool_result"
+    ]
     assert h.bindings.session.writes == 0
+    assert h.executor.calls == []
+    assert results[-1]["status"] == "error"
+    assert results[-1]["content"]["reason_code"] == "tool_outcome_unknown"
+    assert state["pending_tool_index"] == 1
+    assert any(event.type == "tool.completed" for event in events)
 
 
 @pytest.mark.asyncio
@@ -1327,16 +1354,17 @@ async def test_spawn_agent_returns_child_summary() -> None:
                     {"prompt": "look around", "max_turns": 1},
                 ),
                 completed(),
-            ],
-            [TextDelta("child saw files"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+            ]
         ]
     )
     events = await collect(h)
     completed_events = [event for event in events if event.type == "tool.completed"]
     assert completed_events
     payload = completed_events[-1].payload["result"]
-    entries = payload.get("entries") or ()
-    assert any("child saw files" in str(item) for item in entries)
+    assert payload.get("delegated") is False
+    assert payload.get("use_phase") == "explore"
+    assert payload.get("note")
+    assert all(getattr(request, "task_id", None) != "spawn" for request in h.model.requests)
 
 
 @pytest.mark.asyncio
@@ -1351,8 +1379,7 @@ async def test_spawn_agent_is_not_batched_with_other_readonly_tools() -> None:
                     {"prompt": "look around", "max_turns": 1},
                 ),
                 completed(),
-            ],
-            [TextDelta("child saw files"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+            ]
         ]
     )
     first = await collect(h)
@@ -1366,10 +1393,13 @@ async def test_spawn_agent_is_not_batched_with_other_readonly_tools() -> None:
     events = await collect(h, h.repository.checkpoints[-1])
     completed_events = [event for event in events if event.type == "tool.completed"]
     assert completed_events
-    entries = completed_events[-1].payload["result"].get("entries") or ()
-    assert any("child saw files" in str(item) for item in entries)
+    payload = completed_events[-1].payload["result"]
+    assert payload.get("delegated") is False
+    assert payload.get("use_phase") == "explore"
     assert not any(
-        item == {"delegated": True} for item in entries if isinstance(item, dict)
+        item == {"delegated": True}
+        for item in (payload.get("entries") or ())
+        if isinstance(item, dict)
     )
 
 
@@ -1384,35 +1414,25 @@ async def test_spawn_agent_stops_inner_loop_on_interrupt() -> None:
                     {"prompt": "look around", "max_turns": 8},
                 ),
                 completed(),
-            ],
-            [
-                tool_call("c1", "read_file.v1", {"path": "a.txt"}),
-                completed(),
-            ],
-            [TextDelta("must not run"), completed()],
-            [TextDelta("must not run either"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+            ]
         ]
     )
-    spawn_requests = {"n": 0}
-    original = h.model.stream
+    original = h.repository.claim_tool_execution
 
-    async def gated_stream(request):
-        if getattr(request, "task_id", None) == "spawn":
-            spawn_requests["n"] += 1
-            if spawn_requests["n"] >= 1:
-                await h.repository.queue_steering(
-                    SteeringRequest(
-                        steering_id="cs_stop",
-                        task_id="ct_1",
-                        mode=SteeringMode.INTERRUPT_NOW,
-                        instruction="stop",
-                        requested_at=NOW,
-                    )
-                )
-        async for event in original(request):
-            yield event
+    async def claim_and_interrupt(**kwargs):
+        claimed = await original(**kwargs)
+        await h.repository.queue_steering(
+            SteeringRequest(
+                steering_id="cs_stop",
+                task_id="ct_1",
+                mode=SteeringMode.INTERRUPT_NOW,
+                instruction="stop",
+                requested_at=NOW,
+            )
+        )
+        return claimed
 
-    h.model.stream = gated_stream
+    h.repository.claim_tool_execution = claim_and_interrupt
     events = await collect(h)
     completed_events = [event for event in events if event.type == "tool.completed"]
 
@@ -1420,8 +1440,7 @@ async def test_spawn_agent_stops_inner_loop_on_interrupt() -> None:
     result = completed_events[-1].payload["result"]
     assert result["status"] == "error"
     assert result["reason_code"] == "aborted"
-    assert spawn_requests["n"] == 1
-    assert h.model.turns  # unused child turns remain
+    assert all(getattr(request, "task_id", None) != "spawn" for request in h.model.requests)
 
 
 @pytest.mark.asyncio

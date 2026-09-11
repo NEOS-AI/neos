@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import Any
 
 import pytest
@@ -32,6 +33,9 @@ class FakeSession:
         self.revision = 7
         self.command_result = CommandResult(0, b"stdout", b"stderr")
         self.error: Exception | None = None
+        self.search_matches: tuple[SearchMatch, ...] = (
+            SearchMatch("a.py", 2, 3, "needle"),
+        )
 
     async def workspace_revision(self) -> int:
         return self.revision
@@ -59,8 +63,13 @@ class FakeSession:
         self.called = ("read_file", path)
         return self.files[path]
 
-    async def write_file(self, path: str, content: bytes) -> int:
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = False
+    ) -> int:
         self._raise()
+        parent = str(PurePosixPath(path).parent)
+        if parent not in {".", ""} and not parents:
+            raise SandboxPolicyViolation("workspace_path_not_resolvable")
         self.files[path] = content
         self.revision += 1
         self.called = ("write_file", (path, content))
@@ -69,7 +78,7 @@ class FakeSession:
     async def search_text(self, query: str, **kwargs: Any) -> tuple[SearchMatch, ...]:
         self._raise()
         self.called = ("search_text", (query, kwargs))
-        return (SearchMatch("a.py", 2, 3, "needle"),)
+        return self.search_matches
 
     async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
         self._raise()
@@ -324,8 +333,78 @@ async def test_search_text_forwards_before_and_after() -> None:
                 "limit": 10,
                 "before": 2,
                 "after": 3,
+                "output_mode": "content",
             },
         ),
+    )
+    assert result.entries == (
+        {
+            "path": "a.py",
+            "line": 2,
+            "column": 3,
+            "text": "needle",
+            "before": (),
+            "after": (),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_text_files_mode_returns_unique_paths_only() -> None:
+    session = FakeSession()
+    session.search_matches = (
+        SearchMatch("a.py", 1, 1, "needle"),
+        SearchMatch("a.py", 4, 2, "needle"),
+        SearchMatch("b.py", 2, 1, "needle"),
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["src"],
+                "regex": False,
+                "limit": 10,
+                "output_mode": "files",
+            },
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.called is not None
+    assert session.called[1][1]["output_mode"] == "files"
+    assert result.entries == ({"path": "a.py"}, {"path": "b.py"})
+
+
+@pytest.mark.asyncio
+async def test_search_text_count_mode_returns_path_and_match_count() -> None:
+    session = FakeSession()
+    session.search_matches = (
+        SearchMatch("a.py", 1, 1, "needle"),
+        SearchMatch("a.py", 4, 2, "needle"),
+        SearchMatch("b.py", 2, 1, "needle"),
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["src"],
+                "regex": False,
+                "limit": 10,
+                "output_mode": "count",
+            },
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.called is not None
+    assert session.called[1][1]["output_mode"] == "count"
+    assert result.entries == (
+        {"path": "a.py", "count": 2},
+        {"path": "b.py", "count": 1},
     )
 
 
@@ -469,19 +548,15 @@ async def test_load_skill_unknown_name_is_denied() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_skill_pdf_returns_catalog_markdown() -> None:
+async def test_load_skill_research_name_is_not_on_coding_catalog() -> None:
     session = FakeSession()
     session.error = SandboxTimeout("load_skill must not touch the sandbox")
     result = await SandboxToolExecutor(10, 10).execute(
         session, call("load_skill.v1", {"name": "pdf"})
     )
 
-    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert (result.status, result.reason_code) == ("denied", "unknown_skill")
     assert session.called is None
-    assert result.entries is not None
-    entry = result.entries[0]
-    assert entry["name"] == "pdf"
-    assert "PDF" in str(entry["markdown"])
 
 
 @pytest.mark.asyncio
@@ -806,6 +881,73 @@ async def test_execute_stops_when_retried_call_repeats_reason_code() -> None:
     assert executor.seen == [
         {"path": "nested/a.txt", "content": "hi"},
         {"path": "nested/a.txt", "content": "hi", "parents": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_write_missing_parent_is_retryable_and_retries_with_parents_fix() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+    )
+
+    assert result.status == "ok"
+    assert session.files["nested/a.txt"] == b"hi"
+    assert session.called == ("write_file", ("nested/a.txt", b"hi"))
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_edit_missing_parent_is_retryable_and_retries_with_parents_fix() -> None:
+    session = FakeSession()
+    session.files["nested/app.py"] = b"foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "nested/app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {
+                "path": "nested/app.py",
+                "old_string": "foo",
+                "new_string": "bar",
+            },
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.files["nested/app.py"] == b"bar"
+    assert result.workspace_revision == "8"
+
+
+@pytest.mark.asyncio
+async def test_write_missing_parent_second_failure_does_not_loop() -> None:
+    class AlwaysMissingParentSession(FakeSession):
+        def __init__(self) -> None:
+            super().__init__()
+            self.writes: list[tuple[str, bool]] = []
+
+        async def write_file(self, path: str, content: bytes) -> int:
+            self.writes.append((path, False))
+            raise SandboxPolicyViolation("workspace_path_not_resolvable")
+
+    session = AlwaysMissingParentSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call("write_file.v1", {"path": "nested/a.txt", "content": "hi"}),
+    )
+
+    assert (result.status, result.reason_code) == (
+        "error",
+        "workspace_path_not_resolvable",
+    )
+    assert result.retryable is True
+    assert result.fix == {"parents": True}
+    assert "workspace_path_not_resolvable" in json.dumps(result.to_mapping())
+    assert session.writes == [
+        ("nested/a.txt", False),
+        ("nested/a.txt", False),
     ]
 
 
