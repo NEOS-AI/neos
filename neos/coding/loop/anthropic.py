@@ -267,7 +267,7 @@ class AnthropicCodingLoop:
                 and state.prompt_compact_retries < 1
             ):
                 compacted = await self._compact_after_prompt_too_long(state)
-                await deps.repository.commit_model_checkpoint(
+                committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="model.completed",
                     event_payload={"reason_code": "prompt_too_long"},
@@ -275,7 +275,8 @@ class AnthropicCodingLoop:
                     workspace_revision=str(bound.binding.workspace_revision),
                     now=self._clock(),
                 )
-                raise CodingLoopFailure("prompt_too_long", retryable=True) from error
+                yield committed.event
+                return
             raise CodingLoopFailure(error.code, retryable=error.retryable) from error
         if completion is None:
             raise CodingLoopFailure("model_stream_incomplete", retryable=True)
@@ -298,26 +299,31 @@ class AnthropicCodingLoop:
             self._metrics.coding_model_turn_total.labels(
                 provider="anthropic", outcome=outcome
             ).inc()
-        next_state = await self._completed_turn(state, text_parts, calls, completion)
-        self._check_usage_budgets(next_state)
         if (
             not calls
             and completion.stop_reason == "max_tokens"
-            and next_state.output_token_escalations < 1
+            and state.output_token_escalations < 1
         ):
-            next_state = replace(
-                next_state,
-                output_token_escalations=next_state.output_token_escalations + 1,
+            retry_state = replace(
+                state,
+                instructions_loaded=True,
+                output_token_escalations=state.output_token_escalations + 1,
+                input_tokens=state.input_tokens + completion.usage.input_tokens,
+                output_tokens=state.output_tokens + completion.usage.output_tokens,
             )
-            await deps.repository.commit_model_checkpoint(
+            self._check_usage_budgets(retry_state)
+            committed = await deps.repository.commit_model_checkpoint(
                 lease=deps.lease,
                 event_type="model.completed",
                 event_payload={"stop_reason": completion.stop_reason},
-                loop_state=self._dump_state(input, next_state),
+                loop_state=self._dump_state(input, retry_state),
                 workspace_revision=str(bound.binding.workspace_revision),
                 now=self._clock(),
             )
-            raise CodingLoopFailure("max_output_tokens_escalate", retryable=True)
+            yield committed.event
+            return
+        next_state = await self._completed_turn(state, text_parts, calls, completion)
+        self._check_usage_budgets(next_state)
         if not calls:
             if completion.stop_reason != "end_turn":
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
@@ -1112,15 +1118,22 @@ class AnthropicCodingLoop:
             "user",
             (TextContent("Prior transcript compacted; kept tool pairs."),),
         )
+        head: tuple[CanonicalMessage, ...] = ()
         remaining = list(prefix)
+        if remaining and remaining[0].role == "user":
+            head = (remaining.pop(0),)
         if force and remaining:
             remaining.pop(0)
-        while remaining and self._over_budget((notice,) + tuple(remaining) + active):
+        while remaining and self._over_budget(
+            head + (notice,) + tuple(remaining) + active
+        ):
             remaining.pop(0)
         if remaining:
-            candidate = (notice,) + tuple(remaining) + active
+            candidate = head + (notice,) + tuple(remaining) + active
         elif active:
-            candidate = (notice,) + active
+            candidate = head + (notice,) + active
+        elif head:
+            candidate = head
         else:
             candidate = (notice,)
         if not self._over_budget(candidate) or not self._over_bytes(candidate):

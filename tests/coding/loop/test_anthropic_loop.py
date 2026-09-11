@@ -908,27 +908,32 @@ async def test_explore_phase_omits_write_file_from_model_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prompt_too_long_is_retryable_and_increments_compact_retry() -> None:
+async def test_prompt_too_long_checkpoints_without_dropping_the_task() -> None:
     h = harness([CodingModelError("prompt_too_long", retryable=True)])
 
-    with pytest.raises(CodingLoopFailure) as caught:
-        await collect(h)
+    events = await collect(h)
 
-    assert caught.value.code == "prompt_too_long"
-    assert caught.value.retryable is True
-    assert h.repository.checkpoints[-1].loop_state["prompt_compact_retries"] == 1
+    assert any(event.checkpoint_id for event in events)
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["prompt_compact_retries"] == 1
+    user_texts = [
+        item["content"][0]["text"]
+        for item in state["transcript"]
+        if item["role"] == "user" and item["content"]
+    ]
+    assert any("Fix it" in text for text in user_texts)
 
 
 @pytest.mark.asyncio
-async def test_max_tokens_once_is_retryable_escalate() -> None:
+async def test_max_tokens_once_checkpoints_escalation_without_assistant_turn() -> None:
     h = harness([[TextDelta("partial"), ModelCompleted("max_tokens", ModelUsage(2, 1))]])
 
-    with pytest.raises(CodingLoopFailure) as caught:
-        await collect(h)
+    events = await collect(h)
 
-    assert caught.value.code == "max_output_tokens_escalate"
-    assert caught.value.retryable is True
-    assert h.repository.checkpoints[-1].loop_state["output_token_escalations"] == 1
+    assert any(event.checkpoint_id for event in events)
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["output_token_escalations"] == 1
+    assert all(item["role"] != "assistant" for item in state["transcript"])
 
 
 @pytest.mark.asyncio
@@ -939,8 +944,7 @@ async def test_second_max_tokens_without_tools_is_incomplete() -> None:
             [TextDelta("still"), ModelCompleted("max_tokens", ModelUsage(2, 1))],
         ]
     )
-    with pytest.raises(CodingLoopFailure, match="max_output_tokens_escalate"):
-        await collect(h)
+    await collect(h)
     checkpoint = h.repository.checkpoints[-1]
 
     with pytest.raises(CodingLoopFailure) as caught:
