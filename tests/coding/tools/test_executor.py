@@ -463,6 +463,33 @@ async def test_load_skill_unknown_name_is_denied() -> None:
     )
 
     assert result.status == "denied"
+    assert result.reason_code == "unknown_skill"
+
+
+@pytest.mark.asyncio
+async def test_load_skill_pdf_returns_catalog_markdown() -> None:
+    session = FakeSession()
+    session.error = SandboxTimeout("load_skill must not touch the sandbox")
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("load_skill.v1", {"name": "pdf"})
+    )
+
+    assert (result.status, result.reason_code) == ("ok", "ok")
+    assert session.called is None
+    assert result.entries is not None
+    entry = result.entries[0]
+    assert entry["name"] == "pdf"
+    assert "PDF" in str(entry["markdown"])
+
+
+@pytest.mark.asyncio
+async def test_load_skill_path_traversal_is_denied() -> None:
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(), call("load_skill.v1", {"name": "../../../etc/passwd"})
+    )
+
+    assert (result.status, result.reason_code) == ("denied", "unknown_skill")
+
 
 
 @pytest.mark.asyncio

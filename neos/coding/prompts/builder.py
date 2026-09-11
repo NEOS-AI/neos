@@ -33,6 +33,7 @@ def build_coding_system_prompt(
         _actions(),
         SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
         _tools(tools, resolved),
+        _skills(),
     ]
     lessons = _lessons(resolved)
     if lessons is not None:
@@ -94,6 +95,22 @@ def _tools(tools: Sequence[ToolDefinition], env: CodingPromptEnv) -> str:
         lines.append(f"execute.v1 allowlist: {allow}.")
     for tool in tools:
         lines.append(f"- {tool.name}: {tool.description}")
+    return "\n".join(lines)
+
+
+def _skills() -> str:
+    from neos.skills.markdown_catalog import list_skills
+
+    lines = [
+        "## Skills",
+        "Use load_skill.v1 with a catalog name to load the full markdown. "
+        "Do not invent names.",
+    ]
+    for skill in list_skills():
+        description = skill.description.replace("\n", " ").strip()
+        if len(description) > 120:
+            description = description[:117].rstrip() + "..."
+        lines.append(f"- {skill.name}: {description}")
     return "\n".join(lines)
 
 

@@ -70,6 +70,15 @@ def test_explore_definitions_omit_write_and_execute() -> None:
     assert hidden.name == "write_file.v1"
 
 
+def test_load_skill_accepts_catalog_names() -> None:
+    pdf = registry().validate("load_skill.v1", {"name": "pdf"})
+    verify = registry().validate("load_skill.v1", {"name": "verify"})
+
+    assert pdf.input["name"] == "pdf"
+    assert verify.input["name"] == "verify"
+    assert registry().decide("load_skill.v1", {"name": "commit"}).allowed is True
+
+
 def test_ask_user_requires_approval() -> None:
     call = registry().validate(
         "ask_user.v1", {"questions": ["Which test runner should I keep?"]}
@@ -408,7 +417,7 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("set_phase.v1", {"phase": "plan"}),
         ("ask_user.v1", {"questions": []}),
         ("ask_user.v1", {"questions": ["a", "b", "c", "d", "e"]}),
-        ("load_skill.v1", {"name": "foo"}),
+        ("load_skill.v1", {"name": ""}),
     ],
 )
 def test_unknown_or_invalid_calls_fail_closed(

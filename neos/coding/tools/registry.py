@@ -148,7 +148,7 @@ class _AskUserInput(_ToolInput):
 
 
 class _LoadSkillInput(_ToolInput):
-    name: Literal["verify", "commit"]
+    name: str = Field(min_length=1, max_length=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,8 +330,8 @@ class CodingToolRegistry:
         _RegisteredTool(
             "load_skill.v1",
             (
-                "Load a bundled coding skill (verify or commit). "
-                "Returns the skill markdown. Do not skip hooks. "
+                "Load a catalog skill by name (verify, commit, or any indexed "
+                "markdown skill). Returns the skill markdown. Do not skip hooks. "
                 "Do not invent skill names. "
                 "On policy_* denial, do not retry the same name."
             ),

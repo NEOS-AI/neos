@@ -1,0 +1,264 @@
+"""Markdown-only Agent Skill catalog.
+
+Indexes SKILL.md (and coding *.md) by name + description without requiring
+skill.py. Bodies load on demand. Entries are never executed as BaseSkill.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+import yaml
+
+from neos.skills.base.metadata_parser import extract_frontmatter
+
+logger = logging.getLogger(__name__)
+
+SkillSource = Literal["repo", "coding", "builtin"]
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownSkill:
+    name: str
+    description: str
+    path: Path
+    source: SkillSource
+
+
+def default_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    return (
+        ("repo", _REPO_ROOT / "skills"),
+        ("coding", _REPO_ROOT / "neos" / "coding" / "skills"),
+        ("builtin", _REPO_ROOT / "neos" / "skills" / "builtin"),
+    )
+
+
+def _is_safe_name(name: str) -> bool:
+    if not name or name != name.strip():
+        return False
+    if "\0" in name or "/" in name or "\\" in name:
+        return False
+    if name in {".", ".."} or ".." in name:
+        return False
+    return True
+
+
+def _fallback_description(content: str) -> str:
+    heading = ""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            if not heading:
+                heading = stripped.lstrip("#").strip()
+            continue
+        return stripped
+    return heading
+
+
+def _parse_markdown_skill(
+    path: Path,
+    source: SkillSource,
+    fallback_name: str,
+) -> MarkdownSkill | None:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Skipping unreadable skill file %s: %s", path, exc)
+        return None
+
+    name = fallback_name
+    description = ""
+    frontmatter, body = extract_frontmatter(content)
+    if frontmatter is not None:
+        try:
+            parsed = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as exc:
+            logger.warning("Skipping skill with invalid YAML %s: %s", path, exc)
+            return None
+        if isinstance(parsed, dict):
+            raw_name = parsed.get("name")
+            if isinstance(raw_name, str) and raw_name.strip():
+                name = raw_name.strip()
+            raw_desc = parsed.get("description")
+            if isinstance(raw_desc, str):
+                description = raw_desc.strip()
+        elif parsed is not None:
+            logger.warning("Skipping skill with non-mapping frontmatter %s", path)
+            return None
+
+    if not description:
+        description = _fallback_description(body if body is not None else content)
+
+    if not _is_safe_name(name):
+        logger.warning("Skipping skill with unsafe name %r at %s", name, path)
+        return None
+
+    try:
+        resolved = path.resolve()
+    except OSError as exc:
+        logger.warning("Skipping unresolvable skill path %s: %s", path, exc)
+        return None
+
+    return MarkdownSkill(
+        name=name,
+        description=description,
+        path=resolved,
+        source=source,
+    )
+
+
+class MarkdownSkillCatalog:
+    """Cached index of markdown skills under allowed roots."""
+
+    def __init__(
+        self,
+        roots: tuple[tuple[SkillSource, Path], ...] | None = None,
+    ) -> None:
+        raw = roots if roots is not None else default_skill_roots()
+        self._roots = tuple((source, Path(path).resolve()) for source, path in raw)
+        self._index: dict[str, MarkdownSkill] | None = None
+
+    def reload(self) -> None:
+        self._index = self._scan()
+
+    def list_skills(self) -> tuple[MarkdownSkill, ...]:
+        index = self._ensure_index()
+        return tuple(index[name] for name in sorted(index))
+
+    def get(self, name: str) -> MarkdownSkill | None:
+        if not _is_safe_name(name):
+            return None
+        return self._ensure_index().get(name)
+
+    def load_markdown(self, name: str) -> str | None:
+        skill = self.get(name)
+        if skill is None:
+            return None
+        if not self._path_allowed(skill.path):
+            logger.warning("Refusing to load skill %r outside catalog roots", name)
+            return None
+        try:
+            if not skill.path.is_file():
+                return None
+            return skill.path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to read skill %r at %s: %s", name, skill.path, exc)
+            return None
+
+    def _ensure_index(self) -> dict[str, MarkdownSkill]:
+        if self._index is None:
+            self.reload()
+        assert self._index is not None
+        return self._index
+
+    def _path_allowed(self, path: Path) -> bool:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        return any(resolved.is_relative_to(root) for _source, root in self._roots)
+
+    def _scan(self) -> dict[str, MarkdownSkill]:
+        index: dict[str, MarkdownSkill] = {}
+        for source, root in self._roots:
+            if not root.is_dir():
+                continue
+            if source == "coding":
+                self._index_flat_markdown(index, root, source)
+            self._index_skill_directories(index, root, source)
+        return index
+
+    def _index_flat_markdown(
+        self,
+        index: dict[str, MarkdownSkill],
+        root: Path,
+        source: SkillSource,
+    ) -> None:
+        for path in sorted(root.glob("*.md")):
+            if not path.is_file():
+                continue
+            skill = _parse_markdown_skill(path, source, fallback_name=path.stem)
+            self._put(index, skill, root=root)
+
+    def _index_skill_directories(
+        self,
+        index: dict[str, MarkdownSkill],
+        root: Path,
+        source: SkillSource,
+    ) -> None:
+        try:
+            children = sorted(root.iterdir())
+        except OSError as exc:
+            logger.warning("Failed to scan skill root %s: %s", root, exc)
+            return
+        for child in children:
+            if not child.is_dir() or child.name.startswith(("_", ".")):
+                continue
+            skill_md = child / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            skill = _parse_markdown_skill(
+                skill_md, source, fallback_name=child.name
+            )
+            self._put(index, skill, root=root)
+
+    def _put(
+        self,
+        index: dict[str, MarkdownSkill],
+        skill: MarkdownSkill | None,
+        *,
+        root: Path,
+    ) -> None:
+        if skill is None:
+            return
+        if not skill.path.is_relative_to(root):
+            logger.warning(
+                "Skipping skill %r whose path %s is outside %s",
+                skill.name,
+                skill.path,
+                root,
+            )
+            return
+        existing = index.get(skill.name)
+        if existing is not None:
+            logger.debug(
+                "Skipping duplicate markdown skill %s from %s (kept %s)",
+                skill.name,
+                skill.path,
+                existing.path,
+            )
+            return
+        index[skill.name] = skill
+
+
+_DEFAULT_CATALOG: MarkdownSkillCatalog | None = None
+
+
+def default_catalog() -> MarkdownSkillCatalog:
+    global _DEFAULT_CATALOG
+    if _DEFAULT_CATALOG is None:
+        _DEFAULT_CATALOG = MarkdownSkillCatalog()
+    return _DEFAULT_CATALOG
+
+
+def list_skills() -> tuple[MarkdownSkill, ...]:
+    return default_catalog().list_skills()
+
+
+def get(name: str) -> MarkdownSkill | None:
+    return default_catalog().get(name)
+
+
+def load_markdown(name: str) -> str | None:
+    return default_catalog().load_markdown(name)
+
+
+def reload() -> None:
+    default_catalog().reload()

@@ -24,6 +24,7 @@ class SkillManager:
         """
         self.registry = skill_registry or SkillRegistry()
         self._initialized_skills: Dict[str, bool] = {}
+        self._markdown_catalog = None
 
     def register_builtin_skills(self, use_auto_discovery: bool = False) -> None:
         """내장 스킬 등록
@@ -50,6 +51,7 @@ class SkillManager:
                 logger.warning(f"Failed to import builtin skills: {e}")
             except Exception as e:
                 logger.error(f"Error registering builtin skills: {e}")
+        self._log_markdown_catalog()
 
     def auto_discover_builtin_skills(self, check_deps: bool = True) -> None:
         """내장 스킬 자동 발견 및 등록
@@ -345,6 +347,29 @@ class SkillManager:
             XML formatted prompt with all available skills
         """
         return self.generate_skills_prompt(include_body=True)
+
+    def markdown_catalog(self):
+        """Return the markdown skill catalog (names/descriptions only)."""
+        if self._markdown_catalog is None:
+            from neos.skills.markdown_catalog import default_catalog
+
+            self._markdown_catalog = default_catalog()
+        return self._markdown_catalog
+
+    def markdown_skills(self):
+        """Indexed markdown skills. Not registered as BaseSkill."""
+        return list(self.markdown_catalog().list_skills())
+
+    def _log_markdown_catalog(self) -> None:
+        try:
+            visible = self.markdown_skills()
+        except Exception as exc:
+            logger.warning("Failed to index markdown skill catalog: %s", exc)
+            return
+        logger.info(
+            "Markdown skill catalog visible: %s skills (not registered as BaseSkill)",
+            len(visible),
+        )
 
 
 # 전역 스킬 매니저 인스턴스

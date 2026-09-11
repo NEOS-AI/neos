@@ -31,7 +31,15 @@ def _tools() -> tuple[ToolDefinition, ...]:
 
 def test_prompt_contains_required_sections_in_order() -> None:
     prompt = build_coding_system_prompt(_tools())
-    headings = ["## Intro", "## System", "## Tasks", "## Actions", "## Tools", "## Tone"]
+    headings = [
+        "## Intro",
+        "## System",
+        "## Tasks",
+        "## Actions",
+        "## Tools",
+        "## Skills",
+        "## Tone",
+    ]
     positions = [prompt.index(heading) for heading in headings]
     assert positions == sorted(positions)
     assert prompt.index("<!-- neos:dynamic -->") < prompt.index("## Tools")
@@ -63,6 +71,15 @@ def test_prompt_includes_allowlist_and_rejects_brand_copy() -> None:
     assert "ruff" in prompt
     assert "Claude Code" not in prompt
     assert "You are Claude" not in prompt
+
+
+def test_prompt_lists_catalog_skill_names_not_bodies() -> None:
+    prompt = build_coding_system_prompt(_tools())
+    assert "## Skills" in prompt
+    assert "load_skill.v1" in prompt
+    assert "pdf" in prompt
+    assert "verify" in prompt
+    assert "from pypdf import PdfReader" not in prompt
 
 
 def test_live_registry_descriptions_teach_search_over_execute() -> None:

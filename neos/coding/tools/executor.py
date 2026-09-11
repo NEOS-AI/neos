@@ -7,12 +7,8 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
-
-_SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
-_ALLOWED_SKILLS = frozenset({"verify", "commit"})
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -443,17 +439,14 @@ class SandboxToolExecutor:
 
     @staticmethod
     def _load_skill(call: ValidatedToolCall) -> ToolResult:
+        from neos.skills.markdown_catalog import default_catalog
+
         name = str(call.input.get("name", ""))
-        if name not in _ALLOWED_SKILLS:
+        markdown = default_catalog().load_markdown(name)
+        if markdown is None:
             return ToolResult(
                 "denied", "unknown_skill", None, None, False, None, "unknown"
             )
-        path = _SKILLS_DIR / f"{name}.md"
-        if not path.is_file():
-            return ToolResult(
-                "denied", "unknown_skill", None, None, False, None, "unknown"
-            )
-        markdown = path.read_text(encoding="utf-8")
         return ToolResult.ok(
             workspace_revision="unknown",
             entries=({"name": name, "markdown": markdown},),
