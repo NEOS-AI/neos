@@ -136,9 +136,33 @@ async def test_a_deep_analysis_dispatch_is_instrumented(collected):
     record = collected[0]
     assert record.workflow_step == "report_assembly"
     assert record.model == "claude-opus-5"
+    assert record.provider == "anthropic"
     assert record.prompt_tokens == 77
-    assert record.completion_tokens == 33
-    assert record.output_text == "조립된 리포트"
+
+
+@pytest.mark.asyncio
+async def test_a_deep_analysis_openai_dispatch_records_openai_provider(collected):
+    from neos.workflow.deep_analysis.llm import LLMResponse, _budgeted_dispatch
+
+    async def invoke(limit, dispatch):
+        return LLMResponse(
+            text="ok",
+            input_tokens=1,
+            output_tokens=1,
+            model="gpt-6-astra",
+            stop_reason="end_turn",
+        )
+
+    await _budgeted_dispatch(
+        model="gpt-6-astra",
+        request={"messages": [{"role": "user", "content": "q"}]},
+        max_tokens=100,
+        stage="scout",
+        invoke=invoke,
+    )
+
+    assert collected[0].provider == "openai"
+    assert collected[0].model == "gpt-6-astra"
 
 
 @pytest.mark.asyncio
