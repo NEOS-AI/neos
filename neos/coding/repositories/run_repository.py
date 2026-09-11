@@ -16,6 +16,7 @@ from neos.coding.domain.approvals import (
     CodingApproval,
     approval_display_summary,
     canonical_approval_hash,
+    requires_approval_answers,
 )
 from neos.coding.domain.durability import (
     ExecutionLease,
@@ -956,6 +957,7 @@ class PostgresCodingRunRepository:
         owner_id: str,
         decision: ApprovalDecision,
         now: datetime,
+        answers: tuple[str, ...] = (),
     ) -> ApprovalResolutionCommit:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -1008,6 +1010,12 @@ class PostgresCodingRunRepository:
                 approval = self._approval_from_row(row)
                 if approval.status is not ApprovalStatus.PENDING:
                     raise ApprovalConflict("approval_already_resolved")
+                if (
+                    decision is ApprovalDecision.APPROVE
+                    and requires_approval_answers(approval.tool_name)
+                    and not answers
+                ):
+                    raise ApprovalConflict("answers_required")
                 status, conflict_code = self._resolution_status(
                     approval=approval,
                     loop_state=dict(row[17]),
@@ -1016,19 +1024,24 @@ class PostgresCodingRunRepository:
                     decision=decision,
                     now=now,
                 )
+                display_summary = dict(approval.display_summary)
+                if answers:
+                    display_summary["answers"] = list(answers)
                 resolved = self._resolved_approval(
                     approval=approval,
                     status=status,
                     decision=decision,
                     owner_id=owner_id,
                     now=now,
+                    display_summary=display_summary,
                 )
                 await session.execute(
                     text(
                         """
                         UPDATE coding_approvals
                         SET status = :status, decision = :decision,
-                            decided_by = :decided_by, decided_at = :decided_at
+                            decided_by = :decided_by, decided_at = :decided_at,
+                            display_summary = CAST(:display_summary AS jsonb)
                         WHERE approval_id = :approval_id
                           AND task_id = :task_id AND status = 'pending'
                         """
@@ -1044,6 +1057,7 @@ class PostgresCodingRunRepository:
                         ),
                         "decided_by": resolved.decided_by,
                         "decided_at": now,
+                        "display_summary": json.dumps(display_summary),
                     },
                 )
                 updated = await session.execute(
@@ -2416,7 +2430,9 @@ class PostgresCodingRunRepository:
         decision: ApprovalDecision,
         owner_id: str,
         now: datetime,
+        display_summary: Mapping[str, object] | None = None,
     ) -> CodingApproval:
+        summary = approval.display_summary if display_summary is None else display_summary
         if status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED}:
             return replace(
                 approval,
@@ -2424,8 +2440,11 @@ class PostgresCodingRunRepository:
                 decision=decision,
                 decided_by=owner_id,
                 decided_at=now,
+                display_summary=summary,
             )
-        return replace(approval, status=status, decided_at=now)
+        return replace(
+            approval, status=status, decided_at=now, display_summary=summary
+        )
 
     @staticmethod
     def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:

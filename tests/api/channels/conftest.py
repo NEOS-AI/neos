@@ -7,6 +7,7 @@ import pytest
 from neos.config.schema import (
     AppConfig,
     ChannelConfig,
+    ChannelPrincipal,
     DiscordChannelConfig,
     SlackChannelConfig,
     TelegramChannelConfig,
@@ -35,6 +36,7 @@ def install_channel_settings(
     telegram: TelegramChannelConfig | None = None,
     coding_invoke: bool = False,
     coding_owner_user_id: str = "",
+    principals: list[ChannelPrincipal] | None = None,
 ) -> Settings:
     import neos.config.settings as settings_module
 
@@ -49,6 +51,7 @@ def install_channel_settings(
             telegram=telegram or TelegramChannelConfig(),
             coding_invoke=coding_invoke,
             coding_owner_user_id=coding_owner_user_id,
+            principals=principals or [],
         )
     )
     installed = Settings(config=config)

@@ -539,6 +539,10 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_text_delta_bytes=coding.max_text_delta_bytes,
         max_public_text_bytes=coding.max_public_text_bytes,
         approval_ttl_sec=coding.approval_ttl_seconds,
+        approval_mode=coding.approval_mode,
+        approval_deny_tools=frozenset(coding.approval_deny_tools),
+        approval_allow_tools=frozenset(coding.approval_allow_tools),
+        approval_always_allow=frozenset(coding.approval_always_allow),
     )
 
     def finish(sandboxes) -> DurableCodingLoop:

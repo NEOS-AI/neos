@@ -140,7 +140,7 @@ class _ExecuteInput(_ToolInput):
 
 
 class _SetPhaseInput(_ToolInput):
-    phase: Literal["explore", "implement", "verify"]
+    phase: Literal["explore", "plan", "implement", "verify"]
 
 
 class _AskUserInput(_ToolInput):
@@ -308,8 +308,9 @@ class CodingToolRegistry:
         _RegisteredTool(
             "set_phase.v1",
             (
-                "Set the coding-agent phase to explore, implement, or verify. "
-                "explore hides write and execute tools. verify hides writes. "
+                "Set the coding-agent phase to explore, plan, implement, or verify. "
+                "explore and plan hide write and execute tools. verify hides writes. "
+                "Moving to implement from explore, plan, or verify needs approval. "
                 "Do not use this to bypass a policy_* denial. "
                 "On policy_* denial, do not retry the same phase."
             ),

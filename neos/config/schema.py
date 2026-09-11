@@ -1592,6 +1592,10 @@ class CodingModelConfig(StrictConfigModel):
     mutation_snapshot_interval: int = Field(default=5, gt=0)
     approval_ttl_seconds: int = Field(default=900, gt=0)
     approval_reconciliation_batch_size: int = Field(default=100, gt=0, le=1000)
+    approval_mode: Literal["manual", "auto"] = "manual"
+    approval_deny_tools: list[str] = Field(default_factory=list)
+    approval_allow_tools: list[str] = Field(default_factory=list)
+    approval_always_allow: list[str] = Field(default_factory=list)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     deferred_tools_threshold: int = Field(default=20, ge=1, le=100)
 
@@ -1667,6 +1671,12 @@ class SlackChannelConfig(ChannelPlatformConfig):
     pass
 
 
+class ChannelPrincipal(StrictConfigModel):
+    platform: str
+    platform_user_id: str
+    user_id: str
+
+
 class ChannelConfig(StrictConfigModel):
     telegram: TelegramChannelConfig = Field(default_factory=TelegramChannelConfig)
     discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
@@ -1678,6 +1688,7 @@ class ChannelConfig(StrictConfigModel):
     ignored_channels: list[str] = Field(default_factory=list)
     coding_invoke: bool = False
     coding_owner_user_id: str = ""
+    principals: list[ChannelPrincipal] = Field(default_factory=list)
 
     @field_validator(
         "allowed_users", "allowed_channels", "ignored_channels", mode="before"

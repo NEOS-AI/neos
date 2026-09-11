@@ -29,7 +29,7 @@ def test_coding_failure_extracts_a_lesson_success_does_not() -> None:
         owner_id="u1",
         task_id="ct_1",
         outcome="failed",
-        events=[{"event_type": "run.failed", "error_code": "tool_outcome_unknown"}],
+        events=[{"event_type": "run.failed", "error_code": "precondition_read_required"}],
     )
     ok = extract_coding_lesson(
         owner_id="u1",
@@ -39,8 +39,25 @@ def test_coding_failure_extracts_a_lesson_success_does_not() -> None:
     )
     assert failed is not None
     assert failed.status is LessonStatus.STAGED
-    assert "tool_outcome_unknown" in failed.body
+    assert "precondition_read_required" in failed.body
     assert ok is None
+
+
+def test_extractor_drops_env_and_unverified_failures() -> None:
+    env = extract_coding_lesson(
+        owner_id="u1",
+        task_id="ct_env",
+        outcome="failed",
+        events=[{"event_type": "run.failed", "error_code": "sandbox_timeout"}],
+    )
+    unknown = extract_coding_lesson(
+        owner_id="u1",
+        task_id="ct_unk",
+        outcome="failed",
+        events=[{"event_type": "run.failed", "error_code": "tool_outcome_unknown"}],
+    )
+    assert env is None
+    assert unknown is None
 
 
 def test_research_procedure_is_document_only() -> None:

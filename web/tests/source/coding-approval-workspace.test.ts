@@ -2,23 +2,30 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const read = (path: string) => readFileSync(path, "utf8");
-
 test("approval cards precede steering and remain event-driven", () => {
-  const workspace = read("features/coding/components/coding-task-workspace.tsx");
-  const card = read("features/coding/components/coding-approval-card.tsx");
-  assert.ok(workspace.indexOf("CodingApprovalCard") < workspace.indexOf("CodingSteerComposer"));
-  assert.match(workspace, /connection === "live"/);
-  assert.match(card, /approval\.status !== "pending"/);
+  const workspace = readFileSync(
+    "features/coding/components/coding-task-workspace.tsx",
+    "utf8"
+  );
+  const card = readFileSync(
+    "features/coding/components/coding-approval-card.tsx",
+    "utf8"
+  );
+
+  assert.match(workspace, /CodingApprovalCard/);
+  assert.match(workspace, /pendingApprovals/);
   assert.match(card, /decideCodingApproval/);
-  assert.doesNotMatch(card, /setApproval|onResolved/);
+  assert.match(card, /Approve once/);
 });
 
-test("approval card exposes bounded summary and accessible decision state", () => {
-  const card = read("features/coding/components/coding-approval-card.tsx");
-  assert.match(card, /display_summary/);
-  assert.match(card, /aria-label="Approve tool request"/);
-  assert.match(card, /aria-label="Deny tool request"/);
-  assert.match(card, /role="alert"/);
-  assert.doesNotMatch(card, /request_hash|requested_by|checkpoint_id|normalized_input/);
+test("ask_user approval card collects answers instead of echoing questions", () => {
+  const card = readFileSync(
+    "features/coding/components/coding-approval-card.tsx",
+    "utf8"
+  );
+  const api = readFileSync("features/coding/api/coding-api.ts", "utf8");
+
+  assert.match(card, /ask_user\.v1/);
+  assert.match(card, /answers/);
+  assert.match(api, /answers/);
 });

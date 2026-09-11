@@ -13,6 +13,8 @@ from uuid import uuid4
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.text_parts import TextPartConflict
 from neos.coding.domain.approvals import (
+    ApprovalGate,
+    ApprovalMode,
     ApprovalPolicyOutcome,
     ApprovalStatus,
     evaluate_approval,
@@ -36,7 +38,13 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
-from neos.coding.phases import hidden_tools_for_phase, parse_phase, tool_allowed_in_phase
+from neos.coding.phases import (
+    durable_phase_kind,
+    hidden_tools_for_phase,
+    parse_phase,
+    tool_allowed_in_phase,
+    write_risk_blocked,
+)
 from neos.coding.hooks import CodingHookPort, NullCodingHooks
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
@@ -93,6 +101,10 @@ class CodingLoopConfig:
     max_text_delta_bytes: int = 16_384
     max_public_text_bytes: int = 1_048_576
     approval_ttl_sec: float = 900
+    approval_mode: str = "manual"
+    approval_deny_tools: frozenset[str] = frozenset()
+    approval_allow_tools: frozenset[str] = frozenset()
+    approval_always_allow: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         numeric = (
@@ -149,6 +161,7 @@ class AgentLoopState:
     output_token_escalations: int = 0
     llm_compact_attempts: int = 0
     revealed_tools: frozenset[str] = frozenset()
+    approved_always: frozenset[str] = frozenset()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -167,9 +180,7 @@ class DurableCodingLoop:
         metrics=None,
         audit=None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        approval_evaluator: Callable[
-            [ValidatedToolCall], ApprovalPolicyOutcome
-        ] = evaluate_approval,
+        approval_evaluator: Callable[..., ApprovalPolicyOutcome] = evaluate_approval,
         hooks: CodingHookPort | None = None,
     ) -> None:
         self._model = model
@@ -182,6 +193,38 @@ class DurableCodingLoop:
         self._clock = clock
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
+
+    def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
+        try:
+            mode = ApprovalMode(self._config.approval_mode)
+        except ValueError:
+            mode = ApprovalMode.MANUAL
+        return ApprovalGate(
+            mode=mode,
+            deny_tools=frozenset(self._config.approval_deny_tools),
+            allow_tools=frozenset(self._config.approval_allow_tools),
+            always_allow=frozenset(self._config.approval_always_allow),
+            approved_always=state.approved_always,
+            current_phase=state.phase,
+        )
+
+    def _evaluate_call(self, validated, state: AgentLoopState) -> ApprovalPolicyOutcome:
+        gate = self._approval_gate(state)
+        try:
+            return self._approval_evaluator(validated, gate)
+        except TypeError:
+            return self._approval_evaluator(validated)
+
+    @staticmethod
+    def _with_approval_answers(validated, approval) -> Any:
+        if validated.name != "ask_user.v1":
+            return validated
+        answers = approval.display_summary.get("answers")
+        if not isinstance(answers, list):
+            return validated
+        merged = dict(validated.input)
+        merged["answers"] = [str(item) for item in answers]
+        return replace(validated, input=merged)
 
     async def run(
         self,
@@ -416,6 +459,12 @@ class DurableCodingLoop:
             )
             yield event, denied_state
             return
+        if write_risk_blocked(validated.risk, state.phase):
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, "policy_phase_denied"
+            )
+            yield event, denied_state
+            return
         await self._audit.emit(
             CodingToolAuditEvent.from_result(
                 provider=bound.binding.provider,
@@ -424,7 +473,13 @@ class DurableCodingLoop:
                 outcome="allowed",
             )
         )
-        approval_outcome = self._approval_evaluator(validated)
+        approval_outcome = self._evaluate_call(validated, state)
+        if approval_outcome is ApprovalPolicyOutcome.DENY:
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, "policy_approval_denied"
+            )
+            yield event, denied_state
+            return
         if approval_outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
             approval = await deps.repository.get_tool_approval(
                 task_id=input.task_id,
@@ -471,6 +526,7 @@ class DurableCodingLoop:
                 )
                 yield committed.event, denied_state
                 return
+            validated = self._with_approval_answers(validated, approval)
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,
@@ -486,7 +542,9 @@ class DurableCodingLoop:
         ):
             raise CodingLoopFailure("tool_outcome_unknown", retryable=False)
         started = await deps.repository.begin_phase(
-            lease=deps.lease, kind=CodingPhaseKind.IMPLEMENT, now=self._clock()
+            lease=deps.lease,
+            kind=durable_phase_kind(state.phase),
+            now=self._clock(),
         )
         if started.event is not None:
             yield started.event, state
@@ -590,7 +648,7 @@ class DurableCodingLoop:
             return None
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
-            if call.name == "spawn_agent.v1":
+            if call.name in {"spawn_agent.v1", "set_phase.v1"}:
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
@@ -635,7 +693,9 @@ class DurableCodingLoop:
                 raise CodingLoopFailure("tool_execution_busy", retryable=True)
             claims.append((call, validated, claim))
         started = await deps.repository.begin_phase(
-            lease=deps.lease, kind=CodingPhaseKind.IMPLEMENT, now=self._clock()
+            lease=deps.lease,
+            kind=durable_phase_kind(state.phase),
+            now=self._clock(),
         )
         if started.event is not None:
             yield started.event, current
@@ -1254,6 +1314,7 @@ class DurableCodingLoop:
             int(raw.get("output_token_escalations", 0)),
             int(raw.get("llm_compact_attempts", 0)),
             frozenset(str(name) for name in raw.get("revealed_tools") or ()),
+            frozenset(str(name) for name in raw.get("approved_always") or ()),
         )
 
     @staticmethod
@@ -1302,6 +1363,7 @@ class DurableCodingLoop:
             "output_token_escalations": state.output_token_escalations,
             "llm_compact_attempts": state.llm_compact_attempts,
             "revealed_tools": sorted(state.revealed_tools),
+            "approved_always": sorted(state.approved_always),
         }
 
     @staticmethod

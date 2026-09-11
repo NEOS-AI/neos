@@ -172,7 +172,11 @@ class ChannelGateway:
                 return _CODE_USAGE
             if not settings.config.channels.coding_invoke:
                 return _CODE_DISABLED
-            owner = settings.config.channels.coding_owner_user_id
+            from .principals import resolve_coding_owner
+
+            owner = resolve_coding_owner(
+                message=message, channels=settings.config.channels
+            )
             if not owner:
                 return _CODE_NO_OWNER
             coding = self._coding_port()

@@ -32,8 +32,44 @@ PROTECTED_SKILL_NAMES = frozenset(
 )
 
 
+_ENV_FAILURE_MARKERS = (
+    "sandbox_error",
+    "sandbox_timeout",
+    "command_not_found",
+    "modulenotfounderror",
+    "filenotfounderror",
+    "permission denied",
+    "no such file",
+    "not installed",
+    "missing binary",
+    "credential",
+    "api_key",
+    "authentication failed",
+)
+
+_UNVERIFIED_MARKERS = (
+    "tool_outcome_unknown",
+    "is broken",
+    "does not work",
+    "doesn't work",
+    "always fails",
+    "never works",
+)
+
+
 def is_imperative(text: str) -> bool:
     return bool(text and _IMPERATIVE.search(text))
+
+
+def should_capture_coding_signal(*parts: object) -> bool:
+    blob = " ".join(str(part).lower() for part in parts if part)
+    if not blob:
+        return False
+    if any(marker in blob for marker in _ENV_FAILURE_MARKERS):
+        return False
+    if any(marker in blob for marker in _UNVERIFIED_MARKERS):
+        return False
+    return True
 
 
 def namespace(owner_id: str, workspace_id: str | None = None) -> str:

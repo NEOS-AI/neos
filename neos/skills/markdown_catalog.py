@@ -38,6 +38,11 @@ def default_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
     )
 
 
+def _has_required_sections(content: str) -> bool:
+    lowered = content.lower()
+    return "## when to use" in lowered and "## boundaries" in lowered
+
+
 def _is_safe_name(name: str) -> bool:
     if not name or name != name.strip():
         return False
@@ -99,6 +104,21 @@ def _parse_markdown_skill(
     if not _is_safe_name(name):
         logger.warning("Skipping skill with unsafe name %r at %s", name, path)
         return None
+
+    body_text = body if body is not None else content
+    if not _has_required_sections(body_text):
+        if source == "coding":
+            logger.warning(
+                "Skipping coding skill %r without When to Use / Boundaries at %s",
+                name,
+                path,
+            )
+            return None
+        logger.warning(
+            "Skill %r is missing When to Use / Boundaries at %s",
+            name,
+            path,
+        )
 
     try:
         resolved = path.resolve()

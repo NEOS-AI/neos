@@ -135,8 +135,16 @@ class DiscordAdapter(ChannelAdapterBase):
             chat = channel_id
             thread = "-"
 
+        from neos.api.channels.principals import resolve_channel_principal
+
+        platform_user_id = str(raw.author.id)
+        mapped = resolve_channel_principal(
+            platform="discord",
+            platform_user_id=platform_user_id,
+            channels=settings.config.channels,
+        )
         return ChannelMessage(
-            user_id=settings.CHANNEL_BOT_USER_ID,
+            user_id=mapped or settings.CHANNEL_BOT_USER_ID,
             session_id=build_session_key(
                 "discord", guild_id or "dm", chat, thread
             ),

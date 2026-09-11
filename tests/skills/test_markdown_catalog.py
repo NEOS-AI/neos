@@ -60,6 +60,20 @@ def test_get_does_not_escape_via_path_name() -> None:
     assert catalog.load_markdown("..") is None
 
 
+def test_coding_skill_without_required_sections_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    root.mkdir()
+    (root / "thin.md").write_text("# thin\n\nJust a note.\n", encoding="utf-8")
+    (root / "full.md").write_text(
+        "---\nname: full\ndescription: Complete\n---\n\n"
+        "## When to Use\n\nUse it.\n\n## Boundaries\n\nDo not invent.\n",
+        encoding="utf-8",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+    assert catalog.get("thin") is None
+    assert catalog.get("full") is not None
+
+
 def test_reload_picks_up_new_skill(tmp_path: Path) -> None:
     root = tmp_path / "skills"
     first = root / "hello"

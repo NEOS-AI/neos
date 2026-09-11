@@ -439,7 +439,9 @@ async def test_ask_user_returns_ok_entries_without_sandbox_io() -> None:
 
     assert (result.status, result.reason_code) == ("ok", "ok")
     assert session.called is None
-    assert result.entries == ({"questions": questions},)
+    assert result.entries[0]["questions"] == questions
+    assert result.entries[0]["answers"] == []
+    assert result.entries[0]["pairs"][0]["question"] == "Which runner?"
 
 
 @pytest.mark.asyncio

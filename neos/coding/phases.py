@@ -9,19 +9,23 @@ from neos.coding.tools.registry import ToolRisk
 
 class CodingAgentPhase(StrEnum):
     EXPLORE = "explore"
+    PLAN = "plan"
     IMPLEMENT = "implement"
     VERIFY = "verify"
 
 
+_HIDDEN_WRITES = frozenset(
+    {
+        "edit_file.v1",
+        "write_file.v1",
+        "execute.v1",
+        "spawn_agent.v1",
+    }
+)
+
 _HIDDEN: dict[CodingAgentPhase, frozenset[str]] = {
-    CodingAgentPhase.EXPLORE: frozenset(
-        {
-            "edit_file.v1",
-            "write_file.v1",
-            "execute.v1",
-            "spawn_agent.v1",
-        }
-    ),
+    CodingAgentPhase.EXPLORE: _HIDDEN_WRITES,
+    CodingAgentPhase.PLAN: _HIDDEN_WRITES,
     CodingAgentPhase.VERIFY: frozenset(
         {"edit_file.v1", "write_file.v1", "spawn_agent.v1"}
     ),
@@ -50,3 +54,29 @@ def write_risk_blocked(risk: ToolRisk, phase: CodingAgentPhase | str) -> bool:
     if parsed is CodingAgentPhase.IMPLEMENT:
         return False
     return risk is ToolRisk.WORKSPACE_WRITE
+
+
+def phase_change_requires_approval(
+    current: CodingAgentPhase | str, target: CodingAgentPhase | str
+) -> bool:
+    current_phase = parse_phase(current)
+    target_phase = parse_phase(target)
+    if target_phase is not CodingAgentPhase.IMPLEMENT:
+        return False
+    return current_phase in {
+        CodingAgentPhase.EXPLORE,
+        CodingAgentPhase.PLAN,
+        CodingAgentPhase.VERIFY,
+    }
+
+
+def durable_phase_kind(phase: CodingAgentPhase | str):
+    from neos.coding.domain.phases import CodingPhaseKind
+
+    parsed = parse_phase(phase)
+    return {
+        CodingAgentPhase.EXPLORE: CodingPhaseKind.UNDERSTAND,
+        CodingAgentPhase.PLAN: CodingPhaseKind.PLAN,
+        CodingAgentPhase.IMPLEMENT: CodingPhaseKind.IMPLEMENT,
+        CodingAgentPhase.VERIFY: CodingPhaseKind.VERIFY,
+    }[parsed]

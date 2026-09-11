@@ -25,6 +25,7 @@ from neos.coding.domain.approvals import (
     CodingApproval,
     approval_display_summary,
     canonical_approval_hash,
+    requires_approval_answers,
 )
 from neos.coding.domain.events import make_event
 from neos.coding.domain.text_parts import (
@@ -606,7 +607,7 @@ class InMemoryCodingRunRepository:
             return self.approvals.get((task_id, run_id, tool_call_id))
 
     async def resolve_tool_approval(
-        self, *, task_id, approval_id, owner_id, decision, now
+        self, *, task_id, approval_id, owner_id, decision, now, answers=()
     ):
         async with self._durability_lock:
             item = next(
@@ -633,14 +634,24 @@ class InMemoryCodingRunRepository:
                     decided_at=now,
                 )
                 conflict_code = "approval_expired"
+            elif (
+                decision is ApprovalDecision.APPROVE
+                and requires_approval_answers(approval.tool_name)
+                and not answers
+            ):
+                raise ApprovalConflict("answers_required")
             elif decision is ApprovalDecision.APPROVE:
                 status = ApprovalStatus.APPROVED
+                summary = dict(approval.display_summary)
+                if answers:
+                    summary["answers"] = list(answers)
                 resolved = replace(
                     approval,
                     status=status,
                     decision=decision,
                     decided_by=owner_id,
                     decided_at=now,
+                    display_summary=summary,
                 )
             else:
                 status = ApprovalStatus.DENIED
@@ -663,7 +674,7 @@ class InMemoryCodingRunRepository:
                     "status": status.value,
                     "requested_at": approval.requested_at.isoformat(),
                     "expires_at": approval.expires_at.isoformat(),
-                    "display_summary": dict(approval.display_summary),
+                    "display_summary": dict(resolved.display_summary),
                 },
                 now=now,
                 run_id=approval.run_id,

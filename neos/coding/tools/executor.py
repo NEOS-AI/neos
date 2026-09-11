@@ -387,9 +387,19 @@ class SandboxToolExecutor:
     @staticmethod
     def _ask_user(call: ValidatedToolCall) -> ToolResult:
         questions = [str(item) for item in call.input["questions"]]
+        raw_answers = call.input.get("answers")
+        answers = (
+            [str(item) for item in raw_answers]
+            if isinstance(raw_answers, list)
+            else []
+        )
+        pairs = [
+            {"question": question, "answer": answers[index] if index < len(answers) else ""}
+            for index, question in enumerate(questions)
+        ]
         return ToolResult.ok(
             workspace_revision="unknown",
-            entries=({"questions": questions},),
+            entries=({"questions": questions, "answers": answers, "pairs": pairs},),
         )
 
     @staticmethod

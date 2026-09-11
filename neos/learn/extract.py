@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from neos.learn.lessons import Lesson, new_lesson
-from neos.learn.policy import clip_knowledge, namespace
+from neos.learn.policy import clip_knowledge, namespace, should_capture_coding_signal
 
 _FAILURE_MARKERS = (
     "tool_outcome_unknown",
@@ -36,6 +36,8 @@ def extract_coding_lesson(
             codes.append(kind)
     unique = list(dict.fromkeys(codes))[:8]
     detail = ", ".join(unique) if unique else outcome
+    if not should_capture_coding_signal(outcome, detail, *unique):
+        return None
     body = clip_knowledge(
         f"Coding run {task_id} ended {outcome}. Signals: {detail}."
     )

@@ -175,8 +175,18 @@ class TelegramAdapter(ChannelAdapterBase):
         message_thread_id = getattr(message, "message_thread_id", None)
         message_id = getattr(message, "message_id", None)
 
+        from neos.api.channels.principals import resolve_channel_principal
+
+        platform_user_id = (
+            str(raw.effective_user.id) if raw.effective_user else ""
+        )
+        mapped = resolve_channel_principal(
+            platform="telegram",
+            platform_user_id=platform_user_id,
+            channels=settings.config.channels,
+        )
         return ChannelMessage(
-            user_id=settings.CHANNEL_BOT_USER_ID,
+            user_id=mapped or settings.CHANNEL_BOT_USER_ID,
             session_id=build_session_key(
                 "telegram",
                 "dm" if is_private else chat_id,

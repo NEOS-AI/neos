@@ -4,6 +4,7 @@ import pytest
 
 from neos.api.channels.base import ChannelMessage
 from neos.api.channels.gateway import ChannelGateway
+from neos.config.schema import ChannelPrincipal
 from tests.api.channels.conftest import install_channel_settings
 
 pytestmark = pytest.mark.no_db
@@ -37,22 +38,35 @@ class FakeCoding:
         return f"{task_id} {'approved' if approve else 'denied'}"
 
 
-def _message(text: str, session_id: str = "v2:slack:T:C:1") -> ChannelMessage:
+def _message(
+    text: str,
+    session_id: str = "v2:slack:T:C:1",
+    *,
+    slack_user_id: str = "U_alice",
+) -> ChannelMessage:
     return ChannelMessage(
         user_id="bot",
         session_id=session_id,
         text=text,
         channel_type="slack",
         channel_id="C",
+        metadata={"slack_user_id": slack_user_id},
     )
 
 
-def _gateway(monkeypatch, *, coding_invoke=True, owner="u_owner"):
+def _gateway(
+    monkeypatch,
+    *,
+    coding_invoke=True,
+    owner="u_owner",
+    principals=None,
+):
     install_channel_settings(
         monkeypatch,
         allowed_users=["U_alice"],
         coding_invoke=coding_invoke,
         coding_owner_user_id=owner,
+        principals=principals,
     )
     workflow = FakeWorkflow()
     coding = FakeCoding()
@@ -100,6 +114,42 @@ async def test_stop_and_status_use_bound_task(monkeypatch):
     assert await gateway.dispatch(_message("/status", "other")) == (
         "No coding task in this thread."
     )
+
+
+async def test_code_uses_mapped_principal_not_shared_owner(monkeypatch):
+    gateway, _workflow, coding = _gateway(
+        monkeypatch,
+        owner="u_shared",
+        principals=[
+            ChannelPrincipal(
+                platform="slack",
+                platform_user_id="U_alice",
+                user_id="u_alice",
+            )
+        ],
+    )
+    reply = await gateway.dispatch(_message("<@U_BOT> /code fix the test"))
+    assert "ct_channel" in reply
+    assert coding.started == [("u_alice", "fix the test")]
+
+
+async def test_code_without_principal_is_refused_when_map_exists(monkeypatch):
+    gateway, _workflow, coding = _gateway(
+        monkeypatch,
+        owner="u_shared",
+        principals=[
+            ChannelPrincipal(
+                platform="slack",
+                platform_user_id="U_alice",
+                user_id="u_alice",
+            )
+        ],
+    )
+    reply = await gateway.dispatch(
+        _message("/code fix", slack_user_id="U_unknown")
+    )
+    assert "owner" in reply.lower()
+    assert coding.started == []
 
 
 async def test_inflight_second_message_is_dropped(monkeypatch):

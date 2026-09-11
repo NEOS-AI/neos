@@ -414,7 +414,7 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("todo_write.v1", {"todos": [{"content": "x", "status": "blocked"}]}),
         ("todo_write.v1", {"todos": [{"content": "x", "status": "pending", "surprise": True}]}),
         ("execute.v1", {"argv": []}),
-        ("set_phase.v1", {"phase": "plan"}),
+        ("set_phase.v1", {"phase": "ship"}),
         ("ask_user.v1", {"questions": []}),
         ("ask_user.v1", {"questions": ["a", "b", "c", "d", "e"]}),
         ("load_skill.v1", {"name": ""}),

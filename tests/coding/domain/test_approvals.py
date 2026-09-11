@@ -1,11 +1,14 @@
 import json
 
 from neos.coding.domain.approvals import (
+    ApprovalGate,
+    ApprovalMode,
     ApprovalPolicyOutcome,
     ApprovalStatus,
     approval_display_summary,
     canonical_approval_hash,
     evaluate_approval,
+    requires_approval_answers,
 )
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
@@ -46,6 +49,48 @@ def test_policy_allows_reads_and_requires_exact_approval_for_mutations() -> None
     assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
     assert evaluate_approval(command) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
     assert evaluate_approval(lint) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
+def test_approval_gate_denies_listed_tools_and_fail_closes() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "value"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    denied = evaluate_approval(
+        write, ApprovalGate(deny_tools=frozenset({"write_file.v1"}))
+    )
+    auto_allow = evaluate_approval(
+        write,
+        ApprovalGate(
+            mode=ApprovalMode.AUTO,
+            always_allow=frozenset({"write_file.v1"}),
+        ),
+    )
+    manual_seed = evaluate_approval(
+        write,
+        ApprovalGate(
+            mode=ApprovalMode.MANUAL,
+            always_allow=frozenset({"write_file.v1"}),
+        ),
+    )
+    assert denied is ApprovalPolicyOutcome.DENY
+    assert auto_allow is ApprovalPolicyOutcome.ALLOW
+    assert manual_seed is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
+def test_set_phase_to_implement_from_plan_requires_approval() -> None:
+    jump = call("set_phase.v1", {"phase": "implement"}, ToolRisk.READ_ONLY)
+    assert (
+        evaluate_approval(jump, ApprovalGate(current_phase="plan"))
+        is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    )
+    assert (
+        evaluate_approval(jump, ApprovalGate(current_phase="implement"))
+        is ApprovalPolicyOutcome.ALLOW
+    )
+    assert requires_approval_answers("ask_user.v1")
+    assert not requires_approval_answers("write_file.v1")
 
 
 def test_canonical_hash_is_deterministic_and_binding_sensitive() -> None:

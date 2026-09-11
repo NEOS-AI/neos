@@ -10,6 +10,7 @@ from enum import StrEnum
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.phases import CodingCheckpoint
+from neos.coding.phases import phase_change_requires_approval
 
 
 class ApprovalStatus(StrEnum):
@@ -29,6 +30,21 @@ class ApprovalPolicyOutcome(StrEnum):
     ALLOW = "allow"
     DENY = "deny"
     REQUIRE_APPROVAL = "require_approval"
+
+
+class ApprovalMode(StrEnum):
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalGate:
+    mode: ApprovalMode = ApprovalMode.MANUAL
+    deny_tools: frozenset[str] = frozenset()
+    allow_tools: frozenset[str] = frozenset()
+    always_allow: frozenset[str] = frozenset()
+    approved_always: frozenset[str] = frozenset()
+    current_phase: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +114,35 @@ class ApprovalNotFound(LookupError):
     pass
 
 
-def evaluate_approval(call: ValidatedToolCall) -> ApprovalPolicyOutcome:
+def requires_approval_answers(tool_name: str) -> bool:
+    return tool_name == "ask_user.v1"
+
+
+def evaluate_approval(
+    call: ValidatedToolCall,
+    gate: ApprovalGate | None = None,
+) -> ApprovalPolicyOutcome:
+    try:
+        return _evaluate_approval(call, gate or ApprovalGate())
+    except Exception:
+        return ApprovalPolicyOutcome.DENY
+
+
+def _evaluate_approval(
+    call: ValidatedToolCall, gate: ApprovalGate
+) -> ApprovalPolicyOutcome:
+    if call.name in gate.deny_tools:
+        return ApprovalPolicyOutcome.DENY
+    if call.name in gate.allow_tools:
+        return ApprovalPolicyOutcome.ALLOW
+    if call.name in gate.approved_always:
+        return ApprovalPolicyOutcome.ALLOW
+    if call.name in gate.always_allow and gate.mode is ApprovalMode.AUTO:
+        return ApprovalPolicyOutcome.ALLOW
+    if call.name == "set_phase.v1" and gate.current_phase is not None:
+        target = str(call.input.get("phase") or "")
+        if phase_change_requires_approval(gate.current_phase, target):
+            return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.risk is ToolRisk.READ_ONLY:
         return ApprovalPolicyOutcome.ALLOW
     if call.risk in {
@@ -134,6 +178,11 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         if warnings:
             summary["warnings"] = warnings
         return summary
+    if call.name == "ask_user.v1":
+        questions = call.input.get("questions")
+        if isinstance(questions, list):
+            return {"questions": [str(item) for item in questions]}
+        return {"questions": []}
     path = call.input.get("path")
     if isinstance(path, str):
         return {"path": path}

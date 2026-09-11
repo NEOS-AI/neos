@@ -115,6 +115,19 @@ export async function getCodingSandboxStatus(
   return response.json();
 }
 
+export async function stopCodingTask(
+  taskId: string
+): Promise<{ task_id: string; status: "cancelled" }> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/stop`,
+    { method: "POST" }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not stop coding task");
+  }
+  return response.json();
+}
+
 export async function steerCodingTask(
   taskId: string,
   instruction: string,
@@ -137,14 +150,15 @@ export async function steerCodingTask(
 export async function decideCodingApproval(
   taskId: string,
   approvalId: string,
-  decision: "approve" | "deny"
+  decision: "approve" | "deny",
+  answers: string[] = []
 ): Promise<CodingApprovalView> {
   const response = await fetch(
     `/api/coding/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, answers }),
     }
   );
   if (!response.ok) {

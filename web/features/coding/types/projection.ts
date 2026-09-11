@@ -27,7 +27,7 @@ export type CodingToolView = {
 export type CodingApprovalView = {
   approval_id: string;
   tool_name: string;
-  risk: "workspace_write" | "command";
+  risk: "workspace_write" | "command" | "user_question";
   status: "pending" | "approved" | "denied" | "expired" | "invalidated";
   requested_at: string;
   expires_at: string;

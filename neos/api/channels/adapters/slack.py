@@ -148,8 +148,15 @@ class SlackAdapter(ChannelAdapterBase):
             thread_id or "-",
         )
 
+        from neos.api.channels.principals import resolve_channel_principal
+
+        mapped = resolve_channel_principal(
+            platform="slack",
+            platform_user_id=slack_user_id,
+            channels=settings.config.channels,
+        )
         return ChannelMessage(
-            user_id=settings.CHANNEL_BOT_USER_ID,
+            user_id=mapped or settings.CHANNEL_BOT_USER_ID,
             session_id=session_id,
             text=text,
             channel_type=self.channel_type,

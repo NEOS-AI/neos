@@ -17,14 +17,26 @@ export function CodingApprovalCard({
 }) {
   const [submitting, setSubmitting] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const questions = Array.isArray(approval.display_summary.questions)
+    ? approval.display_summary.questions.filter(
+        (item): item is string => typeof item === "string"
+      )
+    : [];
+  const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const disabled = !live || approval.status !== "pending" || submitting !== null;
   const command = approval.risk === "command";
+  const asking = approval.tool_name === "ask_user.v1" || questions.length > 0;
 
   async function decide(decision: "approve" | "deny") {
     setSubmitting(decision);
     setError(null);
     try {
-      await decideCodingApproval(taskId, approval.approval_id, decision);
+      await decideCodingApproval(
+        taskId,
+        approval.approval_id,
+        decision,
+        asking ? answers : []
+      );
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -69,16 +81,38 @@ export function CodingApprovalCard({
         </span>
       </div>
 
-      <dl className="mt-4 grid gap-px border border-border/60 bg-border/60 sm:grid-cols-2">
-        {Object.entries(approval.display_summary).map(([label, value]) => (
-          <div className="bg-background/90 px-3 py-2" key={label}>
-            <dt className="font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
-              {label.replaceAll("_", " ")}
-            </dt>
-            <dd className="mt-1 truncate font-mono text-xs">{String(value)}</dd>
-          </div>
-        ))}
-      </dl>
+      {asking ? (
+        <div className="mt-4 space-y-2">
+          {questions.map((question, index) => (
+            <label className="block" key={question}>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {question}
+              </span>
+              <input
+                className="mt-1 w-full border border-border/70 bg-background px-2 py-1 font-mono text-xs"
+                disabled={disabled}
+                onChange={(event) => {
+                  const next = [...answers];
+                  next[index] = event.target.value;
+                  setAnswers(next);
+                }}
+                value={answers[index] ?? ""}
+              />
+            </label>
+          ))}
+        </div>
+      ) : (
+        <dl className="mt-4 grid gap-px border border-border/60 bg-border/60 sm:grid-cols-2">
+          {Object.entries(approval.display_summary).map(([label, value]) => (
+            <div className="bg-background/90 px-3 py-2" key={label}>
+              <dt className="font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
+                {label.replaceAll("_", " ")}
+              </dt>
+              <dd className="mt-1 truncate font-mono text-xs">{String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-[11px] text-muted-foreground">

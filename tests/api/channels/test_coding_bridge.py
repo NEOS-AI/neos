@@ -1,25 +1,29 @@
-from __future__ import annotations
-
 from types import SimpleNamespace
 
 import pytest
 
 from neos.api.channels.coding_bridge import RuntimeChannelCoding
+from neos.coding.domain.approvals import ApprovalStatus
 
 pytestmark = pytest.mark.no_db
 
 
-async def test_stop_task_uses_run_service_stop(monkeypatch) -> None:
-    calls: list[dict] = []
-
-    async def stop(**kwargs):
-        calls.append(kwargs)
-
-    monkeypatch.setattr(
-        "neos.coding.runtime.coding_run_service",
-        SimpleNamespace(stop=stop),
+@pytest.mark.asyncio
+async def test_channel_cannot_approve_ask_user_without_answers(monkeypatch) -> None:
+    pending = SimpleNamespace(
+        approval_id="ca_9",
+        tool_name="ask_user.v1",
+        status=ApprovalStatus.PENDING,
     )
 
-    await RuntimeChannelCoding().stop_task(task_id="ct_1", owner_id="u_owner")
+    class Snapshot:
+        async def get_owned(self, task_id, owner_id):
+            return SimpleNamespace(approvals=(pending,))
 
-    assert calls == [{"task_id": "ct_1", "owner_id": "u_owner"}]
+    import neos.coding.runtime as runtime
+
+    monkeypatch.setattr(runtime, "coding_snapshot_service", Snapshot())
+    reply = await RuntimeChannelCoding().decide(
+        task_id="ct_1", owner_id="u1", approve=True, approval_id="ca_9"
+    )
+    assert "Code UI" in reply

@@ -90,10 +90,11 @@ def test_owner_can_resolve_coding_approval() -> None:
 
     class Approvals:
         async def resolve(self, **kwargs):
-            assert kwargs == {
-                "task_id": "ct_1", "approval_id": "ca_1",
-                "owner_id": "owner", "decision": kwargs["decision"],
-            }
+            assert kwargs["task_id"] == "ct_1"
+            assert kwargs["approval_id"] == "ca_1"
+            assert kwargs["owner_id"] == "owner"
+            assert kwargs["decision"].value == "approve"
+            assert kwargs.get("answers", ()) == ()
             return SimpleNamespace(approval=SimpleNamespace(
                 approval_id="ca_1", tool_name="write_file.v1",
                 risk=SimpleNamespace(value="workspace_write"), status=SimpleNamespace(value="approved"),
@@ -246,6 +247,30 @@ def test_foreign_user_cannot_steer_coding_task() -> None:
         f"/api/v1/coding/tasks/{task_id}/steer",
         json={"instruction": "exfiltrate", "mode": "interrupt_now"},
     )
+
+    assert response.status_code == 404
+
+
+def test_owner_can_stop_coding_task() -> None:
+    client, _ = make_client("u1")
+    task_id = client.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it"}
+    ).json()["task_id"]
+
+    response = client.post(f"/api/v1/coding/tasks/{task_id}/stop")
+
+    assert response.status_code == 202
+    assert response.json() == {"task_id": task_id, "status": "cancelled"}
+
+
+def test_foreign_user_cannot_stop_coding_task() -> None:
+    owner, _ = make_client("owner")
+    task_id = owner.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it"}
+    ).json()["task_id"]
+    foreign, _ = make_client("foreign")
+
+    response = foreign.post(f"/api/v1/coding/tasks/{task_id}/stop")
 
     assert response.status_code == 404
 

@@ -35,33 +35,67 @@ class RuntimeChannelCoding:
         snapshot = await coding_service.snapshot(task_id, owner_id)
         if snapshot is None:
             return "Coding task not found."
-        return f"{snapshot.task.task_id} {snapshot.task.status.value}"
+        status = snapshot.task.status.value
+        if status == "waiting_approval":
+            from neos.coding.domain.approvals import ApprovalStatus
+            from neos.coding.runtime import coding_snapshot_service
+
+            projection = await coding_snapshot_service.get_owned(task_id, owner_id)
+            pending = [
+                item
+                for item in (projection.approvals if projection is not None else ())
+                if item.status is ApprovalStatus.PENDING
+            ]
+            if pending:
+                latest = pending[-1]
+                return (
+                    f"{snapshot.task.task_id} waiting_approval "
+                    f"{latest.approval_id} {latest.tool_name}"
+                )
+        return f"{snapshot.task.task_id} {status}"
 
     async def decide(
         self, *, task_id: str, owner_id: str, approve: bool, approval_id: str
     ) -> str:
-        from neos.coding.domain.approvals import ApprovalDecision, ApprovalStatus
+        from neos.coding.domain.approvals import (
+            ApprovalConflict,
+            ApprovalDecision,
+            ApprovalStatus,
+            requires_approval_answers,
+        )
         from neos.coding.runtime import coding_approval_service, coding_snapshot_service
 
         target = approval_id
+        snapshot = await coding_snapshot_service.get_owned(task_id, owner_id)
+        if snapshot is None:
+            return "Coding task not found."
+        pending = [
+            item
+            for item in snapshot.approvals
+            if item.status is ApprovalStatus.PENDING
+        ]
         if not target:
-            snapshot = await coding_snapshot_service.get_owned(task_id, owner_id)
-            if snapshot is None:
-                return "Coding task not found."
-            pending = [
-                item
-                for item in snapshot.approvals
-                if item.status is ApprovalStatus.PENDING
-            ]
             if not pending:
                 return "No pending coding approval."
             target = pending[-1].approval_id
-        commit = await coding_approval_service.resolve(
-            task_id=task_id,
-            approval_id=target,
-            owner_id=owner_id,
-            decision=(
-                ApprovalDecision.APPROVE if approve else ApprovalDecision.DENY
-            ),
-        )
+        chosen = next((item for item in pending if item.approval_id == target), None)
+        if (
+            approve
+            and chosen is not None
+            and requires_approval_answers(chosen.tool_name)
+        ):
+            return "Answer this question in the Code UI."
+        try:
+            commit = await coding_approval_service.resolve(
+                task_id=task_id,
+                approval_id=target,
+                owner_id=owner_id,
+                decision=(
+                    ApprovalDecision.APPROVE if approve else ApprovalDecision.DENY
+                ),
+            )
+        except ApprovalConflict as error:
+            if str(error) == "answers_required":
+                return "Answer this question in the Code UI."
+            raise
         return f"{commit.approval.approval_id} {commit.approval.status.value}"

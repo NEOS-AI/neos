@@ -1070,6 +1070,68 @@ async def test_hidden_tool_in_explore_phase_is_denied() -> None:
 
 
 @pytest.mark.asyncio
+async def test_set_phase_to_implement_is_not_batched_past_the_approval_gate() -> None:
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        approval_evaluator=evaluate_approval,
+    )
+    checkpoint = CodingCheckpoint(
+        "cc_plan",
+        "ct_1",
+        "cr_1",
+        1,
+        {
+            "transcript": [
+                {"role": "user", "content": [{"type": "text", "text": "Fix it"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "tool_call_id": "phase_1",
+                            "name": "set_phase.v1",
+                            "input": {"phase": "implement"},
+                        },
+                        {
+                            "type": "tool_use",
+                            "tool_call_id": "read_1",
+                            "name": "read_file.v1",
+                            "input": {"path": "a.txt"},
+                        },
+                    ],
+                },
+            ],
+            "pending_tool_calls": [
+                {
+                    "tool_call_id": "phase_1",
+                    "name": "set_phase.v1",
+                    "input": {"phase": "implement"},
+                },
+                {
+                    "tool_call_id": "read_1",
+                    "name": "read_file.v1",
+                    "input": {"path": "a.txt"},
+                },
+            ],
+            "pending_tool_index": 0,
+            "phase": "plan",
+            "turn_count": 1,
+            "tool_count": 0,
+            "transcript_digest": "x",
+            "instructions_loaded": True,
+        },
+        "1",
+        NOW,
+    )
+
+    events = await collect(h, checkpoint)
+
+    assert any(event.type == "approval.requested" for event in events)
+    assert h.executor.calls == []
+    assert h.repository.checkpoints[-1].loop_state["phase"] == "plan"
+
+
+@pytest.mark.asyncio
 async def test_readonly_tools_are_prefetched_once_during_model_stream() -> None:
     h = harness(
         [

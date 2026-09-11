@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from neos.coding.domain.approvals import requires_approval_answers
+
 ACTION_STOP = "neos_code_stop"
 ACTION_STATUS = "neos_code_status"
 ACTION_APPROVE = "neos_code_approve"
@@ -15,6 +17,7 @@ _STARTED = re.compile(r"^Started coding task (\S+)$")
 _STOPPED = re.compile(r"^Stopped (\S+)$")
 _APPROVAL = re.compile(r"^(\S+) (approved|denied)$")
 _STATUS = re.compile(r"^(\S+) (\S+)$")
+_WAITING = re.compile(r"^(\S+) waiting_approval(?: (\S+)(?: (\S+))?)?$")
 
 _TEXT_ONLY = frozenset(
     {
@@ -90,6 +93,16 @@ def coding_blocks(text: str) -> list[dict[str, Any]] | None:
 
     if _STOPPED.fullmatch(stripped) or _APPROVAL.fullmatch(stripped):
         return [_context(stripped)]
+
+    waiting = _WAITING.fullmatch(stripped)
+    if waiting:
+        task_id, approval_id, tool_name = waiting.group(1), waiting.group(2), waiting.group(3)
+        buttons = [_button("Stop", ACTION_STOP, task_id, style="danger")]
+        if approval_id:
+            if not requires_approval_answers(tool_name or ""):
+                buttons.append(_button("Approve", ACTION_APPROVE, approval_id))
+            buttons.append(_button("Deny", ACTION_DENY, approval_id))
+        return [_section(stripped), _actions(buttons)]
 
     status = _STATUS.fullmatch(stripped)
     if status:
