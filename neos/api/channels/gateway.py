@@ -339,6 +339,12 @@ class ChannelGateway:
         return _LEARN_STAGED
 
     async def _run_new(self, message: ChannelMessage) -> str:
+        binding = await self._binds.get(message.session_id)
+        if binding is not None:
+            coding = self._coding_port()
+            await coding.stop_task(
+                task_id=binding.task_id, owner_id=binding.owner_id
+            )
         await self._binds.unbind(message.session_id)
         self._code_starts = {
             key: value

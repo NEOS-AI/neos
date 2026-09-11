@@ -44,6 +44,9 @@ def neutralize_untrusted_inline(text: str, max_len: int = 240) -> str:
             continue
         if unicodedata.category(ch) in {"Cc", "Cf"}:
             continue
+        if ch in "[]":
+            chars.append(" ")
+            continue
         chars.append(ch)
     cleaned = " ".join("".join(chars).split())
     if max_len <= 0:
@@ -73,7 +76,7 @@ def display_name_from_metadata(
 
 def sender_prefix(platform_user_id: str, display_name: str = "") -> str:
     """`[name | id]` when a display name exists, otherwise `[id]`. Never mint mentions."""
-    pid = str(platform_user_id or "").strip()
+    pid = neutralize_untrusted_inline(platform_user_id)
     name = neutralize_untrusted_inline(display_name)
     if name and pid:
         return f"[{name} | {pid}]"

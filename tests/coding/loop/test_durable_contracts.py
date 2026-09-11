@@ -134,6 +134,38 @@ def test_compact_large_payload_stores_artifact_ref_and_body() -> None:
     assert "x" * 5000 in bodies[digest]
 
 
+def test_compact_stores_small_bodies_and_expand_restores_them() -> None:
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            max_transcript_bytes=10_000_000,
+            max_transcript_tokens=1_000_000,
+        ),
+    )
+    old_body = {"preview": "tiny-body", "entries": [{"text": "ok"}]}
+    digest = _sha256_payload(old_body)
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        *_pair("old", old_body),
+        *_pair("active", {"preview": "kept"}),
+    )
+    bodies: dict[str, str] = {}
+    shrunk = h.loop._shrink_old_tool_results(transcript[2], bodies)
+    compacted = (transcript[0], transcript[1], shrunk, *transcript[3:])
+    assert digest in bodies
+    expanded = h.loop._expand_artifact_refs(compacted, bodies)
+    restored = {
+        item.tool_call_id: dict(item.content)
+        for message in expanded
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+    assert restored["old"]["preview"] == "tiny-body"
+    assert restored["old"].get("compacted") is None
+
+
 def test_compacted_bodies_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(h.loop._restore(INPUT, None), compacted_bodies={"abc": "full text"})
@@ -167,6 +199,7 @@ async def test_unknown_mutation_commits_synthetic_result_and_run_lives() -> None
     assert results[-1]["status"] == "error"
     assert results[-1]["content"]["reason_code"] == "tool_outcome_unknown"
     assert state["pending_tool_index"] == 1
+    assert state["consecutive_tool_errors"] == 0
     assert any(event.type == "tool.completed" for event in events)
     assert audit.events[-1]["error_code"] == "tool_outcome_unknown"
 

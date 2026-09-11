@@ -56,7 +56,7 @@ async def test_learn_enabled_by_coding_lessons_flag(monkeypatch) -> None:
 
 async def test_new_unbinds_only_this_session(monkeypatch) -> None:
     store = InMemoryChannelCodingBindStore()
-    gateway, workflow, _coding = _bound_gateway(monkeypatch, binds=store)
+    gateway, workflow, coding = _bound_gateway(monkeypatch, binds=store)
     other = "v2:slack:T:C:other"
     this = "v2:slack:T:C:1"
     await gateway.dispatch(_message("/code fix a", this))
@@ -69,6 +69,7 @@ async def test_new_unbinds_only_this_session(monkeypatch) -> None:
     remaining = await store.get(other)
     assert remaining is not None
     assert remaining.task_id
+    assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
     assert await gateway.dispatch(_message("/status", this)) == (
         "No coding task in this thread."

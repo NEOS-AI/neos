@@ -84,6 +84,15 @@ def test_secret_dotfile_paths_are_denied_even_when_read_only(path: str) -> None:
     assert approved_write is ApprovalPolicyOutcome.DENY
 
 
+def test_search_text_paths_are_denied_when_they_target_secrets() -> None:
+    search = call(
+        "search_text.v1",
+        {"query": "TOKEN", "paths": [".env", "src"]},
+        ToolRisk.READ_ONLY,
+    )
+    assert evaluate_approval(search) is ApprovalPolicyOutcome.DENY
+
+
 @pytest.mark.parametrize(
     "path",
     [

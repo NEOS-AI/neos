@@ -268,7 +268,9 @@ class DurableCodingLoop:
             state = await self._load_workspace_instructions(state, bound)
         request = ModelRequest(
             system=await coding_turn_system(self._config.system, input.owner_id),
-            messages=state.transcript,
+            messages=self._expand_artifact_refs(
+                state.transcript, state.compacted_bodies
+            ),
             tools=self._tool_definitions(state),
             model=self._config.model,
             limits=self._model_limits(state),
@@ -1231,7 +1233,15 @@ class DurableCodingLoop:
             preserve_tools=has_more_tools,
             bodies=bodies,
         )
-        errors = 0 if result.status == "ok" else state.consecutive_tool_errors + 1
+        reason = ""
+        if isinstance(result.content, Mapping):
+            reason = str(result.content.get("reason_code") or "")
+        if result.status == "ok":
+            errors = 0
+        elif reason == "tool_outcome_unknown":
+            errors = state.consecutive_tool_errors
+        else:
+            errors = state.consecutive_tool_errors + 1
         read_paths = state.read_paths
         if tool_name == "read_file.v1" and result.status == "ok":
             raw_path = tool_input.get("path")
@@ -1715,6 +1725,41 @@ class DurableCodingLoop:
         return remaining
 
     @staticmethod
+    @staticmethod
+    def _expand_artifact_refs(transcript, bodies: Mapping[str, str]):
+        if not bodies:
+            return transcript
+        expanded = []
+        for message in transcript:
+            items = []
+            changed = False
+            for item in message.content:
+                if (
+                    isinstance(item, ToolResultContent)
+                    and item.content.get("compacted")
+                ):
+                    digest = item.content.get("sha256")
+                    raw = bodies.get(str(digest or ""))
+                    if raw:
+                        try:
+                            restored = json.loads(raw)
+                        except json.JSONDecodeError:
+                            restored = None
+                        if isinstance(restored, dict):
+                            items.append(
+                                ToolResultContent(
+                                    item.tool_call_id, item.status, restored
+                                )
+                            )
+                            changed = True
+                            continue
+                items.append(item)
+            expanded.append(
+                CanonicalMessage(message.role, tuple(items)) if changed else message
+            )
+        return tuple(expanded)
+
+    @staticmethod
     def _compact_ref_path(content: Mapping[str, object]) -> str | None:
         raw = content.get("path")
         if isinstance(raw, str) and raw:
@@ -1756,8 +1801,7 @@ class DurableCodingLoop:
                     "preview": preview_source[:200],
                 }
                 path = DurableCodingLoop._compact_ref_path(payload)
-                if len(payload_bytes) > COMPACT_REF_THRESHOLD_BYTES:
-                    bodies[digest] = payload_text
+                bodies[digest] = payload_text
                 if path is None:
                     path = f"artifact://{digest}"
                 shrunk["path"] = path

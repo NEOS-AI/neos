@@ -83,6 +83,15 @@ for p in sorted(Path('/workspace').rglob('*')):
     if not p.is_file() or p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
     if '.git' in Path(relative).parts: continue
+    name = Path(relative).name
+    parts = Path(relative).parts
+    if name == '.env' or name.startswith('.env.'): continue
+    if '.ssh' in parts or name == 'id_rsa': continue
+    if '.aws' in parts:
+        try:
+            if parts[parts.index('.aws') + 1] == 'credentials': continue
+        except IndexError:
+            pass
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
                for pattern in patterns): continue
@@ -123,6 +132,15 @@ for p in sorted(Path('/workspace').rglob('*')):
     if p.is_symlink(): continue
     relative = p.relative_to('/workspace').as_posix()
     if '.git' in Path(relative).parts: continue
+    name = Path(relative).name
+    parts = Path(relative).parts
+    if name == '.env' or name.startswith('.env.'): continue
+    if '.ssh' in parts or name == 'id_rsa': continue
+    if '.aws' in parts:
+        try:
+            if parts[parts.index('.aws') + 1] == 'credentials': continue
+        except IndexError:
+            pass
     if fnmatch.fnmatch(relative, pattern) or (
         pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
     ):

@@ -128,6 +128,17 @@ def evaluate_approval(
         return ApprovalPolicyOutcome.DENY
 
 
+def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
+    found: list[str] = []
+    raw_path = call.input.get("path")
+    if isinstance(raw_path, str) and raw_path:
+        found.append(raw_path)
+    raw_paths = call.input.get("paths")
+    if isinstance(raw_paths, (list, tuple)):
+        found.extend(str(item) for item in raw_paths if item)
+    return tuple(found)
+
+
 def _posix_path_parts(path: str) -> tuple[str, ...]:
     return tuple(
         part
@@ -136,7 +147,7 @@ def _posix_path_parts(path: str) -> tuple[str, ...]:
     )
 
 
-def _is_denied_secret_path(path: object) -> bool:
+def is_denied_secret_path(path: object) -> bool:
     if not isinstance(path, str) or not path:
         return False
     parts = _posix_path_parts(path)
@@ -158,7 +169,7 @@ def _is_denied_secret_path(path: object) -> bool:
 def _evaluate_approval(
     call: ValidatedToolCall, gate: ApprovalGate
 ) -> ApprovalPolicyOutcome:
-    if _is_denied_secret_path(call.input.get("path")):
+    if any(is_denied_secret_path(path) for path in _call_paths(call)):
         return ApprovalPolicyOutcome.DENY
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY

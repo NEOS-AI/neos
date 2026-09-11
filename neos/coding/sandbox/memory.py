@@ -577,7 +577,7 @@ class MemorySandboxSession:
             if not item.is_file() or item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
-            if self._is_git_path(relative):
+            if self._is_git_path(relative) or self._is_secret_path(relative):
                 continue
             if not any(self._matches_path(relative, pattern) for pattern in paths):
                 continue
@@ -638,7 +638,7 @@ class MemorySandboxSession:
             if item.is_symlink():
                 continue
             relative = item.relative_to(self._record.workspace).as_posix()
-            if self._is_git_path(relative):
+            if self._is_git_path(relative) or self._is_secret_path(relative):
                 continue
             if self._matches_path(relative, pattern):
                 found.append(relative)
@@ -839,6 +839,12 @@ class MemorySandboxSession:
     @staticmethod
     def _is_git_path(path: str) -> bool:
         return ".git" in PurePosixPath(path).parts
+
+    @staticmethod
+    def _is_secret_path(path: str) -> bool:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        return is_denied_secret_path(path)
 
     @staticmethod
     def _ignore_watch_path(path: str) -> bool:
