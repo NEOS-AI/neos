@@ -568,6 +568,8 @@ class AnthropicCodingLoop:
             return None
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
+            if call.name == "spawn_agent.v1":
+                break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
             try:

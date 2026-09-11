@@ -1059,6 +1059,40 @@ async def test_spawn_agent_returns_child_summary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spawn_agent_is_not_batched_with_other_readonly_tools() -> None:
+    h = harness(
+        [
+            [
+                tool_call("r1", "read_file.v1", {"path": "a.txt"}),
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "look around", "max_turns": 1},
+                ),
+                completed(),
+            ],
+            [TextDelta("child saw files"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+        ]
+    )
+    first = await collect(h)
+    assert all(
+        event.payload.get("result", {}).get("entries") != ({"delegated": True},)
+        for event in first
+        if event.type == "tool.completed"
+    )
+    assert h.repository.checkpoints[-1].loop_state["pending_tool_index"] == 1
+
+    events = await collect(h, h.repository.checkpoints[-1])
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    entries = completed_events[-1].payload["result"].get("entries") or ()
+    assert any("child saw files" in str(item) for item in entries)
+    assert not any(
+        item == {"delegated": True} for item in entries if isinstance(item, dict)
+    )
+
+
+@pytest.mark.asyncio
 async def test_llm_compact_keeps_first_user_instruction() -> None:
     from neos.coding.model.base import CanonicalMessage, TextContent
 
