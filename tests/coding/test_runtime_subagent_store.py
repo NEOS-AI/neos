@@ -131,6 +131,29 @@ async def test_parent_sink_adapter_forwards_allowlisted_payload_only() -> None:
     assert "checkpoint_id" not in step
 
 
+class _BoomParentSink:
+    async def append(self, **kwargs) -> None:
+        raise RuntimeError("sink down")
+
+
+@pytest.mark.asyncio
+async def test_parent_sink_adapter_swallows_append_failure() -> None:
+    adapter = ParentSubagentEventAdapter(_BoomParentSink())
+    await adapter.emit(
+        "subagent.step",
+        {
+            "run_id": "sa_1",
+            "spec": "explore",
+            "parent_kind": "coding",
+            "parent_id": "ct_1",
+            "parent_run_id": "cr_1",
+            "parent_tool_call_id": "s1",
+            "step_kind": "continuing",
+            "status": "running",
+        },
+    )
+
+
 def test_build_runtime_wires_parent_sink_adapter() -> None:
     parent = _RecordingParentSink()
     runtime = _build_subagent_runtime(

@@ -256,6 +256,27 @@ def test_search_definitions_honors_phase_hide_and_skips_core() -> None:
     assert "spawn_agent.v1" not in write_names
 
 
+def test_control_plane_tools_hidden_when_subagent_disabled() -> None:
+    names = CodingToolRegistry.deferred_tool_names(subagent_enabled=False)
+    assert "subagent_list.v1" not in names
+    assert "subagent_steer.v1" not in names
+    assert "spawn_agent.v1" in names
+    hidden = CodingToolRegistry.search_definitions(
+        "select:subagent_list.v1,subagent_steer.v1,spawn_agent.v1",
+        subagent_enabled=False,
+    )
+    found = {item["name"] for item in hidden}
+    assert found == {"spawn_agent.v1"}
+    shown = CodingToolRegistry.search_definitions(
+        "select:subagent_list.v1,subagent_steer.v1",
+        subagent_enabled=True,
+    )
+    assert {item["name"] for item in shown} == {
+        "subagent_list.v1",
+        "subagent_steer.v1",
+    }
+
+
 def test_load_skill_input_accepts_optional_reference() -> None:
     with_ref = registry().validate(
         "load_skill.v1", {"name": "verify", "reference": "hooks.md"}
@@ -878,6 +899,7 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("search_tools.v1", {"query": ""}),
         ("spawn_agent.v1", {"prompt": "x", "max_turns": 0}),
         ("spawn_agent.v1", {"prompt": "x", "max_turns": 9}),
+        ("subagent_steer.v1", {"run_id": "sa_1", "text": "x" * 2001}),
         ("git_log.v1", {"limit": 101}),
         (
             "edit_file.v1",

@@ -2483,7 +2483,7 @@ class DurableCodingLoop:
         raw = call.input if isinstance(call.input, Mapping) else {}
         run_id = str(raw.get("run_id") or "")
         text = str(raw.get("text") or "").strip()
-        if not run_id or not text:
+        if not run_id or not text or len(text) > 2000:
             return self._spawn_tool_error(bound, "policy_schema_invalid")
         try:
             snapshot = await self._subagents.status(run_id)
@@ -2498,6 +2498,8 @@ class DurableCodingLoop:
         merged = "\n".join(
             part for part in (existing.pending_steer, text) if part
         )
+        if len(merged) > 2000:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
         updated = self._upsert_active_child(
             state, replace(existing, pending_steer=merged)
         )

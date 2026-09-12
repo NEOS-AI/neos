@@ -286,6 +286,61 @@ async def test_child_transcript_too_large_fails() -> None:
     assert second.error_code == "child_transcript_too_large"
 
 
+def test_two_steers_during_tool_batch_apply_once() -> None:
+    from neos.subagent.stepper import _apply_pending_steer, _queue_pending_steer
+
+    state: dict = {
+        "messages": [],
+        "pending_steer": "",
+        "steer_applied": "",
+    }
+    _queue_pending_steer(state, "A")
+    _queue_pending_steer(state, "A\nB")
+    assert state["pending_steer"] == "A\nB"
+    _apply_pending_steer(state)
+    user_texts = [item["text"] for item in state["messages"] if item.get("role") == "user"]
+    assert user_texts == ["A\nB"]
+    _queue_pending_steer(state, "A\nB")
+    assert state["pending_steer"] == ""
+    _queue_pending_steer(state, "A\nB\nC")
+    assert state["pending_steer"] == "C"
+    _apply_pending_steer(state)
+    user_texts = [item["text"] for item in state["messages"] if item.get("role") == "user"]
+    assert user_texts == ["A\nB", "C"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_two_steers_during_tools_make_one_user_message() -> None:
+    runtime, store, _tools, _model, _events = _runtime(
+        [_tool("read_file.v1", path="a.py"), _text("done")]
+    )
+    first = await runtime.advance(_ticket())
+    second = await runtime.advance(
+        _ticket(
+            run_id=first.run_id,
+            expected_checkpoint_id=first.checkpoint_id,
+            pending_steer="A",
+        )
+    )
+    third = await runtime.advance(
+        _ticket(
+            run_id=first.run_id,
+            expected_checkpoint_id=second.checkpoint_id,
+            pending_steer="A\nB",
+        )
+    )
+    assert third.kind is StepKind.COMPLETED
+    state = await store.get_loop_state(first.run_id)
+    user_texts = [
+        str(item.get("text") or "")
+        for item in state.get("messages") or ()
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    assert "A\nA\nB" not in user_texts
+    assert user_texts[-1] == "A\nB"
+    assert user_texts.count("A\nB") == 1
+
+
 def test_compact_keeps_size_ref_pointer() -> None:
     from neos.subagent.stepper import _compact
 

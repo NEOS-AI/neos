@@ -321,16 +321,26 @@ def _thinking_off_kwargs() -> dict[str, Any]:
     return {}
 
 
+def _steer_remainder(snapshot: str, applied: str) -> str:
+    """Ticket text is the parent snapshot. Queue only the unapplied suffix."""
+    snap = str(snapshot or "").strip()
+    done = str(applied or "").strip()
+    if not snap or snap == done:
+        return ""
+    if not done:
+        return snap
+    prefix = f"{done}\n"
+    if snap.startswith(prefix):
+        return snap[len(prefix) :]
+    if snap.startswith(done):
+        return snap[len(done) :].lstrip("\n")
+    return snap
+
+
 def _queue_pending_steer(state: dict[str, Any], text: str) -> None:
-    steer = str(text or "").strip()
-    if not steer:
-        return
-    if str(state.get("steer_applied") or "") == steer:
-        return
-    existing = str(state.get("pending_steer") or "").strip()
-    if steer == existing or (existing and steer in existing):
-        return
-    state["pending_steer"] = "\n".join(part for part in (existing, steer) if part)
+    state["pending_steer"] = _steer_remainder(
+        text, str(state.get("steer_applied") or "")
+    )
 
 
 def _apply_pending_steer(state: dict[str, Any]) -> None:

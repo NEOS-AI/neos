@@ -165,6 +165,8 @@ def test_session_lists_deferred_tool_names_not_schemas() -> None:
     assert "git_status.v1" in session
     assert "web_fetch.v1" in session
     assert "spawn_agent.v1" in session
+    assert "subagent_list.v1" not in session
+    assert "subagent_steer.v1" not in session
 
 
 def test_environment_holds_workspace_and_allowlist() -> None:

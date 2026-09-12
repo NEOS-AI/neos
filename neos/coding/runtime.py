@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from pathlib import Path
 from contextlib import suppress
@@ -479,6 +480,8 @@ def _resolve_coding_session_factory(session_factory):
     return session_factory or db_manager.get_session
 
 
+logger = logging.getLogger(__name__)
+
 _PARENT_SINK_EVENTS = frozenset(
     {"subagent.started", "subagent.step", "subagent.completed"}
 )
@@ -511,13 +514,22 @@ class ParentSubagentEventAdapter:
         task_id = str(safe.get("parent_id") or "")
         if not task_id:
             return
-        await self._parent.append(
-            task_id=task_id,
-            event_type=event_type,
-            payload=safe,
-            run_id=str(raw.get("parent_run_id") or "") or None,
-            tool_call_id=str(safe.get("parent_tool_call_id") or "") or None,
-        )
+        try:
+            await self._parent.append(
+                task_id=task_id,
+                event_type=event_type,
+                payload=safe,
+                run_id=str(raw.get("parent_run_id") or "") or None,
+                tool_call_id=str(safe.get("parent_tool_call_id") or "") or None,
+            )
+        except Exception:
+            logger.warning(
+                "parent subagent sink failed event_type=%s task_id=%s run_id=%s",
+                event_type,
+                task_id,
+                safe.get("run_id"),
+                exc_info=True,
+            )
 
 
 def _build_subagent_runtime(
