@@ -468,6 +468,46 @@ def test_warn_unknown_routed_models_is_silent_for_committed_defaults(caplog) -> 
     assert not [r for r in caplog.records if "model_routing" in r.message]
 
 
+def test_warn_unknown_routed_models_flags_role_aliases_missing_from_custom_catalog(
+    tmp_path: Path, monkeypatch, restore_model_config, caplog
+) -> None:
+    from neos.config.schema import ModelRoutingConfig
+
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-sonnet-5": {"provider": "anthropic"},
+                "claude-opus-5": {"provider": "anthropic"},
+                "gpt-5.6-terra": {"provider": "openai"},
+                "gpt-5.6-sol": {"provider": "openai"},
+            }
+        },
+    )
+    monkeypatch.setenv("NEOS_MODEL_CONFIG_PATH", str(path))
+    model_config.reload()
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        unknown = warn_unknown_routed_models(ModelRoutingConfig())
+
+    assert "sonnet-5" in unknown
+    assert "opus-5" in unknown
+
+    dated = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {
+                "everyday": "claude-sonnet-5",
+                "powerful": "claude-opus-5",
+            },
+            "openai": {
+                "everyday": "gpt-5.6-terra",
+                "powerful": "gpt-5.6-sol",
+            },
+        }
+    )
+    assert warn_unknown_routed_models(dated) == []
+
+
 def test_main_lifespan_checks_routed_models_against_the_catalog() -> None:
     """기동 경로에 검사가 연결돼 있는지 소스로 고정한다."""
     source = Path("neos/main.py").read_text(encoding="utf-8")

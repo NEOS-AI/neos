@@ -5,6 +5,7 @@ from neos.config.coding_selection import (
     resolve_coding_selection,
     resolve_coding_selection_from_app,
 )
+from neos.config.model_config import model_config
 from neos.config.schema import AppConfig, CodingModelConfig, ModelRoutingConfig
 
 
@@ -18,8 +19,19 @@ def test_default_anthropic_uses_everyday_role() -> None:
     )
 
     assert selected.provider == "anthropic"
-    assert selected.model == "claude-sonnet-5"
+    assert selected.model == model_config.catalog.role_aliases["sonnet-5"].current
     assert selected.source == "role_default"
+
+
+def test_coding_role_alias_override_resolves_to_current_pin() -> None:
+    selected = resolve_coding_selection(
+        coding=CodingModelConfig(model="sonnet-5"),
+        routing=ModelRoutingConfig(),
+    )
+
+    assert selected.provider == "anthropic"
+    assert selected.model == model_config.catalog.role_aliases["sonnet-5"].current
+    assert selected.source == "catalog"
 
 
 def test_openai_provider_without_model_uses_everyday_role() -> None:

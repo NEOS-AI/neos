@@ -388,16 +388,26 @@ key is read in the old shape (`vision_models` / `llm_models` /
 Converted entries have no tier and no price, and fall back to
 `thinking: budgeted`. Provider `google` is normalized to `gemini`.
 
+Custom catalogs must ship `role_aliases:` (the schema defaults are now
+`sonnet-5` / `opus-5`, not dated pins). A file without that block will not
+resolve those roles: boot logs the existing unknown-routed-model warning and
+everyday traffic has no pin. The alternative is a dated `model_routing`
+override in env YAML (`everyday: claude-sonnet-5`). Legacy conversion does
+**not** invent role aliases. `aliases.llm.*` stay pin-valued — moving
+`role_aliases.sonnet-5.current` does not move `get_llm_model_id`.
+
 ### Model Routing
 
-`model_routing` maps a provider and a workload role to a concrete model. It only
-governs **automatic** workloads — a model the user picked is never overwritten.
+`model_routing` maps a provider and a workload role to a role alias or a
+catalog pin. The resolver accepts either; the value it returns is always the
+pin. It only governs **automatic** workloads — a model the user picked is
+never overwritten.
 
 ```yaml
 model_routing:
   anthropic:
-    everyday: claude-sonnet-5
-    powerful: claude-opus-5
+    everyday: sonnet-5
+    powerful: opus-5
   openai:
     everyday: gpt-5.6-terra
     powerful: gpt-5.6-sol

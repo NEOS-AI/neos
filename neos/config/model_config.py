@@ -735,20 +735,29 @@ def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
             "ERROR logged at catalog load time and fix neos/config/models.yaml "
             "(or the file at NEOS_MODEL_CONFIG_PATH)."
         )
+    from neos.config.model_identity import canonicalize
+
     unknown: list[str] = []
     for provider in ("anthropic", "openai"):
         provider_roles = getattr(routing, provider)
         for role in ("everyday", "powerful"):
             model = getattr(provider_roles, role)
-            if model and catalog.get_model_spec(model) is None:
-                unknown.append(model)
-                logger.warning(
-                    "model_routing.%s.%s = %r is not declared in the model catalog "
-                    "(neos/config/models.yaml) — check for a typo",
-                    provider,
-                    role,
-                    model,
-                )
+            if not model:
+                continue
+            # Role defaults are aliases or pins. Resolve the alias before the
+            # membership check so sonnet-5 is known when role_aliases exist,
+            # and still warned on a custom catalog that omitted them.
+            ident = canonicalize(model, catalog=catalog, apply_remap=False)
+            if ident is not None:
+                continue
+            unknown.append(model)
+            logger.warning(
+                "model_routing.%s.%s = %r is not declared in the model catalog "
+                "(neos/config/models.yaml) — check for a typo",
+                provider,
+                role,
+                model,
+            )
     return unknown
 
 

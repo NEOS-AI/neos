@@ -3,6 +3,8 @@ from pydantic import ValidationError
 
 from neos.config.schema import AppConfig
 
+pytestmark = pytest.mark.no_db
+
 
 @pytest.mark.parametrize("raw", ["false", "0", "no", "off", False])
 def test_string_false_values_parse_for_boolean_fields(raw):
@@ -59,8 +61,8 @@ def test_schema_defaults_match_current_runtime_policy():
     assert config.api.debug is False
     assert config.api.v1_prefix == "/api/v1"
     assert config.research_harness.direct_repair.enabled is False
-    assert config.model_routing.anthropic.everyday == "claude-sonnet-5"
-    assert config.model_routing.anthropic.powerful == "claude-opus-5"
+    assert config.model_routing.anthropic.everyday == "sonnet-5"
+    assert config.model_routing.anthropic.powerful == "opus-5"
     assert config.model_routing.openai.everyday == "gpt-5.6-terra"
     assert config.model_routing.openai.powerful == "gpt-5.6-sol"
 

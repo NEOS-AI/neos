@@ -147,8 +147,8 @@ class ProviderModelRolesConfig(StrictConfigModel):
 class ModelRoutingConfig(StrictConfigModel):
     anthropic: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
-            everyday="claude-sonnet-5",
-            powerful="claude-opus-5",
+            everyday="sonnet-5",
+            powerful="opus-5",
         )
     )
     openai: ProviderModelRolesConfig = Field(

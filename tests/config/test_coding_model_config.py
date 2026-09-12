@@ -2,8 +2,11 @@ import pytest
 from pydantic import ValidationError
 
 from neos.config.coding_selection import resolve_coding_selection
+from neos.config.model_config import model_config
 from neos.config.model_routing import resolve_model
 from neos.config.schema import AppConfig, CodingModelConfig, ModelRoutingConfig
+
+pytestmark = pytest.mark.no_db
 
 
 def real_config(**overrides):
@@ -115,7 +118,7 @@ def test_coding_model_uses_everyday_role_when_feature_override_is_omitted() -> N
             role="everyday",
             feature_override=coding.model,
         ).model
-        == "claude-sonnet-5"
+        == model_config.catalog.role_aliases["sonnet-5"].current
     )
 
 

@@ -3,6 +3,7 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from neos.config.model_config import model_config
 from neos.config.model_routing import (
     ResolutionSource,
     WorkloadRole,
@@ -11,18 +12,27 @@ from neos.config.model_routing import (
 from neos.config.schema import ModelRoutingConfig, ProviderModelRolesConfig
 from neos.utils.llm_factory import get_recommended_models
 
+pytestmark = pytest.mark.no_db
+
 
 def test_role_defaults_map_to_current_models() -> None:
+    """Everyday/powerful are role aliases; the pin lives in role_aliases.*.current."""
     config = ModelRoutingConfig()
+    catalog = model_config.catalog
 
-    assert (
-        resolve_model(config=config, provider="anthropic", role="everyday").model
-        == "claude-sonnet-5"
-    )
-    assert (
-        resolve_model(config=config, provider="anthropic", role="powerful").model
-        == "claude-opus-5"
-    )
+    assert config.anthropic.everyday == "sonnet-5"
+    assert config.anthropic.powerful == "opus-5"
+
+    everyday = resolve_model(config=config, provider="anthropic", role="everyday")
+    assert everyday.model == catalog.role_aliases["sonnet-5"].current
+    assert everyday.role_alias == "sonnet-5"
+    assert everyday.source is ResolutionSource.ROLE_DEFAULT
+
+    powerful = resolve_model(config=config, provider="anthropic", role="powerful")
+    assert powerful.model == catalog.role_aliases["opus-5"].current
+    assert powerful.role_alias == "opus-5"
+    assert powerful.source is ResolutionSource.ROLE_DEFAULT
+
     assert (
         resolve_model(config=config, provider="openai", role="everyday").model
         == "gpt-5.6-terra"
@@ -31,6 +41,74 @@ def test_role_defaults_map_to_current_models() -> None:
         resolve_model(config=config, provider="openai", role="powerful").model
         == "gpt-5.6-sol"
     )
+
+
+def test_dated_env_yaml_overrides_still_resolve() -> None:
+    config = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {
+                "everyday": "claude-sonnet-5",
+                "powerful": "claude-opus-5",
+            },
+            "openai": {
+                "everyday": "gpt-5.6-terra",
+                "powerful": "gpt-5.6-sol",
+            },
+        }
+    )
+
+    result = resolve_model(config=config, provider="anthropic", role="everyday")
+    assert result.model == "claude-sonnet-5"
+    assert result.role_alias == "sonnet-5"
+    assert result.source is ResolutionSource.ROLE_DEFAULT
+
+
+def test_unknown_role_default_is_not_replaced_with_a_hardcoded_pin() -> None:
+    config = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {"everyday": "sonnet-9", "powerful": "opus-5"},
+            "openai": {"everyday": "gpt-5.6-terra", "powerful": "gpt-5.6-sol"},
+        }
+    )
+
+    result = resolve_model(config=config, provider="anthropic", role="everyday")
+    assert result.model == "sonnet-9"
+    assert result.role_alias is None
+
+
+def test_user_source_applies_remaps() -> None:
+    result = resolve_model(
+        config=ModelRoutingConfig(),
+        provider="anthropic",
+        role="everyday",
+        user_model="anthropic/claude-opus-4.5",
+    )
+
+    assert result.model == "claude-opus-5"
+    assert result.source is ResolutionSource.USER
+    assert result.role_alias == "opus-5"
+
+
+def test_conversation_and_feature_sources_do_not_apply_remaps() -> None:
+    conversation = resolve_model(
+        config=ModelRoutingConfig(),
+        provider="anthropic",
+        role="everyday",
+        conversation_model="anthropic/claude-opus-4.5",
+    )
+    assert conversation.model == "anthropic/claude-opus-4.5"
+    assert conversation.source is ResolutionSource.CONVERSATION
+    assert conversation.role_alias is None
+
+    feature = resolve_model(
+        config=ModelRoutingConfig(),
+        provider="anthropic",
+        role="everyday",
+        feature_override="anthropic/claude-opus-4.5",
+    )
+    assert feature.model == "anthropic/claude-opus-4.5"
+    assert feature.source is ResolutionSource.FEATURE_OVERRIDE
+    assert feature.role_alias is None
 
 
 def test_user_selection_has_stable_highest_precedence() -> None:

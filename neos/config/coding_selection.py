@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from neos.config.model_config import (
-    get_model_spec,
     model_config,
     models_for_provider,
 )
+from neos.config.model_identity import canonicalize
 from neos.config.model_routing import resolve_model
 
 if TYPE_CHECKING:
@@ -41,11 +41,13 @@ def resolve_coding_selection(
         raise ValueError(f"Unknown coding model provider: {coding.provider}")
 
     if coding.model:
-        spec = get_model_spec(coding.model)
-        if spec is not None:
+        ident = canonicalize(
+            coding.model, catalog=model_config.catalog, apply_remap=False
+        )
+        if ident is not None:
             return CodingModelSelection(
-                provider=spec.provider,
-                model=coding.model,
+                provider=ident.provider,
+                model=ident.catalog_id,
                 source="catalog",
             )
         return CodingModelSelection(

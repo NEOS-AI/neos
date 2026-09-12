@@ -8,10 +8,12 @@ import pytest
 
 import neos.coding.runtime as runtime_module
 from neos.coding.runtime import create_coding_runtime
+from neos.config.model_config import model_config
 from neos.config.schema import AppConfig
 from tests.coding.fakes import InMemoryCodingRunRepository
 import neos.utils.anthropic_client as anthropic_client_module
 
+pytestmark = pytest.mark.no_db
 
 NOW = datetime(2026, 7, 19, 10, tzinfo=UTC)
 
@@ -83,7 +85,7 @@ def test_development_prepares_real_loop_before_provider_allocation(monkeypatch) 
 @pytest.mark.parametrize(
     ("feature_model", "expected_model"),
     [
-        (None, "claude-sonnet-5"),
+        (None, model_config.catalog.role_aliases["sonnet-5"].current),
         ("claude-manual", "claude-manual"),
     ],
 )
