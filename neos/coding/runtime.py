@@ -486,10 +486,10 @@ def _build_subagent_runtime(
 ):
     """Construct the parent-driven child runtime.
 
-    When the flag is on, persist children in Postgres via the same session
-    factory the coding repos use. When the flag is off, an in-memory store
-    is enough because no spawn path writes rows; the runtime is still
-    injected so a mid-flight flag flip can cancel.
+    Flag-off still injects the runtime so cancel works; the store must be
+    the durable one whenever a factory exists. InMemory remains the no-DB
+    fake (tests / no session factory and flag off). When the flag is on
+    without a factory, fall back to db_manager.get_session.
     """
     from neos.coding.subagent_port import CodingToolPort
     from neos.subagent.catalog import SpecRegistry
@@ -501,10 +501,12 @@ def _build_subagent_runtime(
     from neos.subagent.runtime import SubagentRuntime
     from neos.subagent.stepper import ChildStepper
 
-    factory = session_factory or db_manager.get_session
-    store = (
-        PostgresSubagentStore(factory) if enabled else InMemorySubagentStore()
-    )
+    if session_factory is not None:
+        store = PostgresSubagentStore(session_factory)
+    elif enabled:
+        store = PostgresSubagentStore(db_manager.get_session)
+    else:
+        store = InMemorySubagentStore()
     port = CodingToolPort(registry=tools, executor=executor)
     return SubagentRuntime(
         store=store,
