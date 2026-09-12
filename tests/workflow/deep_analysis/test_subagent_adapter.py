@@ -88,12 +88,15 @@ class RecordingWorker:
 
 
 class RecordingRuntime:
-    def __init__(self, outcomes, *, fold=None) -> None:
+    def __init__(self, outcomes, *, fold=None, fold_error=None, cancel_error=None) -> None:
         self._outcomes = list(outcomes)
         self.tickets = []
         self.advance_calls = 0
         self.fold_calls: list[str] = []
+        self.cancel_calls: list[tuple[str, str]] = []
         self._fold = fold
+        self._fold_error = fold_error
+        self._cancel_error = cancel_error
 
     async def advance(self, ticket):
         self.advance_calls += 1
@@ -102,6 +105,8 @@ class RecordingRuntime:
 
     async def fold(self, run_id: str):
         self.fold_calls.append(run_id)
+        if self._fold_error is not None:
+            raise self._fold_error
         if self._fold is not None:
             return self._fold
         return FoldedResult(
@@ -110,6 +115,11 @@ class RecordingRuntime:
             summary="unverified explore brief",
             truncated=False,
         )
+
+    async def cancel(self, run_id: str, reason: str):
+        self.cancel_calls.append((run_id, reason))
+        if self._cancel_error is not None:
+            raise self._cancel_error
 
 
 def _assignment(**overrides) -> Assignment:
@@ -415,3 +425,158 @@ async def test_investigate_does_not_read_or_write_ledger() -> None:
     body = _ADAPTER.read_text().split("async def investigate_via_subagent", 1)[1]
     assert "ledger.log" not in body
     assert "latest_subagent_pointers" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "brief,question_text",
+    [("", ""), ("  \n\t  ", "   "), ("", " \n"), ("   ", "")],
+)
+async def test_empty_or_whitespace_assignment_fails_closed_without_advance(
+    brief, question_text
+) -> None:
+    runtime = RecordingRuntime([_outcome()])
+
+    result = await investigate_via_subagent(
+        runtime=runtime,
+        assignment=_assignment(brief=brief, question_text=question_text),
+        parent_id="run00001",
+    )
+
+    assert result.status == "failed"
+    assert result.fail_reason == "subagent_briefing_empty"
+    assert runtime.advance_calls == 0
+    assert runtime.fold_calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_fold_error_uses_exception_type() -> None:
+    runtime = RecordingRuntime(
+        [_outcome(kind=StepKind.COMPLETED, status=SubagentStatus.COMPLETED)],
+        fold_error=RuntimeError(""),
+    )
+
+    result = await investigate_via_subagent(
+        runtime=runtime,
+        assignment=_assignment(),
+        parent_id="run00001",
+    )
+
+    assert result.status == "failed"
+    assert result.fail_reason == "RuntimeError"
+    assert runtime.fold_calls == ["sa_child"]
+
+
+@pytest.mark.asyncio
+async def test_fold_error_uses_message() -> None:
+    runtime = RecordingRuntime(
+        [_outcome(kind=StepKind.COMPLETED, status=SubagentStatus.COMPLETED)],
+        fold_error=RuntimeError("fold_broke"),
+    )
+
+    result = await investigate_via_subagent(
+        runtime=runtime,
+        assignment=_assignment(),
+        parent_id="run00001",
+    )
+
+    assert result.status == "failed"
+    assert result.fail_reason == "fold_broke"
+    assert runtime.fold_calls == ["sa_child"]
+
+
+@pytest.mark.asyncio
+async def test_tool_port_wraps_search_and_fetch_exceptions() -> None:
+    async def boom_search(query, k=5):
+        raise RuntimeError("search_down")
+
+    async def boom_fetch(url):
+        raise ValueError("fetch_down")
+
+    port = DAToolPort(boom_search, boom_fetch)
+
+    assert await port.execute("search", {"query": "moe"}) == {"error": "search_down"}
+    assert await port.execute("fetch", {"url": "https://a.example"}) == {
+        "error": "fetch_down"
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_port_invalid_k_falls_back_to_five() -> None:
+    seen: list[int] = []
+
+    async def search_fn(query, k=5):
+        seen.append(k)
+        return [{"url": "https://a.example", "title": query, "snippet": query}]
+
+    async def fetch_fn(url):
+        return {"source_url": url, "http_status": 200, "content_hash": "h", "raw_text": ""}
+
+    port = DAToolPort(search_fn, fetch_fn)
+    await port.execute("search", {"query": "moe", "k": "nope"})
+    await port.execute("search", {"query": "moe", "k": None})
+    await port.execute("search", {"query": "moe"})
+
+    assert seen == [5, 5, 5]
+
+
+@pytest.mark.asyncio
+async def test_stall_cancel_uses_latest_pointer_and_survives_cancel_error() -> None:
+    class _Question:
+        id = "qid00001"
+        status = "open"
+
+    class _Ledger(RecordingLedger):
+        async def get_question(self, question_id):
+            return _Question() if question_id == _Question.id else None
+
+    ledger = _Ledger()
+    await ledger.log(
+        "subagent_step",
+        "qid00001",
+        {
+            "run_id": "sa_old",
+            "checkpoint_id": "sc_1",
+            "step_kind": "continuing",
+            "status": "partial",
+        },
+    )
+    await ledger.log(
+        "subagent_step",
+        "qid00001",
+        {
+            "run_id": "sa_latest",
+            "checkpoint_id": "sc_2",
+            "step_kind": "continuing",
+            "status": "partial",
+        },
+    )
+    await ledger.log(
+        "subagent_step",
+        "qid_other",
+        {
+            "run_id": "sa_other",
+            "checkpoint_id": "sc_9",
+            "step_kind": "continuing",
+            "status": "partial",
+        },
+    )
+
+    runtime = RecordingRuntime([], cancel_error=RuntimeError("cancel_broke"))
+    orch = _orch(runtime=runtime, ledger=ledger)
+    split_ids: list[str] = []
+
+    async def capture_split(question):
+        split_ids.append(question.id)
+
+    orch._do_split = capture_split
+    orch._stall_counts["qid00001"] = 3
+
+    await orch._force_terminate_stalled("qid00001")
+
+    assert runtime.cancel_calls == [("sa_latest", "stall_terminated")]
+    assert ("stall_terminated", "qid00001", {"rounds": 3}) in [
+        (kind, qid, payload) for kind, qid, payload in ledger.events
+    ]
+    assert split_ids == ["qid00001"]
+    assert orch._stall_counts["qid00001"] == 0

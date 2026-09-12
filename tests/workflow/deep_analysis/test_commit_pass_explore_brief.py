@@ -259,3 +259,150 @@ async def test_continuing_plus_tokens_is_progress() -> None:
     assert registered == [(question.id, True)]
     assert orchestrator._stall_counts[question.id] == 0
     assert question.spent_tokens == 40
+
+
+def _kinds(ledger: _MemoryLedger) -> list[str]:
+    return [kind for kind, _qid, _payload in ledger.events]
+
+
+@pytest.mark.asyncio
+async def test_empty_unverified_brief_skips_explore_brief() -> None:
+    ledger = _MemoryLedger()
+    await ledger.commit_pass(
+        ledger.question.id,
+        _brief_result(ledger.question.id, unverified_brief=""),
+        {},
+        judge_tokens_spent=0,
+    )
+
+    assert _explore_events(ledger) == []
+    assert _kinds(ledger) == ["pass_completed"]
+
+
+@pytest.mark.asyncio
+async def test_whitespace_brief_is_not_explore_or_dead_end() -> None:
+    ledger = _MemoryLedger()
+    await ledger.commit_pass(
+        ledger.question.id,
+        _brief_result(ledger.question.id, unverified_brief="  \n\t  "),
+        {},
+        judge_tokens_spent=0,
+    )
+
+    assert _explore_events(ledger) == []
+    assert "dead_end" not in _kinds(ledger)
+    assert _kinds(ledger) == ["pass_completed"]
+
+
+@pytest.mark.asyncio
+async def test_long_brief_is_truncated_with_child_status_fallback() -> None:
+    ledger = _MemoryLedger()
+    raw = "x" * 16_385
+    await ledger.commit_pass(
+        ledger.question.id,
+        _brief_result(
+            ledger.question.id,
+            unverified_brief=raw,
+            subagent_step_kind="",
+            status="partial",
+        ),
+        {},
+        judge_tokens_spent=0,
+    )
+
+    explore = _explore_events(ledger)
+    assert len(explore) == 1
+    payload = explore[0][2]
+    assert len(payload["text"]) == 16_384
+    assert payload["text"] == raw[:16_384]
+    assert payload["truncated"] is True
+    assert payload["child_status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_continuing_with_zero_tokens_is_still_progress() -> None:
+    """continuing counts as progress even when tokens_spent stays 0."""
+    question = _Question(id="qid00001", text="What?", status="open", cap_tokens=999_999)
+    ledger = _MemoryLedger(question)
+    orchestrator = Orchestrator(
+        session=None,
+        run_id="run00001",
+        worker_factory=lambda: _ContinuingWorker(tokens_spent=0),
+        grader=None,
+        ledger=ledger,
+        decompose_fn=lambda _text: [],
+        global_token_cap=10_000,
+    )
+    registered: list[tuple[str, bool]] = []
+    original = orchestrator._register_progress
+
+    async def spy(question_id, made_progress):
+        registered.append((question_id, made_progress))
+        await original(question_id, made_progress)
+
+    orchestrator._register_progress = spy
+    orchestrator._stall_counts[question.id] = 2
+
+    assert question.spent_tokens == 0
+    assert await orchestrator._made_progress(question.id, 0, 1, 0) is False
+
+    ran = await orchestrator._run_round()
+
+    assert ran is True
+    assert registered == [(question.id, True)]
+    assert orchestrator._stall_counts[question.id] == 0
+    assert question.spent_tokens == 0
+
+
+class _RunIdWorker:
+    def __init__(self, run_id: str) -> None:
+        self.tokens_spent = 0
+        self.run_id = run_id
+
+    async def investigate(self, brief, effort, qid, repairs=None, question_text=""):
+        return WorkerResult(
+            question_id=qid,
+            status="partial",
+            claims=[],
+            tokens_spent=0,
+            subagent_run_id=self.run_id,
+            subagent_checkpoint_id="sc_1" if self.run_id else "",
+            subagent_step_kind="continuing" if self.run_id else "",
+        )
+
+    def flush_partial(self, qid):
+        return WorkerResult(question_id=qid, status="partial")
+
+
+def _round_orch(ledger: _MemoryLedger, worker: object) -> Orchestrator:
+    return Orchestrator(
+        session=None,
+        run_id="run00001",
+        worker_factory=lambda: worker,
+        grader=None,
+        ledger=ledger,
+        decompose_fn=lambda _text: [],
+        global_token_cap=10_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_round_logs_subagent_step_only_when_run_id_present() -> None:
+    missing = _Question(id="qid00001", text="What?", status="open", cap_tokens=999_999)
+    missing_ledger = _MemoryLedger(missing)
+    await _round_orch(missing_ledger, _RunIdWorker(""))._run_round()
+    assert [kind for kind, _qid, _payload in missing_ledger.events if kind == "subagent_step"] == []
+
+    present = _Question(id="qid00001", text="What?", status="open", cap_tokens=999_999)
+    present_ledger = _MemoryLedger(present)
+    await _round_orch(present_ledger, _RunIdWorker("sa_child"))._run_round()
+    steps = [
+        payload
+        for kind, qid, payload in present_ledger.events
+        if kind == "subagent_step"
+    ]
+    assert len(steps) == 1
+    assert steps[0]["run_id"] == "sa_child"
+    assert steps[0]["checkpoint_id"] == "sc_1"
+    assert steps[0]["step_kind"] == "continuing"
+    assert steps[0]["status"] == "partial"
