@@ -196,6 +196,31 @@ class EnterpriseMetricsCollector:
             ["parent_kind"],
             registry=self.registry,
         )
+        self.subagent_live_children = Histogram(
+            "subagent_live_children",
+            "Live subagent children after a parent spawn delivery",
+            ["parent_kind", "spec"],
+            buckets=(0, 1, 2, 3, 4),
+            registry=self.registry,
+        )
+        self.subagent_policy_capped_total = Counter(
+            "subagent_policy_capped_total",
+            "Spawn attempts rejected because a child is already active",
+            ["parent_kind"],
+            registry=self.registry,
+        )
+        self.subagent_fold_rollup_tokens_total = Counter(
+            "subagent_fold_rollup_tokens_total",
+            "Parent-priced child tokens rolled into the parent on child_fold",
+            ["parent_kind", "direction"],
+            registry=self.registry,
+        )
+        self.subagent_fold_rollup_cost_micros_total = Counter(
+            "subagent_fold_rollup_cost_micros_total",
+            "Parent-priced child cost in micros rolled into the parent on child_fold",
+            ["parent_kind", "provider"],
+            registry=self.registry,
+        )
         self.coding_sandbox_lifecycle_seconds = Histogram(
             "coding_sandbox_lifecycle_seconds",
             "Coding sandbox lifecycle operation duration",

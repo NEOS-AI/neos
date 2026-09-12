@@ -883,7 +883,9 @@ class DurableCodingLoop:
                     "child_run_id": result.run_id,
                     "child_checkpoint_id": result.checkpoint_id,
                     "step_kind": result.step_kind,
+                    "live_count": len(parked.active_children),
                 }
+                self._record_spawn_live_children(parked, call)
                 committed = await deps.repository.commit_phase_checkpoint(
                     lease=deps.lease,
                     phase=started.phase,
@@ -998,6 +1000,7 @@ class DurableCodingLoop:
                 ),
             )
             after = self._drain_completed_prefix(after)
+            self._record_spawn_live_children(after, call)
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -1501,6 +1504,46 @@ class DurableCodingLoop:
         self._metrics.coding_tool_execution_total.labels(
             tool=tool_name, outcome=metric_outcome
         ).inc()
+
+    def _spawn_spec_name(self, call) -> str:
+        raw = call.input if isinstance(getattr(call, "input", None), Mapping) else {}
+        return str(raw.get("spec") or "explore")
+
+    def _record_spawn_live_children(self, state, call) -> None:
+        from neos.subagent.metrics import record_live_children
+
+        children = state.active_children or _legacy_single(state)
+        live_count = len(children)
+        record_live_children(
+            self._metrics,
+            parent_kind="coding",
+            spec=self._spawn_spec_name(call),
+            count=live_count,
+        )
+        logger.debug(
+            "coding spawn delivery live_count=%s selected_tool_call_id=%s",
+            live_count,
+            getattr(call, "tool_call_id", ""),
+        )
+
+    def _record_policy_capped(self) -> None:
+        from neos.subagent.metrics import record_policy_capped
+
+        record_policy_capped(self._metrics, parent_kind="coding")
+
+    def _record_fold_rollup(
+        self, input_tokens: int, output_tokens: int, cost_micros: int
+    ) -> None:
+        from neos.subagent.metrics import record_fold_rollup
+
+        record_fold_rollup(
+            self._metrics,
+            parent_kind="coding",
+            provider=self._config.provider,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_micros=cost_micros,
+        )
 
     async def _has_pending_interrupt(self, deps, task_id: str) -> bool:
         checker = getattr(deps.repository, "has_pending_interrupt", None)
@@ -2168,6 +2211,7 @@ class DurableCodingLoop:
 
     def _apply_child_fold_usage(self, state, folded) -> AgentLoopState:
         in_tokens, out_tokens, child_cost = self._price_child_usage(folded)
+        self._record_fold_rollup(in_tokens, out_tokens, child_cost)
         return replace(
             state,
             input_tokens=state.input_tokens + in_tokens,
@@ -2245,6 +2289,7 @@ class DurableCodingLoop:
             and call.tool_call_id not in {child.tool_call_id for child in live}
             and len(live) >= max_active
         ):
+            self._record_policy_capped()
             return self._spawn_tool_error(bound, "policy_child_already_active")
         if self._subagents is None:
             raise CodingLoopFailure("subagent_runtime_missing", retryable=False)

@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
+from prometheus_client import CollectorRegistry
 
 from neos.coding.domain.durability import (
     StaleExecutionLease,
@@ -25,6 +26,7 @@ from neos.coding.domain.phases import (
 )
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
+from neos.observability.metrics import EnterpriseMetricsCollector
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
 from neos.subagent.catalog import SpecRegistry
@@ -250,7 +252,11 @@ async def test_flag_on_first_delivery_parks_without_completing_or_pasting() -> N
     payload = parked[-1].payload
     assert payload["child_run_id"] == state["active_child_run_id"]
     assert payload["step_kind"] == "continuing"
+    assert payload["live_count"] == 1
     assert "transcript" not in payload
+    assert "brief" not in payload
+    assert "briefing" not in payload
+    assert "content" not in payload
 
 
 @pytest.mark.asyncio
@@ -1147,3 +1153,113 @@ async def test_budget_exceed_keeps_folded_result_and_cancels_siblings() -> None:
         error_code="cost_budget_exceeded",
     )
     assert h.repository.active_run.status is CodingRunStatus.FAILED
+
+
+def _metrics():
+    return EnterpriseMetricsCollector(registry=CollectorRegistry())
+
+
+def _histogram_sample(histogram, suffix: str, **labels) -> float:
+    for metric in histogram.collect():
+        for sample in metric.samples:
+            if not sample.name.endswith(suffix):
+                continue
+            if all(sample.labels.get(key) == value for key, value in labels.items()):
+                return sample.value
+    return 0.0
+
+
+def _live_sum(metrics) -> float:
+    return _histogram_sample(
+        metrics.subagent_live_children,
+        "_sum",
+        parent_kind="coding",
+        spec="explore",
+    )
+
+
+def _live_count(metrics) -> float:
+    return _histogram_sample(
+        metrics.subagent_live_children,
+        "_count",
+        parent_kind="coding",
+        spec="explore",
+    )
+
+
+@pytest.mark.asyncio
+async def test_spawn_delivery_observes_live_children_histogram() -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._metrics = metrics
+    events = await collect(h)
+    assert _live_count(metrics) == 1
+    assert _live_sum(metrics) == 1.0
+    parked = [event for event in events if event.type == "phase.completed"]
+    assert parked
+    payload = parked[-1].payload
+    assert payload["live_count"] == 1
+    assert "transcript" not in payload
+    assert "brief" not in payload
+
+
+@pytest.mark.asyncio
+async def test_policy_child_already_active_increments_capped_counter() -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._metrics = metrics
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    state = dict(parked.loop_state)
+    pending = [dict(item) for item in state["pending_tool_calls"]]
+    pending[0]["tool_call_id"] = "s2"
+    state["pending_tool_calls"] = pending
+    mutated = replace(parked, loop_state=state)
+    await collect(h, mutated)
+    assert (
+        metrics.subagent_policy_capped_total.labels(parent_kind="coding")._value.get()
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_child_fold_records_parent_priced_rollup_not_folded_cost() -> None:
+    inner, _child = _make_runtime([_usage_turn("found login.py", 2, 3)])
+    runtime = RecordingSubagents(inner)
+    original_fold = runtime.fold
+
+    async def inflated(run_id):
+        folded = await original_fold(run_id)
+        return replace(folded, cost_micros=999_999)
+
+    runtime.fold = inflated
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    h.loop._metrics = metrics
+    await collect(h)
+    assert (
+        metrics.subagent_fold_rollup_tokens_total.labels(
+            parent_kind="coding", direction="input"
+        )._value.get()
+        == 2
+    )
+    assert (
+        metrics.subagent_fold_rollup_tokens_total.labels(
+            parent_kind="coding", direction="output"
+        )._value.get()
+        == 3
+    )
+    assert (
+        metrics.subagent_fold_rollup_cost_micros_total.labels(
+            parent_kind="coding", provider="anthropic"
+        )._value.get()
+        == 5
+    )
+    assert (
+        metrics.subagent_cost_micros_total.labels(
+            spec="explore", parent_kind="coding", provider="anthropic"
+        )._value.get()
+        == 0
+    )

@@ -50,6 +50,13 @@ def record_subagent_event(metrics, event_type: str, payload: Mapping[str, Any]) 
             histogram.labels(spec=spec, parent_kind=parent).observe(
                 float(payload["duration_sec"])
             )
+        if payload.get("live_count") is not None:
+            record_live_children(
+                metrics,
+                parent_kind=parent,
+                spec=spec,
+                count=int(payload["live_count"]),
+            )
         return
     if event_type == "subagent.completed":
         metrics.subagent_advance_total.labels(
@@ -79,6 +86,56 @@ def record_subagent_event(metrics, event_type: str, payload: Mapping[str, Any]) 
         fold = getattr(metrics, "subagent_fold_chars", None)
         if fold is not None:
             fold.labels(spec=spec).observe(int(payload.get("chars") or 0))
+
+
+def record_live_children(
+    metrics, *, parent_kind: str, spec: str, count: int
+) -> None:
+    if metrics is None:
+        return
+    histogram = getattr(metrics, "subagent_live_children", None)
+    if histogram is None:
+        return
+    histogram.labels(
+        parent_kind=_parent({"parent_kind": parent_kind}),
+        spec=_spec({"spec": spec}),
+    ).observe(int(count))
+
+
+def record_policy_capped(metrics, *, parent_kind: str) -> None:
+    if metrics is None:
+        return
+    counter = getattr(metrics, "subagent_policy_capped_total", None)
+    if counter is None:
+        return
+    counter.labels(parent_kind=_parent({"parent_kind": parent_kind})).inc()
+
+
+def record_fold_rollup(
+    metrics,
+    *,
+    parent_kind: str,
+    provider: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_micros: int,
+) -> None:
+    """Record parent-priced child spend. Never use FoldedResult.cost_micros."""
+    if metrics is None:
+        return
+    parent = _parent({"parent_kind": parent_kind})
+    tokens = getattr(metrics, "subagent_fold_rollup_tokens_total", None)
+    if tokens is not None:
+        tokens.labels(parent_kind=parent, direction="input").inc(int(input_tokens or 0))
+        tokens.labels(parent_kind=parent, direction="output").inc(
+            int(output_tokens or 0)
+        )
+    cost = getattr(metrics, "subagent_fold_rollup_cost_micros_total", None)
+    if cost is not None:
+        cost.labels(
+            parent_kind=parent,
+            provider=_provider({"provider": provider}),
+        ).inc(int(cost_micros or 0))
 
 
 class MetricsEventSink:
