@@ -102,3 +102,19 @@ def test_fold_keeps_last_assistant_text_when_present() -> None:
     assert cancelled.summary == "found auth in gateway.py"
     assert exhausted.summary == "looking"
     assert failed.summary == "partial map of the module"
+
+
+def test_fold_completed_empty_text_and_error_uses_status() -> None:
+    result = fold_run(
+        _record(status=SubagentStatus.COMPLETED, error_code=""),
+        {"last_assistant_text": ""},
+    )
+    assert result.summary == "completed"
+
+
+def test_fold_invalid_budget_and_none_loop_state_does_not_raise() -> None:
+    result = fold_run(
+        _record(briefing={"goal": "inspect", "report_budget_chars": "nope"}),
+        None,
+    )
+    assert result.summary == "completed"

@@ -54,3 +54,14 @@ def test_strip_channel_keys_leaves_unrelated_keys() -> None:
     assert strip_channel_keys("text") == "text"
     assert strip_channel_keys(3) == 3
     assert strip_channel_keys(None) is None
+
+
+def test_strip_channel_keys_recurses_tuple_of_dicts() -> None:
+    payload = (
+        {"session_key": "sk_should_go", "keep": "yes"},
+        {"chat_id": "C1", "ok": 1},
+    )
+    stripped = strip_channel_keys(payload)
+    assert stripped == ({"keep": "yes"}, {"ok": 1})
+    assert isinstance(stripped, tuple)
+    assert payload[0]["session_key"] == "sk_should_go"

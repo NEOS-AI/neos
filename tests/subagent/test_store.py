@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -286,8 +287,57 @@ async def test_commit_does_not_overwrite_killed_status(
     assert loaded.error_code == "stop"
 
 
+@pytest.mark.asyncio
+async def test_reserve_stale_expected_on_running_is_mismatch(
+    store: InMemorySubagentStore,
+) -> None:
+    run = await store.resolve_or_create(_ticket())
+    reserved = await store.reserve(run.run_id, None)
+    committed = await store.commit(reserved, _write(status=SubagentStatus.RUNNING))
+    assert committed.status is SubagentStatus.RUNNING
+    seq_before = committed.latest_seq
+    checkpoint_before = committed.latest_checkpoint_id
+    mismatch = await store.reserve(run.run_id, "sc_stale")
+    assert mismatch.matched is False
+    loaded = await store.get(run.run_id)
+    assert loaded.latest_seq == seq_before
+    assert loaded.latest_checkpoint_id == checkpoint_before
+
+
+@pytest.mark.asyncio
+async def test_reserve_expected_set_with_no_checkpoints_is_mismatch(
+    store: InMemorySubagentStore,
+) -> None:
+    run = await store.resolve_or_create(_ticket())
+    assert run.latest_seq == 0
+    mismatch = await store.reserve(run.run_id, "sc_expected")
+    assert mismatch.matched is False
+    assert mismatch.seq == 0
+    loaded = await store.get(run.run_id)
+    assert loaded.latest_seq == 0
+    assert loaded.latest_checkpoint_id is None
+
+
+def test_postgres_json_strips_channel_keys() -> None:
+    postgres = pytest.importorskip("neos.subagent.postgres")
+    dumped = postgres._json(
+        {
+            "goal": "inspect",
+            "session_key": "sk_live",
+            "nested": {"chat_id": "C1", "keep": True},
+        }
+    )
+    assert json.loads(dumped) == {"goal": "inspect", "nested": {"keep": True}}
+
+
 def test_postgres_commit_skips_terminal_run_update() -> None:
     source = Path("neos/subagent/postgres.py").read_text()
+    insert_src = source.split("_INSERT_RUN = text(", 1)[1].split(
+        "_LATEST_CHECKPOINT", 1
+    )[0]
+    assert "ON CONFLICT (parent_kind, parent_id, parent_tool_call_id) DO NOTHING" in (
+        insert_src
+    )
     commit_src = source.split("async def commit", 1)[1].split("async def cancel", 1)[0]
     assert "_SELECT_RUN_FOR_UPDATE" in commit_src
     assert "_UPDATE_CHECKPOINT" in commit_src

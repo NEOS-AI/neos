@@ -290,3 +290,71 @@ def test_runtime_has_no_run_until_done_or_inner_loop() -> None:
         text = path.read_text()
         assert "run_until_done" not in text
         assert "while True" not in text
+
+
+@pytest.mark.asyncio
+async def test_live_cas_mismatch_emits_and_does_not_step() -> None:
+    runtime, _store, _tools, model, events = _runtime([_tool(), _text("nope")])
+    first = await runtime.advance(_ticket())
+    assert first.kind is StepKind.CONTINUING
+    assert first.status is SubagentStatus.RUNNING
+    before = len(model.requests)
+    second = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id="sc_stale")
+    )
+    assert any(kind == "subagent.cas_mismatch" for kind, _ in events.events)
+    assert second.kind is StepKind.CONTINUING
+    assert second.status is SubagentStatus.RUNNING
+    assert len(model.requests) == before
+
+
+@pytest.mark.asyncio
+async def test_advance_after_kill_is_cancelled_without_model() -> None:
+    runtime, _store, _tools, model, _events = _runtime([_tool(), _text("nope")])
+    first = await runtime.advance(_ticket())
+    assert first.status is SubagentStatus.RUNNING
+    killed = await runtime.cancel(first.run_id, "aborted")
+    assert killed.status is SubagentStatus.KILLED
+    before = len(model.requests)
+    second = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id=None)
+    )
+    assert second.kind is StepKind.CANCELLED
+    assert second.status is SubagentStatus.KILLED
+    assert len(model.requests) == before
+
+
+@pytest.mark.asyncio
+async def test_cancel_of_completed_does_not_emit_cancelled() -> None:
+    runtime, store, _tools, _model, events = _runtime([_text("done")])
+    first = await runtime.advance(_ticket())
+    assert first.status is SubagentStatus.COMPLETED
+    snap = await runtime.cancel(first.run_id, "too-late")
+    assert snap.status is SubagentStatus.COMPLETED
+    assert (await store.get(first.run_id)).status is SubagentStatus.COMPLETED
+    # Runtime emits cancelled only when the stored status is KILLED.
+    assert not any(kind == "subagent.cancelled" for kind, _ in events.events)
+
+
+@pytest.mark.asyncio
+async def test_tool_execute_cancel_then_commit_stays_killed() -> None:
+    tools = FakeToolPort(names=("read_file.v1",))
+    runtime, store, tools, _model, _events = _runtime(
+        [_tool("read_file.v1", path="a.py")],
+        tools=tools,
+    )
+    first = await runtime.advance(_ticket())
+    assert first.status is SubagentStatus.RUNNING
+    bound = tools.execute
+
+    async def cancel_then_execute(name: str, input):
+        await runtime.cancel(first.run_id, "stop")
+        return await bound(name, input)
+
+    tools.execute = cancel_then_execute
+    second = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id=first.checkpoint_id)
+    )
+    assert second.status is SubagentStatus.KILLED
+    assert (await store.get(first.run_id)).status is SubagentStatus.KILLED
+    assert tools.calls == [("read_file.v1", {"path": "a.py"})]

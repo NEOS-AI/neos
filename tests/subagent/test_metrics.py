@@ -220,6 +220,99 @@ def test_step_payload_extras_do_not_observe_live_children_or_raise() -> None:
     )
 
 
+def test_completed_remaps_invented_labels_and_ignores_extras() -> None:
+    metrics = _collector()
+    record_subagent_event(
+        metrics,
+        "subagent.completed",
+        {
+            "spec": "invented-spec",
+            "parent_kind": "not-a-parent",
+            "provider": "not-a-provider",
+            "input_tokens": 2,
+            "output_tokens": 3,
+            "cost_micros": 4,
+            "run_id": "sa_should_not_be_a_label",
+            "transcript": "forbidden",
+        },
+    )
+    assert (
+        metrics.subagent_advance_total.labels(
+            spec="explore", parent_kind="coding", outcome="completed"
+        )._value.get()
+        == 1
+    )
+    assert (
+        metrics.subagent_tokens_total.labels(
+            spec="explore", parent_kind="coding", direction="input"
+        )._value.get()
+        == 2
+    )
+    assert (
+        metrics.subagent_cost_micros_total.labels(
+            spec="explore", parent_kind="coding", provider="anthropic"
+        )._value.get()
+        == 4
+    )
+
+
+def test_duration_failed_cancelled_fold_and_policy_none() -> None:
+    metrics = _collector()
+    labels = {"spec": "explore", "parent_kind": "coding"}
+    record_subagent_event(
+        metrics,
+        "subagent.step",
+        {
+            "spec": "explore",
+            "parent_kind": "coding",
+            "step_kind": "continuing",
+            "duration_sec": 1.5,
+        },
+    )
+    assert _histogram_count(metrics.subagent_advance_seconds, **labels) == 1
+    assert _histogram_sum(metrics.subagent_advance_seconds, **labels) == 1.5
+    record_subagent_event(
+        metrics,
+        "subagent.step",
+        {
+            "spec": "explore",
+            "parent_kind": "coding",
+            "step_kind": "continuing",
+        },
+    )
+    assert _histogram_count(metrics.subagent_advance_seconds, **labels) == 1
+    record_subagent_event(
+        metrics,
+        "subagent.failed",
+        {"spec": "explore", "parent_kind": "coding"},
+    )
+    record_subagent_event(
+        metrics,
+        "subagent.cancelled",
+        {"spec": "explore", "parent_kind": "coding"},
+    )
+    record_subagent_event(
+        metrics,
+        "subagent.fold",
+        {"spec": "explore", "chars": 12},
+    )
+    assert (
+        metrics.subagent_advance_total.labels(
+            spec="explore", parent_kind="coding", outcome="failed"
+        )._value.get()
+        == 1
+    )
+    assert (
+        metrics.subagent_advance_total.labels(
+            spec="explore", parent_kind="coding", outcome="cancelled"
+        )._value.get()
+        == 1
+    )
+    assert _histogram_count(metrics.subagent_fold_chars, spec="explore") == 1
+    assert _histogram_sum(metrics.subagent_fold_chars, spec="explore") == 12.0
+    record_policy_capped(None, parent_kind="coding")
+
+
 @pytest.mark.asyncio
 async def test_metrics_sink_forwards_and_records() -> None:
     inner = _Inner()
