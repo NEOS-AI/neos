@@ -742,6 +742,92 @@ def test_catalog_rejects_duplicate_gateway_ids(tmp_path: Path) -> None:
         load_catalog(path)
 
 
+def test_catalog_rejects_same_pin_primary_and_extra_gateway_id(tmp_path: Path) -> None:
+    """A pin cannot reuse its primary gateway_id on a picker extra."""
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-sonnet-4-5-20250929": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/claude-sonnet-4.5-thinking",
+                    "picker": {
+                        "name": "Sonnet 4.5",
+                        "description": "prev",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "gateway_id": "anthropic/claude-sonnet-4.5-thinking",
+                                "name": "Thinking",
+                                "description": "extended",
+                                "group": "reasoning",
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/claude-sonnet-4.5-thinking"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_two_extras_with_the_same_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/a",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "gateway_id": "anthropic/a-extra",
+                                "name": "One",
+                                "description": "first",
+                                "group": "reasoning",
+                            },
+                            {
+                                "gateway_id": "anthropic/a-extra",
+                                "name": "Two",
+                                "description": "second",
+                                "group": "reasoning",
+                            },
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/a-extra"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_role_alias_key_that_shadows_a_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-sonnet-5": {"provider": "anthropic"}},
+            "role_aliases": {"claude-sonnet-5": {"current": "claude-sonnet-5"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-sonnet-5"):
+        load_catalog(path)
+
+
+def test_committed_role_aliases_do_not_shadow_pin_keys() -> None:
+    catalog = model_config.catalog
+
+    assert set(catalog.role_aliases) & set(catalog.models) == set()
+
+
 def test_catalog_rejects_duplicate_wire_id_on_the_same_provider(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

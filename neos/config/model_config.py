@@ -71,7 +71,7 @@ class PickerRow(StrictConfigModel):
 
 
 class PickerSpec(StrictConfigModel):
-    """채팅 피커 노출. 이 블록이 있으면 GET /models 에 올라간다.
+    """채팅 피커 노출. 이 블록이 있으면 to_picker_payload 한 줄이 생긴다.
 
     `selectable` 과 다르다 — selectable 은 list_models / 턴 오버라이드 허용
     목록이고, 피커 멤버십은 따로 고른다.
@@ -236,7 +236,7 @@ class ModelCatalog(StrictConfigModel):
 
         def claim(spelling: str, pin: str, kind: str) -> None:
             existing = claimed_lookup.get(spelling)
-            if existing is not None and existing != pin:
+            if existing is not None:
                 raise ValueError(
                     f"{kind} {spelling!r} is claimed by both {existing!r} "
                     f"and {pin!r}"
@@ -279,6 +279,9 @@ class ModelCatalog(StrictConfigModel):
                     f"claimed by both {claimed_wire[wire_key]!r} and {name!r}"
                 )
             claimed_wire[wire_key] = name
+
+        for name in self.role_aliases:
+            claim(name, name, "role_alias")
 
         return self
 
