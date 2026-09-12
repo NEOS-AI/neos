@@ -133,6 +133,22 @@ async def test_create_conversation_allows_selectable_model(monkeypatch):
     assert create.await_args.kwargs["model_name"] == "claude-sonnet-5"
 
 
+@pytest.mark.asyncio
+async def test_create_conversation_allows_selectable_gemini_model(monkeypatch):
+    """gemini-1.5-pro-latest is selectable and not role-routed — the gate must not 400."""
+    create = AsyncMock(return_value=_conversation(model_name="gemini-1.5-pro-latest"))
+    monkeypatch.setattr(chat_handlers.ChatService, "create_conversation", create)
+    request = CreateConversationRequest(
+        conversation_id="c1", model_name="gemini-1.5-pro-latest"
+    )
+
+    result = await chat_handlers.create_conversation(request, current_user=CURRENT_USER)
+
+    assert result is not None
+    create.assert_awaited_once()
+    assert create.await_args.kwargs["model_name"] == "gemini-1.5-pro-latest"
+
+
 # ---------------------------------------------------------------------------
 # regenerate_message
 # ---------------------------------------------------------------------------

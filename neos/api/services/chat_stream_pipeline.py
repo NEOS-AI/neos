@@ -44,7 +44,8 @@ from neos.api.models.open_responses import (
 from neos.api.services.chat_chunk_dispatcher import ChunkEventDispatcher, StreamAccumulator
 from neos.api.services.chat_stream_strategy import resolve_llm_strategy
 from neos.api.services.chat_system_prompt_builder import SystemPromptBuilder
-from neos.config.model_config import is_user_selectable_model
+from neos.config.model_config import is_user_selectable_model, model_config
+from neos.config.model_identity import RemapCycleError, canonicalize
 from neos.config.settings import settings as app_settings
 from neos.utils.logger import get_logger
 
@@ -91,9 +92,11 @@ def resolve_turn_model_name(
     """이 턴에 쓸 모델명을 고른다.
 
     `request_metadata["model"]`은 매 메시지 FE 셀렉터 값이 실려 오는,
-    사용자가 통제하는 값이 모델 라우팅에 도달하는 경로다(#6). 이 함수는
-    두 가지를 거부하고 `conversation["model_name"]`으로 떨어진다 —
-    조용히가 아니라 `logger.warning`을 남기고:
+    사용자가 통제하는 값이 모델 라우팅에 도달하는 경로다(#6). 요청
+    오버라이드만 `canonicalize(..., apply_remap=True)` 한 뒤 selectable
+    게이트를 통과한다. 저장된 `conversation["model_name"]`은 리맵하지
+    않는다. 이 함수는 두 가지를 거부하고 `conversation["model_name"]`으로
+    떨어진다 — 조용히가 아니라 `logger.warning`을 남기고:
 
     1. 문자열이 아닌 값 (`metadata`는 `Dict[str, Any]`라 list/dict가 올 수
        있다 — 그대로 카탈로그 조회에 넘기면 `dict.get()`이 해시 불가능한
@@ -120,7 +123,16 @@ def resolve_turn_model_name(
             conversation_model,
         )
         return conversation_model
-    if not is_user_selectable_model(requested_model):
+    try:
+        identity = canonicalize(
+            requested_model,
+            catalog=model_config.catalog,
+            apply_remap=True,
+        )
+    except RemapCycleError:
+        identity = None
+    pin = identity.catalog_id if identity is not None else None
+    if pin is None or not is_user_selectable_model(pin):
         logger.warning(
             "Ignoring unknown or non-selectable per-turn model override %r "
             "(not in the user-selectable model catalog neos/config/models.yaml) "
@@ -129,7 +141,7 @@ def resolve_turn_model_name(
             conversation_model,
         )
         return conversation_model
-    return requested_model
+    return pin
 
 
 @dataclass

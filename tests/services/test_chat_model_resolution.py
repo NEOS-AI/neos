@@ -9,6 +9,7 @@ from neos.api.models.chat_models import (
 )
 from neos.api.services import chat_service
 from neos.api.services.chat_service import ChatService, resolve_new_chat_model
+from neos.api.services.chat_stream_pipeline import resolve_turn_model_name
 from neos.config.model_config import model_config
 from neos.services import chat_llm_service
 import neos.utils.anthropic_client as anthropic_client_module
@@ -37,8 +38,87 @@ def test_new_chat_user_cookie_is_remapped() -> None:
     assert resolve_new_chat_model("openai/gpt-4.1") == "gpt-5.6-sol"
 
 
+def test_gemini_pin_is_stored_without_calling_resolve_model(monkeypatch) -> None:
+    """Selectable Gemini is not role-routed. resolve_model(provider='gemini') 500s."""
+
+    def _boom(**kwargs):
+        raise AssertionError(f"resolve_model must not run for Gemini: {kwargs}")
+
+    monkeypatch.setattr(chat_service, "resolve_model", _boom)
+    assert resolve_new_chat_model("gemini-1.5-pro-latest") == "gemini-1.5-pro-latest"
+
+
+def test_openai_selection_resolves_with_openai_provider(monkeypatch) -> None:
+    seen: dict = {}
+    real = chat_service.resolve_model
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(chat_service, "resolve_model", _spy)
+    assert resolve_new_chat_model("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert seen["provider"] == "openai"
+    assert seen["user_model"] == "gpt-5.6-sol"
+    assert seen["role"] == "everyday"
+
+
+def test_anthropic_selection_resolves_with_anthropic_provider(monkeypatch) -> None:
+    seen: dict = {}
+    real = chat_service.resolve_model
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(chat_service, "resolve_model", _spy)
+    assert resolve_new_chat_model("claude-opus-5") == "claude-opus-5"
+    assert seen["provider"] == "anthropic"
+    assert seen["user_model"] == "claude-opus-5"
+
+
 def test_stored_conversation_model_is_not_replaced() -> None:
     assert resolve_conversation_chat_model("openai/gpt-4.1") == "openai/gpt-4.1"
+
+
+def test_turn_override_canonicalizes_gateway_id_to_pin() -> None:
+    assert (
+        resolve_turn_model_name(
+            {"model": "anthropic/claude-sonnet-5"},
+            {"model_name": "gpt-4o-mini"},
+        )
+        == "claude-sonnet-5"
+    )
+
+
+def test_turn_override_applies_user_remap() -> None:
+    assert (
+        resolve_turn_model_name(
+            {"model": "anthropic/claude-opus-4.5"},
+            {"model_name": "gpt-4o-mini"},
+        )
+        == "claude-opus-5"
+    )
+
+
+def test_turn_override_accepts_selectable_gemini_pin() -> None:
+    assert (
+        resolve_turn_model_name(
+            {"model": "gemini-1.5-pro-latest"},
+            {"model_name": "claude-sonnet-5"},
+        )
+        == "gemini-1.5-pro-latest"
+    )
+
+
+def test_turn_falls_back_to_conversation_without_remapping() -> None:
+    assert (
+        resolve_turn_model_name(
+            {},
+            {"model_name": "anthropic/claude-opus-4.5"},
+        )
+        == "anthropic/claude-opus-4.5"
+    )
 
 
 def test_new_template_without_selection_defers_to_role_routing() -> None:
