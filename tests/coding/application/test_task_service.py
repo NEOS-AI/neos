@@ -8,6 +8,15 @@ from neos.coding.application.task_service import (
 )
 from neos.coding.domain.models import CodingTaskStatus
 from neos.coding.events.store import InMemoryCodingEventStore
+from neos.subagent.memory import InMemorySubagentStore
+from neos.subagent.store import CheckpointWrite, SubagentNotFound
+from neos.subagent.types import (
+    ModelPin,
+    ParentBriefing,
+    ParentKind,
+    SubagentStatus,
+    SubagentTicket,
+)
 
 pytestmark = pytest.mark.no_db
 
@@ -110,3 +119,46 @@ async def test_list_owned_omits_deleted_and_orders_by_activity() -> None:
 
     assert [task.task_id for task in tasks] == ["ct_new", "ct_old"]
     assert all(task.prompt != "Gone" for task in tasks)
+
+
+def _child_ticket(parent_id: str, tool_call_id: str) -> SubagentTicket:
+    return SubagentTicket(
+        parent_kind=ParentKind.CODING,
+        parent_id=parent_id,
+        parent_run_id="cr_parent",
+        parent_tool_call_id=tool_call_id,
+        spec="explore",
+        briefing=ParentBriefing(goal="inspect auth"),
+        model=ModelPin(provider="anthropic", model="claude-test"),
+    )
+
+
+async def test_archive_deletes_only_that_parent_subagent_runs() -> None:
+    store = InMemorySubagentStore()
+    repo = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
+    )
+    await service.create_task(owner_id="u1", prompt="Keep", task_id="ct_keep")
+    await service.create_task(owner_id="u1", prompt="Drop", task_id="ct_drop")
+    victim = await store.resolve_or_create(_child_ticket("ct_drop", "toolu_1"))
+    reserved = await store.reserve(victim.run_id, None)
+    await store.commit(
+        reserved,
+        CheckpointWrite(
+            loop_state={"messages": [{"role": "user", "content": "brief"}]},
+            status=SubagentStatus.RUNNING,
+            turn_count=1,
+            tool_count=0,
+        ),
+    )
+    kept = await store.resolve_or_create(_child_ticket("ct_keep", "toolu_1"))
+
+    assert await service.archive("ct_drop", "u1") is True
+    assert await service.archive("ct_drop", "u2") is False
+    listed = await service.list_owned("u1", limit=20)
+    assert [task.task_id for task in listed] == ["ct_keep"]
+    with pytest.raises(SubagentNotFound):
+        await store.get(victim.run_id)
+    remaining = await store.get(kept.run_id)
+    assert remaining.parent_id == "ct_keep"

@@ -8,7 +8,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
-from neos.subagent.identity import new_checkpoint_id, new_run_id, strip_channel_keys
+from neos.subagent.identity import (
+    new_checkpoint_id,
+    new_run_id,
+    persist_payload,
+)
 from neos.subagent.store import (
     PLACEHOLDER_STATE,
     CasReservation,
@@ -33,7 +37,7 @@ def _now() -> datetime:
 
 
 def _briefing_payload(ticket: SubagentTicket) -> dict[str, Any]:
-    return strip_channel_keys(
+    return persist_payload(
         {
             "goal": ticket.briefing.goal,
             "why": ticket.briefing.why,
@@ -169,7 +173,7 @@ class InMemorySubagentStore:
             row = self._row(reservation.run.run_id, reservation.seq)
             if row is None:
                 raise SubagentNotFound(reservation.run.run_id)
-            state = strip_channel_keys(dict(write.loop_state))
+            state = persist_payload(dict(write.loop_state))
             row["loop_state"] = state
             if run.status in _TERMINAL:
                 return run
@@ -221,6 +225,28 @@ class InMemorySubagentStore:
                 )
                 for run in children
             )
+
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int:
+        async with self._lock:
+            victims = [
+                run
+                for run in self._runs.values()
+                if run.parent_kind is parent_kind and run.parent_id == parent_id
+            ]
+            for run in victims:
+                self._runs.pop(run.run_id, None)
+                self._checkpoints.pop(run.run_id, None)
+                self._by_parent.pop(
+                    (
+                        run.parent_kind.value,
+                        run.parent_id,
+                        run.parent_tool_call_id,
+                    ),
+                    None,
+                )
+            return len(victims)
 
     def _mark_terminal_locked(
         self, run_id: str, status: SubagentStatus, error_code: str

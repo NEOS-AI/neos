@@ -57,6 +57,24 @@ class CodingTaskRepository:
             if (task := _task_from_row(row)) is not None
         ]
 
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        execute = getattr(self._database, "execute", None)
+        if execute is None:
+            return False
+        row = await execute(
+            """
+            UPDATE coding_tasks
+               SET status = 'archived',
+                   deleted_at = NOW(),
+                   updated_at = NOW()
+             WHERE task_id = $1 AND owner_id = $2 AND deleted_at IS NULL
+            RETURNING task_id
+            """,
+            task_id,
+            owner_id,
+        )
+        return row is not None
+
 
 def _task_from_row(row) -> CodingTask | None:
     if row is None:

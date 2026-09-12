@@ -12,7 +12,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from neos.subagent.identity import new_checkpoint_id, new_run_id, strip_channel_keys
+from neos.subagent.identity import (
+    new_checkpoint_id,
+    new_run_id,
+    persist_payload,
+    strip_channel_keys,
+)
 from neos.subagent.store import (
     PLACEHOLDER_STATE,
     CasReservation,
@@ -159,6 +164,13 @@ _LIST_PARENT = text(
        AND parent_id = :parent_id
     """
 )
+_DELETE_PARENT = text(
+    """
+    DELETE FROM subagent_runs
+     WHERE parent_kind = :parent_kind
+       AND parent_id = :parent_id
+    """
+)
 
 
 def _now() -> datetime:
@@ -166,7 +178,7 @@ def _now() -> datetime:
 
 
 def _json(value: Mapping[str, Any] | dict[str, Any]) -> str:
-    return json.dumps(strip_channel_keys(dict(value)))
+    return json.dumps(persist_payload(dict(value)))
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -233,7 +245,7 @@ class PostgresSubagentStore:
                     return await self._with_latest(session, existing)
                 now = _now()
                 run_id = new_run_id()
-                briefing = strip_channel_keys(
+                briefing = persist_payload(
                     {
                         "goal": ticket.briefing.goal,
                         "why": ticket.briefing.why,
@@ -440,6 +452,20 @@ class PostgresSubagentStore:
                         for row in rows
                     ]
                 )
+
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    _DELETE_PARENT,
+                    {
+                        "parent_kind": parent_kind.value,
+                        "parent_id": parent_id,
+                    },
+                )
+        return int(result.rowcount or 0)
 
     async def _mark_terminal_in_session(
         self,

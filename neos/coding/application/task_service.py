@@ -56,6 +56,17 @@ class InMemoryCodingTaskRepository:
     def mark_deleted(self, task_id: str, when: datetime | None = None) -> None:
         self._deleted_at[task_id] = when or datetime.now(UTC)
 
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        task = await self.get_owned(task_id, owner_id)
+        if task is None:
+            return False
+        now = datetime.now(UTC)
+        self.mark_deleted(task_id, now)
+        self._tasks[task_id] = replace(
+            task, status=CodingTaskStatus.ARCHIVED, updated_at=now
+        )
+        return True
+
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
         owned = [
             task
@@ -85,11 +96,13 @@ class CodingTaskService:
         events: InMemoryCodingEventStore,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        subagents=None,
     ) -> None:
         self.tasks = tasks
         self.events = events
         self._clock = clock
         self._task_created_notifier: Callable[[str], bool | None] | None = None
+        self._subagents = subagents
 
     def set_task_created_notifier(
         self, notifier: Callable[[str], bool | None] | None
@@ -147,3 +160,21 @@ class CodingTaskService:
         return await self.tasks.list_owned(
             owner_id, limit=clamp_task_list_limit(limit)
         )
+
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        task = await self.tasks.get_owned(task_id, owner_id)
+        if task is None:
+            return False
+        archiver = getattr(self.tasks, "archive", None)
+        if archiver is not None:
+            ok = await archiver(task_id, owner_id)
+        else:
+            marker = getattr(self.tasks, "mark_deleted", None)
+            if marker is not None:
+                marker(task_id)
+            ok = True
+        if ok and self._subagents is not None:
+            from neos.subagent.types import ParentKind
+
+            await self._subagents.delete_for_parent(ParentKind.CODING, task_id)
+        return bool(ok)

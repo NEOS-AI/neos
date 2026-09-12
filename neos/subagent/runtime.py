@@ -227,6 +227,11 @@ class SubagentRuntime:
             snapshots.append(record.snapshot())
         return tuple(snapshots)
 
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int:
+        return await self._store.delete_for_parent(parent_kind, parent_id)
+
     async def fold(self, run_id: str) -> FoldedResult:
         record = await self._store.get(run_id)
         state = await self._store.get_loop_state(run_id)

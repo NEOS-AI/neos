@@ -6,8 +6,9 @@ pytestmark = pytest.mark.no_db
 
 
 class FakeResult:
-    def __init__(self, row=None):
+    def __init__(self, row=None, rowcount=1):
         self._row = row
+        self.rowcount = rowcount
 
     def first(self):
         return self._row
@@ -232,3 +233,34 @@ async def test_list_owned_scopes_to_owner_and_orders_by_activity() -> None:
     assert "ORDER BY last_activity_at DESC, task_id DESC" in sql
     assert params["owner"] == "owner-a"
     assert params["limit"] == 50
+
+
+async def test_archive_soft_deletes_task_and_orphans_subagent_runs() -> None:
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    archived = await service.archive("ct_drop", "owner-a")
+
+    assert archived is True
+    sql = "\n".join(statement for statement, _ in session.statements)
+    assert "UPDATE coding_tasks" in sql
+    assert "deleted_at = :now" in sql
+    assert "status = 'archived'" in sql
+    assert "DELETE FROM subagent_runs" in sql
+    update_params = next(
+        params
+        for statement, params in session.statements
+        if "UPDATE coding_tasks" in statement
+    )
+    delete_params = next(
+        params
+        for statement, params in session.statements
+        if "DELETE FROM subagent_runs" in statement
+    )
+    assert update_params["task_id"] == "ct_drop"
+    assert update_params["owner_id"] == "owner-a"
+    assert delete_params["parent_kind"] == "coding"
+    assert delete_params["parent_id"] == "ct_drop"

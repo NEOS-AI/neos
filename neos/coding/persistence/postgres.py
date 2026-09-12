@@ -308,6 +308,38 @@ class PostgresCodingService:
             for row in rows
         ]
 
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        now = datetime.now(UTC)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                           SET status = 'archived',
+                               deleted_at = :now,
+                               updated_at = :now
+                         WHERE task_id = :task_id
+                           AND owner_id = :owner_id
+                           AND deleted_at IS NULL
+                        """
+                    ),
+                    {
+                        "task_id": task_id,
+                        "owner_id": owner_id,
+                        "now": now,
+                    },
+                )
+                archived = bool(result.rowcount)
+        if archived:
+            from neos.subagent.postgres import PostgresSubagentStore
+            from neos.subagent.types import ParentKind
+
+            await PostgresSubagentStore(self._session_factory).delete_for_parent(
+                ParentKind.CODING, task_id
+            )
+        return archived
+
     async def list_after(
         self, task_id: str, *, after_seq: int = 0, limit: int = 500
     ) -> list[CodingEvent]:
