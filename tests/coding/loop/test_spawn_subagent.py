@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from prometheus_client import CollectorRegistry
@@ -26,6 +27,7 @@ from neos.coding.domain.phases import (
 )
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
+from neos.coding.loop.durable import _select_spawn_work
 from neos.observability.metrics import EnterpriseMetricsCollector
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
@@ -1327,3 +1329,309 @@ async def test_child_fold_observes_live_children_after_drop() -> None:
     assert _live_count(metrics) == 1
     assert _live_sum(metrics) == 0.0
     assert _live_bucket(metrics, "0.0") == 1.0
+
+
+@pytest.mark.asyncio
+async def test_token_budget_exceed_cancels_siblings_with_token_reason() -> None:
+    inner, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=0, output_tokens=0),
+            _usage_turn("s1 report", 2, 3),
+            _child_tool(),
+        ]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_priced(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    parent_tokens = int(parked.loop_state["input_tokens"]) + int(
+        parked.loop_state["output_tokens"]
+    )
+    h.loop._config = replace(
+        h.loop._config,
+        max_total_tokens=max(1, parent_tokens),
+        max_cost_micros=10**12,
+    )
+    service = await _run_service(h, clock)
+    with pytest.raises(CodingLoopFailure) as caught:
+        for _ in range(8):
+            await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+            clock.tick()
+    assert caught.value.code == "token_budget_exceeded"
+    state = h.repository.checkpoints[-1].loop_state
+    folded = [
+        item
+        for item in _tool_results(state)
+        if item["tool_call_id"] in {"s1", "s2"} and item["status"] == "ok"
+    ]
+    assert len(folded) == 1
+    folded_id = folded[0]["tool_call_id"]
+    sibling_id = "s2" if folded_id == "s1" else "s1"
+    assert ("ct_1", folded_id) in h.repository.completed_tools
+    sibling = h.repository.completed_tools[("ct_1", sibling_id)]
+    assert sibling["reason_code"] == "token_budget_exceeded"
+    last_fold = max(
+        index
+        for index, ticket in enumerate(runtime.advance_tickets)
+        if ticket.parent_tool_call_id == folded_id
+    )
+    last_sibling = max(
+        (
+            index
+            for index, ticket in enumerate(runtime.advance_tickets)
+            if ticket.parent_tool_call_id == sibling_id
+        ),
+        default=-1,
+    )
+    assert last_sibling < last_fold
+
+
+@pytest.mark.asyncio
+async def test_completed_reuse_skips_after_result_and_drains_prefix() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _text()])
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    assert parked.loop_state["pending_tool_index"] == 0
+    assert _child_by_id(parked.loop_state, "s1") is not None
+    state = dict(parked.loop_state)
+    transcript = list(state.get("transcript") or ())
+    transcript.append(
+        {
+            "role": "tool",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "s1",
+                    "status": "ok",
+                    "content": {"summary": "already folded"},
+                }
+            ],
+        }
+    )
+    state["transcript"] = transcript
+    h.repository.completed_tools[("ct_1", "s1")] = {
+        "status": "ok",
+        "summary": "already folded",
+    }
+    mutated = replace(parked, loop_state=state)
+    await collect(h, mutated)
+    after = h.repository.checkpoints[-1].loop_state
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+    assert after["pending_tool_index"] == 1
+    assert _child_by_id(after, "s1") is None
+    assert after.get("active_children") in (None, [], ())
+    assert after["active_child_run_id"] is None
+
+
+def test_restore_empty_stamps_when_len_gt_1_use_epoch() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = h.loop._restore(
+        INPUT,
+        _checkpoint(
+            {
+                "transcript": [],
+                "pending_tool_calls": [],
+                "pending_tool_index": 0,
+                "active_children": [
+                    {
+                        "run_id": "sa_1",
+                        "checkpoint_id": "sc_1",
+                        "tool_call_id": "s1",
+                        "last_advanced_at": "",
+                    },
+                    {
+                        "run_id": "sa_2",
+                        "checkpoint_id": "sc_2",
+                        "tool_call_id": "s2",
+                        "last_advanced_at": "",
+                    },
+                ],
+            }
+        ),
+    )
+    assert [child.tool_call_id for child in state.active_children] == ["s1", "s2"]
+    assert {child.last_advanced_at for child in state.active_children} == {
+        "1970-01-01T00:00:00+00:00"
+    }
+
+
+def test_select_spawn_work_resume_call_none_on_pending_mutation() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = h.loop._restore(
+        INPUT,
+        _checkpoint(
+            {
+                "transcript": [],
+                "pending_tool_calls": [
+                    {
+                        "tool_call_id": "s2",
+                        "name": "spawn_agent.v1",
+                        "input": {"prompt": "look two", "max_turns": 4},
+                    }
+                ],
+                "pending_tool_index": 0,
+                "active_children": [
+                    {
+                        "run_id": "sa_1",
+                        "checkpoint_id": "sc_1",
+                        "tool_call_id": "s1",
+                        "last_advanced_at": "2026-07-19T00:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+    )
+    work = _select_spawn_work(state, max_active=1)
+    assert work is not None
+    assert work.kind == "resume"
+    assert work.call is None
+    assert work.child is not None
+    assert work.child.tool_call_id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_flag_off_mid_flight_cancels_all_live_children() -> None:
+    inner, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    assert [child["tool_call_id"] for child in parked.loop_state["active_children"]] == [
+        "s1",
+        "s2",
+    ]
+    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    await collect(h, parked)
+    state = h.repository.checkpoints[-1].loop_state
+    results = _tool_results(state)
+    assert {item["tool_call_id"] for item in results} == {"s1", "s2"}
+    assert all(item["status"] == "error" for item in results)
+    assert all(
+        item["content"].get("reason_code") == "subagent_disabled"
+        or item.get("reason_code") == "subagent_disabled"
+        for item in results
+    )
+    assert not any("look one" in text for text in _user_texts(state))
+    assert not any("look two" in text for text in _user_texts(state))
+    assert state["active_child_run_id"] is None
+    assert state.get("active_children") in (None, [], ())
+    s1 = _child_by_id(parked.loop_state, "s1")
+    s2 = _child_by_id(parked.loop_state, "s2")
+    assert s1 is not None and s2 is not None
+    assert (await inner._store.get(s1["run_id"])).status is SubagentStatus.KILLED
+    assert (await inner._store.get(s2["run_id"])).status is SubagentStatus.KILLED
+
+
+@pytest.mark.asyncio
+async def test_unknown_spawn_spec_is_policy_unknown_spec() -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {
+                        "prompt": "look around",
+                        "max_turns": 4,
+                        "spec": "general-purpose",
+                    },
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_unknown_spec"
+    state = h.repository.checkpoints[-1].loop_state
+    assert state.get("active_children") in (None, [], ())
+    assert state["active_child_run_id"] is None
+    assert len(_subagent_store(runtime)._runs) == 0
+
+
+def test_price_child_usage_mapping_and_object_use_parent_prices() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]], config=_priced())
+    mapping = {"input_tokens": 2, "output_tokens": 3, "cost_micros": 999_999}
+    obj = SimpleNamespace(input_tokens=2, output_tokens=3, cost_micros=999_999)
+    assert h.loop._price_child_usage(mapping) == (2, 3, 5)
+    assert h.loop._price_child_usage(obj) == (2, 3, 5)
+
+
+@pytest.mark.asyncio
+async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
+    inner, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    original_s1 = {"status": "ok", "summary": "already folded"}
+    h.repository.completed_tools[("ct_1", "s1")] = dict(original_s1)
+    state = dict(parked.loop_state)
+    transcript = list(state.get("transcript") or ())
+    for tool_call_id, content in (
+        ("s1", {"summary": "already folded"}),
+        ("s2", {"summary": "already on transcript"}),
+    ):
+        transcript.append(
+            {
+                "role": "tool",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_call_id": tool_call_id,
+                        "status": "ok",
+                        "content": content,
+                    }
+                ],
+            }
+        )
+    state["transcript"] = transcript
+    mutated = replace(parked, loop_state=state)
+    bound = await h.loop._bindings.resolve(h.deps.lease)
+    restored = h.loop._restore(INPUT, mutated)
+    after = await h.loop.fail_all_live_spawn_claims(
+        restored,
+        h.deps,
+        bound,
+        reason="aborted",
+        task_id="ct_1",
+    )
+    dumped = h.loop._dump_state(INPUT, after)
+    results = _tool_results(dumped)
+    s1_results = [item for item in results if item["tool_call_id"] == "s1"]
+    s2_results = [item for item in results if item["tool_call_id"] == "s2"]
+    assert len(s1_results) == 1
+    assert len(s2_results) == 1
+    assert s1_results[0]["content"] == {"summary": "already folded"}
+    assert s2_results[0]["content"] == {"summary": "already on transcript"}
+    assert h.repository.completed_tools[("ct_1", "s1")] == original_s1
+    assert h.repository.completed_tools[("ct_1", "s2")]["reason_code"] == "aborted"
+    assert after.active_children == ()
