@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -6,6 +7,7 @@ from neos.coding.application.task_service import (
     InMemoryCodingTaskRepository,
     CodingTaskService,
 )
+from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.models import CodingTaskStatus
 from neos.coding.events.store import InMemoryCodingEventStore
 from neos.subagent.memory import InMemorySubagentStore
@@ -140,7 +142,8 @@ async def test_archive_deletes_only_that_parent_subagent_runs() -> None:
         repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
     )
     await service.create_task(owner_id="u1", prompt="Keep", task_id="ct_keep")
-    await service.create_task(owner_id="u1", prompt="Drop", task_id="ct_drop")
+    drop = await service.create_task(owner_id="u1", prompt="Drop", task_id="ct_drop")
+    await repo.save(replace(drop, status=CodingTaskStatus.COMPLETED))
     victim = await store.resolve_or_create(_child_ticket("ct_drop", "toolu_1"))
     reserved = await store.reserve(victim.run_id, None)
     await store.commit(
@@ -162,3 +165,25 @@ async def test_archive_deletes_only_that_parent_subagent_runs() -> None:
         await store.get(victim.run_id)
     remaining = await store.get(kept.run_id)
     assert remaining.parent_id == "ct_keep"
+
+    retried = await store.resolve_or_create(_child_ticket("ct_drop", "toolu_retry"))
+    assert await service.archive("ct_drop", "u1") is True
+    with pytest.raises(SubagentNotFound):
+        await store.get(retried.run_id)
+    assert (await store.get(kept.run_id)).parent_id == "ct_keep"
+
+
+async def test_archive_refuses_non_terminal_tasks() -> None:
+    store = InMemorySubagentStore()
+    repo = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
+    )
+    await service.create_task(owner_id="u1", prompt="Live", task_id="ct_live")
+    child = await store.resolve_or_create(_child_ticket("ct_live", "toolu_1"))
+
+    with pytest.raises(InvalidTaskTransition, match="queued.*archived"):
+        await service.archive("ct_live", "u1")
+    assert (await store.get(child.run_id)).parent_id == "ct_live"
+    listed = await service.list_owned("u1", limit=20)
+    assert [task.task_id for task in listed] == ["ct_live"]

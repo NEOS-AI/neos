@@ -81,6 +81,15 @@ TERMINAL_TASK_STATUSES = frozenset(
     }
 )
 
+ARCHIVABLE_TASK_STATUSES = frozenset(
+    {
+        CodingTaskStatus.FAILED,
+        CodingTaskStatus.COMPLETED,
+        CodingTaskStatus.CANCELLED,
+        CodingTaskStatus.EXPIRED,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CodingTask:

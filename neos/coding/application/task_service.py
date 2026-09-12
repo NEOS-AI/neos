@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 from typing import Callable, Protocol
 from uuid import uuid4
 
-from neos.coding.domain.models import CodingTask, CodingTaskStatus
+from neos.coding.domain.errors import InvalidTaskTransition
+from neos.coding.domain.models import (
+    ARCHIVABLE_TASK_STATUSES,
+    CodingTask,
+    CodingTaskStatus,
+    transition_task,
+)
 from neos.coding.events.store import InMemoryCodingEventStore
 
 
@@ -57,14 +63,16 @@ class InMemoryCodingTaskRepository:
         self._deleted_at[task_id] = when or datetime.now(UTC)
 
     async def archive(self, task_id: str, owner_id: str) -> bool:
-        task = await self.get_owned(task_id, owner_id)
-        if task is None:
+        task = self._tasks.get(task_id)
+        if task is None or task.owner_id != owner_id:
             return False
+        if task.status is CodingTaskStatus.ARCHIVED:
+            return True
         now = datetime.now(UTC)
-        self.mark_deleted(task_id, now)
-        self._tasks[task_id] = replace(
-            task, status=CodingTaskStatus.ARCHIVED, updated_at=now
+        self._tasks[task_id] = transition_task(
+            task, CodingTaskStatus.ARCHIVED, now
         )
+        self.mark_deleted(task_id, now)
         return True
 
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
@@ -162,19 +170,34 @@ class CodingTaskService:
         )
 
     async def archive(self, task_id: str, owner_id: str) -> bool:
-        task = await self.tasks.get_owned(task_id, owner_id)
+        task = await self._owned_including_archived(task_id, owner_id)
         if task is None:
             return False
-        archiver = getattr(self.tasks, "archive", None)
-        if archiver is not None:
-            ok = await archiver(task_id, owner_id)
-        else:
-            marker = getattr(self.tasks, "mark_deleted", None)
-            if marker is not None:
-                marker(task_id)
-            ok = True
-        if ok and self._subagents is not None:
+        if task.status is not CodingTaskStatus.ARCHIVED:
+            if task.status not in ARCHIVABLE_TASK_STATUSES:
+                raise InvalidTaskTransition(
+                    f"cannot transition coding task from {task.status.value} "
+                    "to archived"
+                )
+            archiver = getattr(self.tasks, "archive", None)
+            if archiver is not None:
+                await archiver(task_id, owner_id)
+            else:
+                marker = getattr(self.tasks, "mark_deleted", None)
+                if marker is not None:
+                    marker(task_id)
+        if self._subagents is not None:
             from neos.subagent.types import ParentKind
 
             await self._subagents.delete_for_parent(ParentKind.CODING, task_id)
-        return bool(ok)
+        return True
+
+    async def _owned_including_archived(
+        self, task_id: str, owner_id: str
+    ) -> CodingTask | None:
+        getter = getattr(self.tasks, "get", None)
+        if getter is not None:
+            task = await getter(task_id)
+            if task is not None and task.owner_id == owner_id:
+                return task
+        return await self.tasks.get_owned(task_id, owner_id)

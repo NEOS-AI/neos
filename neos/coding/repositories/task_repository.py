@@ -58,16 +58,15 @@ class CodingTaskRepository:
         ]
 
     async def archive(self, task_id: str, owner_id: str) -> bool:
-        execute = getattr(self._database, "execute", None)
-        if execute is None:
-            return False
-        row = await execute(
+        row = await self._database.fetch_one(
             """
             UPDATE coding_tasks
                SET status = 'archived',
                    deleted_at = NOW(),
-                   updated_at = NOW()
+                   updated_at = NOW(),
+                   version = version + 1
              WHERE task_id = $1 AND owner_id = $2 AND deleted_at IS NULL
+               AND status IN ('failed', 'completed', 'cancelled', 'expired')
             RETURNING task_id
             """,
             task_id,
