@@ -893,3 +893,81 @@ async def test_adopt_all_rewrites_sibling_fencing() -> None:
         await h.repository.complete_tool_execution(
             claim_a_s1, result={"folded": False}, now=clock.now
         )
+
+
+@pytest.mark.asyncio
+async def test_deny_of_non_prefix_spawn_does_not_advance_index() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _child_tool()])
+    clock = TickableClock()
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1", "spawn_agent.v1", {"prompt": "look one", "max_turns": 4}
+                ),
+                tool_call("s2", "spawn_agent.v1", {"prompt": "", "max_turns": 4}),
+                completed(),
+            ]
+        ],
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    await collect(h)
+    clock.tick()
+    parked = h.repository.checkpoints[-1]
+    assert [child["tool_call_id"] for child in parked.loop_state["active_children"]] == [
+        "s1"
+    ]
+    assert parked.loop_state["pending_tool_index"] == 0
+    await collect(h, parked)
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["pending_tool_index"] == 0
+    assert [child["tool_call_id"] for child in state["active_children"]] == ["s1"]
+    s2_results = [
+        item for item in _tool_results(state) if item["tool_call_id"] == "s2"
+    ]
+    assert len(s2_results) == 1
+    s1_claim, _ = h.repository.tool_claims[("ct_1", "s1")]
+    assert s1_claim.disposition is ToolExecutionDisposition.DELEGATED
+
+
+@pytest.mark.asyncio
+async def test_adopt_all_remarks_expired_sibling_delegated() -> None:
+    runtime, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    clock.tick(160)
+    lease_a = h.deps.lease
+    await h.repository.release_execution_lease(lease_a, now=clock.now)
+    lease_b = await h.repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-b",
+        now=clock.now,
+        expires_at=clock.now + timedelta(minutes=5),
+    )
+    assert lease_b is not None
+    h.deps = replace(h.deps, lease=lease_b)
+    await collect(h, parked)
+    s2_claim, _ = h.repository.tool_claims[("ct_1", "s2")]
+    assert s2_claim.disposition is ToolExecutionDisposition.DELEGATED
+    clock.tick()
+    after_s1 = h.repository.checkpoints[-1]
+    await collect(h, after_s1)
+    s2_after, _ = h.repository.tool_claims[("ct_1", "s2")]
+    assert s2_after.disposition is ToolExecutionDisposition.DELEGATED
+    assert ("ct_1", "s2") not in h.repository.completed_tools
+    store = _subagent_store(runtime)
+    s2 = _child_by_id(after_s1.loop_state, "s2")
+    assert s2 is not None
+    s2_record = await store.get(s2["run_id"])
+    assert s2_record.latest_seq >= 2

@@ -739,9 +739,19 @@ class DurableCodingLoop:
                     "denied",
                     denial_envelope(call, reason_code),
                 )
-                denied_state = await self._after_result(
-                    state, denied, tool_name=call.name, tool_input=call.input
+                advance_index = (
+                    state.has_pending_tool
+                    and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+                    == call.tool_call_id
                 )
+                denied_state = await self._after_result(
+                    state,
+                    denied,
+                    tool_name=call.name,
+                    tool_input=call.input,
+                    advance_index=advance_index,
+                )
+                denied_state = self._drain_completed_prefix(denied_state)
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="tool.denied",
@@ -820,7 +830,9 @@ class DurableCodingLoop:
                 yield await self._emit_tool_started(input, deps, call), state
             try:
                 if call.name == "spawn_agent.v1":
-                    await self._adopt_all_live_claims(state, deps)
+                    await self._adopt_all_live_claims(
+                        state, deps, selected_tool_call_id=call.tool_call_id
+                    )
                     result = await self._run_spawn_agent(
                         call, bound, state, input=input, deps=deps
                     )
@@ -1436,9 +1448,19 @@ class DurableCodingLoop:
         if reason_code == "hook_prevented":
             envelope["denied_by"] = "hook"
         denied = ToolResultContent(call.tool_call_id, "denied", envelope)
-        denied_state = await self._after_result(
-            state, denied, tool_name=call.name, tool_input=call.input
+        advance_index = (
+            state.has_pending_tool
+            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+            == call.tool_call_id
         )
+        denied_state = await self._after_result(
+            state,
+            denied,
+            tool_name=call.name,
+            tool_input=call.input,
+            advance_index=advance_index,
+        )
+        denied_state = self._drain_completed_prefix(denied_state)
         if terminal:
             denied_state = replace(denied_state, terminal_pending=True)
         committed = await deps.repository.commit_model_checkpoint(
@@ -1983,12 +2005,29 @@ class DurableCodingLoop:
         except Exception:
             return None
 
-    async def _adopt_all_live_claims(self, state, deps) -> None:
+    async def _adopt_all_live_claims(
+        self, state, deps, *, selected_tool_call_id: str | None = None
+    ) -> None:
         refs = ()
         if state is not None:
             refs = state.active_children or _legacy_single(state)
         for ref in refs:
-            await self._adopt_spawn_claim(deps, ref.tool_call_id)
+            claim = await self._adopt_spawn_claim(deps, ref.tool_call_id)
+            if (
+                claim is None
+                or claim.disposition is not ToolExecutionDisposition.RECLAIMED
+                or ref.tool_call_id == selected_tool_call_id
+            ):
+                continue
+            await self._mark_spawn_delegated(
+                deps,
+                claim,
+                DelegatedSpawn(
+                    run_id=ref.run_id,
+                    checkpoint_id=ref.checkpoint_id,
+                    step_kind="continuing",
+                ),
+            )
 
     async def _complete_spawn_claim(self, deps, claim, bound, reason: str) -> None:
         if deps is None or claim is None:
