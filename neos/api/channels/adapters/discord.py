@@ -79,7 +79,10 @@ class DiscordAdapter(ChannelAdapterBase):
             intents = discord.Intents.default()
             intents.message_content = True  # Developer Portal에서 활성화 필요
 
-            self._client = discord.Client(intents=intents)
+            self._client = discord.Client(
+                intents=intents,
+                allowed_mentions=discord.AllowedMentions(everyone=False),
+            )
 
             @self._client.event
             async def on_ready() -> None:
@@ -200,7 +203,9 @@ class DiscordAdapter(ChannelAdapterBase):
         ]
         reply_to = await _fetch_reply_target(channel, thread_id)
         view = _coding_discord_view(content) if len(chunks) == 1 else None
-        send_kwargs: dict[str, Any] = {}
+        send_kwargs: dict[str, Any] = {
+            "allowed_mentions": _discord_allowed_mentions(),
+        }
         if view is not None:
             send_kwargs["view"] = view
         for chunk in chunks:
@@ -228,10 +233,11 @@ class DiscordAdapter(ChannelAdapterBase):
             if channel is None:
                 channel = await self._client.fetch_channel(int(channel_id))
             target = await _fetch_reply_target(channel, thread_id)
+            mentions = _discord_allowed_mentions()
             if target is not None and callable(getattr(target, "edit", None)):
-                await target.edit(content=content)
+                await target.edit(content=content, allowed_mentions=mentions)
             elif channel is not None:
-                await channel.send(content)
+                await channel.send(content, allowed_mentions=mentions)
         except Exception as e:
             logger.warning("[DiscordAdapter] send_draft failed to %s: %s", channel_id, e)
 
@@ -306,7 +312,8 @@ class DiscordAdapter(ChannelAdapterBase):
             logger.error("[DiscordAdapter] _handle_message error: %s", e)
             try:
                 await message.channel.send(
-                    "죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+                    "죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                    allowed_mentions=_discord_allowed_mentions(),
                 )
             except Exception:
                 pass
@@ -441,6 +448,7 @@ class DiscordAdapter(ChannelAdapterBase):
             custom_id = str(getattr(data, "custom_id", "") or "")
         if not custom_id.startswith(ACTION_PREFIX):
             return
+        await _ack_discord_interaction(interaction)
         user = getattr(interaction, "user", None) or getattr(interaction, "author", None)
         channel = getattr(interaction, "channel", None)
         guild = getattr(interaction, "guild", None)
@@ -452,6 +460,36 @@ class DiscordAdapter(ChannelAdapterBase):
             is_dm=guild is None,
             is_bot=bool(getattr(user, "bot", False)),
         )
+
+
+def _discord_allowed_mentions() -> Any:
+    try:
+        import discord
+
+        return discord.AllowedMentions(everyone=False)
+    except Exception:
+        return SimpleNamespace(everyone=False)
+
+
+async def _ack_discord_interaction(interaction: Any) -> None:
+    response = getattr(interaction, "response", None)
+    if response is None:
+        return
+    is_done = getattr(response, "is_done", None)
+    try:
+        if callable(is_done) and is_done():
+            return
+    except Exception:
+        pass
+    for name in ("defer", "acknowledge"):
+        method = getattr(response, name, None)
+        if not callable(method):
+            continue
+        try:
+            await method()
+            return
+        except Exception:
+            continue
 
 
 def _should_create_code_thread(

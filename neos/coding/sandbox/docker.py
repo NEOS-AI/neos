@@ -163,10 +163,17 @@ def consider_file(item, relative):
         return False
     if is_binary(item):
         return False
+    max_file_bytes = 1024 * 1024
     try:
-        text = item.read_text(errors='replace')
+        if item.stat().st_size > max_file_bytes:
+            return False
+        with item.open('rb') as handle:
+            data = handle.read(max_file_bytes + 1)
     except OSError:
         return False
+    if len(data) > max_file_bytes or b'\\x00' in data[:8192]:
+        return False
+    text = data.decode('utf-8', errors='replace')
     lines = text.splitlines()
     if multiline == '1':
         file_hits = 0
@@ -331,16 +338,46 @@ sys.stdout.write(json.dumps(result))
 """
 )
 _SNAPSHOT_HELPER = """\
-import sys, tarfile
+import os, sys, tarfile
 from pathlib import Path
+
+def is_secret(rel):
+    if rel in {'.env', '.git/credentials', '.neos/secrets'} or rel.startswith('.neos/secrets/'):
+        return True
+    parts = tuple(p for p in rel.replace('\\\\', '/').split('/') if p not in {'', '.'})
+    if not parts:
+        return False
+    folded = tuple(p.casefold() for p in parts)
+    name = folded[-1]
+    if name == '.env' or name.startswith('.env.'):
+        return True
+    if '.git' in folded or '.ssh' in folded:
+        return True
+    if name == 'id_rsa':
+        return True
+    return any(part == '.aws' and folded[i + 1] == 'credentials' for i, part in enumerate(folded[:-1]))
+
 root = Path('/workspace')
-excluded = {'.env', '.git/credentials', '.neos/secrets'}
 with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
-    for item in sorted(root.rglob('*')):
-        relative = item.relative_to(root).as_posix()
-        if relative in excluded or relative.startswith('.neos/secrets/'): continue
-        if item.is_socket() or item.is_block_device() or item.is_char_device() or item.is_fifo(): continue
-        archive.add(item, arcname=relative, recursive=False)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        current = Path(dirpath)
+        kept = []
+        for name in sorted(dirnames):
+            item = current / name
+            relative = item.relative_to(root).as_posix()
+            if item.is_symlink() or is_secret(relative):
+                continue
+            kept.append(name)
+            archive.add(item, arcname=relative, recursive=False)
+        dirnames[:] = kept
+        for name in sorted(filenames):
+            item = current / name
+            relative = item.relative_to(root).as_posix()
+            if item.is_symlink() or is_secret(relative):
+                continue
+            if item.is_socket() or item.is_block_device() or item.is_char_device() or item.is_fifo():
+                continue
+            archive.add(item, arcname=relative, recursive=False)
 """
 _RESTORE_HELPER = """\
 import sys, tarfile
@@ -348,16 +385,46 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode='r|*') as archive:
     archive.extractall('/workspace', filter='data')
 """
 _SCAN_HELPER = """\
-import json
+import json, os
 from pathlib import Path
+
+def is_secret(rel):
+    parts = tuple(p for p in rel.replace('\\\\', '/').split('/') if p not in {'', '.'})
+    if not parts:
+        return False
+    folded = tuple(p.casefold() for p in parts)
+    name = folded[-1]
+    if name == '.env' or name.startswith('.env.'):
+        return True
+    if '.git' in folded or '.ssh' in folded:
+        return True
+    if name == 'id_rsa':
+        return True
+    return any(part == '.aws' and folded[i + 1] == 'credentials' for i, part in enumerate(folded[:-1]))
+
 root = Path('/workspace')
 result = {}
-for item in root.rglob('*'):
-    if not item.is_file() or item.is_symlink(): continue
-    relative = item.relative_to(root).as_posix()
-    if relative.startswith('.git/') or relative.endswith(('.swp', '~')): continue
-    value = item.stat()
-    result[relative] = [value.st_size, value.st_mtime_ns]
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    current = Path(dirpath)
+    kept = []
+    for name in dirnames:
+        item = current / name
+        if item.is_symlink():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if is_secret(relative) or relative.startswith('.git/') or relative.endswith(('.swp', '~')):
+            continue
+        kept.append(name)
+    dirnames[:] = kept
+    for name in filenames:
+        item = current / name
+        if item.is_symlink() or not item.is_file():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if is_secret(relative) or relative.startswith('.git/') or relative.endswith(('.swp', '~')):
+            continue
+        value = item.lstat()
+        result[relative] = [value.st_size, value.st_mtime_ns]
 print(json.dumps(result, sort_keys=True))
 """
 

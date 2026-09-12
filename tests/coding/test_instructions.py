@@ -154,3 +154,50 @@ def test_include_is_cycle_safe_and_depth_limited(tmp_path: Path) -> None:
     assert "L1" in text
     assert "L5" in text
     assert "TOO_DEEP" not in text
+
+
+def test_include_skips_secret_symlink_and_non_text(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("safe notes", encoding="utf-8")
+    (tmp_path / "secret-link.md").symlink_to(tmp_path / ".env")
+    (tmp_path / "data.json").write_text('{"ok": true}', encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "\n".join(
+            [
+                "start",
+                "@.env",
+                "@secret-link.md",
+                "@data.json",
+                "@notes.md",
+                "end",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert "SECRET=1" not in text
+    assert '{"ok": true}' not in text
+    assert "safe notes" in text
+    assert "@.env" in text
+    assert "@secret-link.md" in text
+    assert "@data.json" in text
+
+
+def test_tree_also_loads_local_and_claude_dir_files(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("from agents", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("sibling claude root", encoding="utf-8")
+    (tmp_path / "CLAUDE.local.md").write_text("from local", encoding="utf-8")
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "CLAUDE.md").write_text("from nested claude file", encoding="utf-8")
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert "from agents" in text
+    assert "sibling claude root" not in text
+    assert "from local" in text
+    assert "from nested claude file" in text
+    assert text.index("from agents") < text.index("from local")

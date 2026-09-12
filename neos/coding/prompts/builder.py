@@ -95,13 +95,22 @@ def _using_tools() -> str:
 
 
 def _session() -> str:
-    return (
-        "## Session\n"
+    from neos.coding.tools.registry import CodingToolRegistry
+
+    lines = [
+        "## Session",
         "Honor the current phase and any loaded skill. "
         "In explore, prefer search tools over execute.v1. "
         "Keep at most one todo in_progress. "
-        "Mark a todo complete immediately when that work is done."
-    )
+        "Mark a todo complete immediately when that work is done.",
+    ]
+    deferred = CodingToolRegistry.deferred_tool_names()
+    if deferred:
+        lines.append(
+            "Deferred tools are hidden until search_tools.v1. Names only:"
+        )
+        lines.extend(f"- {name}" for name in deferred)
+    return "\n".join(lines)
 
 
 def _environment(env: CodingPromptEnv) -> str:

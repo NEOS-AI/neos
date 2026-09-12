@@ -277,6 +277,19 @@ class ChannelGateway:
         command = parse_channel_command(message.text)
         skip_lock = command.kind in _CONTROL_LOCK_BYPASS
         if not skip_lock and not self._inflight.acquire(message.session_id):
+            if command.kind is ChannelCommandKind.CHAT:
+                binding = await self._binds.get(message.session_id)
+                if binding is not None:
+                    try:
+                        return await self._steer_bound_chat(message, binding)
+                    except Exception as e:
+                        logger.error(
+                            f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
+                        )
+                        return (
+                            "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. "
+                            "잠시 후 다시 시도해주세요."
+                        )
             return _BUSY
         breaker = self._get_breaker(message.channel_type)
         try:
@@ -310,13 +323,7 @@ class ChannelGateway:
         if command.kind is ChannelCommandKind.CHAT:
             binding = await self._binds.get(message.session_id)
             if binding is not None:
-                coding = self._coding_port()
-                instruction = _with_sender_prefix(message, message.text)
-                return await coding.steer(
-                    task_id=binding.task_id,
-                    owner_id=binding.owner_id,
-                    instruction=instruction,
-                )
+                return await self._steer_bound_chat(message, binding)
             return await self._run_workflow(message)
         if command.kind is ChannelCommandKind.LEARN:
             return await self._run_learn(message, command)
@@ -539,9 +546,17 @@ class ChannelGateway:
         await self._inbound.clear_session(message.session_id)
         return _SESSION_RESET
 
+    async def _steer_bound_chat(self, message: ChannelMessage, binding: Any) -> str:
+        coding = self._coding_port()
+        instruction = _with_sender_prefix(message, message.text)
+        return await coding.steer(
+            task_id=binding.task_id,
+            owner_id=binding.owner_id,
+            instruction=instruction,
+        )
+
     async def _run_clear(self, message: ChannelMessage) -> str:
         self._workflow_pending.pop(message.session_id, None)
-        await self._inbound.clear_session(message.session_id)
         return _CONTEXT_CLEAR_REQUESTED
 
     async def _run_compact(self, message: ChannelMessage, command) -> str:

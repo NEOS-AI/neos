@@ -58,7 +58,7 @@ from neos.coding.phases import (
     tool_allowed_in_phase,
     write_risk_blocked,
 )
-from neos.coding.hooks import CodingHookPort, NullCodingHooks
+from neos.coding.hooks import CodingHookPort, NullCodingHooks, post_tool_prevented
 from neos.coding.redact import redact_sensitive
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
@@ -82,7 +82,14 @@ EMPTY_RETRY_LIMIT = 1
 STALL_DENY_AFTER = 3
 COMPACT_REF_THRESHOLD_BYTES = 4096
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 80_000
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_CLOSED_RE = re.compile(
+    r"<(think|thinking|reasoning)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_THINK_UNCLOSED_RE = re.compile(
+    r"<(think|thinking|reasoning)\b[^>]*>.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class CodingLoopFailure(RuntimeError):
@@ -193,6 +200,9 @@ class AgentLoopState:
     empty_retry_count: int = 0
     last_error_signature: str = ""
     last_error_count: int = 0
+    last_success_signature: str = ""
+    last_success_result_hash: str = ""
+    last_success_count: int = 0
     verdict: str | None = None
     critical_files: tuple[str, ...] = ()
 
@@ -444,7 +454,7 @@ class DurableCodingLoop:
         self._check_usage_budgets(next_state)
         prefetch = await self._await_prefetch(prefetch_tasks)
         if not calls:
-            public_text = "".join(text_parts)
+            public_text = _scrub_think_blocks("".join(text_parts))
             if completion.stop_reason not in {"end_turn", "unknown"}:
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
             held = self._hold_incomplete_phase(next_state, public_text)
@@ -716,6 +726,7 @@ class DurableCodingLoop:
         )
         if started.event is not None:
             yield started.event, state
+        ran_spawn = False
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
             result = dict(claim.result or {})
             await self._audit.emit(
@@ -740,6 +751,7 @@ class DurableCodingLoop:
                     result = await self._run_spawn_agent(
                         call, bound, state, input=input, deps=deps
                     )
+                    ran_spawn = True
                 else:
                     result = await self._execute_validated(
                         bound,
@@ -780,6 +792,26 @@ class DurableCodingLoop:
                     ):
                         yield item
                     return
+            if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
+                envelope = dict(denial_envelope(call, "hook_prevented"))
+                envelope["denied_by"] = "hook"
+                try:
+                    await deps.repository.complete_tool_execution(
+                        claim, result=envelope, now=self._clock()
+                    )
+                except Exception:
+                    pass
+                event, denied_state = await self._commit_denied_tool(
+                    input,
+                    state,
+                    bound,
+                    deps,
+                    call,
+                    "hook_prevented",
+                    terminal=True,
+                )
+                yield event, denied_state
+                return
             try:
                 tool_event = await deps.repository.complete_tool_execution(
                     claim, result=result, now=self._clock()
@@ -816,6 +848,8 @@ class DurableCodingLoop:
             tool_name=call.name,
             tool_input=call.input,
         )
+        if ran_spawn:
+            after = self._with_spawn_handoff(after, call, result)
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -960,6 +994,19 @@ class DurableCodingLoop:
                 )
             self._record_tool_metric(call.name, result)
             yield tool_event, current
+            if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
+                envelope = dict(denial_envelope(call, "hook_prevented"))
+                envelope["denied_by"] = "hook"
+                current = await self._after_result(
+                    current,
+                    ToolResultContent(call.tool_call_id, "denied", envelope),
+                    tool_name=call.name,
+                    tool_input=call.input,
+                )
+                current = replace(current, terminal_pending=True)
+                last_call = call
+                last_result = envelope
+                break
             status = str(result.get("status", "ok"))
             canonical_status = status if status in {"ok", "error", "denied"} else "ok"
             current = await self._after_result(
@@ -1215,6 +1262,10 @@ class DurableCodingLoop:
             )
         except Exception:
             pass
+        if post_tool_prevented(rewritten):
+            redacted = dict(redact_sensitive(result))
+            redacted["_post_tool_prevent"] = True
+            return redacted
         if isinstance(rewritten, Mapping):
             result = dict(rewritten)
         return redact_sensitive(result)
@@ -1341,9 +1392,11 @@ class DurableCodingLoop:
 
     async def _completed_turn(self, state, text_parts, calls, completion):
         content = []
-        text = "".join(text_parts)
+        raw_text = "".join(text_parts)
+        text = _scrub_think_blocks(raw_text)
         if text:
             content.append(TextContent(text))
+        calls = _uniquify_tool_calls(calls)
         content.extend(
             ToolUseContent(c.tool_call_id, c.name, dict(c.input)) for c in calls
         )
@@ -1379,6 +1432,27 @@ class DurableCodingLoop:
             empty_retry_count=0 if reset_empty else state.empty_retry_count,
         )
 
+    def _with_spawn_handoff(self, state: AgentLoopState, call, result) -> AgentLoopState:
+        if call.name != "spawn_agent.v1":
+            return state
+        status = str(result.get("status", "ok"))
+        if status != "ok":
+            return state
+        prompt = call.input.get("prompt") if isinstance(call.input, Mapping) else None
+        if not isinstance(prompt, str) or not prompt.strip():
+            return state
+        text = prompt.strip()
+        if state.has_pending_tool:
+            existing = state.pending_instruction
+            merged = "\n".join(part for part in (existing, text) if part)
+            return replace(state, pending_instruction=merged)
+        transcript = self._append_user_meta(state.transcript, text)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+        )
+
     async def _after_result(
         self, state, result, *, tool_name: str, tool_input: Mapping[str, object]
     ):
@@ -1401,6 +1475,11 @@ class DurableCodingLoop:
             errors = 0
             last_error_signature = ""
             last_error_count = 0
+            (
+                last_success_signature,
+                last_success_result_hash,
+                last_success_count,
+            ) = _next_success_signature(state, tool_name, tool_input, result)
         else:
             last_error_signature, last_error_count = _next_error_signature(
                 state, tool_name, tool_input
@@ -1409,6 +1488,14 @@ class DurableCodingLoop:
                 errors = state.consecutive_tool_errors
             else:
                 errors = state.consecutive_tool_errors + 1
+            if reason == "policy_stall_denied":
+                last_success_signature = state.last_success_signature
+                last_success_result_hash = state.last_success_result_hash
+                last_success_count = state.last_success_count
+            else:
+                last_success_signature = ""
+                last_success_result_hash = ""
+                last_success_count = 0
         read_paths = state.read_paths
         read_stamps = dict(state.read_stamps)
         if tool_name == "read_file.v1" and result.status == "ok":
@@ -1459,6 +1546,9 @@ class DurableCodingLoop:
             compacted_bodies=bodies,
             last_error_signature=last_error_signature,
             last_error_count=last_error_count,
+            last_success_signature=last_success_signature,
+            last_success_result_hash=last_success_result_hash,
+            last_success_count=last_success_count,
         )
 
     def _check_usage_budgets(self, state):
@@ -1469,12 +1559,21 @@ class DurableCodingLoop:
 
     async def _load_workspace_instructions(self, state, bound) -> AgentLoopState:
         text = None
-        workspace = getattr(getattr(bound.session, "_record", None), "workspace", None)
+        session = bound.session
+        workspace = getattr(getattr(session, "_record", None), "workspace", None)
         if workspace is not None:
             try:
                 from pathlib import Path
 
-                text = load_workspace_instruction_tree(Path(workspace))
+                root = Path(workspace)
+                raw_start = getattr(session, "cwd", None)
+                if raw_start in {None, ""}:
+                    start = root
+                else:
+                    start = Path(raw_start)
+                    if not start.is_absolute():
+                        start = root / start
+                text = load_workspace_instruction_tree(root, start=start)
             except Exception:
                 text = None
         if text is None:
@@ -1748,6 +1847,9 @@ class DurableCodingLoop:
             empty_retry_count,
             str(raw.get("last_error_signature") or ""),
             int(raw.get("last_error_count", 0)),
+            str(raw.get("last_success_signature") or ""),
+            str(raw.get("last_success_result_hash") or ""),
+            int(raw.get("last_success_count", 0)),
             restore_verify_verdict(raw.get("verdict")),
             restore_plan_critical_files(raw.get("critical_files")),
         )
@@ -1805,6 +1907,9 @@ class DurableCodingLoop:
             "empty_retry_count": state.empty_retry_count,
             "last_error_signature": state.last_error_signature,
             "last_error_count": state.last_error_count,
+            "last_success_signature": state.last_success_signature,
+            "last_success_result_hash": state.last_success_result_hash,
+            "last_success_count": state.last_success_count,
             "verdict": state.verdict,
             "critical_files": list(state.critical_files),
             "read_stamps": {
@@ -1994,7 +2099,7 @@ class DurableCodingLoop:
         tool_name: str,
         bodies: dict[str, str],
     ) -> tuple[CanonicalMessage, ...]:
-        if tool_name == "read_file.v1" or not transcript:
+        if not transcript:
             return transcript
         last = transcript[-1]
         if last.role != "tool":
@@ -2070,8 +2175,13 @@ class DurableCodingLoop:
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _scrub_think_blocks(text: str) -> str:
+    cleaned = _THINK_CLOSED_RE.sub("", text)
+    return _THINK_UNCLOSED_RE.sub("", cleaned)
+
+
 def _is_empty_or_think_only(text: str) -> bool:
-    return not _THINK_BLOCK_RE.sub("", text).strip()
+    return not _scrub_think_blocks(text).strip()
 
 
 def _error_signature(name: str, tool_input: Mapping[str, object]) -> str:
@@ -2084,12 +2194,31 @@ def _error_signature(name: str, tool_input: Mapping[str, object]) -> str:
     return hashlib.sha256((name + canonical).encode("utf-8")).hexdigest()
 
 
+def _result_preview_hash(content: Mapping[str, object]) -> str:
+    payload = {
+        "preview": content.get("preview"),
+        "status": content.get("status"),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _is_stall_denied(
     state: AgentLoopState, name: str, tool_input: Mapping[str, object]
 ) -> bool:
-    if state.last_error_count < STALL_DENY_AFTER:
-        return False
-    return state.last_error_signature == _error_signature(name, tool_input)
+    signature = _error_signature(name, tool_input)
+    if (
+        state.last_error_count >= STALL_DENY_AFTER
+        and state.last_error_signature == signature
+    ):
+        return True
+    return (
+        state.last_success_count >= STALL_DENY_AFTER
+        and state.last_success_signature == signature
+    )
 
 
 def _next_error_signature(
@@ -2099,6 +2228,45 @@ def _next_error_signature(
     if signature == state.last_error_signature:
         return signature, state.last_error_count + 1
     return signature, 1
+
+
+def _next_success_signature(
+    state: AgentLoopState,
+    name: str,
+    tool_input: Mapping[str, object],
+    result: ToolResultContent,
+) -> tuple[str, str, int]:
+    signature = _error_signature(name, tool_input)
+    content = result.content if isinstance(result.content, Mapping) else {}
+    result_hash = _result_preview_hash(content)
+    if (
+        signature == state.last_success_signature
+        and result_hash == state.last_success_result_hash
+    ):
+        return signature, result_hash, state.last_success_count + 1
+    return signature, result_hash, 1
+
+
+def _uniquify_tool_calls(
+    calls: Sequence[ToolCallCompleted],
+) -> list[ToolCallCompleted]:
+    used: set[str] = set()
+    uniquified: list[ToolCallCompleted] = []
+    for call in calls:
+        candidate = call.tool_call_id
+        if candidate not in used:
+            used.add(candidate)
+            uniquified.append(call)
+            continue
+        suffix = 2
+        while True:
+            next_id = f"{call.tool_call_id}_d{suffix}"
+            if next_id not in used:
+                used.add(next_id)
+                uniquified.append(replace(call, tool_call_id=next_id))
+                break
+            suffix += 1
+    return uniquified
 
 
 def _string_mapping(value: object) -> dict[str, str]:

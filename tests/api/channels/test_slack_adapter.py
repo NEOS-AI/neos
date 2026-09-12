@@ -814,3 +814,114 @@ async def test_file_shared_image_is_ignored_as_message_fallback(
         {"file_id": "Fimg", "channel_id": "C_general", "user_id": "U_alice"}
     )
     assert gateway.calls == []
+
+
+async def test_file_share_message_is_dropped_after_file_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        require_mention=False,
+        inbound_media=True,
+    )
+    adapter._seen_file_shares.add("F123")
+    adapter._seen_file_shares.add("999.000")
+
+    await adapter._handle_message(
+        _slack_message(
+            subtype="file_share",
+            ts="999.000",
+            files=[{"id": "F123", "mimetype": "video/mp4", "name": "clip.mp4"}],
+            text="clip.mp4",
+        ),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls == []
+    assert say.calls == []
+
+
+async def test_file_share_message_records_ids_for_file_shared_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        require_mention=False,
+        inbound_media=True,
+    )
+
+    await adapter._handle_message(
+        _slack_message(
+            subtype="file_share",
+            ts="999.000",
+            team="T1",
+            files=[{"id": "F123", "mimetype": "text/plain", "name": "note.txt"}],
+            text="note.txt",
+        ),
+        say,
+        client=None,
+    )
+
+    assert "F123" in adapter._seen_file_shares
+    assert "999.000" in adapter._seen_file_shares
+    assert len(gateway.calls) == 1
+
+    _install_slack_video_file(adapter)
+    await adapter._handle_file_shared(
+        {
+            "file_id": "F123",
+            "channel_id": "C_general",
+            "user_id": "U_alice",
+            "team_id": "T1",
+        }
+    )
+    assert len(gateway.calls) == 1
+    assert say.calls == []
+
+
+async def test_message_changed_and_deleted_are_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(subtype="message_changed", text="hello <@U_BOT> edited"),
+        say,
+        client=None,
+    )
+    await adapter._handle_message(
+        _slack_message(subtype="message_deleted", text="hello <@U_BOT>"),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls == []
+    assert say.calls == []
+
+
+async def test_bot_profile_and_user_profile_is_bot_are_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(
+        monkeypatch, allowed_users=["U_alice", "U_APP"]
+    )
+
+    await adapter._handle_message(
+        _slack_message(bot_profile={"id": "B1", "name": "helper"}, user="U_APP"),
+        say,
+        client=None,
+    )
+    await adapter._handle_message(
+        _slack_message(
+            user="U_APP",
+            user_profile={"is_bot": True, "name": "workflow"},
+        ),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls == []
+    assert say.calls == []

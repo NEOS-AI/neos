@@ -106,6 +106,40 @@ def _normalize_text(content: bytes) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _edit_text(content: bytes) -> tuple[str, str]:
+    text = content.decode("utf-8")
+    eol = "\r\n" if "\r\n" in text else "\n"
+    return text.replace("\r\n", "\n").replace("\r", "\n"), eol
+
+
+def _encode_edit_text(text: str, eol: str) -> bytes:
+    if eol == "\r\n":
+        text = text.replace("\n", "\r\n")
+    return text.encode("utf-8")
+
+
+def _argv_with_git_safety(argv: tuple[str, ...]) -> tuple[str, ...]:
+    for index, part in enumerate(argv):
+        if PurePosixPath(part).name != "git":
+            continue
+        extra = [
+            flag for flag in ("--no-pager", "--no-ext-diff") if flag not in argv
+        ]
+        if not extra:
+            return argv
+        return (*argv[: index + 1], *extra, *argv[index + 1 :])
+    return argv
+
+
+def _passthrough_policy_reason(error: SandboxPolicyViolation) -> str:
+    code = str(error)
+    if code.isidentifier() and code.startswith(
+        ("workspace_", "file_", "policy_")
+    ):
+        return code
+    return "sandbox_policy_violation"
+
+
 def _write_accepts_parents(write_file: Any) -> bool:
     try:
         return "parents" in inspect.signature(write_file).parameters
@@ -228,7 +262,7 @@ def _web_fetch_ip_blocked(value: str) -> bool:
         return True
     if address.version == 6 and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
-    if address == _WEB_FETCH_IMDS:
+    if address.is_unspecified or address == _WEB_FETCH_IMDS:
         return True
     return any(address in network for network in _WEB_FETCH_BLOCKED_NETWORKS)
 
@@ -380,7 +414,9 @@ def _http_get(url: str, allowlist: tuple[str, ...]) -> tuple[str, str, bytes]:
         if not addresses:
             raise _WebFetchUnsafe("web_fetch_ssrf")
         opener = urllib.request.build_opener(
-            _NoRedirect(), _PinnedHTTPSHandler(addresses[0])
+            urllib.request.ProxyHandler({}),
+            _NoRedirect(),
+            _PinnedHTTPSHandler(addresses[0]),
         )
         request = urllib.request.Request(current, method="GET")
         response: urllib.request.addinfourl | urllib.error.HTTPError | None = None
@@ -509,8 +545,8 @@ class SandboxToolExecutor:
             return await self._execute(session, call, known_reads=known_reads)
         except SandboxTimeout:
             return self._failure("error", "sandbox_timeout")
-        except SandboxPolicyViolation:
-            return self._failure("denied", "sandbox_policy_violation")
+        except SandboxPolicyViolation as error:
+            return self._failure("denied", _passthrough_policy_reason(error))
         except (SandboxNotFound, FileNotFoundError):
             return self._failure("error", "sandbox_not_found")
         except SandboxError:
@@ -649,6 +685,31 @@ class SandboxToolExecutor:
         known_reads: frozenset[str],
     ) -> ToolResult:
         path = str(call.input["path"])
+        old_string = str(call.input["old_string"])
+        new_string = str(call.input["new_string"])
+        replace_all = bool(call.input.get("replace_all", False))
+        if old_string == new_string:
+            return await self._denied(session, "edit_noop")
+        exists = await self._path_exists(session, path)
+        if old_string == "":
+            if not exists:
+                return await self._persist_edit(session, call, path, new_string, "\n")
+            denied = await self._deny_unread_existing(
+                session, path, known_reads=known_reads
+            )
+            if denied is not None:
+                return denied
+            stale = await self._deny_stale_since_read(session, path)
+            if stale is not None:
+                return stale
+            content = await session.read_file(path)
+            try:
+                text, eol = _edit_text(content)
+            except UnicodeDecodeError:
+                return await self._denied(session, "edit_not_text")
+            if text:
+                return await self._denied(session, "edit_create_existing")
+            return await self._persist_edit(session, call, path, new_string, eol)
         denied = await self._deny_unread_existing(
             session, path, known_reads=known_reads
         )
@@ -659,15 +720,17 @@ class SandboxToolExecutor:
             return stale
         content = await session.read_file(path)
         try:
-            text = content.decode("utf-8")
+            text, eol = _edit_text(content)
         except UnicodeDecodeError:
             return await self._denied(session, "edit_not_text")
-        old_string = str(call.input["old_string"])
-        new_string = str(call.input["new_string"])
-        replace_all = bool(call.input.get("replace_all", False))
-        if old_string == new_string:
-            return await self._denied(session, "edit_noop")
-        matches = text.count(old_string)
+        search = old_string
+        if (
+            new_string == ""
+            and not old_string.endswith("\n")
+            and f"{old_string}\n" in text
+        ):
+            search = f"{old_string}\n"
+        matches = text.count(search)
         if matches == 0:
             return await self._denied(session, "edit_old_string_not_found")
         if matches > 1 and not replace_all:
@@ -675,14 +738,25 @@ class SandboxToolExecutor:
                 session, "edit_old_string_not_unique", matches=matches
             )
         updated = (
-            text.replace(old_string, new_string)
+            text.replace(search, new_string)
             if replace_all
-            else text.replace(old_string, new_string, 1)
+            else text.replace(search, new_string, 1)
         )
+        return await self._persist_edit(session, call, path, updated, eol)
+
+    async def _persist_edit(
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        path: str,
+        text: str,
+        eol: str,
+    ) -> ToolResult:
+        payload = _encode_edit_text(text, eol)
         try:
             revision = await session.write_file(
                 path,
-                updated.encode("utf-8"),
+                payload,
                 **_write_file_kwargs(session.write_file, call),
             )
         except (FileNotFoundError, OSError, SandboxPolicyViolation) as error:
@@ -692,7 +766,7 @@ class SandboxToolExecutor:
         await self._mark_read(
             session,
             path,
-            updated.encode("utf-8"),
+            payload,
             full=True,
             modified=datetime.now(UTC),
         )
@@ -888,7 +962,9 @@ class SandboxToolExecutor:
             result = await session.git_log(limit=int(call.input["limit"]))
             return self._command_result(result, await self._revision(session))
         if call.name == "execute.v1":
-            argv = tuple(str(value) for value in call.input["argv"])
+            argv = _argv_with_git_safety(
+                tuple(str(value) for value in call.input["argv"])
+            )
             request = CommandRequest(
                 argv=argv,
                 cwd=str(call.input["cwd"]),
@@ -1016,14 +1092,32 @@ class SandboxToolExecutor:
         from neos.skills.markdown_catalog import default_catalog
 
         name = str(call.input.get("name", ""))
-        markdown = default_catalog().load_markdown(name)
+        reference = call.input.get("reference")
+        path = call.input.get("path")
+        leaf = reference if isinstance(reference, str) and reference.strip() else path
+        catalog = default_catalog()
+        skill = catalog.get(name)
+        if skill is None or skill.disable_model_invocation:
+            return ToolResult(
+                "denied", "unknown_skill", None, None, False, None, "unknown"
+            )
+        if isinstance(leaf, str) and leaf.strip():
+            markdown = catalog.load_markdown(name, reference=leaf)
+        else:
+            markdown = catalog.load_markdown(name)
         if markdown is None:
             return ToolResult(
                 "denied", "unknown_skill", None, None, False, None, "unknown"
             )
         return ToolResult.ok(
             workspace_revision="unknown",
-            entries=({"name": name, "markdown": markdown},),
+            entries=(
+                {
+                    "name": name,
+                    "markdown": markdown,
+                    "allowed_tools": list(skill.allowed_tools),
+                },
+            ),
         )
 
     def _bounded_bytes(

@@ -104,6 +104,28 @@ def _coding_sections_valid(content: str) -> bool:
     return found == wanted
 
 
+def _skill_directory(skill: MarkdownSkill) -> Path | None:
+    if skill.path.name.upper() == "SKILL.MD":
+        return skill.path.parent
+    return None
+
+
+def _safe_reference_leaf(value: str) -> str | None:
+    text = value.strip()
+    if not text or "\0" in text:
+        return None
+    if text in {".", ".."} or ".." in text:
+        return None
+    if "/" in text or "\\" in text:
+        return None
+    leaf = text if text.endswith(".md") else f"{text}.md"
+    if leaf != Path(leaf).name:
+        return None
+    if leaf.startswith("."):
+        return None
+    return leaf
+
+
 def _is_safe_name(name: str) -> bool:
     if not name or name != name.strip():
         return False
@@ -296,19 +318,61 @@ class MarkdownSkillCatalog:
             return None
         return self._ensure_index().get(name)
 
-    def load_markdown(self, name: str) -> str | None:
+    def load_markdown(
+        self,
+        name: str,
+        *,
+        reference: str | None = None,
+        path: str | None = None,
+    ) -> str | None:
         skill = self.get(name)
-        if skill is None:
+        if skill is None or skill.disable_model_invocation:
             return None
         if not self._path_allowed(skill.path):
             logger.warning("Refusing to load skill %r outside catalog roots", name)
             return None
+        leaf = reference if reference is not None else path
+        if isinstance(leaf, str) and leaf.strip():
+            return self._load_reference(skill, leaf)
         try:
             if not skill.path.is_file():
                 return None
             return skill.path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.warning("Failed to read skill %r at %s: %s", name, skill.path, exc)
+            return None
+
+    def _load_reference(self, skill: MarkdownSkill, leaf: str) -> str | None:
+        name = _safe_reference_leaf(leaf)
+        if name is None:
+            return None
+        skill_dir = _skill_directory(skill)
+        if skill_dir is None:
+            return None
+        try:
+            ref_dir = (skill_dir / "reference").resolve()
+            candidate = (ref_dir / name).resolve()
+        except OSError:
+            return None
+        if not candidate.is_relative_to(ref_dir):
+            return None
+        if not self._path_allowed(candidate):
+            logger.warning(
+                "Refusing to load skill %r reference outside catalog roots",
+                skill.name,
+            )
+            return None
+        try:
+            if not candidate.is_file():
+                return None
+            return candidate.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "Failed to read skill %r reference %s: %s",
+                skill.name,
+                candidate,
+                exc,
+            )
             return None
 
     def _ensure_index(self) -> dict[str, MarkdownSkill]:
@@ -415,8 +479,13 @@ def get(name: str) -> MarkdownSkill | None:
     return default_catalog().get(name)
 
 
-def load_markdown(name: str) -> str | None:
-    return default_catalog().load_markdown(name)
+def load_markdown(
+    name: str,
+    *,
+    reference: str | None = None,
+    path: str | None = None,
+) -> str | None:
+    return default_catalog().load_markdown(name, reference=reference, path=path)
 
 
 def reload() -> None:

@@ -147,6 +147,26 @@ def test_session_requires_one_in_progress_todo() -> None:
     assert "explore" in session.lower()
 
 
+def test_session_lists_deferred_tool_names_not_schemas() -> None:
+    from neos.coding.tools.registry import CodingToolRegistry
+
+    prompt = build_coding_system_prompt(_tools())
+    boundary = prompt.index("<!-- neos:dynamic -->")
+    session_at = prompt.index("## Session")
+    session = prompt[session_at : prompt.index("## Environment")]
+    deferred = CodingToolRegistry.deferred_tool_names()
+
+    assert boundary < session_at
+    assert deferred
+    for name in deferred:
+        assert name in session
+    assert "input_schema" not in session
+    assert "properties" not in session
+    assert "git_status.v1" in session
+    assert "web_fetch.v1" in session
+    assert "spawn_agent.v1" in session
+
+
 def test_environment_holds_workspace_and_allowlist() -> None:
     prompt = build_coding_system_prompt(
         _tools(),

@@ -12,6 +12,7 @@ import struct
 import tempfile
 import termios
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -42,6 +43,7 @@ from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
     resolve_mutable_workspace_path,
+    resolve_readable_workspace_path,
     resolve_workspace_path,
 )
 from neos.coding.sandbox.process import BoundedProcessRunner
@@ -62,6 +64,9 @@ from neos.coding.sandbox.ignore import (
 )
 
 _GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
+_GUEST_PATH = "/usr/bin:/bin"
+_GUEST_LANG = "C.UTF-8"
+_DEFAULT_SEARCH_CAP_BYTES = 1024 * 1024
 
 
 class MemoryPty:
@@ -126,12 +131,9 @@ class MemoryPty:
         if self.is_closed:
             return await self._closed
         self._requested_reason = reason
-        if self._process.returncode is None:
-            try:
-                os.killpg(self._process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        await self._process.wait()
+        from neos.coding.sandbox.process import terminate_process_group
+
+        await terminate_process_group(self._process)
         await self._reader_task
         return await self._closed
 
@@ -538,8 +540,8 @@ class MemorySandboxSession:
         limit: int | None = None,
     ) -> bytes:
         await self._require_running()
-        item = resolve_workspace_path(self._record.workspace, path)
-        if not item.is_file():
+        item = resolve_readable_workspace_path(self._record.workspace, path)
+        if item.is_symlink() or not item.is_file():
             raise SandboxPolicyViolation("workspace_path_is_not_file")
         if offset < 1 or (limit is not None and limit < 1):
             raise SandboxPolicyViolation("invalid_read_request")
@@ -652,6 +654,7 @@ class MemorySandboxSession:
             else workspace
         )
         rules = load_ignore_rules(workspace)
+        max_file_bytes = self._record.sandbox.limits.max_output_bytes
         matches: list[SearchMatch] = []
         for item, relative in iter_workspace_files(
             workspace, root=start, rules=rules
@@ -660,9 +663,8 @@ class MemorySandboxSession:
                 continue
             if _file_is_binary(item):
                 continue
-            try:
-                text = item.read_text(errors="replace")
-            except OSError:
+            text = _read_search_text(item, max_file_bytes)
+            if text is None:
                 continue
             lines = text.splitlines()
             if multiline:
@@ -811,12 +813,7 @@ class MemorySandboxSession:
                 self._record.sandbox.limits.max_output_bytes,
             ),
         )
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key in self._provider._allowed_env_names
-        }
-        environment.update(request.env)
+        environment = _guest_env(self._record.workspace, request.env)
         async with self._record.lock:
             await self._require_running()
             before = self._workspace_fingerprint()
@@ -849,11 +846,7 @@ class MemorySandboxSession:
         if len(active) >= self._provider._max_pty_sessions:
             raise SandboxPolicyViolation("pty_session_limit_exceeded")
         master_fd, slave_fd = pty.openpty()
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key in self._provider._allowed_env_names
-        }
+        environment = _guest_env(self._record.workspace)
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -933,14 +926,34 @@ class MemorySandboxSession:
 
     def _workspace_fingerprint(self) -> dict[str, tuple[int, int]]:
         fingerprint: dict[str, tuple[int, int]] = {}
-        for item in self._record.workspace.rglob("*"):
-            if not item.is_file() or item.is_symlink():
-                continue
-            relative = item.relative_to(self._record.workspace).as_posix()
-            if self._ignore_watch_path(relative):
-                continue
-            value = item.stat()
-            fingerprint[relative] = (value.st_size, value.st_mtime_ns)
+        workspace = self._record.workspace
+        for dirpath, dirnames, filenames in os.walk(
+            workspace, followlinks=False
+        ):
+            current = Path(dirpath)
+            kept: list[str] = []
+            for name in dirnames:
+                item = current / name
+                if item.is_symlink():
+                    continue
+                relative = item.relative_to(workspace).as_posix()
+                if self._is_secret_path(relative) or self._ignore_watch_path(
+                    relative
+                ):
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+            for name in filenames:
+                item = current / name
+                if item.is_symlink() or not item.is_file():
+                    continue
+                relative = item.relative_to(workspace).as_posix()
+                if self._is_secret_path(relative) or self._ignore_watch_path(
+                    relative
+                ):
+                    continue
+                value = item.lstat()
+                fingerprint[relative] = (value.st_size, value.st_mtime_ns)
         return fingerprint
 
     @staticmethod
@@ -992,6 +1005,37 @@ class MemorySandboxSession:
             normalized.startswith("**/")
             and PurePosixPath(path).match(normalized[3:])
         )
+
+
+def _guest_env(
+    workspace: Path, overlay: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    tmpdir = workspace / ".tmp"
+    tmpdir.mkdir(mode=0o700, exist_ok=True)
+    environment = {
+        "PATH": _GUEST_PATH,
+        "HOME": str(workspace),
+        "TMPDIR": str(tmpdir),
+        "LANG": _GUEST_LANG,
+        "LC_ALL": _GUEST_LANG,
+    }
+    if overlay:
+        environment.update(overlay)
+    return environment
+
+
+def _read_search_text(item: Path, max_bytes: int) -> str | None:
+    limit = max_bytes if max_bytes > 0 else _DEFAULT_SEARCH_CAP_BYTES
+    try:
+        if item.stat().st_size > limit:
+            return None
+        with item.open("rb") as handle:
+            data = handle.read(limit + 1)
+    except OSError:
+        return None
+    if len(data) > limit or b"\0" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
 
 
 def _file_is_binary(item: Path) -> bool:

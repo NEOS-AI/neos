@@ -39,16 +39,34 @@ _DEDICATED_EXECUTE_DENY = frozenset(
         "awk",
     }
 )
-_EXECUTE_WRAPPERS = frozenset({"env", "busybox", "xargs"})
+_EXECUTE_WRAPPERS = frozenset(
+    {
+        "env",
+        "busybox",
+        "xargs",
+        "timeout",
+        "nice",
+        "nohup",
+        "time",
+        "stdbuf",
+        "command",
+    }
+)
+_PACKAGE_RUNNERS = frozenset({"pnpm", "npm", "yarn", "npx"})
 _INLINE_INTERPRETERS = frozenset(
     {"python", "python3", "node", "nodejs", "perl", "ruby", "php", "lua"}
 )
 _REMOVAL_EXECUTABLES = frozenset({"rm", "rmdir"})
 _DANGEROUS_REMOVAL_OPERANDS = frozenset({"/", "/*", "*", "~"})
+_DURATION_TOKEN = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
 
 
-def is_path_like_operand(value: object) -> bool:
-    if not isinstance(value, str) or not value or value.startswith("-"):
+def is_path_like_operand(
+    value: object, *, allow_leading_dash: bool = False
+) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if value.startswith("-") and not allow_leading_dash:
         return False
     if value.startswith("."):
         return True
@@ -57,15 +75,17 @@ def is_path_like_operand(value: object) -> bool:
 
 def path_operands_from_argv(argv: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     operands: list[str] = []
+    positional = False
     for part in tuple(argv)[1:]:
         if part == "--":
+            positional = True
             continue
-        if part.startswith("-") and "=" in part:
+        if not positional and part.startswith("-") and "=" in part:
             value = part.split("=", 1)[1]
             if is_path_like_operand(value):
                 operands.append(value)
             continue
-        if is_path_like_operand(part):
+        if is_path_like_operand(part, allow_leading_dash=positional):
             operands.append(part)
     return tuple(operands)
 
@@ -74,31 +94,96 @@ def _command_name(value: str) -> str:
     return PurePosixPath(value).name
 
 
-def _unwrapped_command_names(argv: tuple[str, ...]) -> tuple[str, ...]:
-    names = [_command_name(argv[0])]
-    if names[0] not in _EXECUTE_WRAPPERS:
-        return tuple(names)
-    for part in argv[1:]:
+def _next_wrapped_command_index(
+    wrapper: str, rest: tuple[str, ...]
+) -> int | None:
+    if wrapper not in _EXECUTE_WRAPPERS:
+        return None
+    skip_duration = wrapper == "timeout"
+    for index, part in enumerate(rest):
+        if part == "--":
+            return index + 1 if index + 1 < len(rest) else None
         if part.startswith("-"):
             continue
-        if names[0] == "env" and "=" in part:
+        if wrapper == "env" and "=" in part:
             continue
-        names.append(_command_name(part))
+        if skip_duration and _DURATION_TOKEN.fullmatch(part):
+            skip_duration = False
+            continue
+        return index
+    return None
+
+
+def _package_exec_command_index(name: str, rest: tuple[str, ...]) -> int | None:
+    if name not in _PACKAGE_RUNNERS:
+        return None
+    take_next = False
+    for index, part in enumerate(rest):
+        if part == "--":
+            continue
+        if take_next:
+            if part.startswith("-"):
+                continue
+            return index
+        if part in {"exec", "dlx"}:
+            take_next = True
+    return None
+
+
+def _unwrapped_command_names(argv: tuple[str, ...]) -> tuple[str, ...]:
+    if not argv:
+        return ()
+    names: list[str] = []
+    index = 0
+    while index < len(argv):
+        name = _command_name(argv[index])
+        names.append(name)
+        rest = argv[index + 1 :]
+        next_index = _next_wrapped_command_index(name, rest)
+        if next_index is not None:
+            index = index + 1 + next_index
+            continue
+        package_index = _package_exec_command_index(name, rest)
+        if package_index is not None:
+            index = index + 1 + package_index
+            continue
+        break
     return tuple(names)
 
 
 def _command_operands(argv: tuple[str, ...]) -> tuple[str, ...]:
     operands: list[str] = []
+    positional = False
     for part in argv[1:]:
         if part == "--":
+            positional = True
             continue
-        if part.startswith("-") and "=" in part:
-            operands.append(part.split("=", 1)[1])
-            continue
-        if part.startswith("-"):
-            continue
+        if not positional:
+            if part.startswith("-") and "=" in part:
+                operands.append(part.split("=", 1)[1])
+                continue
+            if part.startswith("-"):
+                continue
         operands.append(part)
     return tuple(operands)
+
+
+def _is_git_dangerous_flag(token: str) -> bool:
+    if token.startswith("--"):
+        return token.startswith("--config-env") or token.startswith("--exec-path")
+    return token.startswith("-c")
+
+
+def _is_inline_interpreter_flag(token: str) -> bool:
+    if token.startswith("--eval"):
+        return True
+    if token.startswith("--"):
+        return False
+    return (
+        token.startswith("-c")
+        or token.startswith("-e")
+        or token.startswith("-p")
+    )
 
 
 def _subcommand_after(argv: tuple[str, ...], executable: str) -> str | None:
@@ -123,6 +208,33 @@ def _operand_escapes_workspace(value: str) -> bool:
         if part not in {"", "."}
     ]
     return ".." in parts
+
+
+def _definition_match(tool: _RegisteredTool) -> dict[str, object]:
+    definition = tool.definition()
+    return {
+        "name": definition.name,
+        "description": definition.description,
+        "input_schema": definition.input_schema,
+    }
+
+
+def _select_query_names(query: str) -> tuple[str, ...] | None:
+    raw = query.strip()
+    if not raw.lower().startswith("select:"):
+        return None
+    return tuple(part.strip() for part in raw.split(":", 1)[1].split(",") if part.strip())
+
+
+def _search_query_terms(query: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    required: list[str] = []
+    optional: list[str] = []
+    for token in query.split():
+        if token.startswith("+") and len(token) > 1:
+            required.append(token[1:].casefold())
+        elif token:
+            optional.append(token.casefold())
+    return tuple(required), tuple(optional)
 
 
 def _deferred_tools_threshold() -> int:
@@ -272,6 +384,8 @@ class _AskUserInput(_ToolInput):
 
 class _LoadSkillInput(_ToolInput):
     name: str = Field(min_length=1, max_length=64)
+    reference: str | None = None
+    path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,6 +668,7 @@ class CodingToolRegistry:
 
         hidden = hidden_tools_for_phase(phase)
         revealed_names = revealed or frozenset()
+        deferred = frozenset(self.deferred_tool_names(phase=phase))
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
@@ -562,31 +677,59 @@ class CodingToolRegistry:
                 tool.name in self._CORE_TOOL_NAMES
                 or tool.name in revealed_names
             )
+            and (
+                tool.name in self._CORE_TOOL_NAMES
+                or tool.name in deferred
+                or tool.name in revealed_names
+            )
+        )
+
+    @classmethod
+    def deferred_tool_names(cls, *, phase: str | None = None) -> tuple[str, ...]:
+        from neos.coding.phases import hidden_tools_for_phase
+
+        hidden = hidden_tools_for_phase(phase) if phase is not None else frozenset()
+        return tuple(
+            tool.name
+            for tool in cls._TOOL_SPECS
+            if tool.name not in cls._CORE_TOOL_NAMES and tool.name not in hidden
         )
 
     @classmethod
     def search_definitions(
-        cls, query: str, *, limit: int = 8
+        cls, query: str, *, limit: int = 8, phase: str = "implement"
     ) -> tuple[Mapping[str, object], ...]:
-        needle = query.casefold()
+        candidates = cls._deferred_tools(phase=phase)
+        selected = _select_query_names(query)
         matches: list[Mapping[str, object]] = []
-        for tool in cls._TOOL_SPECS:
-            if (
-                needle not in tool.name.casefold()
-                and needle not in tool.description.casefold()
-            ):
+        if selected is not None:
+            wanted = {name.casefold() for name in selected}
+            for tool in candidates:
+                if tool.name.casefold() not in wanted:
+                    continue
+                matches.append(_definition_match(tool))
+                if len(matches) >= limit:
+                    break
+            return tuple(matches)
+
+        required, optional = _search_query_terms(query)
+        for tool in candidates:
+            haystack = f"{tool.name}\n{tool.description}".casefold()
+            if any(term not in haystack for term in required):
                 continue
-            definition = tool.definition()
-            matches.append(
-                {
-                    "name": definition.name,
-                    "description": definition.description,
-                    "input_schema": definition.input_schema,
-                }
-            )
+            if optional and any(term not in haystack for term in optional):
+                continue
+            if not required and not optional:
+                continue
+            matches.append(_definition_match(tool))
             if len(matches) >= limit:
                 break
         return tuple(matches)
+
+    @classmethod
+    def _deferred_tools(cls, *, phase: str) -> tuple[_RegisteredTool, ...]:
+        allowed = frozenset(cls.deferred_tool_names(phase=phase))
+        return tuple(tool for tool in cls._TOOL_SPECS if tool.name in allowed)
 
     def decide(
         self, name: str, input: Mapping[str, object]
@@ -660,15 +803,22 @@ class CodingToolRegistry:
             raise ToolValidationError("policy_executable_path_denied")
         executable = PurePosixPath(argv[0]).name
         names = _unwrapped_command_names(argv)
+        if "git" in names and any(_is_git_dangerous_flag(part) for part in argv):
+            raise ToolValidationError("policy_git_operation_denied")
         if any(name in _DEDICATED_EXECUTE_DENY for name in names):
             raise ToolValidationError("policy_dedicated_tool_required")
         if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
             raise ToolValidationError("policy_shell_command_denied")
         if any(name in _INLINE_INTERPRETERS for name in names):
             later = argv[1:]
-            if "-c" in later or "-e" in later:
+            if any(_is_inline_interpreter_flag(part) for part in later):
                 raise ToolValidationError("policy_inline_interpreter_denied")
-            if "php" in names and "-r" in later:
+            if "php" in names and any(
+                part == "-r"
+                or part.startswith("-r=")
+                or (part.startswith("-r") and not part.startswith("--"))
+                for part in later
+            ):
                 raise ToolValidationError("policy_inline_interpreter_denied")
         if any(
             name

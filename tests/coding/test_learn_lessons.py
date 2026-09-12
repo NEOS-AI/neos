@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -156,3 +156,76 @@ def test_runtime_does_not_bake_owner_lessons_at_construction() -> None:
     assert "owner = None" not in source
     assert "approved_texts(" not in source
     assert "get_lesson_store" not in source
+
+
+@pytest.mark.asyncio
+async def test_approved_lesson_texts_cap_at_five(monkeypatch) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(settings.config.learn, "coding_lessons", True)
+    store = reset_lesson_store()
+    for index in range(6):
+        lesson = store.add(
+            new_lesson(
+                namespace="owner:u1",
+                title=f"t{index}",
+                body=f"lesson-body-{index}",
+            )
+        )
+        store.update(replace(lesson, status=LessonStatus.APPROVED))
+    texts = await approved_lesson_texts("u1")
+    assert len(texts) == 5
+    assert all("lesson-body-" in text for text in texts)
+    assert sum(item.inject_count for item in store.list("owner:u1")) == 5
+
+
+@pytest.mark.asyncio
+async def test_approved_lesson_texts_mark_stale_after_seven_days(
+    monkeypatch,
+) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(settings.config.learn, "coding_lessons", True)
+    store = reset_lesson_store()
+    old = store.add(
+        new_lesson(
+            namespace="owner:u1",
+            title="old",
+            body="old fact",
+            now=datetime.now(UTC) - timedelta(days=8),
+        )
+    )
+    fresh = store.add(
+        new_lesson(
+            namespace="owner:u1",
+            title="fresh",
+            body="fresh fact",
+            now=datetime.now(UTC) - timedelta(days=2),
+        )
+    )
+    store.update(replace(old, status=LessonStatus.APPROVED))
+    store.update(replace(fresh, status=LessonStatus.APPROVED))
+    texts = await approved_lesson_texts("u1")
+    stale = next(text for text in texts if "old fact" in text)
+    recent = next(text for text in texts if "fresh fact" in text)
+    assert "may be stale" in stale
+    assert "may be stale" not in recent
+
+
+@pytest.mark.asyncio
+async def test_approved_lesson_texts_fail_closed_on_store_error(
+    monkeypatch,
+) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(settings.config.learn, "coding_lessons", True)
+    monkeypatch.setattr(
+        "neos.coding.learn_lessons.resolve_lesson_session_factory",
+        lambda: None,
+    )
+
+    def boom():
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("neos.coding.learn_lessons.get_lesson_store", boom)
+    assert await approved_lesson_texts("u1") == ()

@@ -61,8 +61,21 @@ def binding(**overrides: object) -> dict[str, object]:
         "home/.ssh/config",
         "id_rsa",
         "keys/id_rsa",
+        "id_ed25519",
+        "keys/id_ed25519",
         ".aws/credentials",
         "svc/.aws/credentials",
+        ".envrc",
+        "svc/.envrc",
+        ".npmrc",
+        ".pypirc",
+        ".netrc",
+        ".pgpass",
+        ".git-credentials",
+        "home/.git-credentials",
+        ".neos/secrets/token",
+        "svc/.neos/secrets/api",
+        ".NEOS/Secrets/token",
     ],
 )
 def test_secret_dotfile_paths_are_denied_even_when_read_only(path: str) -> None:
@@ -111,8 +124,16 @@ def test_search_text_paths_are_denied_when_they_target_secrets() -> None:
         "home/.Ssh/config",
         "ID_RSA",
         "keys/Id_Rsa",
+        "ID_ED25519",
+        "keys/Id_Ed25519",
         ".AWS/credentials",
         "svc/.Aws/Credentials",
+        ".ENVRC",
+        "svc/.Npmrc",
+        ".Pypirc",
+        ".NETRC",
+        ".Pgpass",
+        ".GIT-CREDENTIALS",
     ],
 )
 def test_secret_dotfile_paths_are_denied_casefold(path: str) -> None:
@@ -200,7 +221,6 @@ def test_sensitive_config_writes_require_approval_despite_remember(
         "README.md",
         "src/main.py",
         ".gitignore",
-        ".envrc",
         "id_rsa.pub",
         ".aws/config",
         ".github/workflows/ci.yml",
@@ -307,6 +327,16 @@ def test_instruction_file_writes_require_approval_despite_approved_always() -> N
         {"path": "agents.md", "content": "x"},
         ToolRisk.WORKSPACE_WRITE,
     )
+    local = call(
+        "write_file.v1",
+        {"path": "docs/claude.local.md", "content": "x"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    local_cased = call(
+        "edit_file.v1",
+        {"path": "CLAUDE.local.md", "old_string": "a", "new_string": "b"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
     gate = ApprovalGate(approved_always=frozenset({"write_file.v1", "edit_file.v1"}))
     allow_gate = ApprovalGate(allow_tools=frozenset({"write_file.v1"}))
     auto_gate = ApprovalGate(
@@ -320,7 +350,9 @@ def test_instruction_file_writes_require_approval_despite_approved_always() -> N
     assert evaluate_approval(nested, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
     assert evaluate_approval(soul, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
     assert evaluate_approval(cursor, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
-    assert evaluate_approval(lowercase, gate) is ApprovalPolicyOutcome.ALLOW
+    assert evaluate_approval(lowercase, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(local, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(local_cased, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
 def test_set_phase_to_implement_from_plan_requires_approval() -> None:

@@ -661,6 +661,9 @@ async def test_ask_user_view_omits_approve(
         "neos_code_stop:ct_1",
         "neos_code_deny:ca_9",
     ]
+    mentions = channel.sent_payloads[-1].get("allowed_mentions")
+    assert mentions is not None
+    assert getattr(mentions, "everyone", True) is False
 
 
 async def test_button_stop_dispatches_after_gate(

@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+from neos.coding.domain.approvals import is_denied_secret_path
 from neos.coding.sandbox.base import (
     SandboxNotFound,
     SandboxPolicyViolation,
@@ -109,13 +110,29 @@ def create_workspace_archive(
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     try:
         with tarfile.open(temporary, "w") as archive:
-            for item in sorted(workspace.rglob("*")):
-                relative = item.relative_to(workspace).as_posix()
-                if _is_excluded(relative) or item.is_socket():
-                    continue
-                if item.is_block_device() or item.is_char_device() or item.is_fifo():
-                    continue
-                archive.add(item, arcname=relative, recursive=False)
+            for dirpath, dirnames, filenames in os.walk(
+                workspace, followlinks=False
+            ):
+                current = Path(dirpath)
+                kept: list[str] = []
+                for name in sorted(dirnames):
+                    item = current / name
+                    relative = item.relative_to(workspace).as_posix()
+                    if item.is_symlink() or _is_excluded(relative):
+                        continue
+                    kept.append(name)
+                    archive.add(item, arcname=relative, recursive=False)
+                dirnames[:] = kept
+                for name in sorted(filenames):
+                    item = current / name
+                    relative = item.relative_to(workspace).as_posix()
+                    if item.is_symlink() or _is_excluded(relative):
+                        continue
+                    if item.is_socket() or item.is_block_device():
+                        continue
+                    if item.is_char_device() or item.is_fifo():
+                        continue
+                    archive.add(item, arcname=relative, recursive=False)
         if temporary.stat().st_size > max_archive_bytes:
             raise SandboxPolicyViolation("snapshot_archive_size_exceeded")
         checksum = sha256_file(temporary)
@@ -223,4 +240,6 @@ def _validate_symlink_target(parent: PurePosixPath, linkname: str) -> None:
 
 
 def _is_excluded(path: str) -> bool:
-    return path in _EXCLUDED_PATHS or path.startswith(".neos/secrets/")
+    if path in _EXCLUDED_PATHS or path.startswith(".neos/secrets/"):
+        return True
+    return is_denied_secret_path(path)

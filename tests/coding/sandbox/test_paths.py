@@ -7,6 +7,7 @@ from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
     resolve_mutable_workspace_path,
+    resolve_readable_workspace_path,
     resolve_workspace_path,
 )
 
@@ -163,3 +164,50 @@ def test_resolve_mutable_missing_parent_is_file_not_found(
 ) -> None:
     with pytest.raises(FileNotFoundError):
         resolve_mutable_workspace_path(tmp_path, "nested/a.txt")
+
+
+def test_resolve_readable_rejects_leaf_symlink(tmp_path: Path) -> None:
+    (tmp_path / "inside.txt").write_text("ok")
+    (tmp_path / "link.txt").symlink_to(tmp_path / "inside.txt")
+
+    with pytest.raises(
+        SandboxPolicyViolation, match="workspace_symlink_leaf"
+    ):
+        resolve_readable_workspace_path(tmp_path, "link.txt")
+
+
+def test_resolve_readable_follows_internal_parent_to_regular_file(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "real" / "x.txt").write_text("ok")
+    (tmp_path / "ext").symlink_to(tmp_path / "real")
+
+    resolved = resolve_readable_workspace_path(tmp_path, "ext/x.txt")
+
+    assert resolved == (tmp_path / "real" / "x.txt").resolve()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env", ".env.local", ".ssh/id_rsa", "id_rsa", ".git/config"],
+)
+def test_resolve_readable_rejects_secret_path(tmp_path: Path, path: str) -> None:
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("secret")
+
+    with pytest.raises(SandboxPolicyViolation, match="workspace_secret_path"):
+        resolve_readable_workspace_path(tmp_path, path)
+
+
+def test_resolve_readable_rejects_parent_symlink_to_secret(
+    tmp_path: Path,
+) -> None:
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "notes.md").write_text("key material")
+    (tmp_path / "ext").symlink_to(ssh)
+
+    with pytest.raises(SandboxPolicyViolation, match="workspace_secret_path"):
+        resolve_readable_workspace_path(tmp_path, "ext/notes.md")
