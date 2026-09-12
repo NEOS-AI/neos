@@ -596,3 +596,199 @@ def test_supports_vision_reads_the_live_catalog() -> None:
     assert supports_vision("no-such-model-xyz") is False
     # 카탈로그가 True 로 적은 모델은 True 다
     assert supports_vision("claude-sonnet-5") is True
+
+
+# ---- identity surfaces (role_aliases / remaps / picker / gateway_id) ----
+
+
+def test_catalog_rejects_role_alias_current_missing_from_models(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "role_aliases": {"sonnet-5": {"current": "claude-missing"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-missing"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_remap_to_unknown_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "remaps": {"old/cookie": "claude-typo"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-typo"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_remap_to_non_selectable_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "judge": {"provider": "anthropic", "selectable": False},
+                "ok": {"provider": "anthropic"},
+            },
+            "remaps": {"old/cookie": "judge"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="selectable"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_legacy_alias_pointing_at_a_role_alias(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "role_aliases": {"sonnet-5": {"current": "claude-a"}},
+            "aliases": {"llm": {"claude_sonnet": "sonnet-5"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="role alias"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_spec_role_alias_that_is_not_declared(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic", "role_alias": "sonnet-5"}
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="role_alias"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_picker_without_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="gateway_id"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_picker_extra_without_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/a",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "name": "Thinking",
+                                "description": "extra",
+                                "group": "reasoning",
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="gateway_id"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_duplicate_gateway_ids(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/shared",
+                },
+                "claude-b": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/shared",
+                },
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/shared"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_duplicate_wire_id_on_the_same_provider(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic", "wire_id": "wire-1"},
+                "claude-b": {"provider": "anthropic", "wire_id": "wire-1"},
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="wire"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_id_form_colliding_with_another_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic"},
+                "claude-b": {
+                    "provider": "anthropic",
+                    "id_forms": ["claude-a"],
+                },
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-a"):
+        load_catalog(path)
+
+
+def test_committed_role_aliases_current_pins_exist() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.role_aliases["sonnet-5"].current == "claude-sonnet-5"
+    assert catalog.role_aliases["opus-5"].current == "claude-opus-5"
+    assert catalog.role_aliases["haiku-4.5"].current == "claude-haiku-4-5-20251001"
+    for name, alias in catalog.role_aliases.items():
+        assert alias.current in catalog.models, name
+
+
+def test_committed_remap_targets_are_selectable_pins() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.remaps
+    for raw, pin in catalog.remaps.items():
+        spec = catalog.models[pin]
+        assert spec.selectable, f"{raw} remaps to non-selectable {pin}"

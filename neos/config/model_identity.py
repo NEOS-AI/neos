@@ -1,0 +1,250 @@
+"""Catalog identity resolution.
+
+No I/O. `canonicalize` is the only spelling/remap/alias hop. Remap values
+are catalog pins; picker payload remaps project those pins to gateway_ids.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from neos.config.model_config import ModelCatalog, ModelSpec
+    from neos.config.schema import ModelRoutingConfig
+
+_KNOWN_PREFIXES = frozenset({"anthropic", "openai", "google", "gemini", "xai"})
+_MAX_REMAP_HOPS = 4
+
+IdentitySource = Literal["role_alias", "pin", "remap", "gateway", "id_form"]
+
+
+class RemapCycleError(ValueError):
+    """A remaps: chain looped or exceeded the hop cap."""
+
+
+class AmbiguousModelError(ValueError):
+    """Reserved. v1 load uniqueness makes this unreachable at resolve time."""
+
+
+@dataclass(frozen=True, slots=True)
+class ModelIdentity:
+    catalog_id: str
+    provider: str
+    role_alias: str | None
+    wire_id: str
+    gateway_id: str | None
+    source: IdentitySource
+
+
+@dataclass(frozen=True, slots=True)
+class PickerModel:
+    id: str
+    catalog_id: str
+    name: str
+    provider: str
+    description: str
+    thinking: str
+    vision: bool
+    role_alias: str | None
+    default: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PickerPayload:
+    version: int
+    default_id: str
+    models: list[PickerModel]
+    remaps: dict[str, str]
+
+
+def catalog_shaped(raw: str) -> str:
+    """Strip a known provider/ prefix, then '.' → '-'. Never invents a date."""
+    s = raw.strip()
+    if "/" in s:
+        prefix, rest = s.split("/", 1)
+        if prefix in _KNOWN_PREFIXES and rest:
+            s = rest
+    return s.replace(".", "-")
+
+
+def _identity_from_pin(
+    catalog: ModelCatalog, pin: str, source: IdentitySource
+) -> ModelIdentity:
+    spec = catalog.models[pin]
+    return ModelIdentity(
+        catalog_id=pin,
+        provider=spec.provider,
+        role_alias=spec.role_alias,
+        wire_id=spec.wire_id or pin,
+        gateway_id=spec.gateway_id,
+        source=source,
+    )
+
+
+def _lookup_surfaces(catalog: ModelCatalog) -> tuple[dict[str, str], dict[str, str]]:
+    """gateway_id / extras gateway_id → pin, id_forms → pin."""
+    by_gateway: dict[str, str] = {}
+    by_id_form: dict[str, str] = {}
+    for name, spec in catalog.models.items():
+        if spec.gateway_id:
+            by_gateway[spec.gateway_id] = name
+        if spec.picker is not None:
+            for extra in spec.picker.extras:
+                if extra.gateway_id:
+                    by_gateway[extra.gateway_id] = name
+        for form in spec.id_forms:
+            by_id_form[form] = name
+    return by_gateway, by_id_form
+
+
+def _resolve_declared(
+    current: str,
+    catalog: ModelCatalog,
+    by_gateway: dict[str, str],
+    by_id_form: dict[str, str],
+) -> ModelIdentity | None:
+    if current in catalog.role_aliases:
+        pin = catalog.role_aliases[current].current
+        if pin not in catalog.models:
+            return None
+        return _identity_from_pin(catalog, pin, "role_alias")
+    if current in catalog.models:
+        return _identity_from_pin(catalog, current, "pin")
+    if current in by_gateway:
+        return _identity_from_pin(catalog, by_gateway[current], "gateway")
+    if current in by_id_form:
+        return _identity_from_pin(catalog, by_id_form[current], "id_form")
+    return None
+
+
+def canonicalize(
+    raw: str,
+    *,
+    catalog: ModelCatalog,
+    apply_remap: bool = True,
+) -> ModelIdentity | None:
+    """Return identity or None (unknown).
+
+    v1 resolves only declared surfaces. Undeclared short names (sonnet, opus)
+    return None — they are not guessed and not treated as 'latest'.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+
+    current = raw.strip()
+    seen: list[str] = []
+    if apply_remap:
+        while current in catalog.remaps:
+            if current in seen or len(seen) >= _MAX_REMAP_HOPS:
+                raise RemapCycleError(
+                    f"remap cycle involving {current!r} (seen {seen})"
+                )
+            seen.append(current)
+            current = catalog.remaps[current]
+        if seen:
+            if current not in catalog.models:
+                return None
+            return _identity_from_pin(catalog, current, "remap")
+
+    by_gateway, by_id_form = _lookup_surfaces(catalog)
+    hit = _resolve_declared(current, catalog, by_gateway, by_id_form)
+    if hit is not None:
+        return hit
+
+    # Spelling-only retry, once. Turns anthropic/claude-sonnet-5 into the
+    # pin key when that key already exists. Does not turn
+    # anthropic/claude-haiku-4.5 into claude-haiku-4-5-20251001.
+    spelled = catalog_shaped(current)
+    if spelled != current:
+        return _resolve_declared(spelled, catalog, by_gateway, by_id_form)
+    return None
+
+
+def to_picker_payload(
+    catalog: ModelCatalog,
+    routing: ModelRoutingConfig | None = None,
+) -> PickerPayload:
+    """Project picker: rows and remaps (raw → pin.gateway_id)."""
+    if routing is None:
+        from neos.config.schema import ModelRoutingConfig
+
+        routing = ModelRoutingConfig()
+
+    everyday = canonicalize(
+        routing.anthropic.everyday, catalog=catalog, apply_remap=False
+    )
+    default_pin = everyday.catalog_id if everyday is not None else None
+    default_id = ""
+    if everyday is not None and everyday.gateway_id:
+        default_id = everyday.gateway_id
+
+    rows: list[PickerModel] = []
+    visible_ids: set[str] = set()
+    for name, spec in catalog.models.items():
+        if spec.picker is None or not spec.gateway_id:
+            continue
+        primary = _picker_row(
+            spec,
+            catalog_id=name,
+            gateway_id=spec.gateway_id,
+            name=spec.picker.name,
+            description=spec.picker.description,
+            group=spec.picker.group,
+            default=name == default_pin,
+        )
+        rows.append(primary)
+        visible_ids.add(primary.id)
+        for extra in spec.picker.extras:
+            if not extra.gateway_id:
+                continue
+            extra_row = _picker_row(
+                spec,
+                catalog_id=name,
+                gateway_id=extra.gateway_id,
+                name=extra.name,
+                description=extra.description,
+                group=extra.group,
+                default=False,
+            )
+            rows.append(extra_row)
+            visible_ids.add(extra_row.id)
+
+    projected: dict[str, str] = {}
+    for raw, pin in catalog.remaps.items():
+        spec = catalog.models.get(pin)
+        target = spec.gateway_id if spec is not None else None
+        if target and target in visible_ids:
+            projected[raw] = target
+        else:
+            projected[raw] = default_id
+
+    return PickerPayload(
+        version=1,
+        default_id=default_id,
+        models=rows,
+        remaps=projected,
+    )
+
+
+def _picker_row(
+    spec: ModelSpec,
+    *,
+    catalog_id: str,
+    gateway_id: str,
+    name: str,
+    description: str,
+    group: str,
+    default: bool,
+) -> PickerModel:
+    return PickerModel(
+        id=gateway_id,
+        catalog_id=catalog_id,
+        name=name,
+        provider=group,
+        description=description,
+        thinking=spec.thinking.value,
+        vision=spec.vision,
+        role_alias=spec.role_alias,
+        default=default,
+    )

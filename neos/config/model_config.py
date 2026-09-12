@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 Tier = Literal["fast", "balanced", "powerful"]
 CatalogProvider = Literal["anthropic", "openai", "gemini", "ollama"]
+PickerGroup = Literal["anthropic", "openai", "reasoning"]
 
 # 추천 티어 표시 순서 (저비용 → 고성능)
 _TIER_ORDER: tuple[Tier, ...] = ("fast", "balanced", "powerful")
@@ -60,6 +61,34 @@ class ModelPricing(StrictConfigModel):
     cache_read: float = 0.0
 
 
+class PickerRow(StrictConfigModel):
+    """피커 extras 한 줄. extras 에서는 gateway_id 가 필수다."""
+
+    name: str
+    description: str
+    group: PickerGroup
+    gateway_id: str | None = None
+
+
+class PickerSpec(StrictConfigModel):
+    """채팅 피커 노출. 이 블록이 있으면 GET /models 에 올라간다.
+
+    `selectable` 과 다르다 — selectable 은 list_models / 턴 오버라이드 허용
+    목록이고, 피커 멤버십은 따로 고른다.
+    """
+
+    name: str
+    description: str
+    group: PickerGroup
+    extras: list[PickerRow] = Field(default_factory=list)
+
+
+class RoleAlias(StrictConfigModel):
+    """역할이 가리키는 트랙. current 는 항상 models: 키(핀)다."""
+
+    current: str
+
+
 class ModelSpec(StrictConfigModel):
     provider: CatalogProvider
     # 추천 티어. 비어 있으면 추천 목록에 등장하지 않는다(수동 선택 전용).
@@ -76,6 +105,15 @@ class ModelSpec(StrictConfigModel):
     vision: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
+    # role_aliases: 키만. anthropic_families[].family 가 아니다.
+    role_alias: str | None = None
+    # 쿠키 / 피커 id. `provider/catalog_key` 로 추론하지 않는다.
+    gateway_id: str | None = None
+    # 프로바이더에 보내는 id. 없으면 카탈로그 키.
+    wire_id: str | None = None
+    # 추가로 받는 철자. 날짜 접미사를 지어내지 않는다.
+    id_forms: list[str] = Field(default_factory=list)
+    picker: PickerSpec | None = None
 
 
 #: 프롬프트 캐시 최소 입력 토큰의 기본값. 가족이 값을 선언하지 않거나
@@ -109,15 +147,16 @@ class ModelCatalog(StrictConfigModel):
     # 레거시 별칭 API용. {group: {alias: model_name}}
     aliases: dict[str, dict[str, str]] = Field(default_factory=dict)
     defaults: dict[str, str] = Field(default_factory=dict)
+    # YAML 에서는 anthropic_families: 뒤에 둔다 (FE 정규식 잠금).
+    role_aliases: dict[str, RoleAlias] = Field(default_factory=dict)
+    remaps: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_families(self) -> "ModelCatalog":
-        """접두사는 서로 중첩될 수 없고, advisor 대상은 실재해야 한다.
+        """접두사 중복은 거부하고, advisor 대상은 실재해야 한다.
 
-        중첩을 금지하는 이유가 이 표를 코드에서 옮겨 온 이유와 같다: 파이썬
-        튜플 시절에는 **선언 순서**가 승자를 정했고 그 사실이 어디에도 적혀
-        있지 않았다. 중첩이 없으면 순서가 결과를 바꾸지 못하므로 YAML 의
-        나열 순서를 사람이 자유롭게 바꿔도 안전하다.
+        중첩은 허용한다 — `claude-sonnet-5` 옆에 `claude-sonnet-5-1` 이
+        와야 한다. 승자는 선언 순서가 아니라 가장 긴 접두사다.
         """
         seen: dict[str, str] = {}
         for entry in self.anthropic_families:
@@ -126,13 +165,6 @@ class ModelCatalog(StrictConfigModel):
                     f"duplicate anthropic family prefix {entry.prefix!r}"
                 )
             seen[entry.prefix] = entry.family or ""
-        for prefix in seen:
-            for other in seen:
-                if prefix != other and other.startswith(prefix):
-                    raise ValueError(
-                        f"anthropic family prefix {prefix!r} is a prefix of "
-                        f"{other!r}; nesting hides which one wins"
-                    )
         known = {e.family for e in self.anthropic_families if e.family}
         for entry in self.anthropic_families:
             unknown = sorted(set(entry.advisor_targets) - known)
@@ -158,6 +190,11 @@ class ModelCatalog(StrictConfigModel):
 
         for group, entries in self.aliases.items():
             for alias, model in entries.items():
+                if model in self.role_aliases:
+                    raise ValueError(
+                        f"alias {group}.{alias} points at role alias {model!r}; "
+                        "legacy aliases must stay pin-valued"
+                    )
                 if model not in self.models:
                     raise ValueError(
                         f"alias {group}.{alias} points to unknown model {model!r}"
@@ -172,6 +209,77 @@ class ModelCatalog(StrictConfigModel):
                 raise ValueError(
                     f"default {group}={alias!r} is not defined in aliases.{group}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> "ModelCatalog":
+        """role_aliases / remaps / picker / gateway / wire 유일성."""
+        for name, alias in self.role_aliases.items():
+            if alias.current not in self.models:
+                raise ValueError(
+                    f"role_aliases.{name}.current points to unknown model "
+                    f"{alias.current!r}"
+                )
+
+        for raw, pin in self.remaps.items():
+            if pin not in self.models:
+                raise ValueError(
+                    f"remap {raw!r} points to unknown model {pin!r}"
+                )
+            if not self.models[pin].selectable:
+                raise ValueError(
+                    f"remap {raw!r} targets non-selectable pin {pin!r}"
+                )
+
+        claimed_lookup: dict[str, str] = {}
+        claimed_wire: dict[tuple[str, str], str] = {}
+
+        def claim(spelling: str, pin: str, kind: str) -> None:
+            existing = claimed_lookup.get(spelling)
+            if existing is not None and existing != pin:
+                raise ValueError(
+                    f"{kind} {spelling!r} is claimed by both {existing!r} "
+                    f"and {pin!r}"
+                )
+            claimed_lookup[spelling] = pin
+
+        for name, spec in self.models.items():
+            if spec.role_alias is not None and spec.role_alias not in self.role_aliases:
+                raise ValueError(
+                    f"model {name!r} role_alias {spec.role_alias!r} is not "
+                    "declared in role_aliases"
+                )
+            if spec.picker is not None and not spec.gateway_id:
+                raise ValueError(
+                    f"model {name!r} has picker: but no gateway_id"
+                )
+            if spec.picker is not None:
+                for index, extra in enumerate(spec.picker.extras):
+                    if not extra.gateway_id:
+                        raise ValueError(
+                            f"model {name!r} picker.extras[{index}] is "
+                            "missing gateway_id"
+                        )
+
+            claim(name, name, "catalog key")
+            if spec.gateway_id:
+                claim(spec.gateway_id, name, "gateway_id")
+            for form in spec.id_forms:
+                claim(form, name, "id_form")
+            if spec.picker is not None:
+                for extra in spec.picker.extras:
+                    if extra.gateway_id:
+                        claim(extra.gateway_id, name, "gateway_id")
+
+            wire = spec.wire_id or name
+            wire_key = (spec.provider, wire)
+            if wire_key in claimed_wire and claimed_wire[wire_key] != name:
+                raise ValueError(
+                    f"wire_id {wire!r} for provider {spec.provider!r} is "
+                    f"claimed by both {claimed_wire[wire_key]!r} and {name!r}"
+                )
+            claimed_wire[wire_key] = name
+
         return self
 
     # ---- 파생 뷰 ----
@@ -211,8 +319,8 @@ class ModelCatalog(StrictConfigModel):
     def _anthropic_family_for(self, model: str) -> AnthropicFamily | None:
         """`model` 에 걸리는 가족. 가장 **긴** 접두사가 이긴다.
 
-        `_validate_families` 가 중첩을 금지하므로 후보는 사실상 하나뿐이고,
-        `max` 는 그 사실이 깨졌을 때 조용히 다른 답을 내지 않기 위한 것이다.
+        중첩(`claude-sonnet-5` / `claude-sonnet-5-1`)을 허용하므로 후보가
+        둘 이상일 수 있다. `max` 가 승자를 정한다.
         """
         normalized = model.lower()
         matches = [
@@ -426,7 +534,18 @@ class ModelConfig:
     def _legacy_entry(self, group: str, alias: str) -> dict[str, Any]:
         model_id = self.catalog.resolve_alias(group, alias)
         spec = self.catalog.models[model_id]
-        entry = spec.model_dump(exclude_none=True, exclude={"pricing", "tiers"})
+        entry = spec.model_dump(
+            exclude_none=True,
+            exclude={
+                "pricing",
+                "tiers",
+                "role_alias",
+                "gateway_id",
+                "wire_id",
+                "id_forms",
+                "picker",
+            },
+        )
         entry["model_id"] = model_id
         return entry
 

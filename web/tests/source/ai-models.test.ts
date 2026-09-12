@@ -258,4 +258,57 @@ describe("curated AI models", () => {
     assert.equal(mapToBackendModelName("openai/gpt-4o"), "gpt-5.6-sol");
     assert.equal(mapToBackendModelName("openai/gpt-4o-mini"), "gpt-5.6-terra");
   });
+
+  test("every chatModels id is a declared gateway_id or remaps key", () => {
+    const { gatewayIds, remapKeys } = loadCatalogIdentitySurfaces();
+
+    for (const model of chatModels) {
+      assert.ok(
+        gatewayIds.has(model.id) || remapKeys.has(model.id),
+        `${model.id} is not a models.yaml gateway_id or remaps key`
+      );
+    }
+  });
 });
+
+/**
+ * Collect declared picker/cookie surfaces from the catalog. New top-level
+ * keys (role_aliases, remaps) live AFTER anthropic_families — this scan
+ * must not assume they sit between models: and anthropic_families:.
+ */
+function loadCatalogIdentitySurfaces(): {
+  gatewayIds: Set<string>;
+  remapKeys: Set<string>;
+} {
+  const yamlPath = fileURLToPath(
+    new URL("../../../neos/config/models.yaml", import.meta.url)
+  );
+  const source = readFileSync(yamlPath, "utf8");
+
+  const gatewayIds = new Set<string>();
+  const gatewayRe = /^[ \t]+(?:- )?gateway_id:\s*(\S+)\s*$/gm;
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec-in-loop idiom
+  while ((match = gatewayRe.exec(source))) {
+    gatewayIds.add(match[1]);
+  }
+
+  const remapKeys = new Set<string>();
+  const remapsHeader = source.indexOf("\nremaps:\n");
+  if (remapsHeader >= 0) {
+    const fromHeader = source.slice(remapsHeader + 1);
+    const nextTopLevel = fromHeader.search(/\n[^\s#]/);
+    const remapsBlock =
+      nextTopLevel >= 0 ? fromHeader.slice(0, nextTopLevel) : fromHeader;
+    const keyRe = /^[ \t]+(?:"([^"\n]+)"|'([^'\n]+)'|([^"'\s:][^:\n]*?))\s*:/gm;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard regex-exec-in-loop idiom
+    while ((match = keyRe.exec(remapsBlock))) {
+      const key = match[1] ?? match[2] ?? match[3];
+      if (key && key !== "remaps") {
+        remapKeys.add(key);
+      }
+    }
+  }
+
+  return { gatewayIds, remapKeys };
+}

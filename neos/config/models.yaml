@@ -12,6 +12,11 @@
 #   pricing      USD / 1M 토큰. 없으면 "가격 미상" — 비용 집계 시 경고 후 0
 #   vision       이미지·PDF 입력을 받는가 (기본 false). 유일한 독자는
 #                supports_vision() — 첨부 게이트가 부른다.
+#   role_alias   role_aliases: 키. advisor family 가 아니다
+#   gateway_id   피커/쿠키 id. provider/키 로 추론하지 않는다
+#   picker       채팅 피커 노출. 없으면 selectable 이어도 피커에 안 오른다
+#   wire_id      프로바이더에 보내는 id. 기본은 카탈로그 키
+#   id_forms     추가로 받는 철자. 날짜 접미사를 지어내지 않는다
 #
 # 선언 순서가 list_models() 순서다. 최신 → 레거시 순을 유지할 것.
 
@@ -24,6 +29,12 @@ models:
     description: "Anthropic Claude Sonnet 5"
     max_tokens: 8192
     vision: true
+    role_alias: sonnet-5
+    gateway_id: anthropic/claude-sonnet-5
+    picker:
+      name: "Claude Sonnet 5"
+      description: "Best balance of speed, intelligence, and cost"
+      group: anthropic
     pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
 
   claude-opus-5:
@@ -33,6 +44,12 @@ models:
     description: "Anthropic Claude Opus 5"
     max_tokens: 8192
     vision: true
+    role_alias: opus-5
+    gateway_id: anthropic/claude-opus-5
+    picker:
+      name: "Claude Opus 5"
+      description: "Most capable Anthropic model"
+      group: anthropic
     pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
 
   # 심층분석 판정자 전용 (E3, 2026-08-30). 피커에 올리지 않으므로 tiers 없이
@@ -67,12 +84,30 @@ models:
     description: "Anthropic Claude Haiku 4.5"
     max_tokens: 8192
     vision: true
+    role_alias: haiku-4.5
+    gateway_id: anthropic/claude-haiku-4.5
+    id_forms: [claude-haiku-4-5, claude-haiku-4.5]
+    picker:
+      name: "Claude Haiku 4.5"
+      description: "Fast and affordable, great for everyday tasks"
+      group: anthropic
     pricing: {input: 0.25, output: 1.25, cache_creation: 0.30, cache_read: 0.03}
 
   claude-sonnet-4-5-20250929:
     provider: anthropic
     thinking: budgeted
     vision: true
+    gateway_id: anthropic/claude-sonnet-4.5
+    id_forms: [claude-sonnet-4-5, claude-sonnet-4.5]
+    picker:
+      name: "Claude Sonnet 4.5"
+      description: "Previous-generation balanced model"
+      group: anthropic
+      extras:
+        - gateway_id: anthropic/claude-sonnet-4.5-thinking
+          name: "Claude Sonnet 4.5 (Thinking)"
+          description: "Extended thinking for complex problems"
+          group: reasoning
     pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
 
   # claude-sonnet-4-6 / claude-opus-4-6은 은퇴했다. 가격을 모르는 채로
@@ -102,6 +137,11 @@ models:
     tiers: [fast, balanced]
     thinking: none
     vision: true
+    gateway_id: openai/gpt-5.6-terra
+    picker:
+      name: "GPT-5.6 Terra"
+      description: "Balanced OpenAI model for everyday tasks"
+      group: openai
     pricing: {input: 2.50, output: 15.00}
 
   gpt-5.6-sol:
@@ -109,6 +149,11 @@ models:
     tiers: [powerful]
     thinking: none
     vision: true
+    gateway_id: openai/gpt-5.6-sol
+    picker:
+      name: "GPT-5.6 Sol"
+      description: "Most capable OpenAI model"
+      group: openai
     pricing: {input: 5.00, output: 30.00}
 
   gpt-6-astra:
@@ -240,9 +285,8 @@ models:
 #   advisor_targets        이 세대가 executor 일 때 advisor 로 쓸 수 있는 family
 #                          목록. 생략하면 빈 집합(`incompatible_model_pair`)
 #
-# ⚠️ 한 접두사가 다른 접두사의 접두사가 되면 로더가 거부한다 — 그런 쌍이
-# 생기면 어느 쪽이 이기는지가 선언 순서에 숨고, 그것이 이 표가 코드에 있던
-# 시절의 실제 상태였다.
+# 중첩 접두사는 허용한다 (`claude-sonnet-5` 옆에 `claude-sonnet-5-1`).
+# 가장 긴 접두사가 이긴다. 같은 접두사를 두 번 적으면 로더가 거부한다.
 anthropic_families:
   - prefix: claude-fable-5
     family: fable-5
@@ -320,3 +364,25 @@ defaults:
   vision: gpt4o
   llm: claude_sonnet
   embedding: openai_small
+
+# 역할이 가리키는 트랙. current 는 핀이다 — 최신 자동 선택이 아니다.
+role_aliases:
+  sonnet-5:
+    current: claude-sonnet-5
+  opus-5:
+    current: claude-opus-5
+  haiku-4.5:
+    current: claude-haiku-4-5-20251001
+
+# raw 쿠키/게이트웨이 id → 카탈로그 핀. 피커 페이로드는 핀의 gateway_id 로 투영한다.
+remaps:
+  "openai/gpt-4o": gpt-5.6-sol
+  "openai/gpt-4o-mini": gpt-5.6-terra
+  "openai/gpt-4.1": gpt-5.6-sol
+  "openai/gpt-4.1-mini": gpt-5.6-terra
+  "anthropic/claude-3.7-sonnet-thinking": claude-sonnet-4-5-20250929
+  "anthropic/claude-opus-4.5": claude-opus-5
+  "google/gemini-2.5-flash-lite": claude-sonnet-5
+  "google/gemini-3-pro-preview": claude-sonnet-5
+  "xai/grok-4.1-fast-non-reasoning": claude-sonnet-5
+  "xai/grok-code-fast-1-thinking": claude-sonnet-5

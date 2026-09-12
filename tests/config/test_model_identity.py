@@ -1,0 +1,585 @@
+"""Catalog identity: canonicalize, spelling, remaps, picker projection."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from neos.config.model_config import ModelCatalog, model_config
+from neos.config.model_identity import (
+    AmbiguousModelError,
+    ModelIdentity,
+    RemapCycleError,
+    canonicalize,
+    catalog_shaped,
+    to_picker_payload,
+)
+from neos.config.schema import ModelRoutingConfig
+
+pytestmark = pytest.mark.no_db
+
+
+CURRENT_PICKER_IDS = {
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-opus-5",
+    "anthropic/claude-haiku-4.5",
+    "anthropic/claude-sonnet-4.5",
+    "anthropic/claude-sonnet-4.5-thinking",
+    "openai/gpt-5.6-terra",
+    "openai/gpt-5.6-sol",
+}
+
+RETIRED_REMAPS = {
+    "openai/gpt-4o": "gpt-5.6-sol",
+    "openai/gpt-4o-mini": "gpt-5.6-terra",
+    "openai/gpt-4.1": "gpt-5.6-sol",
+    "openai/gpt-4.1-mini": "gpt-5.6-terra",
+    "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929",
+    "anthropic/claude-opus-4.5": "claude-opus-5",
+    "google/gemini-2.5-flash-lite": "claude-sonnet-5",
+    "google/gemini-3-pro-preview": "claude-sonnet-5",
+    "xai/grok-4.1-fast-non-reasoning": "claude-sonnet-5",
+    "xai/grok-code-fast-1-thinking": "claude-sonnet-5",
+}
+
+
+def _catalog(data: dict) -> ModelCatalog:
+    return ModelCatalog.model_validate(data)
+
+
+def _pin(
+    provider: str = "anthropic",
+    *,
+    selectable: bool = True,
+    gateway_id: str | None = None,
+    picker: dict | None = None,
+    role_alias: str | None = None,
+    wire_id: str | None = None,
+    id_forms: list[str] | None = None,
+    thinking: str = "budgeted",
+    vision: bool = False,
+) -> dict:
+    spec: dict = {"provider": provider, "selectable": selectable, "thinking": thinking}
+    if gateway_id is not None:
+        spec["gateway_id"] = gateway_id
+    if picker is not None:
+        spec["picker"] = picker
+    if role_alias is not None:
+        spec["role_alias"] = role_alias
+    if wire_id is not None:
+        spec["wire_id"] = wire_id
+    if id_forms is not None:
+        spec["id_forms"] = id_forms
+    if vision:
+        spec["vision"] = True
+    return spec
+
+
+def _picker(name: str, description: str, group: str, extras: list[dict] | None = None) -> dict:
+    row = {"name": name, "description": description, "group": group}
+    if extras:
+        row["extras"] = extras
+    return row
+
+
+# ---- catalog_shaped --------------------------------------------------------
+
+
+def test_catalog_shaped_strips_known_provider_prefix_then_dots_to_dashes() -> None:
+    assert catalog_shaped("  anthropic/claude-sonnet-5  ") == "claude-sonnet-5"
+    assert catalog_shaped("anthropic/claude-haiku-4.5") == "claude-haiku-4-5"
+    assert catalog_shaped("openai/gpt-5.6-terra") == "gpt-5-6-terra"
+    assert catalog_shaped("google/gemini-2.5-flash-lite") == "gemini-2-5-flash-lite"
+    assert catalog_shaped("xai/grok-4.1-fast") == "grok-4-1-fast"
+
+
+def test_catalog_shaped_does_not_invent_a_dated_suffix() -> None:
+    assert catalog_shaped("anthropic/claude-haiku-4.5") == "claude-haiku-4-5"
+    assert "20251001" not in catalog_shaped("anthropic/claude-haiku-4.5")
+
+
+def test_catalog_shaped_leaves_unknown_prefixes_and_empty_rest_alone() -> None:
+    assert catalog_shaped("unknown/foo.bar") == "unknown/foo-bar"
+    assert catalog_shaped("anthropic/") == "anthropic/"
+    assert catalog_shaped("claude-sonnet-5") == "claude-sonnet-5"
+
+
+# ---- canonicalize: empty / unknown -----------------------------------------
+
+
+def test_canonicalize_rejects_empty_and_non_str() -> None:
+    catalog = _catalog({"models": {"claude-a": _pin()}})
+
+    assert canonicalize("", catalog=catalog) is None
+    assert canonicalize("   ", catalog=catalog) is None
+    assert canonicalize(None, catalog=catalog) is None  # type: ignore[arg-type]
+    assert canonicalize(123, catalog=catalog) is None  # type: ignore[arg-type]
+
+
+def test_undeclared_bare_sonnet_is_unknown() -> None:
+    catalog = _catalog(
+        {
+            "models": {"claude-sonnet-5": _pin(role_alias="sonnet-5")},
+            "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5"}},
+        }
+    )
+
+    assert canonicalize("sonnet", catalog=catalog) is None
+    assert canonicalize("opus", catalog=catalog) is None
+    assert canonicalize("haiku", catalog=catalog) is None
+
+
+def test_ambiguous_model_error_is_reserved_and_unused_in_v1() -> None:
+    assert issubclass(AmbiguousModelError, ValueError)
+    catalog = _catalog({"models": {"claude-sonnet-5": _pin()}})
+    # Undeclared short names stay None; load uniqueness is what prevents collisions.
+    assert canonicalize("sonnet", catalog=catalog) is None
+
+
+# ---- remaps hop to pins ----------------------------------------------------
+
+
+def test_remap_hops_to_the_catalog_pin_and_stops() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-opus-5": _pin(gateway_id="anthropic/claude-opus-5"),
+                "claude-sonnet-5": _pin(),
+            },
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+        }
+    )
+
+    ident = canonicalize("anthropic/claude-opus-4.5", catalog=catalog)
+
+    assert ident is not None
+    assert ident.catalog_id == "claude-opus-5"
+    assert ident.source == "remap"
+    assert ident.gateway_id == "anthropic/claude-opus-5"
+
+
+def test_apply_remap_false_does_not_follow_a_raw_cookie() -> None:
+    catalog = _catalog(
+        {
+            "models": {"claude-opus-5": _pin(gateway_id="anthropic/claude-opus-5")},
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+        }
+    )
+
+    assert (
+        canonicalize(
+            "anthropic/claude-opus-4.5", catalog=catalog, apply_remap=False
+        )
+        is None
+    )
+
+
+def test_remap_cycle_raises() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "pin-a": _pin(),
+                "pin-b": _pin(),
+            },
+            "remaps": {"pin-a": "pin-b", "pin-b": "pin-a"},
+        }
+    )
+
+    with pytest.raises(RemapCycleError):
+        canonicalize("pin-a", catalog=catalog)
+
+
+def test_self_remap_is_a_cycle() -> None:
+    catalog = _catalog(
+        {
+            "models": {"pin-a": _pin()},
+            "remaps": {"pin-a": "pin-a"},
+        }
+    )
+
+    with pytest.raises(RemapCycleError):
+        canonicalize("pin-a", catalog=catalog)
+
+
+# ---- role alias / pin / gateway / id_form ----------------------------------
+
+
+def test_declared_role_alias_resolves_to_current_pin() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-5": _pin(
+                    role_alias="sonnet-5",
+                    gateway_id="anthropic/claude-sonnet-5",
+                )
+            },
+            "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5"}},
+        }
+    )
+
+    ident = canonicalize("sonnet-5", catalog=catalog)
+
+    assert ident is not None
+    assert ident.catalog_id == "claude-sonnet-5"
+    assert ident.source == "role_alias"
+    assert ident.role_alias == "sonnet-5"
+    assert ident.provider == "anthropic"
+    assert ident.wire_id == "claude-sonnet-5"
+
+
+def test_catalog_pin_key_resolves_as_pin() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-5": _pin(
+                    role_alias="sonnet-5",
+                    gateway_id="anthropic/claude-sonnet-5",
+                    wire_id="claude-sonnet-5",
+                )
+            },
+            "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5"}},
+        }
+    )
+
+    ident = canonicalize("claude-sonnet-5", catalog=catalog)
+
+    assert ident is not None
+    assert ident.source == "pin"
+    assert ident.catalog_id == "claude-sonnet-5"
+    assert ident.gateway_id == "anthropic/claude-sonnet-5"
+
+
+def test_exact_gateway_id_and_extra_resolve() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-4-5-20250929": _pin(
+                    gateway_id="anthropic/claude-sonnet-4.5",
+                    picker=_picker(
+                        "Sonnet 4.5",
+                        "prev",
+                        "anthropic",
+                        extras=[
+                            {
+                                "gateway_id": "anthropic/claude-sonnet-4.5-thinking",
+                                "name": "Thinking",
+                                "description": "extended",
+                                "group": "reasoning",
+                            }
+                        ],
+                    ),
+                )
+            }
+        }
+    )
+
+    primary = canonicalize("anthropic/claude-sonnet-4.5", catalog=catalog)
+    extra = canonicalize("anthropic/claude-sonnet-4.5-thinking", catalog=catalog)
+
+    assert primary is not None and primary.source == "gateway"
+    assert extra is not None and extra.source == "gateway"
+    assert primary.catalog_id == extra.catalog_id == "claude-sonnet-4-5-20250929"
+
+
+def test_id_forms_resolve_without_inventing_a_date() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-haiku-4-5-20251001": _pin(
+                    gateway_id="anthropic/claude-haiku-4.5",
+                    id_forms=["claude-haiku-4-5", "claude-haiku-4.5"],
+                )
+            }
+        }
+    )
+
+    via_form = canonicalize("claude-haiku-4-5", catalog=catalog)
+    via_dotted = canonicalize("claude-haiku-4.5", catalog=catalog)
+
+    assert via_form is not None and via_form.source == "id_form"
+    assert via_dotted is not None and via_dotted.source == "id_form"
+    assert via_form.catalog_id == via_dotted.catalog_id == "claude-haiku-4-5-20251001"
+
+
+def test_spelling_retry_turns_gateway_shaped_pin_into_the_pin_key() -> None:
+    """anthropic/claude-sonnet-5 → claude-sonnet-5 when that is already a pin.
+
+    Dated pins are not invented: anthropic/claude-haiku-4.5 does not become
+    claude-haiku-4-5-20251001 without gateway_id / id_forms / a remap.
+    """
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-5": _pin(),
+                "claude-haiku-4-5-20251001": _pin(),
+            }
+        }
+    )
+
+    spelled = canonicalize("anthropic/claude-sonnet-5", catalog=catalog)
+    dated = canonicalize("anthropic/claude-haiku-4.5", catalog=catalog)
+
+    assert spelled is not None
+    assert spelled.catalog_id == "claude-sonnet-5"
+    assert spelled.source == "pin"
+    assert dated is None
+
+
+def test_spelling_retry_does_not_run_remaps_a_second_time() -> None:
+    catalog = _catalog(
+        {
+            "models": {"claude-sonnet-5": _pin()},
+            "remaps": {"claude-sonnet-5": "claude-sonnet-5"},
+        }
+    )
+    # apply_remap=False: the raw gateway is not a remap key; spelling yields
+    # the pin key, which is also a remap key — step 7 must not hop remaps.
+    ident = canonicalize(
+        "anthropic/claude-sonnet-5", catalog=catalog, apply_remap=False
+    )
+
+    assert ident is not None
+    assert ident.source == "pin"
+    assert ident.catalog_id == "claude-sonnet-5"
+
+
+def test_wire_id_defaults_to_the_catalog_key() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-5": _pin(),
+                "custom": _pin(wire_id="claude-custom-wire"),
+            }
+        }
+    )
+
+    defaulted = canonicalize("claude-sonnet-5", catalog=catalog)
+    explicit = canonicalize("custom", catalog=catalog)
+
+    assert defaulted is not None and defaulted.wire_id == "claude-sonnet-5"
+    assert explicit is not None and explicit.wire_id == "claude-custom-wire"
+
+
+# ---- to_picker_payload -----------------------------------------------------
+
+
+def _three_row_remap_catalog() -> ModelCatalog:
+    """PR fixture: live haiku gateway, opus-4.5 remap, sonnet-5→5.1 remap."""
+    return _catalog(
+        {
+            "models": {
+                "claude-haiku-4-5-20251001": _pin(
+                    gateway_id="anthropic/claude-haiku-4.5",
+                    picker=_picker("Haiku 4.5", "fast", "anthropic"),
+                    vision=True,
+                ),
+                "claude-opus-5": _pin(
+                    gateway_id="anthropic/claude-opus-5",
+                    picker=_picker("Opus 5", "powerful", "anthropic"),
+                    thinking="adaptive",
+                    vision=True,
+                ),
+                "claude-sonnet-5-1": _pin(
+                    gateway_id="anthropic/claude-sonnet-5-1",
+                    role_alias="sonnet-5",
+                    picker=_picker("Sonnet 5.1", "balanced", "anthropic"),
+                    thinking="adaptive",
+                    vision=True,
+                ),
+                "claude-sonnet-5": _pin(selectable=True),
+            },
+            "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5-1"}},
+            "remaps": {
+                "anthropic/claude-opus-4.5": "claude-opus-5",
+                "anthropic/claude-sonnet-5": "claude-sonnet-5-1",
+            },
+        }
+    )
+
+
+def test_three_row_remap_fixture_projects_pins_to_gateway_ids() -> None:
+    catalog = _three_row_remap_catalog()
+    routing = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {
+                "everyday": "claude-sonnet-5-1",
+                "powerful": "claude-opus-5",
+            }
+        }
+    )
+
+    payload = to_picker_payload(catalog, routing)
+    by_id = {row.id: row for row in payload.models}
+
+    haiku = by_id["anthropic/claude-haiku-4.5"]
+    assert haiku.catalog_id == "claude-haiku-4-5-20251001"
+    assert "anthropic/claude-haiku-4.5" not in payload.remaps
+
+    assert payload.remaps["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5"
+    assert payload.remaps["anthropic/claude-sonnet-5"] == "anthropic/claude-sonnet-5-1"
+    assert payload.default_id == "anthropic/claude-sonnet-5-1"
+
+
+def test_picker_membership_is_opt_in_not_every_selectable_pin() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "shown": _pin(
+                    gateway_id="anthropic/shown",
+                    picker=_picker("Shown", "in picker", "anthropic"),
+                ),
+                "hidden-selectable": _pin(selectable=True),
+                "gpt-6-astra": _pin(provider="openai", selectable=True),
+            }
+        }
+    )
+
+    payload = to_picker_payload(catalog, ModelRoutingConfig())
+
+    assert [row.id for row in payload.models] == ["anthropic/shown"]
+    assert "hidden-selectable" not in {row.catalog_id for row in payload.models}
+    assert "gpt-6-astra" not in {row.catalog_id for row in payload.models}
+
+
+def test_remap_to_a_selectable_pin_without_picker_falls_back_to_default_id() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "everyday": _pin(
+                    gateway_id="anthropic/everyday",
+                    picker=_picker("Everyday", "default", "anthropic"),
+                ),
+                "other": _pin(selectable=True),
+            },
+            "remaps": {"old/cookie": "other"},
+        }
+    )
+    routing = ModelRoutingConfig.model_validate(
+        {"anthropic": {"everyday": "everyday", "powerful": "everyday"}}
+    )
+
+    payload = to_picker_payload(catalog, routing)
+
+    assert payload.remaps["old/cookie"] == "anthropic/everyday"
+    assert payload.default_id == "anthropic/everyday"
+
+
+def test_committed_picker_reproduces_today_seven_chat_models() -> None:
+    payload = to_picker_payload(model_config.catalog, ModelRoutingConfig())
+
+    assert {row.id for row in payload.models} == CURRENT_PICKER_IDS
+    assert "openai/gpt-6-astra" not in {row.id for row in payload.models}
+    assert payload.default_id == "anthropic/claude-sonnet-5"
+    thinking = next(
+        row for row in payload.models if row.id.endswith("-thinking")
+    )
+    assert thinking.provider == "reasoning"
+    assert thinking.catalog_id == "claude-sonnet-4-5-20250929"
+
+
+def test_committed_remaps_match_retired_model_map_pins() -> None:
+    catalog = model_config.catalog
+    for raw, pin in RETIRED_REMAPS.items():
+        assert catalog.remaps[raw] == pin
+        ident = canonicalize(raw, catalog=catalog)
+        assert ident is not None
+        assert ident.catalog_id == pin
+        assert ident.source == "remap"
+
+
+def test_legacy_llm_aliases_stay_pin_valued() -> None:
+    assert model_config.catalog.aliases["llm"]["claude_sonnet"] == "claude-sonnet-5"
+    assert model_config.catalog.aliases["llm"]["claude_opus"] == "claude-opus-5"
+    assert (
+        model_config.catalog.aliases["llm"]["claude_haiku"]
+        == "claude-haiku-4-5-20251001"
+    )
+
+
+def test_canonicalize_on_committed_catalog_live_gateway_ids() -> None:
+    catalog = model_config.catalog
+
+    sonnet = canonicalize("anthropic/claude-sonnet-5", catalog=catalog)
+    haiku = canonicalize("anthropic/claude-haiku-4.5", catalog=catalog)
+    thinking = canonicalize(
+        "anthropic/claude-sonnet-4.5-thinking", catalog=catalog
+    )
+
+    assert sonnet is not None and sonnet.catalog_id == "claude-sonnet-5"
+    assert haiku is not None and haiku.catalog_id == "claude-haiku-4-5-20251001"
+    assert thinking is not None and thinking.catalog_id == "claude-sonnet-4-5-20250929"
+    assert isinstance(sonnet, ModelIdentity)
+
+
+# ---- anthropic wire_id pass-through ----------------------------------------
+
+
+def test_anthropic_create_llm_sends_wire_id_when_set(monkeypatch) -> None:
+    from neos.config.model_config import ThinkingContract
+    from neos.providers.anthropic import AnthropicProvider
+
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-custom": _pin(
+                    thinking="none", wire_id="claude-custom-wire"
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.get_model_spec",
+        catalog.get_model_spec,
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.thinking_contract",
+        lambda model: ThinkingContract.NONE,
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        SimpleNamespace(
+            ANTHROPIC_API_KEY="test-key",
+            LLM_TIMEOUT=30,
+            THINKING_BLOCKS_ENABLED=False,
+            MAX_THINKING_LENGTH=0,
+        ),
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-custom", temperature=0.3, max_tokens=1024
+        )
+
+    assert chat_anthropic.call_args.kwargs["model"] == "claude-custom-wire"
+
+
+def test_anthropic_create_llm_sends_model_when_wire_id_unset(monkeypatch) -> None:
+    from neos.config.model_config import ThinkingContract
+    from neos.providers.anthropic import AnthropicProvider
+
+    monkeypatch.setattr(
+        "neos.providers.anthropic.settings",
+        SimpleNamespace(
+            ANTHROPIC_API_KEY="test-key",
+            LLM_TIMEOUT=30,
+            THINKING_BLOCKS_ENABLED=False,
+            MAX_THINKING_LENGTH=0,
+        ),
+    )
+    monkeypatch.setattr(
+        "neos.providers.anthropic.thinking_contract",
+        lambda model: ThinkingContract.NONE,
+    )
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+
+    with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
+        provider.create_llm(
+            model="claude-not-in-catalog",
+            temperature=0.3,
+            max_tokens=1024,
+        )
+
+    assert chat_anthropic.call_args.kwargs["model"] == "claude-not-in-catalog"
