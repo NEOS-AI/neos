@@ -24,6 +24,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     CodingApproval,
     approval_display_summary,
+    approval_event_display_summary,
     canonical_approval_hash,
     requires_approval_answers,
 )
@@ -445,6 +446,22 @@ class InMemoryCodingRunRepository:
                 )
             current = self.tool_claims.get((lease.task_id, tool_call_id))
             if current is not None and current[1] > now:
+                stored_claim = current[0]
+                if (
+                    getattr(stored_claim, "disposition", None)
+                    is ToolExecutionDisposition.DELEGATED
+                ):
+                    adopted = ToolExecutionClaim(
+                        ToolExecutionDisposition.DELEGATED,
+                        tool_call_id,
+                        lease,
+                        getattr(stored_claim, "result", None),
+                    )
+                    self.tool_claims[(lease.task_id, tool_call_id)] = (
+                        adopted,
+                        claim_expires_at,
+                    )
+                    return adopted
                 return ToolExecutionClaim(
                     ToolExecutionDisposition.BUSY, tool_call_id, lease
                 )
@@ -465,7 +482,9 @@ class InMemoryCodingRunRepository:
             self._require_current_lease(claim.lease, now=now)
             key = (claim.lease.task_id, claim.tool_call_id)
             current = self.tool_claims.get(key)
-            if current is None or current[0] != claim:
+            if current is None or not self._claim_matches_current_fencing(
+                current[0], claim
+            ):
                 raise StaleExecutionLease(claim.lease.task_id)
             self.completed_tools[key] = dict(result)
             self.tool_execution_calls.append(
@@ -486,6 +505,43 @@ class InMemoryCodingRunRepository:
                 now=now,
                 run_id=claim.lease.run_id,
                 tool_call_id=claim.tool_call_id,
+            )
+
+    async def mark_tool_delegated(
+        self,
+        claim,
+        *,
+        child_run_id,
+        child_checkpoint_id,
+        claim_expires_at,
+        now,
+    ) -> None:
+        async with self._durability_lock:
+            self._require_current_lease(claim.lease, now=now)
+            if claim.disposition not in {
+                ToolExecutionDisposition.CLAIMED,
+                ToolExecutionDisposition.RECLAIMED,
+                ToolExecutionDisposition.DELEGATED,
+            }:
+                raise ValueError("only a claimed tool execution can be delegated")
+            key = (claim.lease.task_id, claim.tool_call_id)
+            current = self.tool_claims.get(key)
+            if current is None or not self._claim_matches_current_fencing(
+                current[0], claim
+            ):
+                raise StaleExecutionLease(claim.lease.task_id)
+            result = {
+                "child_run_id": child_run_id,
+                "child_checkpoint_id": child_checkpoint_id,
+            }
+            self.tool_claims[key] = (
+                ToolExecutionClaim(
+                    ToolExecutionDisposition.DELEGATED,
+                    claim.tool_call_id,
+                    claim.lease,
+                    result,
+                ),
+                claim_expires_at,
             )
 
     async def request_tool_approval(
@@ -578,7 +634,9 @@ class InMemoryCodingRunRepository:
                     "status": approval.status.value,
                     "requested_at": requested_at.isoformat(),
                     "expires_at": expires_at.isoformat(),
-                    "display_summary": dict(approval.display_summary),
+                    "display_summary": approval_event_display_summary(
+                        approval.display_summary
+                    ),
                 },
                 now=requested_at,
                 run_id=lease.run_id,
@@ -725,6 +783,17 @@ class InMemoryCodingRunRepository:
                 )
             )
         return tuple(commits)
+
+    def _claim_matches_current_fencing(self, stored, claim) -> bool:
+        stored_lease = getattr(stored, "lease", None)
+        if stored_lease is None:
+            return stored == claim
+        return (
+            stored_lease.task_id == claim.lease.task_id
+            and getattr(stored, "tool_call_id", None) == claim.tool_call_id
+            and stored_lease.worker_id == claim.lease.worker_id
+            and stored_lease.fencing_token == claim.lease.fencing_token
+        )
 
     def _require_current_lease(self, lease, *, now=None) -> None:
         current = self.execution_leases.get(lease.task_id)

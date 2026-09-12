@@ -1,5 +1,11 @@
+import asyncio
+import os
+import signal
+
 import pytest
 
+from neos.coding.sandbox import command as command_mod
+from neos.coding.sandbox import process as process_mod
 from neos.coding.sandbox.base import (
     SandboxLimits,
     SandboxPolicyViolation,
@@ -11,6 +17,8 @@ from neos.coding.sandbox.command import (
     DockerCommandRunner,
     build_create_args,
 )
+
+pytestmark = pytest.mark.no_db
 
 
 DIGEST_IMAGE = "neos-sandbox@sha256:" + "a" * 64
@@ -140,3 +148,123 @@ def test_build_create_args_is_byte_identical_without_extra_labels() -> None:
 def test_build_create_args_rejects_label_injection() -> None:
     with pytest.raises(SandboxPolicyViolation, match="docker_label_invalid"):
         _create_args(extra_labels={"com.neos.coding.owner-id": "a\nb"})
+
+
+class _FakeStdin:
+    def write(self, data: bytes) -> None:
+        return None
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeDockerProcess:
+    def __init__(self, *, exit_on: int | None = None, pid: int = 4242) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+        self.stdin = _FakeStdin()
+        self.stdout = None
+        self.stderr = None
+        self._exit_on = exit_on
+        self._exited = asyncio.Event()
+
+    async def communicate(self, stdin: bytes | None = None) -> tuple[bytes, bytes]:
+        await self._exited.wait()
+        return b"", b""
+
+    async def wait(self) -> int:
+        await self._exited.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    def deliver(self, sig: int) -> None:
+        if self.returncode is not None:
+            return
+        if self._exit_on is None or sig == self._exit_on:
+            self.returncode = -sig
+            self._exited.set()
+
+
+class _ImmediateProcess:
+    def __init__(self) -> None:
+        self.pid = 7
+        self.returncode = 0
+
+    async def wait(self) -> int:
+        return 0
+
+
+async def test_execute_timeout_sigterm_then_sigkill_host_and_guest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDockerProcess(exit_on=signal.SIGKILL)
+    sent: list[int] = []
+    spawned: list[tuple[str, ...]] = []
+
+    async def create_subprocess_exec(*args: object, **kwargs: object) -> object:
+        argv = tuple(str(arg) for arg in args)
+        spawned.append(argv)
+        if len(argv) > 1 and argv[1] == "kill":
+            return _ImmediateProcess()
+        assert kwargs.get("start_new_session") is True
+        return fake
+
+    def killpg(pid: int, sig: int) -> None:
+        if pid == fake.pid:
+            sent.append(sig)
+            fake.deliver(sig)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(process_mod, "TERMINATE_GRACE_SEC", 0.01)
+    monkeypatch.setattr(command_mod, "TERMINATE_GRACE_SEC", 0.01)
+
+    runner = DockerCommandRunner()
+    with pytest.raises(SandboxTimeout, match="docker_command_timeout"):
+        await runner.run(
+            "exec",
+            "-i",
+            "neos-sb_guest",
+            "sleep",
+            "30",
+            timeout_sec=0.01,
+        )
+
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert ("docker", "kill", "--signal=TERM", "neos-sb_guest") in spawned
+    assert ("docker", "kill", "--signal=KILL", "neos-sb_guest") in spawned
+
+
+async def test_execute_timeout_sigterm_host_when_guest_id_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDockerProcess(exit_on=signal.SIGKILL)
+    sent: list[int] = []
+    spawned: list[tuple[str, ...]] = []
+
+    async def create_subprocess_exec(*args: object, **kwargs: object) -> object:
+        argv = tuple(str(arg) for arg in args)
+        spawned.append(argv)
+        if len(argv) > 1 and argv[1] == "kill":
+            return _ImmediateProcess()
+        return fake
+
+    def killpg(pid: int, sig: int) -> None:
+        if pid == fake.pid:
+            sent.append(sig)
+            fake.deliver(sig)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(process_mod, "TERMINATE_GRACE_SEC", 0.01)
+    monkeypatch.setattr(command_mod, "TERMINATE_GRACE_SEC", 0.01)
+
+    runner = DockerCommandRunner()
+    with pytest.raises(SandboxTimeout, match="docker_command_timeout"):
+        await runner.run("volume", "create", "neos-vol", timeout_sec=0.01)
+
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert all(argv[1] != "kill" for argv in spawned if len(argv) > 1)

@@ -574,6 +574,192 @@ async def test_fail_active_run_uses_fenced_terminal_command() -> None:
     assert repository.task_statuses["ct_1"] == "failed"
 
 
+async def test_fail_active_run_completes_reclaimed_spawn_claims() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {
+                "current_instruction": "Fix it",
+                "transcript": [],
+                "active_children": [
+                    {
+                        "run_id": "sa_1",
+                        "checkpoint_id": "sc_1",
+                        "tool_call_id": "s1",
+                    }
+                ],
+            },
+            "1",
+            NOW,
+        )
+    )
+    stale_lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-old",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert stale_lease is not None
+    planted = await repository.claim_tool_execution(
+        lease=stale_lease,
+        tool_call_id="s1",
+        now=NOW,
+        claim_expires_at=NOW,
+    )
+    await repository.mark_tool_delegated(
+        planted,
+        child_run_id="sa_1",
+        child_checkpoint_id="sc_1",
+        claim_expires_at=NOW,
+        now=NOW,
+    )
+    await repository.release_execution_lease(stale_lease, now=NOW)
+
+    service = await make_run_service(repository)
+    event = await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="supervisor_retry_exhausted",
+    )
+
+    assert event.type == "run.failed"
+    completed = repository.completed_tools[("ct_1", "s1")]
+    assert completed["status"] == "error"
+    assert completed["reason_code"] == "aborted"
+
+
+async def test_fail_open_skips_busy_spawn_claim() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {
+                "current_instruction": "Fix it",
+                "transcript": [],
+                "active_children": [
+                    {
+                        "run_id": "sa_1",
+                        "checkpoint_id": "sc_1",
+                        "tool_call_id": "s1",
+                    }
+                ],
+            },
+            "1",
+            NOW,
+        )
+    )
+    holder = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-old",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert holder is not None
+    planted = await repository.claim_tool_execution(
+        lease=holder,
+        tool_call_id="s1",
+        now=NOW,
+        claim_expires_at=NOW + timedelta(minutes=1),
+    )
+    assert planted.disposition.value == "claimed"
+    await repository.release_execution_lease(holder, now=NOW)
+
+    service = await make_run_service(repository)
+    event = await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="supervisor_retry_exhausted",
+    )
+
+    assert event.type == "run.failed"
+    assert ("ct_1", "s1") not in repository.completed_tools
+    stored, expires_at = repository.tool_claims[("ct_1", "s1")]
+    assert stored.disposition.value == "claimed"
+    assert expires_at > NOW
+
+
+async def test_fail_open_falls_back_to_scalar_child_tool_call_id() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {
+                "current_instruction": "Fix it",
+                "transcript": [],
+                "active_child_run_id": "sa_1",
+                "active_child_checkpoint_id": "sc_1",
+                "active_child_tool_call_id": "s1",
+            },
+            "1",
+            NOW,
+        )
+    )
+    stale_lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-old",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert stale_lease is not None
+    planted = await repository.claim_tool_execution(
+        lease=stale_lease,
+        tool_call_id="s1",
+        now=NOW,
+        claim_expires_at=NOW,
+    )
+    await repository.mark_tool_delegated(
+        planted,
+        child_run_id="sa_1",
+        child_checkpoint_id="sc_1",
+        claim_expires_at=NOW,
+        now=NOW,
+    )
+    await repository.release_execution_lease(stale_lease, now=NOW)
+
+    service = await make_run_service(repository)
+    event = await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="supervisor_retry_exhausted",
+    )
+
+    assert event.type == "run.failed"
+    completed = repository.completed_tools[("ct_1", "s1")]
+    assert completed["status"] == "error"
+    assert completed["reason_code"] == "aborted"
+
+
 async def test_configured_execution_lease_controls_repository_expiry() -> None:
     repository = RecordingLeaseRepository(
         active_run=run_fixture("cr_1"),

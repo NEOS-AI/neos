@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -58,7 +59,7 @@ from neos.coding.phases import (
     tool_allowed_in_phase,
     write_risk_blocked,
 )
-from neos.coding.hooks import CodingHookPort, NullCodingHooks
+from neos.coding.hooks import CodingHookPort, NullCodingHooks, post_tool_prevented
 from neos.coding.redact import redact_sensitive
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
@@ -76,13 +77,22 @@ from neos.coding.tools.registry import (
 )
 from neos.coding.domain.durability import ToolExecutionDisposition
 
+logger = logging.getLogger(__name__)
+
 PRE_TOOL_HOOK_TIMEOUT_SEC = 5.0
 STOP_RETRY_LIMIT = 2
 EMPTY_RETRY_LIMIT = 1
 STALL_DENY_AFTER = 3
 COMPACT_REF_THRESHOLD_BYTES = 4096
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 80_000
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_THINK_CLOSED_RE = re.compile(
+    r"<(think|thinking|reasoning)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_THINK_UNCLOSED_RE = re.compile(
+    r"<(think|thinking|reasoning)\b[^>]*>.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class CodingLoopFailure(RuntimeError):
@@ -128,8 +138,15 @@ class CodingLoopConfig:
     approval_deny_tools: frozenset[str] = frozenset()
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
+    subagent_enabled: bool = False
+    subagent_max_active: int = 1
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "subagent_max_active",
+            min(4, max(1, self.subagent_max_active)),
+        )
         numeric = (
             self.max_output_tokens,
             self.timeout_sec,
@@ -163,6 +180,25 @@ class CodingLoopConfig:
             raise ValueError("coding model prices cannot be negative")
 
 
+_EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
+
+
+@dataclass(frozen=True, slots=True)
+class _AppliedPendingCommand:
+    transcript: tuple[CanonicalMessage, ...]
+    bodies: dict[str, str]
+    todos: tuple
+    instructions_loaded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveChildRef:
+    run_id: str
+    checkpoint_id: str | None
+    tool_call_id: str
+    last_advanced_at: str  # UTC datetime.isoformat() from self._clock()
+
+
 @dataclass(frozen=True, slots=True)
 class AgentLoopState:
     transcript: tuple[CanonicalMessage, ...]
@@ -193,12 +229,33 @@ class AgentLoopState:
     empty_retry_count: int = 0
     last_error_signature: str = ""
     last_error_count: int = 0
+    last_success_signature: str = ""
+    last_success_result_hash: str = ""
+    last_success_count: int = 0
     verdict: str | None = None
     critical_files: tuple[str, ...] = ()
+    active_child_run_id: str | None = None
+    active_child_checkpoint_id: str | None = None
+    active_child_tool_call_id: str | None = None
+    active_children: tuple[ActiveChildRef, ...] = ()
 
     @property
     def has_pending_tool(self) -> bool:
         return self.pending_tool_index < len(self.pending_tool_calls)
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedSpawn:
+    run_id: str
+    checkpoint_id: str | None
+    step_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class SpawnWork:
+    kind: str
+    call: ToolCallCompleted | None
+    child: ActiveChildRef | None
 
 
 class DurableCodingLoop:
@@ -215,6 +272,7 @@ class DurableCodingLoop:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         approval_evaluator: Callable[..., ApprovalPolicyOutcome] = evaluate_approval,
         hooks: CodingHookPort | None = None,
+        subagents=None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -226,6 +284,7 @@ class DurableCodingLoop:
         self._clock = clock
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
+        self._subagents = subagents
 
     def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
         try:
@@ -444,7 +503,7 @@ class DurableCodingLoop:
         self._check_usage_budgets(next_state)
         prefetch = await self._await_prefetch(prefetch_tasks)
         if not calls:
-            public_text = "".join(text_parts)
+            public_text = _scrub_think_blocks("".join(text_parts))
             if completion.stop_reason not in {"end_turn", "unknown"}:
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
             held = self._hold_incomplete_phase(next_state, public_text)
@@ -523,6 +582,9 @@ class DurableCodingLoop:
             ):
                 yield event
         except asyncio.CancelledError:
+            current = await self.fail_all_live_spawn_claims(
+                current, deps, bound, reason="aborted", task_id=input.task_id
+            )
             await self._persist_abort_after_cancel(input, current, bound, deps)
             raise
 
@@ -530,14 +592,24 @@ class DurableCodingLoop:
         prefetch = prefetch or {}
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
-        call = state.pending_tool_calls[state.pending_tool_index]
+        max_active = _subagent_max_active(self._config)
+        work = _select_spawn_work(state, max_active=max_active)
+        if work is not None and work.call is not None:
+            call = work.call
+        else:
+            # resume with a missing pending id (mutation / corruption) uses
+            # pending[index] so the existing cap guard still fails closed
+            call = state.pending_tool_calls[state.pending_tool_index]
         if _is_stall_denied(state, call.name, call.input):
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_stall_denied"
             )
             yield event, denied_state
             return
-        batch = self._leading_readonly_batch(state)
+        if work is not None and work.call is not None:
+            batch = None
+        else:
+            batch = self._leading_readonly_batch(state)
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
@@ -667,9 +739,19 @@ class DurableCodingLoop:
                     "denied",
                     denial_envelope(call, reason_code),
                 )
-                denied_state = await self._after_result(
-                    state, denied, tool_name=call.name, tool_input=call.input
+                advance_index = (
+                    state.has_pending_tool
+                    and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+                    == call.tool_call_id
                 )
+                denied_state = await self._after_result(
+                    state,
+                    denied,
+                    tool_name=call.name,
+                    tool_input=call.input,
+                    advance_index=advance_index,
+                )
+                denied_state = self._drain_completed_prefix(denied_state)
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="tool.denied",
@@ -691,12 +773,14 @@ class DurableCodingLoop:
                     state,
                     approved_always=state.approved_always | {validated.name},
                 )
+        claim_ttl = self._config.tool_claim_ttl_sec
+        if call.name == "spawn_agent.v1" and self._config.subagent_enabled:
+            claim_ttl = self._config.timeout_sec + 30
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,
             now=self._clock(),
-            claim_expires_at=self._clock()
-            + timedelta(seconds=self._config.tool_claim_ttl_sec),
+            claim_expires_at=self._clock() + timedelta(seconds=claim_ttl),
         )
         if claim.disposition is ToolExecutionDisposition.BUSY:
             raise CodingLoopFailure("tool_execution_busy", retryable=True)
@@ -716,6 +800,10 @@ class DurableCodingLoop:
         )
         if started.event is not None:
             yield started.event, state
+        ran_spawn = False
+        spawn_enabled = (
+            call.name == "spawn_agent.v1" and self._config.subagent_enabled
+        )
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
             result = dict(claim.result or {})
             await self._audit.emit(
@@ -734,12 +822,25 @@ class DurableCodingLoop:
                 tool_call_id=call.tool_call_id,
             )
         else:
-            yield await self._emit_tool_started(input, deps, call), state
+            resume_spawn = spawn_enabled and claim.disposition in {
+                ToolExecutionDisposition.DELEGATED,
+                ToolExecutionDisposition.RECLAIMED,
+            }
+            if not resume_spawn:
+                yield await self._emit_tool_started(input, deps, call), state
             try:
                 if call.name == "spawn_agent.v1":
+                    await self._adopt_all_live_claims(
+                        state, deps, selected_tool_call_id=call.tool_call_id
+                    )
                     result = await self._run_spawn_agent(
                         call, bound, state, input=input, deps=deps
                     )
+                    ran_spawn = True
+                    if isinstance(result, dict):
+                        updated = result.pop("_loop_state", None)
+                        if updated is not None:
+                            state = updated
                 else:
                     result = await self._execute_validated(
                         bound,
@@ -749,6 +850,12 @@ class DurableCodingLoop:
                         known_stamps=state.read_stamps,
                         prefetched=prefetch.get(call.tool_call_id),
                     )
+            except asyncio.CancelledError:
+                await self._cancel_active_child(
+                    state, reason="aborted", task_id=input.task_id
+                )
+                await self._fail_delegated_claim(deps, claim, bound)
+                raise
             except CodingLoopFailure as error:
                 if error.code != "tool_outcome_unknown":
                     raise
@@ -756,6 +863,39 @@ class DurableCodingLoop:
                     input, state, bound, deps, call, claim=claim, started=started
                 ):
                     yield item
+                return
+            if isinstance(result, DelegatedSpawn):
+                if claim.disposition in {
+                    ToolExecutionDisposition.CLAIMED,
+                    ToolExecutionDisposition.RECLAIMED,
+                }:
+                    await self._mark_spawn_delegated(deps, claim, result)
+                parked = self._upsert_active_child(
+                    state,
+                    ActiveChildRef(
+                        run_id=result.run_id,
+                        checkpoint_id=result.checkpoint_id,
+                        tool_call_id=call.tool_call_id,
+                        last_advanced_at=self._utc_stamp(),
+                    ),
+                )
+                payload = {
+                    "child_run_id": result.run_id,
+                    "child_checkpoint_id": result.checkpoint_id,
+                    "step_kind": result.step_kind,
+                    "live_count": len(parked.active_children),
+                }
+                self._record_spawn_live_children(parked, call)
+                committed = await deps.repository.commit_phase_checkpoint(
+                    lease=deps.lease,
+                    phase=started.phase,
+                    tool_call_id=call.tool_call_id,
+                    result=payload,
+                    loop_state=self._dump_state(input, parked),
+                    workspace_revision=str(bound.binding.workspace_revision),
+                    now=self._clock(),
+                )
+                yield committed.event, parked
                 return
             if validated.risk is not ToolRisk.READ_ONLY:
                 try:
@@ -780,6 +920,26 @@ class DurableCodingLoop:
                     ):
                         yield item
                     return
+            if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
+                envelope = dict(denial_envelope(call, "hook_prevented"))
+                envelope["denied_by"] = "hook"
+                try:
+                    await deps.repository.complete_tool_execution(
+                        claim, result=envelope, now=self._clock()
+                    )
+                except Exception:
+                    pass
+                event, denied_state = await self._commit_denied_tool(
+                    input,
+                    state,
+                    bound,
+                    deps,
+                    call,
+                    "hook_prevented",
+                    terminal=True,
+                )
+                yield event, denied_state
+                return
             try:
                 tool_event = await deps.repository.complete_tool_execution(
                     claim, result=result, now=self._clock()
@@ -810,12 +970,41 @@ class DurableCodingLoop:
         yield tool_event, state
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
-        after = await self._after_result(
-            state,
-            ToolResultContent(call.tool_call_id, canonical_status, result),
-            tool_name=call.name,
-            tool_input=call.input,
+        reused = claim.disposition is ToolExecutionDisposition.COMPLETED
+        child_fold = call.name == "spawn_agent.v1" and "child_status" in result
+        if child_fold and (
+            not reused or self._child_ref(state, call.tool_call_id) is not None
+        ):
+            state = self._apply_child_fold_usage(state, result)
+        advance_index = (
+            state.has_pending_tool
+            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+            == call.tool_call_id
         )
+        if call.tool_call_id in _tool_result_ids(state.transcript):
+            after = self._drain_completed_prefix(state)
+        else:
+            after = await self._after_result(
+                state,
+                ToolResultContent(call.tool_call_id, canonical_status, result),
+                tool_name=call.name,
+                tool_input=call.input,
+                advance_index=advance_index,
+            )
+        if ran_spawn and not self._config.subagent_enabled:
+            after = self._with_spawn_handoff(after, call, result)
+        still_live = self._child_ref(after, call.tool_call_id) is not None
+        if ran_spawn or child_fold or still_live:
+            after = self._sync_active_children(
+                after,
+                tuple(
+                    child
+                    for child in after.active_children
+                    if child.tool_call_id != call.tool_call_id
+                ),
+            )
+            after = self._drain_completed_prefix(after)
+            self._record_spawn_live_children(after, call)
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -828,6 +1017,19 @@ class DurableCodingLoop:
             workspace_revision=revision,
             now=self._clock(),
         )
+        if child_fold:
+            # Production returns on first phase.completed; a post-yield check never runs.
+            try:
+                self._check_usage_budgets(after)
+            except CodingLoopFailure as error:
+                await self.fail_all_live_spawn_claims(
+                    after,
+                    deps,
+                    bound,
+                    reason=error.code,
+                    task_id=input.task_id,
+                )
+                raise
         yield committed.event, after
         if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
@@ -960,6 +1162,19 @@ class DurableCodingLoop:
                 )
             self._record_tool_metric(call.name, result)
             yield tool_event, current
+            if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
+                envelope = dict(denial_envelope(call, "hook_prevented"))
+                envelope["denied_by"] = "hook"
+                current = await self._after_result(
+                    current,
+                    ToolResultContent(call.tool_call_id, "denied", envelope),
+                    tool_name=call.name,
+                    tool_input=call.input,
+                )
+                current = replace(current, terminal_pending=True)
+                last_call = call
+                last_result = envelope
+                break
             status = str(result.get("status", "ok"))
             canonical_status = status if status in {"ok", "error", "denied"} else "ok"
             current = await self._after_result(
@@ -1215,6 +1430,10 @@ class DurableCodingLoop:
             )
         except Exception:
             pass
+        if post_tool_prevented(rewritten):
+            redacted = dict(redact_sensitive(result))
+            redacted["_post_tool_prevent"] = True
+            return redacted
         if isinstance(rewritten, Mapping):
             result = dict(rewritten)
         return redact_sensitive(result)
@@ -1255,9 +1474,19 @@ class DurableCodingLoop:
         if reason_code == "hook_prevented":
             envelope["denied_by"] = "hook"
         denied = ToolResultContent(call.tool_call_id, "denied", envelope)
-        denied_state = await self._after_result(
-            state, denied, tool_name=call.name, tool_input=call.input
+        advance_index = (
+            state.has_pending_tool
+            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+            == call.tool_call_id
         )
+        denied_state = await self._after_result(
+            state,
+            denied,
+            tool_name=call.name,
+            tool_input=call.input,
+            advance_index=advance_index,
+        )
+        denied_state = self._drain_completed_prefix(denied_state)
         if terminal:
             denied_state = replace(denied_state, terminal_pending=True)
         committed = await deps.repository.commit_model_checkpoint(
@@ -1279,6 +1508,46 @@ class DurableCodingLoop:
         self._metrics.coding_tool_execution_total.labels(
             tool=tool_name, outcome=metric_outcome
         ).inc()
+
+    def _spawn_spec_name(self, call) -> str:
+        raw = call.input if isinstance(getattr(call, "input", None), Mapping) else {}
+        return str(raw.get("spec") or "explore")
+
+    def _record_spawn_live_children(self, state, call) -> None:
+        from neos.subagent.metrics import record_live_children
+
+        children = state.active_children or _legacy_single(state)
+        live_count = len(children)
+        record_live_children(
+            self._metrics,
+            parent_kind="coding",
+            spec=self._spawn_spec_name(call),
+            count=live_count,
+        )
+        logger.debug(
+            "coding spawn delivery live_count=%s selected_tool_call_id=%s",
+            live_count,
+            getattr(call, "tool_call_id", ""),
+        )
+
+    def _record_policy_capped(self) -> None:
+        from neos.subagent.metrics import record_policy_capped
+
+        record_policy_capped(self._metrics, parent_kind="coding")
+
+    def _record_fold_rollup(
+        self, input_tokens: int, output_tokens: int, cost_micros: int
+    ) -> None:
+        from neos.subagent.metrics import record_fold_rollup
+
+        record_fold_rollup(
+            self._metrics,
+            parent_kind="coding",
+            provider=self._config.provider,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_micros=cost_micros,
+        )
 
     async def _has_pending_interrupt(self, deps, task_id: str) -> bool:
         checker = getattr(deps.repository, "has_pending_interrupt", None)
@@ -1308,13 +1577,11 @@ class DurableCodingLoop:
                     current.cancel()
 
     async def _checkpoint_aborted(self, input, state, bound, deps) -> None:
+        state = await self.fail_all_live_spawn_claims(
+            state, deps, bound, reason="aborted", task_id=input.task_id
+        )
         remaining = state.pending_tool_calls[state.pending_tool_index :]
-        existing = {
-            item.tool_call_id
-            for message in state.transcript
-            for item in message.content
-            if isinstance(item, ToolResultContent)
-        }
+        existing = _tool_result_ids(state.transcript)
         pending = [
             call for call in remaining if call.tool_call_id not in existing
         ]
@@ -1330,6 +1597,7 @@ class DurableCodingLoop:
                 tool_name=call.name,
                 tool_input=call.input,
             )
+        after = self._drain_completed_prefix(after)
         await deps.repository.commit_model_checkpoint(
             lease=deps.lease,
             event_type="tool.completed" if pending else "model.completed",
@@ -1341,9 +1609,11 @@ class DurableCodingLoop:
 
     async def _completed_turn(self, state, text_parts, calls, completion):
         content = []
-        text = "".join(text_parts)
+        raw_text = "".join(text_parts)
+        text = _scrub_think_blocks(raw_text)
         if text:
             content.append(TextContent(text))
+        calls = _uniquify_tool_calls(calls)
         content.extend(
             ToolUseContent(c.tool_call_id, c.name, dict(c.input)) for c in calls
         )
@@ -1379,8 +1649,35 @@ class DurableCodingLoop:
             empty_retry_count=0 if reset_empty else state.empty_retry_count,
         )
 
+    def _with_spawn_handoff(self, state: AgentLoopState, call, result) -> AgentLoopState:
+        if call.name != "spawn_agent.v1":
+            return state
+        status = str(result.get("status", "ok"))
+        if status != "ok":
+            return state
+        prompt = call.input.get("prompt") if isinstance(call.input, Mapping) else None
+        if not isinstance(prompt, str) or not prompt.strip():
+            return state
+        text = prompt.strip()
+        if state.has_pending_tool:
+            existing = state.pending_instruction
+            merged = "\n".join(part for part in (existing, text) if part)
+            return replace(state, pending_instruction=merged)
+        transcript = self._append_user_meta(state.transcript, text)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+        )
+
     async def _after_result(
-        self, state, result, *, tool_name: str, tool_input: Mapping[str, object]
+        self,
+        state,
+        result,
+        *,
+        tool_name: str,
+        tool_input: Mapping[str, object],
+        advance_index: bool = True,
     ):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
         bodies = dict(state.compacted_bodies)
@@ -1401,6 +1698,11 @@ class DurableCodingLoop:
             errors = 0
             last_error_signature = ""
             last_error_count = 0
+            (
+                last_success_signature,
+                last_success_result_hash,
+                last_success_count,
+            ) = _next_success_signature(state, tool_name, tool_input, result)
         else:
             last_error_signature, last_error_count = _next_error_signature(
                 state, tool_name, tool_input
@@ -1409,6 +1711,14 @@ class DurableCodingLoop:
                 errors = state.consecutive_tool_errors
             else:
                 errors = state.consecutive_tool_errors + 1
+            if reason == "policy_stall_denied":
+                last_success_signature = state.last_success_signature
+                last_success_result_hash = state.last_success_result_hash
+                last_success_count = state.last_success_count
+            else:
+                last_success_signature = ""
+                last_success_result_hash = ""
+                last_success_count = 0
         read_paths = state.read_paths
         read_stamps = dict(state.read_stamps)
         if tool_name == "read_file.v1" and result.status == "ok":
@@ -1447,7 +1757,7 @@ class DurableCodingLoop:
             transcript=transcript,
             tool_count=state.tool_count + 1,
             consecutive_tool_errors=errors,
-            pending_tool_index=state.pending_tool_index + 1,
+            pending_tool_index=state.pending_tool_index + (1 if advance_index else 0),
             transcript_digest=self._digest(transcript),
             terminal_pending=False,
             read_paths=read_paths,
@@ -1459,6 +1769,9 @@ class DurableCodingLoop:
             compacted_bodies=bodies,
             last_error_signature=last_error_signature,
             last_error_count=last_error_count,
+            last_success_signature=last_success_signature,
+            last_success_result_hash=last_success_result_hash,
+            last_success_count=last_success_count,
         )
 
     def _check_usage_budgets(self, state):
@@ -1469,12 +1782,21 @@ class DurableCodingLoop:
 
     async def _load_workspace_instructions(self, state, bound) -> AgentLoopState:
         text = None
-        workspace = getattr(getattr(bound.session, "_record", None), "workspace", None)
+        session = bound.session
+        workspace = getattr(getattr(session, "_record", None), "workspace", None)
         if workspace is not None:
             try:
                 from pathlib import Path
 
-                text = load_workspace_instruction_tree(Path(workspace))
+                root = Path(workspace)
+                raw_start = getattr(session, "cwd", None)
+                if raw_start in {None, ""}:
+                    start = root
+                else:
+                    start = Path(raw_start)
+                    if not start.is_absolute():
+                        start = root / start
+                text = load_workspace_instruction_tree(root, start=start)
             except Exception:
                 text = None
         if text is None:
@@ -1573,6 +1895,48 @@ class DurableCodingLoop:
                 ready[call_id] = result
         return ready
 
+    def _utc_stamp(self) -> str:
+        return self._clock().astimezone(UTC).isoformat()
+
+    def _child_ref(self, state, tool_call_id: str) -> ActiveChildRef | None:
+        for child in state.active_children:
+            if child.tool_call_id == tool_call_id:
+                return child
+        return None
+
+    def _sync_active_children(
+        self, state, children: tuple[ActiveChildRef, ...]
+    ) -> AgentLoopState:
+        head = children[0] if children else None
+        return replace(
+            state,
+            active_children=children,
+            active_child_run_id=head.run_id if head else None,
+            active_child_checkpoint_id=head.checkpoint_id if head else None,
+            active_child_tool_call_id=head.tool_call_id if head else None,
+        )
+
+    def _upsert_active_child(self, state, child: ActiveChildRef) -> AgentLoopState:
+        children = list(state.active_children or _legacy_single(state))
+        for index, existing in enumerate(children):
+            if existing.tool_call_id == child.tool_call_id:
+                children[index] = child
+                break
+        else:
+            children.append(child)
+        return self._sync_active_children(state, tuple(children))
+
+    def _drain_completed_prefix(self, state: AgentLoopState) -> AgentLoopState:
+        done = _tool_result_ids(state.transcript)
+        index = state.pending_tool_index
+        while index < len(state.pending_tool_calls):
+            if state.pending_tool_calls[index].tool_call_id not in done:
+                break
+            index += 1
+        if index == state.pending_tool_index:
+            return state
+        return replace(state, pending_tool_index=index)
+
     def _spawn_tool_error(self, bound, reason_code: str) -> dict[str, Any]:
         return ToolResult(
             "error",
@@ -1584,13 +1948,7 @@ class DurableCodingLoop:
             str(bound.binding.workspace_revision),
         ).to_mapping()
 
-    async def _run_spawn_agent(
-        self, call, bound, state, *, input=None, deps=None
-    ) -> dict[str, Any]:
-        del call, state
-        task_id = input.task_id if input is not None else ""
-        if deps is not None and await self._has_pending_interrupt(deps, task_id):
-            return self._spawn_tool_error(bound, "aborted")
+    def _legacy_explore_handoff(self, bound) -> dict[str, Any]:
         note = (
             "Do not nest an inner agent loop. "
             "Use set_phase.v1 to switch the parent to explore."
@@ -1611,6 +1969,395 @@ class DurableCodingLoop:
         result["use_phase"] = "explore"
         result["note"] = note
         return result
+
+    async def cancel_active_child_for_task(self, task_id: str) -> None:
+        if self._subagents is None:
+            return
+        from neos.subagent.types import ParentKind
+
+        await self._subagents.cancel_for_parent(ParentKind.CODING, task_id, "cancelled")
+
+    async def _cancel_active_child(
+        self, state, *, reason: str, task_id: str | None = None
+    ) -> None:
+        if self._subagents is None:
+            return
+        refs = ()
+        if state is not None:
+            refs = state.active_children or _legacy_single(state)
+        for ref in refs:
+            await self._subagents.cancel(ref.run_id, reason)
+        if task_id:
+            from neos.subagent.types import ParentKind
+
+            await self._subagents.cancel_for_parent(
+                ParentKind.CODING, task_id, reason
+            )
+
+    def _child_lease_horizon(self) -> float:
+        return max(self._config.tool_claim_ttl_sec, self._config.timeout_sec + 30)
+
+    async def _renew_parent_lease(self, deps) -> None:
+        if deps is None or deps.lease is None:
+            return
+        renew = getattr(deps.repository, "renew_execution_lease", None)
+        if not callable(renew):
+            return
+        now = self._clock()
+        await renew(
+            deps.lease,
+            now=now,
+            expires_at=now + timedelta(seconds=self._child_lease_horizon()),
+        )
+
+    async def _mark_spawn_delegated(self, deps, claim, result: DelegatedSpawn) -> None:
+        marker = getattr(deps.repository, "mark_tool_delegated", None)
+        if not callable(marker):
+            return
+        now = self._clock()
+        await marker(
+            claim,
+            child_run_id=result.run_id,
+            child_checkpoint_id=result.checkpoint_id or "",
+            claim_expires_at=now + timedelta(seconds=self._config.timeout_sec + 30),
+            now=now,
+        )
+
+    async def _fail_delegated_claim(self, deps, claim, bound) -> None:
+        if deps is None or claim is None:
+            return
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
+        }:
+            return
+        try:
+            await deps.repository.complete_tool_execution(
+                claim,
+                result=self._spawn_tool_error(bound, "aborted"),
+                now=self._clock(),
+            )
+        except Exception:
+            return
+
+    async def _fail_open_spawn_claim(self, deps, tool_call_id: str, bound) -> None:
+        if deps is None or deps.lease is None:
+            return
+        try:
+            claim = await deps.repository.claim_tool_execution(
+                lease=deps.lease,
+                tool_call_id=tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock()
+                + timedelta(seconds=self._config.timeout_sec + 30),
+            )
+        except Exception:
+            return
+        if claim.disposition is ToolExecutionDisposition.DELEGATED:
+            await self._fail_delegated_claim(deps, claim, bound)
+
+    async def _adopt_spawn_claim(self, deps, tool_call_id: str):
+        if deps is None or deps.lease is None:
+            return None
+        try:
+            return await deps.repository.claim_tool_execution(
+                lease=deps.lease,
+                tool_call_id=tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock()
+                + timedelta(seconds=self._config.timeout_sec + 30),
+            )
+        except Exception:
+            return None
+
+    async def _adopt_all_live_claims(
+        self, state, deps, *, selected_tool_call_id: str | None = None
+    ) -> None:
+        refs = ()
+        if state is not None:
+            refs = state.active_children or _legacy_single(state)
+        for ref in refs:
+            claim = await self._adopt_spawn_claim(deps, ref.tool_call_id)
+            if (
+                claim is None
+                or claim.disposition is not ToolExecutionDisposition.RECLAIMED
+                or ref.tool_call_id == selected_tool_call_id
+            ):
+                continue
+            await self._mark_spawn_delegated(
+                deps,
+                claim,
+                DelegatedSpawn(
+                    run_id=ref.run_id,
+                    checkpoint_id=ref.checkpoint_id,
+                    step_kind="continuing",
+                ),
+            )
+
+    async def _complete_spawn_claim(self, deps, claim, bound, reason: str) -> None:
+        if deps is None or claim is None:
+            return
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
+        }:
+            return
+        try:
+            await deps.repository.complete_tool_execution(
+                claim,
+                result=self._spawn_tool_error(bound, reason),
+                now=self._clock(),
+            )
+        except Exception:
+            return
+
+    async def fail_all_live_spawn_claims(
+        self,
+        state,
+        deps,
+        bound,
+        *,
+        reason: str,
+        task_id: str | None,
+        except_tool_call_id: str | None = None,
+    ) -> AgentLoopState:
+        """Adopt + complete live delegated claims except except_tool_call_id."""
+        refs = state.active_children or _legacy_single(state)
+        if self._subagents is not None and task_id:
+            from neos.subagent.types import ParentKind
+
+            await self._subagents.cancel_for_parent(
+                ParentKind.CODING, task_id, reason
+            )
+        done = _tool_result_ids(state.transcript)
+        kept: list[ActiveChildRef] = []
+        after = state
+        for ref in refs:
+            if (
+                except_tool_call_id is not None
+                and ref.tool_call_id == except_tool_call_id
+            ):
+                kept.append(ref)
+                continue
+            claim = await self._adopt_spawn_claim(deps, ref.tool_call_id)
+            if claim is None or claim.disposition is ToolExecutionDisposition.COMPLETED:
+                continue
+            await self._complete_spawn_claim(deps, claim, bound, reason)
+            if ref.tool_call_id not in done:
+                advance_index = (
+                    after.has_pending_tool
+                    and after.pending_tool_calls[after.pending_tool_index].tool_call_id
+                    == ref.tool_call_id
+                )
+                after = await self._after_result(
+                    after,
+                    ToolResultContent(
+                        ref.tool_call_id,
+                        "error",
+                        {"reason_code": reason},
+                    ),
+                    tool_name="spawn_agent.v1",
+                    tool_input={},
+                    advance_index=advance_index,
+                )
+                done.add(ref.tool_call_id)
+        after = self._sync_active_children(after, tuple(kept))
+        return self._drain_completed_prefix(after)
+
+    def _bind_child_tools(self, bound, state) -> None:
+        if self._subagents is None:
+            return
+        stepper = getattr(self._subagents, "_stepper", None)
+        port = getattr(stepper, "_tools", None) if stepper is not None else None
+        bind = getattr(port, "bind", None)
+        if callable(bind):
+            bind(
+                session=bound.session,
+                phase=state.phase,
+                revealed=state.revealed_tools,
+            )
+
+    def _spawn_briefing(self, call):
+        from neos.subagent.types import ParentBriefing
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        already = raw.get("already_tried") or ()
+        if isinstance(already, str):
+            already = (already,)
+        budget = raw.get("report_budget", 4000)
+        try:
+            budget = int(budget)
+        except (TypeError, ValueError):
+            budget = 4000
+        return ParentBriefing(
+            goal=str(raw.get("prompt") or "").strip(),
+            why=str(raw.get("why") or ""),
+            already_tried=tuple(str(item) for item in already),
+            scope=str(raw.get("scope") or ""),
+            success=str(raw.get("success") or ""),
+            report_budget_chars=max(256, min(16_384, budget)),
+        )
+
+    def _price_child_usage(self, folded) -> tuple[int, int, int]:
+        if isinstance(folded, Mapping):
+            in_tokens = int(folded.get("input_tokens") or 0)
+            out_tokens = int(folded.get("output_tokens") or 0)
+        else:
+            in_tokens = int(folded.input_tokens or 0)
+            out_tokens = int(folded.output_tokens or 0)
+        priced = (
+            in_tokens * self._config.input_cost_micros_per_million
+            + out_tokens * self._config.output_cost_micros_per_million
+        ) // 1_000_000
+        return in_tokens, out_tokens, priced
+
+    def _apply_child_fold_usage(self, state, folded) -> AgentLoopState:
+        in_tokens, out_tokens, child_cost = self._price_child_usage(folded)
+        self._record_fold_rollup(in_tokens, out_tokens, child_cost)
+        return replace(
+            state,
+            input_tokens=state.input_tokens + in_tokens,
+            output_tokens=state.output_tokens + out_tokens,
+            cost_micros=state.cost_micros + child_cost,
+        )
+
+    def _folded_spawn_result(self, bound, folded) -> dict[str, Any]:
+        from neos.subagent.types import SubagentStatus
+
+        ok = folded.status is SubagentStatus.COMPLETED
+        status = "ok" if ok else "error"
+        reason = "ok" if ok else folded.status.value
+        result = dict(
+            ToolResult(
+                status,
+                reason,
+                None,
+                None,
+                bool(folded.truncated),
+                None,
+                str(bound.binding.workspace_revision),
+                entries=(
+                    {
+                        "summary": folded.summary,
+                        "run_id": folded.run_id,
+                    },
+                ),
+            ).to_mapping()
+        )
+        result["summary"] = folded.summary
+        result["run_id"] = folded.run_id
+        result["truncated"] = bool(folded.truncated)
+        result["citations"] = list(folded.citations)
+        result["child_status"] = folded.status.value
+        result["turn_count"] = folded.turn_count
+        result["input_tokens"] = int(folded.input_tokens or 0)
+        result["output_tokens"] = int(folded.output_tokens or 0)
+        return result
+
+    async def _run_spawn_agent(
+        self, call, bound, state, *, input=None, deps=None
+    ) -> dict[str, Any] | DelegatedSpawn:
+        task_id = input.task_id if input is not None else ""
+        live = state.active_children or _legacy_single(state)
+        if deps is not None and await self._has_pending_interrupt(deps, task_id):
+            state = await self.fail_all_live_spawn_claims(
+                state,
+                deps,
+                bound,
+                reason="aborted",
+                task_id=task_id or None,
+                except_tool_call_id=call.tool_call_id,
+            )
+            error = self._spawn_tool_error(bound, "aborted")
+            error["_loop_state"] = state
+            return error
+        if live and not self._config.subagent_enabled:
+            state = await self.fail_all_live_spawn_claims(
+                state,
+                deps,
+                bound,
+                reason="subagent_disabled",
+                task_id=task_id or None,
+                except_tool_call_id=call.tool_call_id,
+            )
+            error = self._spawn_tool_error(bound, "subagent_disabled")
+            error["_loop_state"] = state
+            return error
+        if not self._config.subagent_enabled:
+            return self._legacy_explore_handoff(bound)
+        max_active = _subagent_max_active(self._config)
+        if (
+            live
+            and call.tool_call_id not in {child.tool_call_id for child in live}
+            and len(live) >= max_active
+        ):
+            self._record_policy_capped()
+            return self._spawn_tool_error(bound, "policy_child_already_active")
+        if self._subagents is None:
+            raise CodingLoopFailure("subagent_runtime_missing", retryable=False)
+        if input is None:
+            raise CodingLoopFailure("subagent_runtime_missing", retryable=False)
+        from neos.subagent.catalog import UnknownSpec, lookup_spec
+        from neos.subagent.types import (
+            ModelPin,
+            ParentKind,
+            SandboxMode,
+            StepKind,
+            SubagentTicket,
+        )
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        spec_name = str(raw.get("spec") or "explore")
+        try:
+            lookup_spec(spec_name)
+        except UnknownSpec:
+            return self._spawn_tool_error(bound, "policy_unknown_spec")
+        provider = self._config.provider
+        if provider not in {"anthropic", "openai", "gemini", "ollama"}:
+            return self._spawn_tool_error(bound, "model_pin_mismatch")
+        try:
+            max_turns = int(raw.get("max_turns", 4))
+        except (TypeError, ValueError):
+            max_turns = 4
+        max_turns = max(1, min(8, max_turns))
+        try:
+            briefing = self._spawn_briefing(call)
+        except ValueError:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        ref = self._child_ref(state, call.tool_call_id)
+        ticket = SubagentTicket(
+            parent_kind=ParentKind.CODING,
+            parent_id=input.task_id,
+            parent_run_id=input.run_id,
+            parent_tool_call_id=call.tool_call_id,
+            spec=spec_name,
+            briefing=briefing,
+            model=ModelPin(provider=provider, model=self._config.model),
+            max_turns=max_turns,
+            sandbox_mode=SandboxMode.PARENT_RO,
+            expected_checkpoint_id=ref.checkpoint_id if ref else None,
+            run_id=ref.run_id if ref else None,
+        )
+        self._bind_child_tools(bound, state)
+        try:
+            await self._renew_parent_lease(deps)
+            outcome = await self._subagents.advance(ticket)
+            await self._renew_parent_lease(deps)
+        except asyncio.CancelledError:
+            await self._cancel_active_child(
+                state, reason="aborted", task_id=input.task_id
+            )
+            raise
+        if outcome.kind is StepKind.CONTINUING:
+            return DelegatedSpawn(
+                run_id=outcome.run_id,
+                checkpoint_id=outcome.checkpoint_id,
+                step_kind=outcome.kind.value,
+            )
+        folded = await self._subagents.fold(outcome.run_id)
+        return self._folded_spawn_result(bound, folded)
 
     async def _maybe_llm_compact(
         self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
@@ -1678,7 +2425,15 @@ class DurableCodingLoop:
                 transcript,
                 input.workspace_edits,
             )
-            return AgentLoopState(transcript, 0, 0, 0, (), 0, self._digest(transcript))
+            return AgentLoopState(
+                transcript=transcript,
+                turn_count=0,
+                tool_count=0,
+                consecutive_tool_errors=0,
+                pending_tool_calls=(),
+                pending_tool_index=0,
+                transcript_digest=self._digest(transcript),
+            )
         raw = checkpoint.loop_state
         transcript = tuple(
             _message_from_mapping(item) for item in raw.get("transcript", [])
@@ -1704,52 +2459,196 @@ class DurableCodingLoop:
         pending_index = int(raw.get("pending_tool_index", 0))
         has_open_tool_pair = bool(pending) and pending_index < len(pending)
         empty_retry_count = int(raw.get("empty_retry_count", 0))
+        bodies = dict(_string_mapping(raw.get("compacted_bodies")))
+        instructions_loaded = bool(raw.get("instructions_loaded", False))
+        raw_todos = raw.get("todos") or ()
+        todos = tuple(
+            dict(item) for item in raw_todos if isinstance(item, Mapping)
+        )
         if isinstance(pending_instruction, str) and pending_instruction:
             if not has_open_tool_pair:
-                transcript = transcript + (
-                    CanonicalMessage("user", (TextContent(pending_instruction),)),
+                applied = self._apply_pending_command(
+                    input,
+                    transcript,
+                    pending_instruction,
+                    bodies=bodies,
+                    todos=todos,
+                    instructions_loaded=instructions_loaded,
+                    cost_micros=int(raw.get("cost_micros", 0)),
+                    input_tokens=int(raw.get("input_tokens", 0)),
+                    output_tokens=int(raw.get("output_tokens", 0)),
                 )
+                transcript = applied.transcript
+                bodies = applied.bodies
+                todos = applied.todos
+                instructions_loaded = applied.instructions_loaded
                 pending_instruction = None
                 terminal_pending = False
                 digest = self._digest(transcript)
                 empty_retry_count = 0
         else:
             pending_instruction = None
-        raw_todos = raw.get("todos") or ()
-        todos = tuple(
-            dict(item) for item in raw_todos if isinstance(item, Mapping)
+        children = _restore_active_children(raw)
+        _warn_stale_active_child_scalars(raw, children)
+        state = AgentLoopState(
+            transcript=transcript,
+            turn_count=int(raw.get("turn_count", 0)),
+            tool_count=int(raw.get("tool_count", 0)),
+            consecutive_tool_errors=int(raw.get("consecutive_tool_errors", 0)),
+            pending_tool_calls=pending,
+            pending_tool_index=pending_index,
+            transcript_digest=digest,
+            input_tokens=int(raw.get("input_tokens", 0)),
+            output_tokens=int(raw.get("output_tokens", 0)),
+            cost_micros=int(raw.get("cost_micros", 0)),
+            terminal_pending=terminal_pending,
+            read_paths=read_paths,
+            pending_instruction=pending_instruction,
+            todos=todos,
+            phase=parse_phase(raw.get("phase")).value,
+            instructions_loaded=instructions_loaded,
+            prompt_compact_retries=int(raw.get("prompt_compact_retries", 0)),
+            output_token_escalations=int(raw.get("output_token_escalations", 0)),
+            llm_compact_attempts=int(raw.get("llm_compact_attempts", 0)),
+            revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ()),
+            approved_always=frozenset(
+                str(name) for name in raw.get("approved_always") or ()
+            ),
+            hook_retry_count=int(raw.get("hook_retry_count", 0)),
+            compacted_bodies=bodies,
+            stop_retry_count=int(raw.get("stop_retry_count", 0)),
+            read_stamps=_read_stamps_mapping(raw.get("read_stamps")),
+            empty_retry_count=empty_retry_count,
+            last_error_signature=str(raw.get("last_error_signature") or ""),
+            last_error_count=int(raw.get("last_error_count", 0)),
+            last_success_signature=str(raw.get("last_success_signature") or ""),
+            last_success_result_hash=str(raw.get("last_success_result_hash") or ""),
+            last_success_count=int(raw.get("last_success_count", 0)),
+            verdict=restore_verify_verdict(raw.get("verdict")),
+            critical_files=restore_plan_critical_files(raw.get("critical_files")),
+            active_child_run_id=_optional_str(raw.get("active_child_run_id")),
+            active_child_checkpoint_id=_optional_str(
+                raw.get("active_child_checkpoint_id")
+            ),
+            active_child_tool_call_id=_optional_str(
+                raw.get("active_child_tool_call_id")
+            ),
+            active_children=children,
         )
-        return AgentLoopState(
-            transcript,
-            int(raw.get("turn_count", 0)),
-            int(raw.get("tool_count", 0)),
-            int(raw.get("consecutive_tool_errors", 0)),
-            pending,
-            pending_index,
-            digest,
-            int(raw.get("input_tokens", 0)),
-            int(raw.get("output_tokens", 0)),
-            int(raw.get("cost_micros", 0)),
-            terminal_pending,
-            read_paths,
-            pending_instruction,
+        return self._sync_active_children(state, children)
+
+    def _apply_pending_command(
+        self,
+        input: LoopInput,
+        transcript,
+        text: str,
+        *,
+        bodies: dict[str, str],
+        todos: tuple,
+        instructions_loaded: bool,
+        cost_micros: int,
+        input_tokens: int,
+        output_tokens: int,
+    ):
+        from neos.coding.commands.interpret import interpret_coding_command
+        from neos.coding.commands.parse import sanitize_command_args
+        from neos.coding.commands.types import CommandDisposition
+
+        decision = interpret_coding_command(text)
+        if decision.disposition is CommandDisposition.CHAT:
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, text),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        if decision.disposition is CommandDisposition.INJECT:
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, decision.inject_text),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        spec_name = decision.spec.name if decision.spec is not None else ""
+        if spec_name == "compact":
+            after = self._compact(transcript, force=True, bodies=bodies)
+            hint = sanitize_command_args(decision.parsed.args, max_len=240)
+            notice = (
+                f"Transcript compacted by /compact. Keep: {hint}"
+                if hint
+                else "Transcript compacted by /compact."
+            )
+            return _AppliedPendingCommand(
+                self._append_user_meta(after, notice),
+                bodies,
+                todos,
+                False,
+            )
+        if spec_name == "clear":
+            return _AppliedPendingCommand(
+                self._cleared_transcript(input, transcript),
+                {},
+                (),
+                False,
+            )
+        if spec_name == "cost":
+            notice = (
+                f"cost_micros={cost_micros} "
+                f"tokens={input_tokens}+{output_tokens}"
+            )
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, notice),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        notice = decision.message or "Command was not applied as user work."
+        return _AppliedPendingCommand(
+            self._append_user_meta(transcript, notice),
+            bodies,
             todos,
-            parse_phase(raw.get("phase")).value,
-            bool(raw.get("instructions_loaded", False)),
-            int(raw.get("prompt_compact_retries", 0)),
-            int(raw.get("output_token_escalations", 0)),
-            int(raw.get("llm_compact_attempts", 0)),
-            frozenset(str(name) for name in raw.get("revealed_tools") or ()),
-            frozenset(str(name) for name in raw.get("approved_always") or ()),
-            int(raw.get("hook_retry_count", 0)),
-            _string_mapping(raw.get("compacted_bodies")),
-            int(raw.get("stop_retry_count", 0)),
-            _read_stamps_mapping(raw.get("read_stamps")),
-            empty_retry_count,
-            str(raw.get("last_error_signature") or ""),
-            int(raw.get("last_error_count", 0)),
-            restore_verify_verdict(raw.get("verdict")),
-            restore_plan_critical_files(raw.get("critical_files")),
+            instructions_loaded,
+        )
+
+    def _cleared_transcript(self, input: LoopInput, transcript=()):
+        seed = self._task_seed_text(transcript, input)
+        messages: list[CanonicalMessage] = []
+        if seed:
+            messages.append(CanonicalMessage("user", (TextContent(seed),)))
+        messages.append(
+            CanonicalMessage(
+                "user",
+                (TextContent("Conversation context was cleared."),),
+            )
+        )
+        return tuple(messages)
+
+    @staticmethod
+    def _task_seed_text(transcript, input: LoopInput) -> str:
+        for message in transcript or ():
+            if getattr(message, "role", None) != "user":
+                continue
+            for item in getattr(message, "content", ()):
+                text = getattr(item, "text", None)
+                if not isinstance(text, str):
+                    continue
+                candidate = text.strip()
+                if DurableCodingLoop._is_task_seed(candidate):
+                    return candidate
+        fallback = (input.instruction or "").strip()
+        if DurableCodingLoop._is_task_seed(fallback):
+            return fallback
+        return ""
+
+    @staticmethod
+    def _is_task_seed(text: str) -> bool:
+        from neos.coding.commands.interpret import interpret_coding_command
+        from neos.coding.commands.types import CommandDisposition
+
+        if not text or text == "Conversation context was cleared.":
+            return False
+        return (
+            interpret_coding_command(text).disposition is CommandDisposition.CHAT
         )
 
     @staticmethod
@@ -1775,9 +2674,13 @@ class DurableCodingLoop:
         )
 
     def _dump_state(self, input, state):
+        state = self._sync_active_children(state, state.active_children)
+        current = (input.instruction or "").strip()
+        if not self._is_task_seed(current):
+            current = self._task_seed_text(state.transcript, input) or current
         return {
             "phase_index": state.tool_count - 1,
-            "current_instruction": input.instruction,
+            "current_instruction": current,
             "pending_instruction": state.pending_instruction,
             "transcript": [_message_to_mapping(item) for item in state.transcript],
             "todos": [dict(item) for item in state.todos],
@@ -1805,8 +2708,23 @@ class DurableCodingLoop:
             "empty_retry_count": state.empty_retry_count,
             "last_error_signature": state.last_error_signature,
             "last_error_count": state.last_error_count,
+            "last_success_signature": state.last_success_signature,
+            "last_success_result_hash": state.last_success_result_hash,
+            "last_success_count": state.last_success_count,
             "verdict": state.verdict,
             "critical_files": list(state.critical_files),
+            "active_child_run_id": state.active_child_run_id,
+            "active_child_checkpoint_id": state.active_child_checkpoint_id,
+            "active_child_tool_call_id": state.active_child_tool_call_id,
+            "active_children": [
+                {
+                    "run_id": child.run_id,
+                    "checkpoint_id": child.checkpoint_id,
+                    "tool_call_id": child.tool_call_id,
+                    "last_advanced_at": child.last_advanced_at,
+                }
+                for child in state.active_children
+            ],
             "read_stamps": {
                 path: _dump_read_stamp(stamp)
                 for path, stamp in sorted(state.read_stamps.items())
@@ -1994,7 +2912,7 @@ class DurableCodingLoop:
         tool_name: str,
         bodies: dict[str, str],
     ) -> tuple[CanonicalMessage, ...]:
-        if tool_name == "read_file.v1" or not transcript:
+        if not transcript:
             return transcript
         last = transcript[-1]
         if last.role != "tool":
@@ -2070,8 +2988,13 @@ class DurableCodingLoop:
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _scrub_think_blocks(text: str) -> str:
+    cleaned = _THINK_CLOSED_RE.sub("", text)
+    return _THINK_UNCLOSED_RE.sub("", cleaned)
+
+
 def _is_empty_or_think_only(text: str) -> bool:
-    return not _THINK_BLOCK_RE.sub("", text).strip()
+    return not _scrub_think_blocks(text).strip()
 
 
 def _error_signature(name: str, tool_input: Mapping[str, object]) -> str:
@@ -2084,12 +3007,31 @@ def _error_signature(name: str, tool_input: Mapping[str, object]) -> str:
     return hashlib.sha256((name + canonical).encode("utf-8")).hexdigest()
 
 
+def _result_preview_hash(content: Mapping[str, object]) -> str:
+    payload = {
+        "preview": content.get("preview"),
+        "status": content.get("status"),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _is_stall_denied(
     state: AgentLoopState, name: str, tool_input: Mapping[str, object]
 ) -> bool:
-    if state.last_error_count < STALL_DENY_AFTER:
-        return False
-    return state.last_error_signature == _error_signature(name, tool_input)
+    signature = _error_signature(name, tool_input)
+    if (
+        state.last_error_count >= STALL_DENY_AFTER
+        and state.last_error_signature == signature
+    ):
+        return True
+    return (
+        state.last_success_count >= STALL_DENY_AFTER
+        and state.last_success_signature == signature
+    )
 
 
 def _next_error_signature(
@@ -2099,6 +3041,45 @@ def _next_error_signature(
     if signature == state.last_error_signature:
         return signature, state.last_error_count + 1
     return signature, 1
+
+
+def _next_success_signature(
+    state: AgentLoopState,
+    name: str,
+    tool_input: Mapping[str, object],
+    result: ToolResultContent,
+) -> tuple[str, str, int]:
+    signature = _error_signature(name, tool_input)
+    content = result.content if isinstance(result.content, Mapping) else {}
+    result_hash = _result_preview_hash(content)
+    if (
+        signature == state.last_success_signature
+        and result_hash == state.last_success_result_hash
+    ):
+        return signature, result_hash, state.last_success_count + 1
+    return signature, result_hash, 1
+
+
+def _uniquify_tool_calls(
+    calls: Sequence[ToolCallCompleted],
+) -> list[ToolCallCompleted]:
+    used: set[str] = set()
+    uniquified: list[ToolCallCompleted] = []
+    for call in calls:
+        candidate = call.tool_call_id
+        if candidate not in used:
+            used.add(candidate)
+            uniquified.append(call)
+            continue
+        suffix = 2
+        while True:
+            next_id = f"{call.tool_call_id}_d{suffix}"
+            if next_id not in used:
+                used.add(next_id)
+                uniquified.append(replace(call, tool_call_id=next_id))
+                break
+            suffix += 1
+    return uniquified
 
 
 def _string_mapping(value: object) -> dict[str, str]:
@@ -2233,6 +3214,152 @@ def _tool_event_preview(name: str, tool_input: Mapping[str, object]) -> str:
     if not isinstance(redacted, str):
         redacted = name
     return redacted[:200]
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _tool_result_ids(transcript) -> set[str]:
+    return {
+        item.tool_call_id
+        for message in transcript
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+
+
+def _subagent_max_active(config) -> int:
+    return min(4, max(1, getattr(config, "subagent_max_active", 1)))
+
+
+def _spawn_window(state) -> tuple[ToolCallCompleted, ...]:
+    window: list[ToolCallCompleted] = []
+    for call in state.pending_tool_calls[state.pending_tool_index :]:
+        if call.name != "spawn_agent.v1":
+            break
+        window.append(call)
+    return tuple(window)
+
+
+def _pending_by_id(state, tool_call_id: str) -> ToolCallCompleted | None:
+    for call in state.pending_tool_calls:
+        if call.tool_call_id == tool_call_id:
+            return call
+    return None
+
+
+def _select_spawn_work(state, *, max_active: int) -> SpawnWork | None:
+    window = _spawn_window(state)
+    live = list(state.active_children or _legacy_single(state))
+    live_ids = {child.tool_call_id for child in live}
+    done = _tool_result_ids(state.transcript)
+    unstarted = [
+        call
+        for call in window
+        if call.tool_call_id not in live_ids and call.tool_call_id not in done
+    ]
+    if len(live) < max_active and unstarted:
+        return SpawnWork(kind="start", call=unstarted[0], child=None)
+    if live:
+        picked = min(live, key=lambda child: (child.last_advanced_at, child.tool_call_id))
+        call = _pending_by_id(state, picked.tool_call_id)
+        return SpawnWork(kind="resume", call=call, child=picked)
+    return None
+
+
+def _legacy_single(state) -> tuple[ActiveChildRef, ...]:
+    run_id = getattr(state, "active_child_run_id", None)
+    if not run_id:
+        return ()
+    tool_call_id = getattr(state, "active_child_tool_call_id", None) or ""
+    return (
+        ActiveChildRef(
+            run_id=run_id,
+            checkpoint_id=getattr(state, "active_child_checkpoint_id", None),
+            tool_call_id=tool_call_id,
+            last_advanced_at=_EPOCH_STAMP,
+        ),
+    )
+
+
+def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ...]:
+    if "active_children" in raw:
+        items = raw.get("active_children") or ()
+        children: list[ActiveChildRef] = []
+        if isinstance(items, Sequence) and not isinstance(items, (str, bytes)):
+            for item in items:
+                if not isinstance(item, Mapping):
+                    continue
+                run_id = _optional_str(item.get("run_id"))
+                tool_call_id = _optional_str(item.get("tool_call_id"))
+                if not run_id or not tool_call_id:
+                    continue
+                stamp = _optional_str(item.get("last_advanced_at")) or ""
+                children.append(
+                    ActiveChildRef(
+                        run_id=run_id,
+                        checkpoint_id=_optional_str(item.get("checkpoint_id")),
+                        tool_call_id=tool_call_id,
+                        last_advanced_at=stamp,
+                    )
+                )
+        if len(children) > 1:
+            children = [
+                (
+                    child
+                    if child.last_advanced_at
+                    else replace(child, last_advanced_at=_EPOCH_STAMP)
+                )
+                for child in children
+            ]
+        return tuple(children)
+    run_id = _optional_str(raw.get("active_child_run_id"))
+    if not run_id:
+        return ()
+    return (
+        ActiveChildRef(
+            run_id=run_id,
+            checkpoint_id=_optional_str(raw.get("active_child_checkpoint_id")),
+            tool_call_id=_optional_str(raw.get("active_child_tool_call_id")) or "",
+            last_advanced_at=_EPOCH_STAMP,
+        ),
+    )
+
+
+def _warn_stale_active_child_scalars(
+    raw: Mapping[str, Any], children: tuple[ActiveChildRef, ...]
+) -> None:
+    if "active_children" not in raw:
+        return
+    raw_run = _optional_str(raw.get("active_child_run_id"))
+    raw_ckpt = _optional_str(raw.get("active_child_checkpoint_id"))
+    raw_tool = _optional_str(raw.get("active_child_tool_call_id"))
+    if raw_run is None and raw_ckpt is None and raw_tool is None:
+        return
+    head = children[0] if children else None
+    expected = (
+        head.run_id if head else None,
+        head.checkpoint_id if head else None,
+        head.tool_call_id if head else None,
+    )
+    actual = (raw_run, raw_ckpt, raw_tool)
+    if actual == expected:
+        return
+    logger.warning(
+        "active_child scalars disagree with active_children[0]; remirroring "
+        "run_id=%s checkpoint_id=%s tool_call_id=%s from list run_id=%s "
+        "checkpoint_id=%s tool_call_id=%s",
+        raw_run,
+        raw_ckpt,
+        raw_tool,
+        expected[0],
+        expected[1],
+        expected[2],
+    )
 
 
 def _tool_event_payload(call, **extra: Any) -> dict[str, Any]:

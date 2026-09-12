@@ -4,6 +4,9 @@ from neos.api.dependencies.auth import get_current_user
 from neos.api.models.coding_models import (
     CodingApprovalDecisionRequest,
     CodingApprovalSnapshot,
+    CodingCommandCatalogResponse,
+    CodingCommandRequest,
+    CodingCommandResponse,
     CodingEventListResponse,
     CodingSteerRequest,
     CodingSteerResponse,
@@ -26,6 +29,7 @@ from neos.coding.domain.approvals import (
     ApprovalNotFound,
 )
 from neos.coding.application.run_service import CodingRunService
+from neos.coding.commands import CodingCommandService, catalog_listings
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
 from neos.coding.application.task_service import (
@@ -41,6 +45,7 @@ from neos.coding.managed.admin import ManagedSandboxStatusService
 from neos.coding.runtime import (
     coding_run_service,
     coding_approval_service,
+    coding_command_service,
     coding_service,
     coding_snapshot_service,
     coding_workspace_service,
@@ -69,6 +74,10 @@ def get_ws_ticket_store() -> CodingTicketStore:
 
 def get_coding_run_service() -> CodingRunService:
     return coding_run_service
+
+
+def get_coding_command_service() -> CodingCommandService:
+    return coding_command_service
 
 
 def get_coding_snapshot_service() -> CodingSnapshotService:
@@ -180,6 +189,45 @@ async def list_coding_tasks(
         current_user.user_id, limit=clamp_task_list_limit(limit)
     )
     return {"tasks": [_list_item(task) for task in tasks]}
+
+
+@router.get("/commands", response_model=CodingCommandCatalogResponse)
+async def list_coding_commands(
+    current_user: User = Depends(get_current_user),
+):
+    del current_user
+    return {"commands": list(catalog_listings())}
+
+
+@router.post(
+    "/tasks/{task_id}/commands",
+    response_model=CodingCommandResponse,
+)
+async def invoke_coding_command(
+    task_id: str,
+    body: CodingCommandRequest,
+    current_user: User = Depends(get_current_user),
+    commands: CodingCommandService = Depends(get_coding_command_service),
+):
+    from neos.coding.commands.types import CommandStatus
+
+    try:
+        result = await commands.invoke(
+            text=body.text,
+            task_id=task_id,
+            owner_id=current_user.user_id,
+        )
+    except CodingTaskNotFound as error:
+        raise HTTPException(
+            status_code=404, detail="Coding task not found"
+        ) from error
+    if result.status is CommandStatus.UNKNOWN:
+        raise HTTPException(status_code=400, detail=result.message)
+    if result.status is CommandStatus.CHAT:
+        raise HTTPException(
+            status_code=400, detail="Request text is not a slash command"
+        )
+    return result.as_mapping()
 
 
 @router.post(

@@ -161,3 +161,23 @@ def test_anthropic_feature_config_defaults():
 def test_anthropic_feature_config_rejects_invalid_values(advisor):
     with pytest.raises(ValidationError):
         AppConfig.model_validate({"llm": {"advisor": advisor}})
+
+
+def test_coding_model_subagent_max_active_defaults_to_one():
+    config = AppConfig()
+
+    assert config.coding_model.subagent_max_active == 1
+    assert config.coding_model.subagent_enabled is False
+    assert config.learn.coding_lessons is False
+
+
+def test_coding_model_subagent_max_active_accepts_cap():
+    config = AppConfig.model_validate({"coding_model": {"subagent_max_active": 4}})
+
+    assert config.coding_model.subagent_max_active == 4
+
+
+@pytest.mark.parametrize("value", [0, 5])
+def test_coding_model_subagent_max_active_rejects_out_of_range(value):
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"coding_model": {"subagent_max_active": value}})

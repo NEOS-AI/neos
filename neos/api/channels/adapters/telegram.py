@@ -494,6 +494,12 @@ class TelegramAdapter(ChannelAdapterBase):
         )
         try:
             channel_message = await self.receive_message(command_update)
+            message_id = getattr(source, "message_id", None)
+            action = str(getattr(query, "data", "") or "")
+            if message_id is not None and action:
+                channel_message.metadata["idempotency_key"] = (
+                    f"{message_id}:{action}"
+                )
             response = await self._gateway.dispatch(channel_message)
             await self.send_response(
                 channel_message.channel_id,

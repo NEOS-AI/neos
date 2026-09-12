@@ -316,9 +316,9 @@ async def test_stop_bypasses_held_inflight_on_bound_session(monkeypatch):
     assert reply == "Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
-    assert await gateway.dispatch(_message("hello", "sess-ctrl")) == (
-        "Already working on this thread."
-    )
+    steered = await gateway.dispatch(_message("hello", "sess-ctrl"))
+    assert steered == "Steered ct_channel"
+    assert coding.steered == [("ct_channel", "[U_alice] hello")]
 
 
 async def test_workflow_input_includes_channel_attachment_blocks(monkeypatch):
@@ -600,6 +600,22 @@ async def test_new_clears_inbound_so_same_key_can_run_again(monkeypatch):
     assert len(workflow.calls) == 2
 
 
+async def test_clear_does_not_wipe_inbound_idempotency(monkeypatch):
+    gateway, workflow, _coding = _gateway(monkeypatch)
+    first = _message("hello <@U_BOT>", "sess-keep-id")
+    first.metadata["idempotency_key"] = "k1"
+    replay = _message("hello again", "sess-keep-id")
+    replay.metadata["idempotency_key"] = "k1"
+
+    assert await gateway.dispatch(first) == "workflow-ok"
+    cleared = await gateway.dispatch(_message("/clear", "sess-keep-id"))
+    reply = await gateway.dispatch(replay)
+
+    assert "context" in cleared.lower()
+    assert reply == "workflow-ok"
+    assert len(workflow.calls) == 1
+
+
 async def test_remembered_key_replays_while_other_key_is_inflight(monkeypatch):
     gateway, workflow, _coding = _gateway(monkeypatch)
     first = _message("hello <@U_BOT>", "sess-busy-id")
@@ -865,6 +881,16 @@ async def test_inflight_second_message_is_dropped(monkeypatch):
     assert workflow.calls == []
 
 
+async def test_bound_chat_steers_while_inflight(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code fix auth", "sess-busy-bind"))
+    assert gateway._inflight.acquire("sess-busy-bind") is True
+    reply = await gateway.dispatch(_message("also add tests", "sess-busy-bind"))
+    assert reply == "Steered ct_channel"
+    assert coding.steered == [("ct_channel", "[U_alice] also add tests")]
+    assert workflow.calls == []
+
+
 async def test_learn_persists_via_postgres_when_factory_set(monkeypatch):
     import neos.config.settings as settings_module
     from neos.learn.lessons import LessonStatus, reset_lesson_store
@@ -1056,3 +1082,43 @@ async def test_export_does_not_dump_transcript(monkeypatch):
     assert "loop_state" not in reply
     assert workflow.calls == []
     assert coding.started == [("u_owner", "[U_alice] do it")]
+
+
+async def test_loop_is_denied_and_does_not_steer(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-loop"))
+    reply = await gateway.dispatch(_message("/loop 5m check deploy", "sess-loop"))
+
+    assert "disabled" in reply.lower()
+    assert coding.steered == []
+    assert workflow.calls == []
+
+
+async def test_unknown_slash_does_not_start_workflow(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    reply = await gateway.dispatch(_message("/not-a-command", "sess-unknown"))
+
+    assert "unknown command" in reply.lower()
+    assert workflow.calls == []
+    assert coding.started == []
+
+
+async def test_help_lists_commands_without_task(monkeypatch):
+    gateway, workflow, _coding = _gateway(monkeypatch)
+    reply = await gateway.dispatch(_message("/help", "sess-help"))
+
+    assert "/compact" in reply
+    assert "/loop" in reply
+    assert workflow.calls == []
+
+
+async def test_plan_steers_expanded_prompt(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-plan"))
+    reply = await gateway.dispatch(_message("/plan auth", "sess-plan"))
+
+    assert "Steered" in reply
+    assert coding.steered
+    assert coding.steered[-1][1].startswith("[U_alice] Switch to plan")
+    assert "auth" in coding.steered[-1][1]
+    assert workflow.calls == []

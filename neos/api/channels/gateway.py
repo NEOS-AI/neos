@@ -44,6 +44,7 @@ _COMPACT_UNAVAILABLE = "Compact is not available."
 _CONTEXT_CLEAR_REQUESTED = "Conversation context clear is requested."
 _COST_TRACKED = "Cost is tracked on the task."
 _EXPORT_UI = "Transcript export is available in the Code UI."
+_UNKNOWN_COMMAND = "Unknown command. Try /help."
 _CONTROL_LOCK_BYPASS = frozenset(
     {
         ChannelCommandKind.STOP,
@@ -55,6 +56,9 @@ _CONTROL_LOCK_BYPASS = frozenset(
         ChannelCommandKind.CLEAR,
         ChannelCommandKind.COST,
         ChannelCommandKind.EXPORT,
+        ChannelCommandKind.HELP,
+        ChannelCommandKind.LOOP,
+        ChannelCommandKind.UNKNOWN,
     }
 )
 
@@ -277,6 +281,22 @@ class ChannelGateway:
         command = parse_channel_command(message.text)
         skip_lock = command.kind in _CONTROL_LOCK_BYPASS
         if not skip_lock and not self._inflight.acquire(message.session_id):
+            if command.kind in {
+                ChannelCommandKind.CHAT,
+                ChannelCommandKind.PROMPT,
+            }:
+                binding = await self._binds.get(message.session_id)
+                if binding is not None:
+                    try:
+                        return await self._steer_bound_chat(message, binding)
+                    except Exception as e:
+                        logger.error(
+                            f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
+                        )
+                        return (
+                            "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. "
+                            "잠시 후 다시 시도해주세요."
+                        )
             return _BUSY
         breaker = self._get_breaker(message.channel_type)
         try:
@@ -310,13 +330,7 @@ class ChannelGateway:
         if command.kind is ChannelCommandKind.CHAT:
             binding = await self._binds.get(message.session_id)
             if binding is not None:
-                coding = self._coding_port()
-                instruction = _with_sender_prefix(message, message.text)
-                return await coding.steer(
-                    task_id=binding.task_id,
-                    owner_id=binding.owner_id,
-                    instruction=instruction,
-                )
+                return await self._steer_bound_chat(message, binding)
             return await self._run_workflow(message)
         if command.kind is ChannelCommandKind.LEARN:
             return await self._run_learn(message, command)
@@ -330,6 +344,14 @@ class ChannelGateway:
             return await self._run_cost(message)
         if command.kind is ChannelCommandKind.EXPORT:
             return await self._run_export(message)
+        if command.kind is ChannelCommandKind.HELP:
+            return await self._run_help(message, command)
+        if command.kind is ChannelCommandKind.LOOP:
+            return await self._run_disabled_command(message, command)
+        if command.kind is ChannelCommandKind.UNKNOWN:
+            return _UNKNOWN_COMMAND
+        if command.kind is ChannelCommandKind.PROMPT:
+            return await self._run_prompt_command(message, command)
         return await self._run_coding_command(message, command)
 
     async def _run_workflow(self, message: ChannelMessage) -> str:
@@ -539,12 +561,40 @@ class ChannelGateway:
         await self._inbound.clear_session(message.session_id)
         return _SESSION_RESET
 
+    async def _steer_bound_chat(self, message: ChannelMessage, binding: Any) -> str:
+        from neos.coding.commands import interpret_coding_command
+        from neos.coding.commands.types import CommandDisposition
+
+        coding = self._coding_port()
+        decision = interpret_coding_command(message.text)
+        if decision.disposition is CommandDisposition.INJECT:
+            body = decision.inject_text
+        elif decision.disposition is CommandDisposition.APPLY_IN_LOOP:
+            body = decision.canonical_text
+        else:
+            body = message.text
+        instruction = _with_sender_prefix(message, body)
+        return await coding.steer(
+            task_id=binding.task_id,
+            owner_id=binding.owner_id,
+            instruction=instruction,
+        )
+
     async def _run_clear(self, message: ChannelMessage) -> str:
         self._workflow_pending.pop(message.session_id, None)
-        await self._inbound.clear_session(message.session_id)
+        invoked = await self._invoke_bound_command(
+            message, "/clear", require_task=False
+        )
+        if invoked is not None:
+            return invoked
         return _CONTEXT_CLEAR_REQUESTED
 
     async def _run_compact(self, message: ChannelMessage, command) -> str:
+        invoked = await self._invoke_bound_command(
+            message, f"/compact {command.rest}".strip()
+        )
+        if invoked is not None:
+            return invoked
         binding = await self._binds.get(message.session_id)
         if binding is None:
             return _NO_TASK
@@ -565,6 +615,9 @@ class ChannelGateway:
         return _COMPACT_UNAVAILABLE
 
     async def _run_cost(self, message: ChannelMessage) -> str:
+        invoked = await self._invoke_bound_command(message, "/cost")
+        if invoked is not None:
+            return invoked
         binding = await self._binds.get(message.session_id)
         if binding is None:
             return _NO_TASK
@@ -586,10 +639,63 @@ class ChannelGateway:
         return line or _COST_TRACKED
 
     async def _run_export(self, message: ChannelMessage) -> str:
+        invoked = await self._invoke_bound_command(message, "/export")
+        if invoked is not None:
+            return invoked
         binding = await self._binds.get(message.session_id)
         if binding is None:
             return _NO_TASK
         return _EXPORT_UI
+
+    async def _run_help(self, message: ChannelMessage, command) -> str:
+        invoked = await self._invoke_bound_command(
+            message, f"/help {command.rest}".strip(), require_task=False
+        )
+        if invoked is not None:
+            return invoked
+        from neos.coding.commands import format_help
+
+        return format_help(command.rest)
+
+    async def _run_disabled_command(
+        self, message: ChannelMessage, command
+    ) -> str:
+        from neos.coding.commands import interpret_coding_command
+
+        token = (message.text or "").strip() or f"/loop {command.rest}".strip()
+        return interpret_coding_command(token).message
+
+    async def _run_prompt_command(self, message: ChannelMessage, command) -> str:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK
+        return await self._steer_bound_chat(message, binding)
+
+    async def _invoke_bound_command(
+        self,
+        message: ChannelMessage,
+        text: str,
+        *,
+        require_task: bool = True,
+    ) -> str | None:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK if require_task else None
+        coding = self._coding_port()
+        invoke = getattr(coding, "invoke_command", None)
+        if not callable(invoke):
+            return None
+        try:
+            result = await invoke(
+                task_id=binding.task_id,
+                owner_id=binding.owner_id,
+                text=text,
+            )
+        except Exception:
+            return None
+        if isinstance(result, str) and result.strip():
+            return result
+        return None
 
     async def _resume_workflow_approval(
         self, message: ChannelMessage, command, pending: Dict[str, str] | None = None

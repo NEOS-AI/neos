@@ -986,9 +986,11 @@ CI의 10k acceptance fixture는 wall-clock 시간 대신 scheduler 1회, notific
 
 **완료 조건:** tenant별 quota/감사/삭제 요구와 GitHub end-to-end flow가 검증된다.
 
-### Phase 7 — 후속: coordinator
+### Phase 7 — 읽기 전용 explore subagent
 
-단일 agent 지표가 안정된 뒤에만 읽기 전용 조사 subagent부터 시작한다. write worker는 worktree/branch 격리와 merge conflict protocol 없이는 허용하지 않는다.
+단일 agent 지표가 안정된 뒤에만 읽기 전용 조사 subagent를 켠다. 구현은 `neos/subagent/` (`SubagentRuntime.advance` / `status` / `cancel` / `fold`)이고, 코딩 부모는 `spawn_agent.v1`을 1-step으로 park/resume한다. 기본값은 `coding_model.subagent_enabled: false` 와 `deep_analysis.subagent_enabled: false`다. write worker는 worktree/branch 격리와 merge conflict protocol 없이는 허용하지 않는다. 상세: `docs/SUBAGENT_RUNTIME_DESIGN.md`. coordinator / nested `query()` / `while(true)` / ChannelGateway 루프는 넣지 않는다.
+
+Approach M(부모-중재 bounded fan-out)은 `docs/PARENT_MEDIATED_COLLABORATION_DESIGN.md`에 기록한다. knob `coding_model.subagent_max_active` 기본값 1, hard cap 4. `max_active>1`이어도 coding Celery delivery 1회는 fill-then-RR로 child 하나를 정확히 한 번만 전진한다. `child_fold`는 `SubagentRuntime.fold`이고, `channel_fold`는 다른 protocol(channel busy park)이다. DA P2는 ledger single-writer(출하됨). Subagent P2는 write/worktree/merge이며 이번 wave가 아니다. coordinator / nested `query()` / `while(true)` / ChannelGateway 루프는 여전히 넣지 않는다. flag는 기본 `false` / `1`을 유지하고, production enablement는 single-agent 지표 이후 ops 설정이다.
 
 ---
 

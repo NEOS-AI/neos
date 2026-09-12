@@ -844,6 +844,7 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 이 캡은 "게이트웨이가 포기한 뒤에도 백엔드가 자원을 붙들고 있는 것"을 막는 용도다.
     node_wall_clock_cap: float = 300.0
     parallel_workers: int = 4
+    subagent_enabled: bool = False
     quote_match_threshold: float = 0.92
     confidence_cap: dict[int, float] = Field(
         default_factory=lambda: {1: 0.6, 2: 0.8, 3: 0.95}
@@ -1613,6 +1614,9 @@ class CodingModelConfig(StrictConfigModel):
     approval_always_allow: list[str] = Field(default_factory=list)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     deferred_tools_threshold: int = Field(default=20, ge=1, le=100)
+    subagent_enabled: bool = False
+    subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
+    subagent_max_active: int = Field(default=1, ge=1, le=4)
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":

@@ -41,6 +41,11 @@ pytestmark = pytest.mark.no_db
         ("!cost", ChannelCommandKind.COST, ""),
         ("/export", ChannelCommandKind.EXPORT, ""),
         ("!export", ChannelCommandKind.EXPORT, ""),
+        ("/help", ChannelCommandKind.HELP, ""),
+        ("/help compact", ChannelCommandKind.HELP, "compact"),
+        ("/loop 5m check", ChannelCommandKind.LOOP, "5m check"),
+        ("/plan auth", ChannelCommandKind.PROMPT, "auth"),
+        ("/not-a-command", ChannelCommandKind.UNKNOWN, ""),
     ],
 )
 def test_parse_channel_command(text: str, kind: ChannelCommandKind, rest: str) -> None:

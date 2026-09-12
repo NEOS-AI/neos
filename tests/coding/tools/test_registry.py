@@ -221,6 +221,56 @@ def test_definitions_defer_non_core_until_revealed(monkeypatch) -> None:
     assert "web_fetch.v1" not in revealed
 
 
+def test_search_definitions_select_and_required_terms() -> None:
+    selected = CodingToolRegistry.search_definitions(
+        "select:web_fetch.v1,write_file.v1,git_status.v1"
+    )
+    names = [item["name"] for item in selected]
+    assert "web_fetch.v1" in names
+    assert "git_status.v1" in names
+    assert "write_file.v1" not in names
+    assert "read_file.v1" not in names
+
+    required = CodingToolRegistry.search_definitions("+fetch")
+    required_names = [item["name"] for item in required]
+    assert "web_fetch.v1" in required_names
+    assert "git_status.v1" not in required_names
+    assert all(
+        "fetch" in item["name"].casefold()
+        or "fetch" in str(item["description"]).casefold()
+        for item in required
+    )
+
+
+def test_search_definitions_honors_phase_hide_and_skips_core() -> None:
+    explore = CodingToolRegistry.search_definitions("spawn", phase="explore")
+    implement = CodingToolRegistry.search_definitions("spawn", phase="implement")
+    writes = CodingToolRegistry.search_definitions(
+        "select:write_file.v1,spawn_agent.v1", phase="explore"
+    )
+    write_names = [item["name"] for item in writes]
+
+    assert all(item["name"] != "spawn_agent.v1" for item in explore)
+    assert any(item["name"] == "spawn_agent.v1" for item in implement)
+    assert "write_file.v1" not in write_names
+    assert "spawn_agent.v1" not in write_names
+
+
+def test_load_skill_input_accepts_optional_reference() -> None:
+    with_ref = registry().validate(
+        "load_skill.v1", {"name": "verify", "reference": "hooks.md"}
+    )
+    with_path = registry().validate(
+        "load_skill.v1", {"name": "verify", "path": "hooks.md"}
+    )
+    bare = registry().validate("load_skill.v1", {"name": "verify"})
+
+    assert with_ref.input["name"] == "verify"
+    assert with_ref.input["reference"] == "hooks.md"
+    assert with_path.input["path"] == "hooks.md"
+    assert bare.input.get("reference") is None
+
+
 def test_read_file_is_read_only_and_normalizes_path() -> None:
     call = registry().validate("read_file.v1", {"path": "src/./main.py"})
 
@@ -606,6 +656,168 @@ def test_git_execute_only_allows_read_only_subcommands(argv: list[str]) -> None:
 
     assert decision.allowed is False
     assert decision.reason_code == "policy_git_operation_denied"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "-c", "core.fsmonitor=/tmp/evil", "status"],
+        ["git", "-c=core.fsmonitor=/tmp/evil", "status"],
+        ["git", "--config-env", "core.fsmonitor=HOOK", "status"],
+        ["git", "--config-env=core.fsmonitor=HOOK", "diff"],
+        ["git", "--exec-path", "/tmp", "log"],
+        ["git", "--exec-path=/tmp/git-core", "status"],
+        ["env", "git", "--exec-path=/tmp", "status"],
+        ["git", "status", "--config-env=core.fsmonitor=HOOK"],
+        ["git", "-calias.status=!touch pwned", "status"],
+        ["git", "-ccore.fsmonitor=/tmp/evil", "diff"],
+    ],
+)
+def test_git_dangerous_flags_are_denied(argv: list[str]) -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({"git", "env", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = tools.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_git_operation_denied"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pnpm", "exec", "cat", "README.md"],
+        ["npm", "exec", "cat", "README.md"],
+        ["yarn", "dlx", "cat", "README.md"],
+        ["npx", "exec", "grep", "x"],
+        ["pnpm", "exec", "--", "rg", "needle"],
+        ["env", "pnpm", "exec", "sed", "s/a/b/"],
+        ["pnpm", "exec", "env", "cat", "README.md"],
+        ["pnpm", "exec", "timeout", "5", "cat", "README.md"],
+    ],
+)
+def test_package_exec_unwraps_dedicated_command(argv: list[str]) -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({"pnpm", "npm", "yarn", "npx", "env", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = tools.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+def test_package_exec_unwraps_inline_interpreter() -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({"pnpm", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    nested = CodingToolRegistry.default(
+        command_allowlist=frozenset({"pnpm", "env", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+    decision = tools.decide(
+        "execute.v1", {"argv": ["pnpm", "exec", "python", "-cprint(1)"]}
+    )
+    wrapped = nested.decide(
+        "execute.v1",
+        {"argv": ["pnpm", "exec", "env", "python", "-c", "print(1)"]},
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_inline_interpreter_denied"
+    assert wrapped.allowed is False
+    assert wrapped.reason_code == "policy_inline_interpreter_denied"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["timeout", "5", "cat", "README.md"],
+        ["nice", "cat", "README.md"],
+        ["nohup", "cat", "README.md"],
+        ["time", "cat", "README.md"],
+        ["stdbuf", "-o0", "cat", "README.md"],
+        ["command", "cat", "README.md"],
+        ["timeout", "--", "cat", "README.md"],
+        ["env", "timeout", "5", "cat", "README.md"],
+    ],
+)
+def test_additional_wrappers_unwrap_dedicated_commands(argv: list[str]) -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset(
+            {"timeout", "nice", "nohup", "time", "stdbuf", "command", "env", "pytest"}
+        ),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = tools.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+def test_timeout_wrapping_allowlisted_command_stays_allowed() -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({"timeout", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    call = tools.validate("execute.v1", {"argv": ["timeout", "5", "pytest", "-q"]})
+
+    assert call.input["argv"] == ["timeout", "5", "pytest", "-q"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "reason"),
+    [
+        (["rm", "--", "/"], "policy_dangerous_removal"),
+        (["rm", "--", "-/../outside"], "policy_dangerous_removal"),
+        (["pytest", "--", "/tmp/test.py"], "policy_command_path_denied"),
+        (["ruff", "--", "../.env"], "policy_secret_path_denied"),
+    ],
+)
+def test_double_dash_ends_flags_for_path_and_removal_checks(
+    argv: list[str], reason: str
+) -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({"rm", "pytest", "ruff"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = tools.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-cprint(1)"],
+        ["python3", "-c=print(1)"],
+        ["node", "--eval", "console.log(1)"],
+        ["nodejs", "--eval=console.log(1)"],
+        ["perl", "-eprint 1"],
+        ["ruby", "-p"],
+        ["lua", "-eprint(1)"],
+        ["env", "python3", "-cprint(1)"],
+    ],
+)
+def test_attached_interpreter_flags_are_denied(argv: list[str]) -> None:
+    tools = CodingToolRegistry.default(
+        command_allowlist=frozenset({argv[0], "python3", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = tools.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_inline_interpreter_denied"
 
 
 def test_execute_caps_cannot_exceed_server_limits() -> None:

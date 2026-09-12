@@ -36,6 +36,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const canStop =
+    projection.taskStatus != null &&
     !TERMINAL_TASK_STATUSES.has(projection.taskStatus) &&
     connection !== "unauthorized" &&
     connection !== "not_found";

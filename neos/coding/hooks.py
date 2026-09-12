@@ -20,6 +20,10 @@ class StopDecision(TypedDict):
     reason: NotRequired[str]
 
 
+def post_tool_prevented(value: object) -> bool:
+    return isinstance(value, Mapping) and value.get("decision") == "prevent"
+
+
 class CodingHookPort(Protocol):
     async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None: ...
 

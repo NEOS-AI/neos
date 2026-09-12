@@ -6,7 +6,11 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from neos.coding.domain.approvals import is_denied_secret_path
+
 INSTRUCTION_CANDIDATES = ("AGENTS.md", "CLAUDE.md")
+_EXTRA_INSTRUCTION_FILES = ("CLAUDE.local.md", ".claude/CLAUDE.md")
+_INCLUDE_TEXT_SUFFIXES = frozenset({".md", ".txt", ".markdown"})
 MAX_INSTRUCTION_BYTES = 16_384
 MAX_INCLUDE_DEPTH = 5
 _BEGIN = "----- begin workspace instructions -----"
@@ -46,18 +50,19 @@ def load_workspace_instruction_tree(
     except OSError:
         return None
     current = _clamp_start(start, root)
-    collected: list[tuple[str, str]] = []
+    layers: list[list[tuple[str, str]]] = []
     while True:
-        picked = _pick_instruction_file(current, root)
-        if picked is not None:
-            collected.append(picked)
+        picked = _pick_instruction_files(current, root)
+        if picked:
+            layers.append(picked)
         if current == root:
             break
         parent = current.parent
         if parent == current or not _is_within(parent, root):
             break
         current = parent
-    collected.reverse()
+    layers.reverse()
+    collected = [item for layer in layers for item in layer]
     if not collected:
         return None
     return _wrap(tuple(collected))
@@ -77,25 +82,43 @@ def _clamp_start(start: Path | None, root: Path) -> Path:
     return resolved
 
 
-def _pick_instruction_file(
+def _pick_instruction_files(
     directory: Path, workspace: Path
+) -> list[tuple[str, str]]:
+    names: list[str] = []
+    agents = directory / "AGENTS.md"
+    claude = directory / "CLAUDE.md"
+    if agents.is_file() and not agents.is_symlink():
+        names.append("AGENTS.md")
+    elif claude.is_file() and not claude.is_symlink():
+        names.append("CLAUDE.md")
+    names.extend(_EXTRA_INSTRUCTION_FILES)
+    picked: list[tuple[str, str]] = []
+    for name in names:
+        loaded = _try_instruction_file(directory / name, workspace)
+        if loaded is not None:
+            picked.append(loaded)
+    return picked
+
+
+def _try_instruction_file(
+    path: Path, workspace: Path
 ) -> tuple[str, str] | None:
-    for name in INSTRUCTION_CANDIDATES:
-        path = directory / name
-        if not path.is_file():
-            continue
-        body = _read_text_file(path)
-        if body is None:
-            continue
-        expanded = _expand_includes(body, source=path, workspace=workspace)
-        if not expanded.strip():
-            continue
-        try:
-            rel = path.resolve().relative_to(workspace).as_posix()
-        except (OSError, ValueError):
-            rel = name
-        return rel, expanded
-    return None
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        rel = path.resolve().relative_to(workspace).as_posix()
+    except (OSError, ValueError):
+        return None
+    if is_denied_secret_path(rel) or is_denied_secret_path(path.name):
+        return None
+    body = _read_text_file(path)
+    if body is None:
+        return None
+    expanded = _expand_includes(body, source=path, workspace=workspace)
+    if not expanded.strip():
+        return None
+    return rel, expanded
 
 
 def _expand_includes(
@@ -160,12 +183,30 @@ def _load_include(
         return None
     if Path(candidate).is_absolute():
         return None
-    target = (source.parent / candidate).resolve()
+    if is_denied_secret_path(candidate) or is_denied_secret_path(
+        Path(candidate).name
+    ):
+        return None
+    if Path(candidate).suffix.casefold() not in _INCLUDE_TEXT_SUFFIXES:
+        return None
+    joined = source.parent / candidate
+    if joined.is_symlink():
+        return None
+    try:
+        target = joined.resolve()
+    except OSError:
+        return None
     if not _is_within(target, workspace):
+        return None
+    try:
+        rel = target.relative_to(workspace).as_posix()
+    except ValueError:
+        return None
+    if is_denied_secret_path(rel) or is_denied_secret_path(target.name):
         return None
     if target in stack:
         return None
-    if not target.is_file():
+    if target.is_symlink() or not target.is_file():
         return None
     body = _read_text_file(target)
     if body is None or not body.strip():
@@ -180,6 +221,8 @@ def _load_include(
 
 
 def _read_text_file(path: Path) -> str | None:
+    if path.is_symlink():
+        return None
     try:
         data = path.read_bytes()
     except OSError:

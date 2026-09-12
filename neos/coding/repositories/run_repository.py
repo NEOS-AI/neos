@@ -15,6 +15,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     CodingApproval,
     approval_display_summary,
+    approval_event_display_summary,
     canonical_approval_hash,
     requires_approval_answers,
 )
@@ -583,6 +584,17 @@ class PostgresCodingRunRepository:
                             WHERE coding_tool_executions.status != 'completed'
                               AND coding_tool_executions.claim_expires_at <= :now
                             RETURNING status, result_json
+                        ), adopted AS (
+                            UPDATE coding_tool_executions execution
+                               SET worker_id = :worker_id,
+                                   fencing_token = :fencing_token,
+                                   claim_expires_at = :claim_expires_at
+                              FROM valid_lease
+                             WHERE execution.task_id = :task_id
+                               AND execution.tool_call_id = :tool_call_id
+                               AND execution.status = 'delegated'
+                               AND NOT EXISTS (SELECT 1 FROM claimed)
+                            RETURNING execution.status, execution.result_json
                         )
                         SELECT CASE
                                    WHEN EXISTS (
@@ -601,6 +613,11 @@ class PostgresCodingRunRepository:
                           AND execution.tool_call_id = :tool_call_id
                           AND execution.status = 'completed'
                           AND NOT EXISTS (SELECT 1 FROM claimed)
+                        UNION ALL
+                        SELECT 'delegated' AS disposition,
+                               result_json,
+                               TRUE AS lease_valid
+                        FROM adopted
                         UNION ALL
                         SELECT NULL, NULL, FALSE AS lease_valid
                         WHERE NOT EXISTS (SELECT 1 FROM valid_lease)
@@ -639,6 +656,7 @@ class PostgresCodingRunRepository:
         if claim.disposition not in {
             ToolExecutionDisposition.CLAIMED,
             ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
         }:
             raise ValueError("only a claimed tool execution can complete")
         lease = claim.lease
@@ -654,7 +672,7 @@ class PostgresCodingRunRepository:
                         FROM coding_run_leases lease
                         WHERE execution.task_id = :task_id
                           AND execution.tool_call_id = :tool_call_id
-                          AND execution.status = 'claimed'
+                          AND execution.status IN ('claimed', 'delegated')
                           AND execution.worker_id = :worker_id
                           AND execution.fencing_token = :fencing_token
                           AND lease.task_id = execution.task_id
@@ -685,6 +703,56 @@ class PostgresCodingRunRepository:
         if self._wake_outbox is not None:
             self._wake_outbox()
         return event
+
+    async def mark_tool_delegated(
+        self,
+        claim: ToolExecutionClaim,
+        *,
+        child_run_id: str,
+        child_checkpoint_id: str,
+        claim_expires_at: datetime,
+        now: datetime,
+    ) -> None:
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
+        }:
+            raise ValueError("only a claimed tool execution can be delegated")
+        lease = claim.lease
+        async with await self._session_factory() as session:
+            async with session.begin():
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tool_executions
+                           SET status = 'delegated',
+                               result_json = CAST(:result AS JSONB),
+                               claim_expires_at = :claim_expires_at,
+                               worker_id = :worker_id,
+                               fencing_token = :fencing_token
+                         WHERE task_id = :task_id
+                           AND tool_call_id = :tool_call_id
+                           AND status IN ('claimed', 'delegated')
+                           AND worker_id = :worker_id
+                           AND fencing_token = :fencing_token
+                        RETURNING task_id
+                        """
+                    ),
+                    {
+                        **self._lease_params(lease, now=now),
+                        "tool_call_id": claim.tool_call_id,
+                        "claim_expires_at": claim_expires_at,
+                        "result": json.dumps(
+                            {
+                                "child_run_id": child_run_id,
+                                "child_checkpoint_id": child_checkpoint_id,
+                            }
+                        ),
+                    },
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
 
     async def request_tool_approval(
         self,
@@ -2387,7 +2455,9 @@ class PostgresCodingRunRepository:
             "status": approval.status.value,
             "requested_at": approval.requested_at.isoformat(),
             "expires_at": approval.expires_at.isoformat(),
-            "display_summary": dict(approval.display_summary),
+            "display_summary": approval_event_display_summary(
+                approval.display_summary
+            ),
         }
 
     @staticmethod

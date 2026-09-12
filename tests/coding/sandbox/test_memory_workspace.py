@@ -587,3 +587,120 @@ async def test_git_commands_disable_external_diff_and_pager(
     assert "--cached" in captured[2]
     assert "--no-ext-diff" in captured[3]
     await provider.close()
+
+
+async def test_read_file_denies_secret_and_leaf_symlink(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    (workspace / "src").mkdir()
+    (workspace / "src" / "app.py").write_bytes(b"print(1)\n")
+    (workspace / ".env").write_bytes(b"SECRET=1\n")
+    (workspace / "env-link").symlink_to(workspace / ".env")
+    (workspace / "app-link").symlink_to(workspace / "src" / "app.py")
+    (workspace / "real").mkdir()
+    (workspace / "real" / "ok.txt").write_bytes(b"ok\n")
+    (workspace / "ext").symlink_to(workspace / "real")
+
+    with pytest.raises(SandboxPolicyViolation, match="workspace_secret_path"):
+        await session.read_file(".env")
+    with pytest.raises(
+        SandboxPolicyViolation,
+        match="workspace_symlink_leaf|workspace_secret_path",
+    ):
+        await session.read_file("env-link")
+    with pytest.raises(SandboxPolicyViolation, match="workspace_symlink_leaf"):
+        await session.read_file("app-link")
+
+    assert await session.read_file("ext/ok.txt") == b"ok\n"
+    assert await session.read_file("src/app.py") == b"print(1)\n"
+    await provider.close()
+
+
+async def test_search_text_skips_oversized_files(tmp_path: Path) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=replace(SandboxLimits.safe_defaults(), max_output_bytes=64),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file("small.txt", b"needle in small\n")
+    await session.write_file("huge.txt", b"needle " + (b"x" * 200) + b"\n")
+
+    matches = await session.search_text("needle")
+
+    assert [match.path for match in matches] == ["small.txt"]
+    await provider.close()
+
+
+async def test_execute_assembles_guest_env_without_host_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", "/host/secret/bin:/usr/bin")
+    monkeypatch.setenv("HOME", "/host/home")
+    monkeypatch.setenv("TMPDIR", "/host/tmp")
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+
+    result = await session.execute(
+        CommandRequest(
+            argv=(
+                sys.executable,
+                "-c",
+                "import os; print(os.environ.get('PATH','')); "
+                "print(os.environ.get('HOME','')); "
+                "print(os.environ.get('TMPDIR',''))",
+            )
+        )
+    )
+    overlaid = await session.execute(
+        CommandRequest(
+            argv=(sys.executable, "-c", "import os; print(os.environ['PATH'])"),
+            env={"PATH": "/custom/bin"},
+        )
+    )
+
+    lines = result.stdout.decode().splitlines()
+    assert result.exit_code == 0
+    assert lines[0] == "/usr/bin:/bin"
+    assert lines[1] == str(workspace)
+    assert lines[2] in {str(workspace / ".tmp"), "/tmp"}
+    assert "/host/secret/bin" not in result.stdout.decode()
+    assert "/host/home" not in result.stdout.decode()
+    assert overlaid.stdout.decode().strip() == "/custom/bin"
+    await provider.close()
+
+
+async def test_fingerprint_does_not_follow_directory_symlink(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    outside = tmp_path / "outside-secret-dir"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("v1", encoding="utf-8")
+    (workspace / "link").symlink_to(outside)
+
+    assert await session.workspace_revision() == 0
+    secret.write_text("v2", encoding="utf-8")
+    await session.execute(
+        CommandRequest(argv=(sys.executable, "-c", "pass"))
+    )
+
+    assert await session.workspace_revision() == 0
+    await provider.close()

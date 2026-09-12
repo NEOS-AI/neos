@@ -43,6 +43,11 @@
     { "kind": "conflict_reinvestigation", "labeled": true },
     { "kind": "dead_end", "labeled": true },
     { "kind": "entailment_filter_skipped", "labeled": true },
+    {
+      "kind": "explore_brief",
+      "labeled": false,
+      "reason": "터미널 fold 의 미검증 메모다. 클레임이 아니고 채점 대상도 아니다. pass_completed 가 이미 진행을 말하고, 자식 출력을 활동 줄에 올리면 미검증 텍스트가 조사 로그처럼 보인다."
+    },
     { "kind": "finalization_prompt_clamped", "labeled": true },
     { "kind": "investigation_stopped_at_floor", "labeled": true },
     { "kind": "investigation_stopped_at_input_bound", "labeled": true },
@@ -74,6 +79,11 @@
     { "kind": "run_manifest", "labeled": true },
     { "kind": "split", "labeled": true },
     { "kind": "stall_terminated", "labeled": true },
+    {
+      "kind": "subagent_step",
+      "labeled": false,
+      "reason": "자식 1-step 재개 포인터(run_id/checkpoint_id)다. 질문 재개방과 pass_completed 가 이미 진행을 말하고, 라운드마다 찍히므로 활동 줄에 올리면 조사 로그가 된다."
+    },
     { "kind": "subq_adopted", "labeled": true },
     { "kind": "subq_proposed", "labeled": true },
     { "kind": "subq_review_failed", "labeled": true },

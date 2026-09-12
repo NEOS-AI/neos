@@ -376,6 +376,7 @@ async def test_callback_stop_dispatches_after_gate(
     assert len(gateway.calls) == 1
     assert gateway.calls[0].text == "/stop"
     assert gateway.calls[0].session_id == f"v2:telegram:{GROUP_CHAT_ID}:{GROUP_CHAT_ID}:-"
+    assert gateway.calls[0].metadata["idempotency_key"] == "99:neos_code_stop:ct_abc"
     update.callback_query.answer.assert_awaited()
 
 

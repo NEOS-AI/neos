@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from neos.coding.hooks import HookDecision, NullCodingHooks, StopDecision
+from neos.coding.hooks import (
+    HookDecision,
+    NullCodingHooks,
+    StopDecision,
+    post_tool_prevented,
+)
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 pytestmark = pytest.mark.no_db
@@ -36,3 +41,11 @@ def test_stop_decision_allows_prevent_and_retry() -> None:
     assert prevent["decision"] in {"allow", "prevent", "retry"}
     assert retry["decision"] == "retry"
     assert allow["decision"] == "allow"
+
+
+def test_post_tool_prevented_reads_decision_mapping() -> None:
+    assert post_tool_prevented({"decision": "prevent", "reason": "stop"})
+    assert not post_tool_prevented({"decision": "allow"})
+    assert not post_tool_prevented({"status": "ok", "hooked": True})
+    assert not post_tool_prevented(None)
+    assert not post_tool_prevented("prevent")

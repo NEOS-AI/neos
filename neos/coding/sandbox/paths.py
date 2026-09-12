@@ -67,6 +67,53 @@ def resolve_workspace_path(
     return resolved
 
 
+def resolve_readable_workspace_path(root: Path, path: str) -> Path:
+    """Resolve a read target: follow internal parent dirs, refuse leaf links."""
+    from neos.coding.domain.approvals import is_denied_secret_path
+
+    relative = normalize_workspace_path(path)
+    requested = relative.as_posix()
+    if requested != "." and is_denied_secret_path(requested):
+        raise SandboxPolicyViolation("workspace_secret_path")
+
+    try:
+        root_real = root.resolve(strict=True)
+    except (FileNotFoundError, RuntimeError) as error:
+        raise SandboxPolicyViolation("workspace_path_not_resolvable") from error
+
+    parts = tuple(part for part in relative.parts if part != ".")
+    current = root_real
+    for index, part in enumerate(parts):
+        current = current / part
+        is_leaf = index == len(parts) - 1
+        try:
+            if current.is_symlink():
+                if is_leaf:
+                    raise SandboxPolicyViolation("workspace_symlink_leaf")
+                resolved = current.resolve(strict=True)
+                if not resolved.is_relative_to(root_real):
+                    raise SandboxPolicyViolation("workspace_symlink_escape")
+                current = resolved
+            elif is_leaf:
+                current = current.resolve(strict=True)
+            elif not current.exists():
+                raise SandboxPolicyViolation("workspace_path_not_resolvable")
+        except SandboxPolicyViolation:
+            raise
+        except (FileNotFoundError, RuntimeError, OSError) as error:
+            raise SandboxPolicyViolation("workspace_path_not_resolvable") from error
+
+    if not current.is_relative_to(root_real):
+        raise SandboxPolicyViolation("workspace_symlink_escape")
+    try:
+        resolved_rel = current.relative_to(root_real).as_posix()
+    except ValueError as error:
+        raise SandboxPolicyViolation("workspace_symlink_escape") from error
+    if resolved_rel != "." and is_denied_secret_path(resolved_rel):
+        raise SandboxPolicyViolation("workspace_secret_path")
+    return current
+
+
 def resolve_mutable_workspace_path(root: Path, path: str) -> Path:
     """Resolve a mutation target without following parent or leaf symlinks."""
     relative = normalize_workspace_path(path)

@@ -1139,17 +1139,55 @@ async def test_latest_tool_result_over_threshold_is_persisted_as_ref() -> None:
 
 
 @pytest.mark.asyncio
-async def test_latest_read_file_result_is_not_ref_compacted() -> None:
+async def test_latest_huge_read_file_result_is_previewed() -> None:
     fat = _fat_payload(preview_prefix="     1|")
+    assert (
+        len(json.dumps(fat, sort_keys=True, separators=(",", ":")).encode())
+        >= COMPACT_REF_THRESHOLD_BYTES
+    )
     h = harness(
-        [[tool_call("r1", "read_file.v1", {"path": "big.txt"}), completed()]],
+        [
+            [tool_call("r1", "read_file.v1", {"path": "big.txt"}), completed()],
+            [TextDelta("noted"), ModelCompleted("end_turn", ModelUsage(1, 1))],
+        ],
         executor=_FatExecutor(fat, name="read_file.v1"),
+    )
+    await collect(h)
+    results = _transcript_tool_results(h.repository.checkpoints[-1].loop_state)
+    assert results[-1]["content"]["compacted"] is True
+    assert "entries" not in results[-1]["content"]
+    digest = results[-1]["content"]["sha256"]
+    assert digest in h.repository.checkpoints[-1].loop_state["compacted_bodies"]
+
+    await collect(h, h.repository.checkpoints[-1])
+    request_results = {
+        item.tool_call_id: dict(item.content)
+        for message in h.model.requests[-1].messages
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+    assert request_results["r1"]["compacted"] is True
+    assert "entries" not in request_results["r1"]
+    assert "x" * 200 not in json.dumps(request_results["r1"])
+
+
+@pytest.mark.asyncio
+async def test_latest_small_read_file_result_is_not_ref_compacted() -> None:
+    small = {
+        "status": "ok",
+        "workspace_revision": "1",
+        "preview": "     1|hi",
+        "entries": [{"text": "     1|hi"}],
+    }
+    h = harness(
+        [[tool_call("r1", "read_file.v1", {"path": "tiny.txt"}), completed()]],
+        executor=_FatExecutor(small, name="read_file.v1"),
     )
     await collect(h)
     results = _transcript_tool_results(h.repository.checkpoints[-1].loop_state)
     assert results[-1]["content"].get("compacted") is not True
     assert results[-1]["content"]["preview"].lstrip().startswith("1|")
-    assert len(results[-1]["content"]["entries"]) == 30
+    assert len(results[-1]["content"]["entries"]) == 1
 
 
 def test_shrink_old_tool_results_skips_read_file_pairs() -> None:
@@ -1295,3 +1333,312 @@ def test_read_stamps_round_trip_offset_and_limit() -> None:
     assert dumped["read_stamps"]["exists.txt"]["offset"] == 10
     assert dumped["read_stamps"]["exists.txt"]["limit"] == 40
     assert dict(restored.read_stamps) == stamps
+
+
+@pytest.mark.asyncio
+async def test_workspace_instruction_tree_starts_at_session_cwd(tmp_path) -> None:
+    (tmp_path / "AGENTS.md").write_text("root rules", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "AGENTS.md").write_text("pkg rules", encoding="utf-8")
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    h.bindings.session._record = SimpleNamespace(workspace=str(tmp_path))
+    h.bindings.session.cwd = str(pkg)
+    state = h.loop._restore(INPUT, None)
+    loaded = await h.loop._load_workspace_instructions(
+        state, SimpleNamespace(session=h.bindings.session)
+    )
+    texts = [
+        item.text
+        for message in loaded.transcript
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    ]
+    blob = "\n".join(texts)
+    assert "root rules" in blob
+    assert "pkg rules" in blob
+    assert blob.index("root rules") < blob.index("pkg rules")
+
+
+@pytest.mark.asyncio
+async def test_workspace_instruction_tree_does_not_walk_above_workspace(
+    tmp_path,
+) -> None:
+    parent = tmp_path / "outside"
+    parent.mkdir()
+    (parent / "AGENTS.md").write_text("outside parent", encoding="utf-8")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text("inside", encoding="utf-8")
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    h.bindings.session._record = SimpleNamespace(workspace=str(workspace))
+    h.bindings.session.cwd = str(parent)
+    state = h.loop._restore(INPUT, None)
+    loaded = await h.loop._load_workspace_instructions(
+        state, SimpleNamespace(session=h.bindings.session)
+    )
+    texts = [
+        item.text
+        for message in loaded.transcript
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    ]
+    blob = "\n".join(texts)
+    assert "inside" in blob
+    assert "outside parent" not in blob
+
+
+@pytest.mark.asyncio
+async def test_think_blocks_are_stripped_from_persisted_transcript() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("<think>secret plan</think> visible answer"),
+                ModelCompleted("end_turn", ModelUsage(2, 1)),
+            ]
+        ]
+    )
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    blob = json.dumps(state["transcript"])
+    assert "visible answer" in blob
+    assert "<think>" not in blob
+    assert "</think>" not in blob
+    assert "secret plan" not in blob
+    assert state["terminal_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_unclosed_thinking_and_reasoning_are_stripped() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("ok <thinking>hidden"),
+                ModelCompleted("end_turn", ModelUsage(2, 1)),
+            ]
+        ]
+    )
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    blob = json.dumps(state["transcript"])
+    assert "ok" in blob
+    assert "<thinking>" not in blob
+    assert "hidden" not in blob
+    assert state["terminal_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_unclosed_reasoning_only_is_empty_retry() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("<reasoning>still thinking"),
+                ModelCompleted("end_turn", ModelUsage(2, 1)),
+            ]
+        ]
+    )
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    blob = json.dumps(state["transcript"])
+    assert "<reasoning>" not in blob
+    assert "still thinking" not in blob
+    assert state["terminal_pending"] is False
+    assert state["empty_retry_count"] == 1
+
+
+class _SameOkExecutor(Executor):
+    async def execute(self, session, call, **kwargs):
+        self.calls.append(call)
+        return SimpleNamespace(
+            to_mapping=lambda: {
+                "status": "ok",
+                "preview": "same",
+                "workspace_revision": "1",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_identical_successes_are_stall_denied_before_fourth_execute() -> None:
+    same = {"path": "a.txt", "content": "x"}
+    h = harness(
+        [
+            [tool_call("t1", "write_file.v1", same), completed()],
+            [tool_call("t2", "write_file.v1", same), completed()],
+            [tool_call("t3", "write_file.v1", same), completed()],
+            [tool_call("t4", "write_file.v1", same), completed()],
+        ],
+        executor=_SameOkExecutor(),
+    )
+    await collect(h)
+    await collect(h, h.repository.checkpoints[-1])
+    await collect(h, h.repository.checkpoints[-1])
+    assert len(h.executor.calls) == 3
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["last_success_count"] == 3
+    events = await collect(h, h.repository.checkpoints[-1])
+    assert len(h.executor.calls) == 3
+    assert events[-1].type == "tool.denied"
+    assert events[-1].payload["reason_code"] == "policy_stall_denied"
+    results = _transcript_tool_results(h.repository.checkpoints[-1].loop_state)
+    assert results[-1]["content"]["reason_code"] == "policy_stall_denied"
+
+
+@pytest.mark.asyncio
+async def test_success_stall_resets_when_result_hash_changes() -> None:
+    same = {"path": "a.txt", "content": "x"}
+
+    class FlipExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__()
+            self._n = 0
+
+        async def execute(self, session, call, **kwargs):
+            self.calls.append(call)
+            self._n += 1
+            return SimpleNamespace(
+                to_mapping=lambda: {
+                    "status": "ok",
+                    "preview": f"n{self._n}",
+                    "workspace_revision": "1",
+                }
+            )
+
+    h = harness(
+        [
+            [tool_call("t1", "write_file.v1", same), completed()],
+            [tool_call("t2", "write_file.v1", same), completed()],
+            [tool_call("t3", "write_file.v1", same), completed()],
+            [tool_call("t4", "write_file.v1", same), completed()],
+        ],
+        executor=FlipExecutor(),
+    )
+    await collect(h)
+    await collect(h, h.repository.checkpoints[-1])
+    await collect(h, h.repository.checkpoints[-1])
+    events = await collect(h, h.repository.checkpoints[-1])
+    assert len(h.executor.calls) == 4
+    assert all(event.type != "tool.denied" for event in events)
+    assert h.repository.checkpoints[-1].loop_state["last_success_count"] == 1
+
+
+def test_success_stall_fields_round_trip_in_loop_state() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = replace(
+        h.loop._restore(INPUT, None),
+        last_success_signature="sig",
+        last_success_result_hash="hash",
+        last_success_count=3,
+    )
+    dumped = h.loop._dump_state(INPUT, state)
+    restored = h.loop._restore(
+        INPUT,
+        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
+    )
+    assert dumped["last_success_signature"] == "sig"
+    assert dumped["last_success_result_hash"] == "hash"
+    assert dumped["last_success_count"] == 3
+    assert restored.last_success_signature == "sig"
+    assert restored.last_success_result_hash == "hash"
+    assert restored.last_success_count == 3
+
+
+@pytest.mark.asyncio
+async def test_duplicate_tool_call_ids_are_suffixed_deterministically() -> None:
+    h = harness(
+        [
+            [
+                tool_call("dup", "write_file.v1", {"path": "a.txt", "content": "x"}),
+                tool_call("dup", "write_file.v1", {"path": "b.txt", "content": "y"}),
+                tool_call("dup", "write_file.v1", {"path": "c.txt", "content": "z"}),
+                completed(),
+            ]
+        ]
+    )
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    pending_ids = [call["tool_call_id"] for call in state["pending_tool_calls"]]
+    assert pending_ids == ["dup", "dup_d2", "dup_d3"]
+    use_ids = [
+        item["tool_call_id"]
+        for message in state["transcript"]
+        if message["role"] == "assistant"
+        for item in message["content"]
+        if item.get("type") == "tool_use"
+    ]
+    assert use_ids == ["dup", "dup_d2", "dup_d3"]
+    assert "uuid" not in json.dumps(pending_ids)
+
+
+def test_uniquify_avoids_existing_suffixed_ids() -> None:
+    from neos.coding.loop.durable import _uniquify_tool_calls
+
+    calls = [
+        tool_call("x", "read_file.v1", {"path": "a.txt"}),
+        tool_call("x_d2", "read_file.v1", {"path": "b.txt"}),
+        tool_call("x", "read_file.v1", {"path": "c.txt"}),
+    ]
+    ids = [call.tool_call_id for call in _uniquify_tool_calls(calls)]
+    assert ids == ["x", "x_d2", "x_d3"]
+    assert len(ids) == len(set(ids))
+
+
+class _PostPrevent(_DecisionHook):
+    async def pre_tool(self, call):
+        return {"decision": "allow"}
+
+    async def post_tool(self, call, result):
+        return {"decision": "prevent", "reason": "stop after"}
+
+
+@pytest.mark.asyncio
+async def test_post_tool_prevent_closes_pair_and_is_terminal() -> None:
+    h = harness([[tool_call(), completed()]], hooks=_PostPrevent("allow"))
+    events = await collect(h)
+    assert h.executor.calls
+    denied = [event for event in events if event.type == "tool.denied"]
+    assert denied
+    assert denied[-1].payload["reason_code"] == "hook_prevented"
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["terminal_pending"] is True
+    assert state["pending_tool_index"] == 1
+    results = _transcript_tool_results(state)
+    assert results[-1]["status"] in {"denied", "error"}
+    assert results[-1]["content"]["reason_code"] == "hook_prevented"
+    assert results[-1]["content"]["denied_by"] == "hook"
+    follow = await collect(h, h.repository.checkpoints[-1])
+    assert follow == []
+
+
+@pytest.mark.asyncio
+async def test_spawn_agent_appends_prompt_as_user_meta() -> None:
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "look around", "max_turns": 8},
+                ),
+                completed(),
+            ]
+        ]
+    )
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    results = _transcript_tool_results(state)
+    assert results[-1]["content"].get("delegated") is False
+    assert results[-1]["content"].get("use_phase") == "explore"
+    texts = [
+        item["text"]
+        for message in state["transcript"]
+        if message["role"] == "user"
+        for item in message["content"]
+        if item.get("type") == "text"
+    ]
+    assert any("look around" in text for text in texts)
+    assert state["transcript"][-1]["role"] == "user"
+    assert "look around" in state["transcript"][-1]["content"][0]["text"]
+    assert all(getattr(request, "task_id", None) != "spawn" for request in h.model.requests)

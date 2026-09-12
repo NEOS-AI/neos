@@ -336,6 +336,34 @@ async def test_command_bounds_stdout_and_stderr_separately() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_git_injects_no_pager_and_no_ext_diff() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "execute.v1",
+            {
+                "argv": ["git", "status", "--short"],
+                "cwd": ".",
+                "env": {},
+                "stdin": "",
+                "timeout_sec": 1,
+                "max_output_bytes": 10,
+            },
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.called is not None
+    request = session.called[1]
+    assert request.argv[0] == "git"
+    assert "--no-pager" in request.argv
+    assert "--no-ext-diff" in request.argv
+    assert request.argv.index("--no-pager") < request.argv.index("status")
+    assert request.argv.index("--no-ext-diff") < request.argv.index("status")
+
+
+@pytest.mark.asyncio
 async def test_execute_never_serializes_environment_values() -> None:
     result = await SandboxToolExecutor(10, 10).execute(
         FakeSession(),
@@ -398,6 +426,20 @@ async def test_maps_sandbox_errors_without_leaking_messages(
     )
     assert (result.status, result.reason_code) == (status, reason)
     assert str(error) not in json.dumps(result.to_mapping())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code",
+    ["workspace_path_escape", "file_too_large", "policy_secret_path_denied"],
+)
+async def test_known_sandbox_policy_codes_pass_through(code: str) -> None:
+    session = FakeSession()
+    session.error = SandboxPolicyViolation(code)
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("read_file.v1", {"path": "a.txt"})
+    )
+    assert (result.status, result.reason_code) == ("denied", code)
 
 
 @pytest.mark.asyncio
@@ -634,6 +676,7 @@ async def test_web_fetch_blocks_secret_query_param_names(
         "192.168.1.8",
         "100.64.0.1",
         "::1",
+        "::",
         "fc00::1",
         "fe80::1",
     ],
@@ -739,6 +782,42 @@ def _fake_web_response(
             return None
 
     return FakeResponse()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_disables_env_proxy(monkeypatch) -> None:
+    import urllib.request
+
+    seen: list[object] = []
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            del request, timeout
+            return _fake_web_response(b"hello")
+
+    def capture(*handlers, **kwargs):
+        del kwargs
+        seen.extend(handlers)
+        return FakeOpener()
+
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.urllib.request.build_opener", capture
+    )
+    result = await SandboxToolExecutor(32, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+
+    assert result.status == "ok"
+    proxies = [
+        handler
+        for handler in seen
+        if isinstance(handler, urllib.request.ProxyHandler)
+    ]
+    assert proxies
+    assert proxies[0].proxies == {}
 
 
 @pytest.mark.asyncio
@@ -1198,6 +1277,87 @@ async def test_edit_without_prior_read_is_denied() -> None:
         "precondition_read_required",
     )
     assert session.files["app.py"] == b"foo"
+
+
+@pytest.mark.asyncio
+async def test_edit_empty_old_string_creates_missing_or_empty_file() -> None:
+    session = FakeSession()
+    executor = SandboxToolExecutor(64, 10)
+    created = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "new.py", "old_string": "", "new_string": "print(1)\n"},
+        ),
+    )
+    session.files["empty.py"] = b""
+    await executor.execute(session, call("read_file.v1", {"path": "empty.py"}))
+    filled = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "empty.py", "old_string": "", "new_string": "ok\n"},
+        ),
+    )
+
+    assert created.status == "ok"
+    assert session.files["new.py"] == b"print(1)\n"
+    assert filled.status == "ok"
+    assert session.files["empty.py"] == b"ok\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_empty_old_string_denies_existing_nonempty_file() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"already here"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "", "new_string": "new\n"},
+        ),
+    )
+
+    assert (result.status, result.reason_code) == ("denied", "edit_create_existing")
+    assert session.files["app.py"] == b"already here"
+
+
+@pytest.mark.asyncio
+async def test_edit_empty_new_string_deletes_following_newline() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"keep\nremove\nnext\n"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "remove", "new_string": ""},
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.files["app.py"] == b"keep\nnext\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_matches_crlf_text_and_restores_original_eol() -> None:
+    session = FakeSession()
+    session.files["win.txt"] = b"alpha\r\nbeta\r\n"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "win.txt"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "win.txt", "old_string": "beta", "new_string": "gamma"},
+        ),
+    )
+
+    assert result.status == "ok"
+    assert session.files["win.txt"] == b"alpha\r\ngamma\r\n"
 
 
 @pytest.mark.asyncio

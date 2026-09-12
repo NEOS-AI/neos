@@ -317,4 +317,118 @@ def test_list_skills_hides_disable_model_invocation(tmp_path: Path) -> None:
     hidden = catalog.get("hidden")
     assert hidden is not None
     assert hidden.disable_model_invocation is True
-    assert catalog.load_markdown("hidden") is not None
+    assert catalog.load_markdown("hidden") is None
+
+
+def _write_coding_dir_skill(
+    root: Path, name: str, frontmatter: str, body: str = ""
+) -> Path:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\n{frontmatter}\n---\n\n"
+        "## When to Use\n\nUse it.\n\n## Boundaries\n\nDo not invent.\n"
+        f"{body}",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_load_markdown_reference_is_jailed_to_skill_dir(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    skill_dir = _write_coding_dir_skill(
+        root,
+        "guided",
+        "name: guided\ndescription: Guided\nallowed-tools: read_file.v1",
+    )
+    ref_dir = skill_dir / "reference"
+    ref_dir.mkdir()
+    (ref_dir / "hooks.md").write_text("# Hooks\nDo not skip hooks.\n", encoding="utf-8")
+    outside = tmp_path / "secret.md"
+    outside.write_text("SECRET", encoding="utf-8")
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+
+    body = catalog.load_markdown("guided", reference="hooks.md")
+    by_stem = catalog.load_markdown("guided", reference="hooks")
+    by_path = catalog.load_markdown("guided", path="hooks.md")
+
+    assert body is not None and "Do not skip hooks" in body
+    assert by_stem == body
+    assert by_path == body
+    assert catalog.load_markdown("guided", reference="../secret.md") is None
+    assert catalog.load_markdown("guided", path="../../secret.md") is None
+    assert catalog.load_markdown("guided", reference="missing.md") is None
+    assert catalog.load_markdown("guided", reference="hooks.md/../secret.md") is None
+
+
+def test_load_skill_denies_disabled_and_returns_allowed_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from neos.coding.tools.executor import SandboxToolExecutor
+    from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
+
+    root = tmp_path / "coding"
+    _write_coding_dir_skill(
+        root,
+        "guided",
+        "\n".join(
+            [
+                "name: guided",
+                "description: Guided",
+                "allowed-tools:",
+                "  - read_file.v1",
+                "  - execute.v1",
+            ]
+        ),
+    )
+    _write_coding_skill(
+        root,
+        "hidden",
+        "name: hidden\ndescription: Hidden\ndisable-model-invocation: true\n",
+    )
+    ref_dir = root / "guided" / "reference"
+    ref_dir.mkdir()
+    (ref_dir / "hooks.md").write_text("# Hooks\nLayer two.\n", encoding="utf-8")
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+    monkeypatch.setattr(
+        "neos.skills.markdown_catalog.default_catalog", lambda: catalog
+    )
+
+    loaded = SandboxToolExecutor._load_skill(
+        ValidatedToolCall("load_skill.v1", {"name": "guided"}, ToolRisk.READ_ONLY)
+    )
+    disabled = SandboxToolExecutor._load_skill(
+        ValidatedToolCall("load_skill.v1", {"name": "hidden"}, ToolRisk.READ_ONLY)
+    )
+    missing_ref = SandboxToolExecutor._load_skill(
+        ValidatedToolCall(
+            "load_skill.v1",
+            {"name": "guided", "reference": "missing.md"},
+            ToolRisk.READ_ONLY,
+        )
+    )
+    escaped = SandboxToolExecutor._load_skill(
+        ValidatedToolCall(
+            "load_skill.v1",
+            {"name": "guided", "path": "../secret.md"},
+            ToolRisk.READ_ONLY,
+        )
+    )
+    reference = SandboxToolExecutor._load_skill(
+        ValidatedToolCall(
+            "load_skill.v1",
+            {"name": "guided", "reference": "hooks.md"},
+            ToolRisk.READ_ONLY,
+        )
+    )
+
+    assert loaded.status == "ok"
+    assert loaded.entries[0]["allowed_tools"] == ["read_file.v1", "execute.v1"]
+    assert (disabled.status, disabled.reason_code) == ("denied", "unknown_skill")
+    assert (missing_ref.status, missing_ref.reason_code) == (
+        "denied",
+        "unknown_skill",
+    )
+    assert (escaped.status, escaped.reason_code) == ("denied", "unknown_skill")
+    assert reference.status == "ok"
+    assert "Layer two" in str(reference.entries[0]["markdown"])

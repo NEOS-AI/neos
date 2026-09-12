@@ -6,16 +6,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
-from neos.coding.tools.registry import (
-    ToolRisk,
-    ValidatedToolCall,
-    path_operands_from_argv,
-)
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.phases import phase_change_requires_approval
 from neos.coding.redact import redact_sensitive
+
+if TYPE_CHECKING:
+    from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 
 class ApprovalStatus(StrEnum):
@@ -155,6 +154,8 @@ def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
     if isinstance(raw_paths, (list, tuple)):
         found.extend(str(item) for item in raw_paths if item)
     if call.name == "execute.v1":
+        from neos.coding.tools.registry import path_operands_from_argv
+
         argv = call.input.get("argv")
         if isinstance(argv, (list, tuple)):
             found.extend(path_operands_from_argv(tuple(str(item) for item in argv)))
@@ -181,7 +182,21 @@ def is_denied_secret_path(path: object) -> bool:
         return True
     if ".git" in folded or ".ssh" in folded:
         return True
-    if name == "id_rsa":
+    if name in {
+        "id_rsa",
+        "id_ed25519",
+        ".envrc",
+        ".npmrc",
+        ".pypirc",
+        ".netrc",
+        ".pgpass",
+        ".git-credentials",
+    }:
+        return True
+    if any(
+        part == ".neos" and folded[index + 1] == "secrets"
+        for index, part in enumerate(folded[:-1])
+    ):
         return True
     return any(
         part == ".aws" and folded[index + 1] == "credentials"
@@ -190,7 +205,13 @@ def is_denied_secret_path(path: object) -> bool:
 
 
 _PROTECTED_INSTRUCTION_BASENAMES = frozenset(
-    {"AGENTS.md", "CLAUDE.md", "SOUL.md", ".cursorrules"}
+    {
+        "agents.md",
+        "claude.md",
+        "soul.md",
+        ".cursorrules",
+        "claude.local.md",
+    }
 )
 _INSTRUCTION_WRITE_TOOLS = frozenset({"write_file.v1", "edit_file.v1"})
 _SENSITIVE_CONFIG_BASENAMES = frozenset(
@@ -215,7 +236,7 @@ def _is_protected_instruction_write(call: ValidatedToolCall) -> bool:
         return False
     for path in _call_paths(call):
         parts = _posix_path_parts(path)
-        if parts and parts[-1] in _PROTECTED_INSTRUCTION_BASENAMES:
+        if parts and parts[-1].casefold() in _PROTECTED_INSTRUCTION_BASENAMES:
             return True
     return False
 
@@ -268,6 +289,8 @@ def _evaluate_approval(
         target = str(call.input.get("phase") or "")
         if phase_change_requires_approval(gate.current_phase, target):
             return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    from neos.coding.tools.registry import ToolRisk
+
     if call.risk is ToolRisk.READ_ONLY:
         return ApprovalPolicyOutcome.ALLOW
     if call.risk in {
@@ -362,6 +385,17 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
     return redact_sensitive({"operation": call.name})
 
 
+def approval_event_display_summary(
+    summary: Mapping[str, object],
+) -> dict[str, object]:
+    excerpt = dict(summary)
+    excerpt.pop("preview", None)
+    excerpt.pop("patch", None)
+    excerpt.pop("content", None)
+    excerpt.pop("truncated", None)
+    return excerpt
+
+
 def denial_envelope(call, reason_code: str) -> dict[str, object]:
     if reason_code.startswith("policy_hook_"):
         denied_by = "hook"
@@ -369,6 +403,8 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
         denied_by = "user"
     else:
         denied_by = "policy"
+    from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
+
     summary_call = (
         call
         if isinstance(call, ValidatedToolCall)

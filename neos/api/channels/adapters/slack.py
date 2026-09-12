@@ -517,6 +517,32 @@ class SlackAdapter(ChannelAdapterBase):
             return file_obj
         return payload if payload.get("mimetype") else None
 
+    def _remember_file_shares(self, message: dict) -> None:
+        files = list(message.get("files") or [])
+        if not files and message.get("subtype") != "file_share":
+            return
+        ts = str(message.get("ts") or "")
+        if ts:
+            self._seen_file_shares.add(ts)
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            file_id = str(item.get("id") or "")
+            if file_id:
+                self._seen_file_shares.add(file_id)
+
+    def _file_share_already_seen(self, message: dict) -> bool:
+        ts = str(message.get("ts") or "")
+        if ts and ts in self._seen_file_shares:
+            return True
+        for item in message.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            file_id = str(item.get("id") or "")
+            if file_id and file_id in self._seen_file_shares:
+                return True
+        return False
+
     def _team_scope(self, raw: Any) -> str:
         team = None
         if isinstance(raw, dict):
@@ -534,8 +560,14 @@ class SlackAdapter(ChannelAdapterBase):
 
     async def _handle_message(self, message: dict, say: Any, client: Any) -> None:
         """@app.message() 핸들러."""
-        # bot_id가 있는 메시지 = 봇이 보낸 메시지 — 무시
-        if message.get("bot_id"):
+        subtype = str(message.get("subtype") or "")
+        if subtype in {"message_changed", "message_deleted"}:
+            return
+        if _is_slack_bot_sender(message):
+            return
+        already_seen = self._file_share_already_seen(message)
+        self._remember_file_shares(message)
+        if subtype == "file_share" and already_seen:
             return
 
         from neos.config.settings import settings
@@ -563,7 +595,7 @@ class SlackAdapter(ChannelAdapterBase):
             channel_id=channel_id,
             text=text,
             is_dm=message.get("channel_type") == "im" or channel_id.startswith("D"),
-            is_bot=bool(message.get("bot_id")) or message.get("subtype") == "bot_message",
+            is_bot=_is_slack_bot_sender(message),
             is_self=bool(self._bot_user_id)
             and str(message.get("user")) == self._bot_user_id,
             mentioned=slack_event_mentions_bot(message, self._bot_user_id or ""),
@@ -610,6 +642,19 @@ class SlackAdapter(ChannelAdapterBase):
                 await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             except Exception:
                 pass
+
+
+def _is_slack_bot_sender(message: dict) -> bool:
+    if message.get("bot_id"):
+        return True
+    if message.get("subtype") == "bot_message":
+        return True
+    if message.get("bot_profile"):
+        return True
+    profile = message.get("user_profile")
+    if isinstance(profile, dict) and profile.get("is_bot"):
+        return True
+    return False
 
 
 def _context_team_id(context: Any) -> str:

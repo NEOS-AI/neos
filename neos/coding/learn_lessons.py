@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 
 from neos.config.settings import settings
 from neos.learn.extract import extract_coding_lesson
@@ -14,6 +15,9 @@ from neos.learn.lessons import (
 )
 from neos.learn.policy import namespace
 from neos.learn.postgres import PostgresLessonStore
+
+LESSON_INJECT_CAP = 5
+LESSON_STALE_AFTER = timedelta(days=7)
 
 
 async def _persist_lesson(lesson: Lesson) -> Lesson:
@@ -75,10 +79,22 @@ async def _record_inject(lessons: Sequence[Lesson]) -> None:
         return
 
 
+def _lesson_inject_text(lesson: Lesson, *, now: datetime | None = None) -> str:
+    body = lesson.body
+    created = lesson.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    if current - created > LESSON_STALE_AFTER:
+        return f"{body}\nmay be stale"
+    return body
+
+
 async def approved_lesson_texts(owner_id: str | None) -> tuple[str, ...]:
     approved = await _approved_lessons(owner_id)
-    await _record_inject(approved)
-    return tuple(item.body for item in approved)
+    selected = approved[:LESSON_INJECT_CAP]
+    await _record_inject(selected)
+    return tuple(_lesson_inject_text(item) for item in selected)
 
 
 async def coding_turn_system(static_system: str, owner_id: str | None) -> str:

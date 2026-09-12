@@ -160,6 +160,7 @@ def harness(
     bindings=None,
     approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
     hooks=None,
+    subagents=None,
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
@@ -181,6 +182,7 @@ def harness(
         clock=lambda: NOW,
         approval_evaluator=approval_evaluator,
         hooks=hooks,
+        subagents=subagents,
     )
     deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
     return Harness(loop, repository, events, model, executor, bindings, deps)

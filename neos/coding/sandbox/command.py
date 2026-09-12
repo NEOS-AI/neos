@@ -18,6 +18,12 @@ from neos.coding.sandbox.base import (
     SandboxTimeout,
     SandboxUnavailable,
 )
+from neos.coding.sandbox.process import (
+    TERMINATE_GRACE_SEC,
+    _close_stdio,
+    _signal_process_group,
+    terminate_process_group,
+)
 
 
 _DIGEST_IMAGE = re.compile(r"^[^\s]+@sha256:[0-9a-f]{64}$")
@@ -137,11 +143,7 @@ class DockerInteractiveProcess:
         )
 
     async def terminate(self) -> None:
-        if self._process.returncode is None:
-            try:
-                os.killpg(self._process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        await terminate_process_group(self._process)
 
     async def wait(self) -> int:
         code = await self._process.wait()
@@ -227,6 +229,135 @@ def build_create_args(
     )
 
 
+_DOCKER_VALUE_OPTS = {
+    "-e",
+    "--env",
+    "-u",
+    "--user",
+    "-w",
+    "--workdir",
+    "-s",
+    "--signal",
+    "--env-file",
+    "--name",
+    "--network",
+    "--label",
+    "--memory",
+    "--cpus",
+    "--pids-limit",
+    "--security-opt",
+    "--tmpfs",
+    "--mount",
+    "--cidfile",
+    "--time",
+    "-t",
+}
+
+_DOCKER_GUEST_COMMANDS = {
+    "exec",
+    "run",
+    "start",
+    "stop",
+    "kill",
+    "rm",
+    "inspect",
+    "attach",
+    "logs",
+    "wait",
+    "restart",
+    "pause",
+    "unpause",
+}
+
+
+def _docker_option_value(args: tuple[str, ...], option: str) -> str | None:
+    prefix = f"{option}="
+    for index, arg in enumerate(args):
+        if arg == option and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def _docker_guest_id(args: tuple[str, ...]) -> str | None:
+    if not args:
+        return None
+    named = _docker_option_value(args, "--name")
+    if named and "\0" not in named and not named.startswith("-"):
+        return named
+    if args[0] not in _DOCKER_GUEST_COMMANDS:
+        return None
+    index = 1
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            if index + 1 >= len(args):
+                return None
+            target = args[index + 1]
+            return target if target and "\0" not in target else None
+        if arg.startswith("-"):
+            key, separator, _value = arg.partition("=")
+            if separator or key not in _DOCKER_VALUE_OPTS:
+                index += 1
+                continue
+            index += 2
+            continue
+        if "\0" in arg or arg.startswith("-"):
+            return None
+        return arg
+    return None
+
+
+async def _docker_kill_guest(target: str, sig: str) -> None:
+    if not target or "\0" in target or target.startswith("-"):
+        return
+    try:
+        killer = await asyncio.create_subprocess_exec(
+            "docker",
+            "kill",
+            f"--signal={sig}",
+            target,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError):
+        return
+    try:
+        async with asyncio.timeout(2.0):
+            await killer.wait()
+    except TimeoutError:
+        if killer.pid is not None:
+            _signal_process_group(killer.pid, signal.SIGKILL)
+        await killer.wait()
+
+
+async def _terminate_docker_process(
+    process: asyncio.subprocess.Process,
+    guest: str | None,
+) -> None:
+    if guest is None:
+        await terminate_process_group(process)
+        return
+    if process.returncode is None and process.pid is not None:
+        _signal_process_group(process.pid, signal.SIGTERM)
+    await _docker_kill_guest(guest, "TERM")
+    if process.returncode is not None:
+        return
+    try:
+        async with asyncio.timeout(TERMINATE_GRACE_SEC):
+            await process.wait()
+    except TimeoutError:
+        if process.returncode is None and process.pid is not None:
+            _signal_process_group(process.pid, signal.SIGKILL)
+        _close_stdio(process)
+        await _docker_kill_guest(guest, "KILL")
+        if process.returncode is None:
+            await process.wait()
+
+
 async def _execute_docker(
     *args: str,
     timeout_sec: float,
@@ -248,8 +379,7 @@ async def _execute_docker(
         async with asyncio.timeout(timeout_sec):
             stdout, stderr = await process.communicate(input or None)
     except TimeoutError:
-        process.kill()
-        await process.wait()
+        await _terminate_docker_process(process, _docker_guest_id(args))
         raise
     maximum = 1024 * 1024
     return DockerCommandResult(

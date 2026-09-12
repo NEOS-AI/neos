@@ -10,6 +10,7 @@ from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.commands import CodingCommandService
 from neos.coding.application.approval_service import CodingApprovalService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
@@ -474,6 +475,46 @@ def _coding_api_key(config: AppConfig, provider: str) -> str | None:
     return coding_credential_for(config, provider)
 
 
+class _NullSubagentSink:
+    async def emit(self, event_type: str, payload) -> None:
+        del event_type, payload
+        return None
+
+
+def _build_subagent_runtime(
+    *, model, tools, executor, session_factory, enabled: bool
+):
+    """Construct the parent-driven child runtime.
+
+    When the flag is on, persist children in Postgres via the same session
+    factory the coding repos use. When the flag is off, an in-memory store
+    is enough because no spawn path writes rows; the runtime is still
+    injected so a mid-flight flag flip can cancel.
+    """
+    from neos.coding.subagent_port import CodingToolPort
+    from neos.subagent.catalog import SpecRegistry
+    from neos.subagent.memory import InMemorySubagentStore
+    from neos.subagent.ports import SystemClock
+    from neos.subagent.postgres import PostgresSubagentStore
+    from neos.observability.metrics import get_metrics_collector
+    from neos.subagent.metrics import MetricsEventSink
+    from neos.subagent.runtime import SubagentRuntime
+    from neos.subagent.stepper import ChildStepper
+
+    factory = session_factory or db_manager.get_session
+    store = (
+        PostgresSubagentStore(factory) if enabled else InMemorySubagentStore()
+    )
+    port = CodingToolPort(registry=tools, executor=executor)
+    return SubagentRuntime(
+        store=store,
+        catalog=SpecRegistry(),
+        stepper=ChildStepper(model=model, tools=port),
+        events=MetricsEventSink(_NullSubagentSink(), get_metrics_collector()),
+        clock=SystemClock(),
+    )
+
+
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
     selection = resolve_coding_selection_from_app(config)
@@ -543,6 +584,15 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         approval_deny_tools=frozenset(coding.approval_deny_tools),
         approval_allow_tools=frozenset(coding.approval_allow_tools),
         approval_always_allow=frozenset(coding.approval_always_allow),
+        subagent_enabled=coding.subagent_enabled,
+        subagent_max_active=coding.subagent_max_active,
+    )
+    subagents = _build_subagent_runtime(
+        model=model,
+        tools=tools,
+        executor=executor,
+        session_factory=session_factory,
+        enabled=coding.subagent_enabled,
     )
 
     def finish(sandboxes) -> DurableCodingLoop:
@@ -560,6 +610,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             config=loop_config,
             metrics=metrics,
             audit=LoggingCodingAuditSink(),
+            subagents=subagents,
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라
@@ -704,6 +755,10 @@ coding_snapshot_service = coding_runtime.snapshots
 coding_approval_service = coding_runtime.approvals
 coding_workspace_service = coding_runtime.workspace
 coding_workspace_stream_service = coding_runtime.workspace_streams
+coding_command_service = CodingCommandService(
+    runs=coding_run_service,
+    snapshots=coding_snapshot_service,
+)
 
 
 def initialize_coding_transport(
