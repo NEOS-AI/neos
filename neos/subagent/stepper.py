@@ -348,7 +348,8 @@ def _apply_pending_steer(state: dict[str, Any]) -> None:
     if not text:
         return
     state["messages"].append({"role": "user", "text": text})
-    state["steer_applied"] = text
+    applied = str(state.get("steer_applied") or "").strip()
+    state["steer_applied"] = "\n".join(part for part in (applied, text) if part)
 
 
 def _should_compact(state: Mapping[str, Any]) -> bool:

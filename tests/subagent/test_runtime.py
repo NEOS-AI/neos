@@ -307,6 +307,13 @@ def test_two_steers_during_tool_batch_apply_once() -> None:
     _apply_pending_steer(state)
     user_texts = [item["text"] for item in state["messages"] if item.get("role") == "user"]
     assert user_texts == ["A\nB", "C"]
+    assert state["steer_applied"] == "A\nB\nC"
+    _queue_pending_steer(state, "A\nB\nC\nD")
+    assert state["pending_steer"] == "D"
+    _apply_pending_steer(state)
+    user_texts = [item["text"] for item in state["messages"] if item.get("role") == "user"]
+    assert user_texts == ["A\nB", "C", "D"]
+    assert state["steer_applied"] == "A\nB\nC\nD"
 
 
 @pytest.mark.asyncio
