@@ -37,6 +37,7 @@ from neos.subagent.ports import SystemClock
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
 from neos.subagent.types import (
+    FoldedResult,
     ModelPin,
     ParentBriefing,
     ParentKind,
@@ -95,6 +96,9 @@ class RecordingSubagents:
 
     async def fold(self, run_id):
         return await self.inner.fold(run_id)
+
+    async def status(self, run_id):
+        return await self.inner.status(run_id)
 
     async def cancel(self, run_id, reason):
         self.cancel_calls.append((run_id, reason))
@@ -170,13 +174,26 @@ def _tool_results(state) -> list[dict]:
     ]
 
 
-def _spawn_turns(prompt: str = "look around", call_id: str = "s1"):
+def _spawn_turns(prompt: str = "look around", call_id: str = "s1", max_turns: int = 4):
     return [
         [
-            tool_call(call_id, "spawn_agent.v1", {"prompt": prompt, "max_turns": 4}),
+            tool_call(
+                call_id, "spawn_agent.v1", {"prompt": prompt, "max_turns": max_turns}
+            ),
             completed(),
         ]
     ]
+
+
+async def _fold_spawn(h, checkpoint=None):
+    current = checkpoint
+    for _ in range(6):
+        events = await collect(h, current)
+        completed_events = [event for event in events if event.type == "tool.completed"]
+        if completed_events:
+            return completed_events[-1], h.repository.checkpoints[-1]
+        current = h.repository.checkpoints[-1]
+    raise AssertionError("spawn never folded")
 
 
 class TickableClock:
@@ -283,6 +300,9 @@ async def test_flag_on_multi_delivery_folds_summary_into_parent_tool_result() ->
     assert folded is not None
     result = folded.payload["result"]
     assert "login.py" in str(result.get("summary") or result)
+    assert result["exit_reason"] == "completed"
+    assert result["child_status"] == "completed"
+    assert "full_summary" not in result
     state = h.repository.checkpoints[-1].loop_state
     assert state["pending_tool_index"] == 1
     assert state["active_child_run_id"] is None
@@ -290,8 +310,118 @@ async def test_flag_on_multi_delivery_folds_summary_into_parent_tool_result() ->
     results = _tool_results(state)
     assert results
     assert "login.py" in str(results[-1]["content"].get("summary") or results[-1])
+    assert results[-1]["content"].get("exit_reason") == "completed"
+    assert "full_summary" not in results[-1]["content"]
     assert child.requests
     assert child.requests[0].task_id.startswith("sa_")
+
+
+@pytest.mark.parametrize(
+    ("exit_reason", "status"),
+    [
+        ("completed", SubagentStatus.COMPLETED),
+        ("turns_exhausted", SubagentStatus.COMPLETED),
+        ("cancelled", SubagentStatus.KILLED),
+    ],
+)
+def test_folded_spawn_result_includes_exit_reason(exit_reason, status) -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]], config=_flag_on())
+    bound = SimpleNamespace(binding=SimpleNamespace(workspace_revision="1"))
+    folded = FoldedResult(
+        run_id="sa_1",
+        status=status,
+        summary="report",
+        truncated=True,
+        citations=("README.md",),
+        turn_count=2,
+        input_tokens=4,
+        output_tokens=5,
+        exit_reason=exit_reason,
+        full_summary="secret child checkpoint text",
+    )
+    result = h.loop._folded_spawn_result(bound, folded)
+    assert result["exit_reason"] == exit_reason
+    assert result["child_status"] == status.value
+    assert result["truncated"] is True
+    assert result["input_tokens"] == 4
+    assert result["output_tokens"] == 5
+    assert result["summary"] == "report"
+    assert "full_summary" not in result
+    assert "secret child checkpoint text" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_folded_tool_result_includes_exit_reason_turns_exhausted() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _text("late report")])
+    h = harness(_spawn_turns(max_turns=1), config=_flag_on(), subagents=runtime)
+    folded, checkpoint = await _fold_spawn(h)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "turns_exhausted"
+    assert result["child_status"] == "completed"
+    assert "full_summary" not in result
+    results = [
+        item
+        for item in _tool_results(checkpoint.loop_state)
+        if item["tool_call_id"] == "s1"
+    ]
+    assert results
+    assert results[-1]["content"].get("exit_reason") == "turns_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_folded_tool_result_includes_exit_reason_cancelled() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text("should not fold this")])
+    runtime = RecordingSubagents(inner)
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    run_id = parked.loop_state["active_child_run_id"]
+    await runtime.cancel(run_id, "aborted")
+    folded, checkpoint = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "cancelled"
+    assert result["child_status"] == "killed"
+    assert "full_summary" not in result
+    results = [
+        item
+        for item in _tool_results(checkpoint.loop_state)
+        if item["tool_call_id"] == "s1"
+    ]
+    assert results
+    assert results[-1]["content"].get("exit_reason") == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_fold_after_parent_id_mismatch_does_not_leak_summary() -> None:
+    secret = "UNIQUE_CHILD_REPORT_MUST_NOT_LEAK"
+    runtime, _child = _make_runtime([_child_tool(), _text(secret)])
+    original_status = runtime.status
+
+    async def replaced_parent(run_id):
+        snapshot = await original_status(run_id)
+        return replace(snapshot, parent_id="ct_replaced")
+
+    runtime.status = replaced_parent
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    assert parked.loop_state["active_child_run_id"]
+    folded, checkpoint = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "dropped"
+    assert "summary" not in result
+    assert secret not in str(result)
+    assert ("ct_1", "s1") in h.repository.completed_tools
+    completed = h.repository.completed_tools[("ct_1", "s1")]
+    assert completed["exit_reason"] == "dropped"
+    assert secret not in str(completed)
+    state = checkpoint.loop_state
+    assert secret not in str(state.get("transcript") or ())
+    assert not any(secret in text for text in _user_texts(state))
+    results = [item for item in _tool_results(state) if item["tool_call_id"] == "s1"]
+    assert results == []
+    assert _child_by_id(state, "s1") is None
+    assert state["active_child_run_id"] is None
 
 
 @pytest.mark.asyncio

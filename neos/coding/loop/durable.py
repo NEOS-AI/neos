@@ -990,9 +990,15 @@ class DurableCodingLoop:
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
         reused = claim.disposition is ToolExecutionDisposition.COMPLETED
+        dropped_fold = (
+            call.name == "spawn_agent.v1"
+            and str(result.get("exit_reason") or "") == "dropped"
+        )
         child_fold = call.name == "spawn_agent.v1" and "child_status" in result
-        if child_fold and (
-            not reused or self._child_ref(state, call.tool_call_id) is not None
+        if (
+            child_fold
+            and not dropped_fold
+            and (not reused or self._child_ref(state, call.tool_call_id) is not None)
         ):
             state = self._apply_child_fold_usage(state, result, call.tool_call_id)
         advance_index = (
@@ -1000,7 +1006,13 @@ class DurableCodingLoop:
             and state.pending_tool_calls[state.pending_tool_index].tool_call_id
             == call.tool_call_id
         )
-        if call.tool_call_id in _tool_result_ids(state.transcript):
+        if dropped_fold:
+            after = state
+            if advance_index:
+                after = replace(
+                    after, pending_tool_index=after.pending_tool_index + 1
+                )
+        elif call.tool_call_id in _tool_result_ids(state.transcript):
             after = self._drain_completed_prefix(state)
         else:
             after = await self._after_result(
@@ -2286,6 +2298,7 @@ class DurableCodingLoop:
         ok = folded.status is SubagentStatus.COMPLETED
         status = "ok" if ok else "error"
         reason = "ok" if ok else folded.status.value
+        exit_reason = str(getattr(folded, "exit_reason", "") or "")
         result = dict(
             ToolResult(
                 status,
@@ -2299,6 +2312,7 @@ class DurableCodingLoop:
                     {
                         "summary": folded.summary,
                         "run_id": folded.run_id,
+                        "exit_reason": exit_reason,
                     },
                 ),
             ).to_mapping()
@@ -2311,6 +2325,35 @@ class DurableCodingLoop:
         result["turn_count"] = folded.turn_count
         result["input_tokens"] = int(folded.input_tokens or 0)
         result["output_tokens"] = int(folded.output_tokens or 0)
+        result["exit_reason"] = exit_reason
+        result.pop("full_summary", None)
+        return result
+
+    def _dropped_spawn_result(self, bound, snapshot) -> dict[str, Any]:
+        result = dict(
+            ToolResult(
+                "error",
+                "dropped",
+                None,
+                None,
+                False,
+                None,
+                str(bound.binding.workspace_revision),
+                entries=(
+                    {
+                        "run_id": snapshot.run_id,
+                        "exit_reason": "dropped",
+                    },
+                ),
+            ).to_mapping()
+        )
+        result["run_id"] = snapshot.run_id
+        result["exit_reason"] = "dropped"
+        result["child_status"] = snapshot.status.value
+        result["truncated"] = False
+        result["turn_count"] = int(getattr(snapshot, "turn_count", 0) or 0)
+        result["input_tokens"] = int(snapshot.input_tokens or 0)
+        result["output_tokens"] = int(snapshot.output_tokens or 0)
         return result
 
     async def _run_spawn_agent(
@@ -2415,6 +2458,10 @@ class DurableCodingLoop:
                 input_tokens=int(outcome.input_tokens or 0),
                 output_tokens=int(outcome.output_tokens or 0),
             )
+        snapshot = await self._subagents.status(outcome.run_id)
+        # Replaced parent must not inherit the child's report.
+        if snapshot.parent_id != input.task_id:
+            return self._dropped_spawn_result(bound, snapshot)
         folded = await self._subagents.fold(outcome.run_id)
         return self._folded_spawn_result(bound, folded)
 
