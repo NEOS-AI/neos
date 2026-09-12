@@ -31,10 +31,6 @@ _ROW = re.compile(
 )
 
 
-def _quoted(model: str) -> str:
-    return f"'{model}'"
-
-
 def _rows(sql: str) -> dict[str, tuple[float, float, float, float]]:
     found: dict[str, tuple[float, float, float, float]] = {}
     for match in _ROW.finditer(sql):
@@ -55,9 +51,11 @@ def test_seed_keeps_4_5_price_rows() -> None:
 
 
 def test_seed_adds_claude5_price_rows() -> None:
-    rows = _rows(SEED.read_text(encoding="utf-8"))
+    sql = SEED.read_text(encoding="utf-8")
+    rows = _rows(sql)
     for model, prices in CLAUDE5_PRICES.items():
         assert rows.get(model) == prices, f"seed {model}: {rows.get(model)} != {prices}"
+    assert "ON CONFLICT (provider, model_name, effective_from) DO NOTHING" in sql
 
 
 def test_migration_adds_claude5_prices_without_deleting_4_5() -> None:
@@ -69,6 +67,12 @@ def test_migration_adds_claude5_prices_without_deleting_4_5() -> None:
         assert rows.get(model) == prices, (
             f"migration {model}: {rows.get(model)} != {prices}"
         )
+
+    # Unique key is (provider, model_name, effective_from). A bare INSERT
+    # would duplicate pins on fresh bootstrap (seed then 056).
+    assert "WHERE NOT EXISTS" in sql
+    assert "existing.provider = v.provider" in sql
+    assert "existing.model_name = v.model_name" in sql
 
     assert "delete from llm_model_pricing" not in sql.lower()
     for model in LEGACY_45:
