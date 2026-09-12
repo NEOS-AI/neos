@@ -3,7 +3,6 @@ import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { auth } from "@/app/(auth)/auth";
-import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { loadPageCatalog } from "@/lib/ai/catalog";
@@ -67,9 +66,6 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   const { catalog, modelId, rewriteTo } = await loadPageCatalog(
     cookieStore.get("chat-model")?.value
   );
-  if (rewriteTo) {
-    await saveChatModelAsCookie(rewriteTo);
-  }
 
   return (
     <>
@@ -79,6 +75,7 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
         // (use-chat-stream.ts의 resumeStream도 no-op으로 이중 차단)
         autoResume={false}
         catalog={catalog}
+        cookieRewriteTo={rewriteTo}
         id={chat.id}
         initialChatModel={modelId}
         initialMessages={uiMessages}

@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
+import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { ChatHeader } from "@/components/chat-header";
 import {
   AlertDialog,
@@ -41,6 +42,7 @@ export function Chat({
   isReadonly,
   autoResume,
   catalog,
+  cookieRewriteTo,
 }: {
   id: string;
   initialMessages: ChatMessage[];
@@ -49,6 +51,7 @@ export function Chat({
   isReadonly: boolean;
   autoResume: boolean;
   catalog: CatalogPayload;
+  cookieRewriteTo?: string | null;
 }) {
   const router = useRouter();
 
@@ -80,6 +83,15 @@ export function Chat({
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
+
+  // Persist remaps after hydration. cookies().set during RSC render throws
+  // ReadonlyRequestCookiesError in Next 16 (phase !== "action").
+  useEffect(() => {
+    if (!cookieRewriteTo) {
+      return;
+    }
+    void saveChatModelAsCookie(cookieRewriteTo);
+  }, [cookieRewriteTo]);
 
   const {
     messages,

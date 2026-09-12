@@ -1,5 +1,7 @@
 import { strict as assert } from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   generatedCatalog,
@@ -294,6 +296,40 @@ describe("cookie remaps", () => {
     const result = resolveChatModelFromCookie(undefined, generatedCatalog);
     assert.equal(result.modelId, generatedDefaultId);
     assert.equal(result.rewriteTo, null);
+  });
+
+  test("remapped cookie does not require a render-phase cookies().set", () => {
+    const read = (relative: string) =>
+      readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+
+    const newChatPage = read("../../app/(chat)/page.tsx");
+    const existingChatPage = read("../../app/(chat)/chat/[id]/page.tsx");
+    const chat = read("../../components/chat.tsx");
+
+    for (const [label, source] of [
+      ["page.tsx", newChatPage],
+      ["chat/[id]/page.tsx", existingChatPage],
+    ] as const) {
+      assert.equal(
+        source.includes("saveChatModelAsCookie"),
+        false,
+        `${label} must not call saveChatModelAsCookie during RSC render`
+      );
+      assert.equal(
+        /cookies\(\)\s*\.set|cookieStore\.set/.test(source),
+        false,
+        `${label} must not mutate cookies during RSC render`
+      );
+    }
+
+    assert.ok(
+      chat.includes("saveChatModelAsCookie"),
+      "Chat persists the remapped cookie from a client effect"
+    );
+    assert.ok(
+      /useEffect\(\s*\(\)\s*=>\s*\{[\s\S]*saveChatModelAsCookie/.test(chat),
+      "cookie persist must be inside useEffect, not render"
+    );
   });
 });
 

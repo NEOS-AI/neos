@@ -6,7 +6,6 @@ import { DataStreamHandler } from "@/components/data-stream-handler";
 import { loadPageCatalog } from "@/lib/ai/catalog";
 import { generateUUID } from "@/lib/utils";
 import { auth } from "../(auth)/auth";
-import { saveChatModelAsCookie } from "./actions";
 
 
 export default function Page() {
@@ -30,15 +29,13 @@ async function NewChatPage() {
   const { catalog, modelId, rewriteTo } = await loadPageCatalog(
     cookieStore.get("chat-model")?.value
   );
-  if (rewriteTo) {
-    await saveChatModelAsCookie(rewriteTo);
-  }
 
   return (
     <>
       <Chat
         autoResume={false}
         catalog={catalog}
+        cookieRewriteTo={rewriteTo}
         id={id}
         initialChatModel={modelId}
         initialMessages={[]}

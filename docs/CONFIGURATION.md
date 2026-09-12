@@ -231,9 +231,11 @@ picker (still a valid selectable pin).
 `GET /models` row (plus `picker.extras`). `gpt-6-astra` and Gemini stay
 selectable and out of the chat picker until someone adds a `picker:` block.
 
-Cookie `chat-model` stores a gateway id. On page load the FE rewrites it
-through payload remaps (`raw → gateway_id` still in `models[]`; else
-`default_id`). The next FE turn sends `metadata.model` as the remapped
+Cookie `chat-model` stores a gateway id. On page load the FE remaps it
+in memory (`raw → gateway_id` still in `models[]`; else `default_id`)
+and persists the new value after hydration via `saveChatModelAsCookie`
+(a client-invoked Server Action — Next 16 cannot `cookies().set` during
+RSC render). The next FE turn sends `metadata.model` as the remapped
 catalog pin. Stored `conversations.model_name` is **not** rewritten;
 backend-only paths stay on the stored / role pin.
 
