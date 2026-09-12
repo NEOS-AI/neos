@@ -23,7 +23,11 @@ from typing import TYPE_CHECKING, Any, Literal
 import yaml
 from pydantic import Field, ValidationError, model_validator
 
-from neos.config.model_identity import canonicalize, catalog_shaped
+from neos.config.model_identity import (
+    RemapCycleError,
+    canonicalize,
+    catalog_shaped,
+)
 from neos.config.schema import StrictConfigModel
 
 if TYPE_CHECKING:
@@ -653,6 +657,25 @@ def models_for_provider(provider: str) -> list[str]:
     return model_config.catalog.models_for_provider(provider)
 
 
+def resolve_user_selectable_model(model: str) -> str | None:
+    """USER/cookie strings → selectable catalog pin, or None.
+
+    Remaps and role aliases are resolved first so create/regenerate use
+    the same hop as the per-turn override.
+    """
+    try:
+        identity = canonicalize(
+            model, catalog=model_config.catalog, apply_remap=True
+        )
+    except RemapCycleError:
+        return None
+    if identity is None:
+        return None
+    if identity.catalog_id not in models_for_provider(identity.provider):
+        return None
+    return identity.catalog_id
+
+
 def is_user_selectable_model(model: str) -> bool:
     """`model`이 사용자가 고를 수 있는 카탈로그 모델인가.
 
@@ -669,10 +692,7 @@ def is_user_selectable_model(model: str) -> bool:
     턴 오버라이드(`chat_stream_pipeline.resolve_turn_model_name`), 대화 생성,
     메시지 재생성. 문은 여럿이지만 규칙은 하나여야 한다.
     """
-    spec = get_model_spec(model)
-    if spec is None:
-        return False
-    return model in models_for_provider(spec.provider)
+    return resolve_user_selectable_model(model) is not None
 
 
 def tiers_for_provider(provider: str) -> dict[str, str]:

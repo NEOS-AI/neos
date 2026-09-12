@@ -149,6 +149,30 @@ async def test_create_conversation_allows_selectable_gemini_model(monkeypatch):
     assert create.await_args.kwargs["model_name"] == "gemini-1.5-pro-latest"
 
 
+@pytest.mark.asyncio
+async def test_create_conversation_canonicalizes_remap_and_role_alias(
+    monkeypatch,
+):
+    create = AsyncMock(return_value=_conversation(model_name="claude-sonnet-5"))
+    monkeypatch.setattr(chat_handlers.ChatService, "create_conversation", create)
+
+    alias = await chat_handlers.create_conversation(
+        CreateConversationRequest(conversation_id="c1", model_name="sonnet-5"),
+        current_user=CURRENT_USER,
+    )
+    remap = await chat_handlers.create_conversation(
+        CreateConversationRequest(
+            conversation_id="c2", model_name="openai/gpt-4.1"
+        ),
+        current_user=CURRENT_USER,
+    )
+
+    assert alias is not None
+    assert remap is not None
+    assert create.await_args_list[0].kwargs["model_name"] == "claude-sonnet-5"
+    assert create.await_args_list[1].kwargs["model_name"] == "gpt-5.6-sol"
+
+
 # ---------------------------------------------------------------------------
 # regenerate_message
 # ---------------------------------------------------------------------------
@@ -313,6 +337,22 @@ def test_is_user_selectable_model_lives_in_model_config():
     assert is_user_selectable_model("claude-sonnet-5") is True
     assert is_user_selectable_model("claude-opus-4-8") is False
     assert is_user_selectable_model("totally-bogus-model") is False
+
+
+def test_is_user_selectable_model_accepts_remaps_and_role_aliases():
+    from neos.config.model_config import (
+        is_user_selectable_model,
+        resolve_user_selectable_model,
+    )
+
+    assert is_user_selectable_model("sonnet-5") is True
+    assert is_user_selectable_model("openai/gpt-4.1") is True
+    assert is_user_selectable_model("anthropic/claude-opus-4.5") is True
+    assert is_user_selectable_model("anthropic/claude-sonnet-5") is True
+    assert resolve_user_selectable_model("sonnet-5") == "claude-sonnet-5"
+    assert resolve_user_selectable_model("openai/gpt-4.1") == "gpt-5.6-sol"
+    assert resolve_user_selectable_model("anthropic/claude-opus-4.5") == "claude-opus-5"
+    assert resolve_user_selectable_model("claude-opus-4-8") is None
 
 
 def test_chat_stream_pipeline_imports_shared_gate():

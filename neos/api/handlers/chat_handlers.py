@@ -45,7 +45,7 @@ from neos.api.services.chat_stream_pipeline import (
     ChatStreamPipeline,
     resolve_authorized_parent_message,
 )
-from neos.config.model_config import is_user_selectable_model
+from neos.config.model_config import resolve_user_selectable_model
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
 from neos.workflow.graph import multi_agent_workflow
@@ -140,13 +140,16 @@ async def create_conversation(
     current_user: User = Depends(get_current_active_user),
 ):
     """새 대화 생성"""
-    if request.model_name and not is_user_selectable_model(request.model_name):
-        raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
+    selected_model = None
+    if request.model_name:
+        selected_model = resolve_user_selectable_model(request.model_name)
+        if selected_model is None:
+            raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
     try:
         conversation = await ChatService.create_conversation(
             user_id=current_user.user_id,
             conversation_id=request.conversation_id,
-            model_name=request.model_name,
+            model_name=selected_model,
             title=request.title,
             system_prompt=request.system_prompt,
             temperature=request.temperature,
@@ -641,8 +644,11 @@ async def regenerate_message(
     original_message: dict = Depends(get_owned_message),
 ):
     """메시지 재생성 (alternative response)"""
-    if request.model_name and not is_user_selectable_model(request.model_name):
-        raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
+    selected_model = None
+    if request.model_name:
+        selected_model = resolve_user_selectable_model(request.model_name)
+        if selected_model is None:
+            raise HTTPException(status_code=400, detail=_MODEL_NOT_SELECTABLE_DETAIL)
     try:
         # 대화 정보 및 히스토리 가져오기
         conversation = await ChatService.get_conversation(original_message["conversation_id"])
@@ -662,7 +668,7 @@ async def regenerate_message(
             conversation_id=original_message["conversation_id"],
             message_id=new_message_id,
             conversation_messages=history_messages,
-            model_name=request.model_name or conversation.get("model_name"),
+            model_name=selected_model or conversation.get("model_name"),
             system_prompt=conversation.get("system_prompt"),
             temperature=request.temperature or conversation.get("temperature", 0.7),
             max_tokens=conversation.get("max_tokens")
