@@ -347,6 +347,119 @@ def test_thinking_contract_of_unregistered_model_is_budgeted(tmp_path: Path) -> 
     assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.BUDGETED
 
 
+def _set_unknown_claude_adaptive(monkeypatch, enabled: bool) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.config.model_catalog,
+        "default_unknown_claude_adaptive",
+        enabled,
+    )
+
+
+def test_unknown_claude_adaptive_flag_defaults_false() -> None:
+    from neos.config.schema import AppConfig
+
+    assert AppConfig().model_catalog.default_unknown_claude_adaptive is False
+
+
+def test_default_yaml_does_not_enable_unknown_claude_adaptive() -> None:
+    from neos.config.loader import load_yaml_file
+    from neos.config.schema import AppConfig
+
+    config = AppConfig.model_validate(load_yaml_file(Path("config/neos.default.yaml")))
+
+    assert config.model_catalog.default_unknown_claude_adaptive is False
+
+
+def test_unknown_claude_stays_budgeted_when_flag_off(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, False)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.BUDGETED
+    assert catalog.thinking_contract("anthropic/claude-sonnet-5-1") is ThinkingContract.BUDGETED
+
+
+def test_unknown_claude_is_adaptive_when_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.ADAPTIVE
+    # catalog_shaped must strip the provider prefix; raw anthropic/… is not claude-.
+    assert catalog.thinking_contract("anthropic/claude-sonnet-5-1") is ThinkingContract.ADAPTIVE
+    assert catalog.thinking_contract("claude-sonnet-5.1") is ThinkingContract.ADAPTIVE
+
+
+def test_unknown_non_claude_stays_budgeted_when_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("gpt-from-the-future") is ThinkingContract.BUDGETED
+    assert catalog.thinking_contract("anthropic/gpt-from-the-future") is ThinkingContract.BUDGETED
+
+
+def test_listed_budgeted_pins_stay_budgeted_when_unknown_claude_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-sonnet-4-5-20250929": {
+                        "provider": "anthropic",
+                        "thinking": "budgeted",
+                        "gateway_id": "anthropic/claude-sonnet-4.5",
+                    },
+                    "claude-sonnet-5": {
+                        "provider": "anthropic",
+                        "thinking": "adaptive",
+                    },
+                }
+            },
+        )
+    )
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert (
+        catalog.thinking_contract("claude-sonnet-4-5-20250929")
+        is ThinkingContract.BUDGETED
+    )
+    assert (
+        catalog.thinking_contract("anthropic/claude-sonnet-4.5")
+        is ThinkingContract.BUDGETED
+    )
+    assert catalog.thinking_contract("claude-sonnet-5") is ThinkingContract.ADAPTIVE
+
+
+def test_thinking_contract_does_not_follow_remaps_for_unknown_claude(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-sonnet-4-5-20250929": {
+                        "provider": "anthropic",
+                        "thinking": "budgeted",
+                    }
+                },
+                "remaps": {"claude-from-the-future": "claude-sonnet-4-5-20250929"},
+            },
+        )
+    )
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.ADAPTIVE
+
+
 def test_committed_catalog_loads_and_is_non_empty() -> None:
     """리포지토리에 커밋된 카탈로그가 실제로 유효하다."""
     catalog = load_catalog(Path("neos/config/models.yaml"))

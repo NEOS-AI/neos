@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import yaml
 from pydantic import Field, ValidationError, model_validator
 
+from neos.config.model_identity import canonicalize, catalog_shaped
 from neos.config.schema import StrictConfigModel
 
 if TYPE_CHECKING:
@@ -309,9 +310,23 @@ class ModelCatalog(StrictConfigModel):
         return {tier: by_tier[tier] for tier in _TIER_ORDER if tier in by_tier}
 
     def thinking_contract(self, model: str) -> ThinkingContract:
-        """모델의 thinking 요청 계약. 미등록 모델은 BUDGETED(레거시 경로)."""
-        spec = self.models.get(model)
-        return spec.thinking if spec else ThinkingContract.BUDGETED
+        """모델의 thinking 요청 계약.
+
+        카탈로그 핀은 그 핀의 계약. 미등록은 BUDGETED. 플래그가 켜지면
+        카탈로그 미스이면서 catalog_shaped 가 claude- 인 모델만 ADAPTIVE.
+        등재된 4.5 핀은 플래그와 무관하게 budgeted. remap 은 따르지 않는다.
+        """
+        ident = canonicalize(model, catalog=self, apply_remap=False)
+        if ident is not None:
+            return self.models[ident.catalog_id].thinking
+        from neos.config.settings import settings
+
+        if (
+            settings.config.model_catalog.default_unknown_claude_adaptive
+            and catalog_shaped(model).lower().startswith("claude-")
+        ):
+            return ThinkingContract.ADAPTIVE
+        return ThinkingContract.BUDGETED
 
     def pricing_for(self, provider: str, model: str) -> ModelPricing | None:
         spec = self.models.get(model)
