@@ -181,6 +181,7 @@ class CodingLoopConfig:
 
 
 _EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
+_STALE_SLACK_SEC = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1898,6 +1899,37 @@ class DurableCodingLoop:
     def _utc_stamp(self) -> str:
         return self._clock().astimezone(UTC).isoformat()
 
+    def _child_stale_after_sec(self, max_turns: int) -> float:
+        timeout = float(getattr(self._config, "timeout_sec", 120) or 120)
+        return max(1, min(8, max_turns)) * timeout + _STALE_SLACK_SEC
+
+    async def _fold_if_stale_child(
+        self, ref: ActiveChildRef, *, max_turns: int, bound
+    ) -> dict[str, Any] | None:
+        if self._subagents is None:
+            return None
+        from neos.subagent.types import SubagentStatus
+
+        now = self._clock()
+        horizon = self._child_stale_after_sec(max_turns)
+        parent_stale = _stamp_is_stale(ref.last_advanced_at, now, horizon)
+        fail_if_stale = getattr(self._subagents, "fail_if_stale", None)
+        if not callable(fail_if_stale):
+            return None
+        # Parent last_advanced_at is the no-progress clock; 0 forces store fail.
+        snap = await fail_if_stale(
+            ref.run_id,
+            now=now,
+            stale_after_sec=0 if parent_stale else horizon,
+        )
+        store_stale = (
+            snap.status is SubagentStatus.FAILED and snap.error_code == "stalled"
+        )
+        if not parent_stale and not store_stale:
+            return None
+        folded = await self._subagents.fold(ref.run_id)
+        return self._folded_spawn_result(bound, folded)
+
     def _child_ref(self, state, tool_call_id: str) -> ActiveChildRef | None:
         for child in state.active_children:
             if child.tool_call_id == tool_call_id:
@@ -2212,7 +2244,8 @@ class DurableCodingLoop:
 
         ok = folded.status is SubagentStatus.COMPLETED
         status = "ok" if ok else "error"
-        reason = "ok" if ok else folded.status.value
+        exit_reason = str(getattr(folded, "exit_reason", "") or "")
+        reason = "ok" if ok else (exit_reason or folded.status.value)
         result = dict(
             ToolResult(
                 status,
@@ -2235,6 +2268,7 @@ class DurableCodingLoop:
         result["truncated"] = bool(folded.truncated)
         result["citations"] = list(folded.citations)
         result["child_status"] = folded.status.value
+        result["exit_reason"] = exit_reason
         result["turn_count"] = folded.turn_count
         result["input_tokens"] = int(folded.input_tokens or 0)
         result["output_tokens"] = int(folded.output_tokens or 0)
@@ -2324,6 +2358,12 @@ class DurableCodingLoop:
             expected_checkpoint_id=ref.checkpoint_id if ref else None,
             run_id=ref.run_id if ref else None,
         )
+        if ref is not None:
+            folded = await self._fold_if_stale_child(
+                ref, max_turns=max_turns, bound=bound
+            )
+            if folded is not None:
+                return folded
         self._bind_child_tools(bound, state)
         try:
             await self._renew_parent_lease(deps)
@@ -3205,6 +3245,31 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _parse_utc_stamp(stamp: str) -> datetime | None:
+    text = (stamp or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _stamp_is_stale(stamp: str, now: datetime, stale_after_sec: float) -> bool:
+    # Epoch is the restore placeholder for unknown last_advanced_at, not a
+    # real last-advance, so RR fixtures that plant it must not fold stalled.
+    if stamp == _EPOCH_STAMP:
+        return False
+    parsed = _parse_utc_stamp(stamp)
+    if parsed is None:
+        return False
+    age = (now.astimezone(UTC) - parsed).total_seconds()
+    return age >= stale_after_sec
 
 
 def _tool_result_ids(transcript) -> set[str]:

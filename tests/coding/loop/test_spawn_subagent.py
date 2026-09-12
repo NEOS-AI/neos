@@ -88,6 +88,7 @@ class RecordingSubagents:
         self.advance_tickets: list[SubagentTicket] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.cancel_for_parent_calls: list[tuple[object, str, str]] = []
+        self.fail_if_stale_calls: list[tuple[str, object, float]] = []
 
     async def advance(self, ticket):
         self.advance_tickets.append(ticket)
@@ -95,6 +96,12 @@ class RecordingSubagents:
 
     async def fold(self, run_id):
         return await self.inner.fold(run_id)
+
+    async def fail_if_stale(self, run_id, *, now, stale_after_sec=990):
+        self.fail_if_stale_calls.append((run_id, now, stale_after_sec))
+        return await self.inner.fail_if_stale(
+            run_id, now=now, stale_after_sec=stale_after_sec
+        )
 
     async def cancel(self, run_id, reason):
         self.cancel_calls.append((run_id, reason))
@@ -649,6 +656,42 @@ async def test_same_tool_call_id_resume_still_parks() -> None:
     store = _subagent_store(runtime)
     assert len(store._runs) == 1
     assert list(store._by_parent.values()) == [first_run]
+
+
+@pytest.mark.asyncio
+async def test_old_last_advanced_at_folds_stalled_without_advance() -> None:
+    inner, child = _make_runtime([_child_tool(), _text("should not run")])
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    state = dict(parked.loop_state)
+    children = [dict(item) for item in state["active_children"]]
+    assert children
+    children[0]["last_advanced_at"] = (NOW - timedelta(seconds=2000)).isoformat()
+    state["active_children"] = children
+    mutated = replace(parked, loop_state=state)
+    advances_before = len(runtime.advance_tickets)
+    events = await collect(h, mutated)
+    assert len(runtime.advance_tickets) == advances_before
+    assert runtime.fail_if_stale_calls
+    assert runtime.fail_if_stale_calls[-1][0] == children[0]["run_id"]
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "stalled"
+    assert result.get("exit_reason") == "stalled"
+    assert result.get("child_status") == "failed"
+    loaded = await inner._store.get(children[0]["run_id"])
+    assert loaded.status is SubagentStatus.FAILED
+    assert loaded.error_code == "stalled"
+    after = h.repository.checkpoints[-1].loop_state
+    assert _child_by_id(after, "s1") is None
+    assert after.get("active_children") in (None, [], ())
+    assert child.requests  # first park advanced; resume must not
 
 
 @pytest.mark.asyncio
