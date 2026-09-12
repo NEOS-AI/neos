@@ -4,7 +4,8 @@ import asyncio
 import hashlib
 import inspect
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+import re
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -22,7 +23,11 @@ from neos.coding.domain.approvals import (
 )
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.harness import fold_model_event, iter_model_turn
-from neos.coding.instructions import INSTRUCTION_CANDIDATES, load_workspace_instructions
+from neos.coding.instructions import (
+    INSTRUCTION_CANDIDATES,
+    load_workspace_instruction_tree,
+    load_workspace_instructions,
+)
 from neos.coding.learn_lessons import coding_turn_system
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.errors import CodingModelError
@@ -46,6 +51,10 @@ from neos.coding.phases import (
     parse_phase,
     parse_plan_critical_files,
     parse_verify_verdict,
+    persist_plan_critical_files,
+    persist_verify_verdict,
+    restore_plan_critical_files,
+    restore_verify_verdict,
     tool_allowed_in_phase,
     write_risk_blocked,
 )
@@ -69,8 +78,11 @@ from neos.coding.domain.durability import ToolExecutionDisposition
 
 PRE_TOOL_HOOK_TIMEOUT_SEC = 5.0
 STOP_RETRY_LIMIT = 2
+EMPTY_RETRY_LIMIT = 1
+STALL_DENY_AFTER = 3
 COMPACT_REF_THRESHOLD_BYTES = 4096
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 80_000
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
 class CodingLoopFailure(RuntimeError):
@@ -178,6 +190,11 @@ class AgentLoopState:
     compacted_bodies: Mapping[str, str] = field(default_factory=dict)
     stop_retry_count: int = 0
     read_stamps: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    empty_retry_count: int = 0
+    last_error_signature: str = ""
+    last_error_count: int = 0
+    verdict: str | None = None
+    critical_files: tuple[str, ...] = ()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -427,9 +444,10 @@ class DurableCodingLoop:
         self._check_usage_budgets(next_state)
         prefetch = await self._await_prefetch(prefetch_tasks)
         if not calls:
-            if completion.stop_reason != "end_turn":
+            public_text = "".join(text_parts)
+            if completion.stop_reason not in {"end_turn", "unknown"}:
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
-            held = self._hold_incomplete_phase(next_state, "".join(text_parts))
+            held = self._hold_incomplete_phase(next_state, public_text)
             if held is not None:
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
@@ -441,6 +459,22 @@ class DurableCodingLoop:
                 )
                 yield committed.event
                 return
+            if _is_empty_or_think_only(public_text):
+                retry_state = self._maybe_empty_retry(next_state)
+                if retry_state is not None:
+                    committed = await deps.repository.commit_model_checkpoint(
+                        lease=deps.lease,
+                        event_type="model.completed",
+                        event_payload={"reason_code": "empty_retry"},
+                        loop_state=self._dump_state(input, retry_state),
+                        workspace_revision=str(bound.binding.workspace_revision),
+                        now=self._clock(),
+                    )
+                    yield committed.event
+                    return
+                raise CodingLoopFailure("model_output_incomplete", retryable=False)
+            if completion.stop_reason != "end_turn":
+                raise CodingLoopFailure("model_output_incomplete", retryable=False)
             retry_state = await self._maybe_stop_retry(
                 next_state, completion.stop_reason
             )
@@ -455,6 +489,7 @@ class DurableCodingLoop:
                 )
                 yield committed.event
                 return
+            next_state = self._with_phase_artifacts(next_state, public_text)
             next_state = self._with_terminal_pending(next_state)
             committed = await deps.repository.commit_model_checkpoint(
                 lease=deps.lease,
@@ -495,12 +530,22 @@ class DurableCodingLoop:
         prefetch = prefetch or {}
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
+        call = state.pending_tool_calls[state.pending_tool_index]
+        if _is_stall_denied(state, call.name, call.input):
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, "policy_stall_denied"
+            )
+            yield event, denied_state
+            return
         batch = self._leading_readonly_batch(state)
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
                 decision, _reason, updated = await self._pre_tool_decision(validated)
-                if decision in {"deny", "retry"} or updated:
+                if decision in {"deny", "retry", "prevent"} or updated:
+                    hook_blocked = True
+                    break
+                if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
                     hook_blocked = True
                     break
             if not hook_blocked:
@@ -509,7 +554,6 @@ class DurableCodingLoop:
                 ):
                     yield event, current
                 return
-        call = state.pending_tool_calls[state.pending_tool_index]
         if not tool_allowed_in_phase(call.name, state.phase):
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_phase_denied"
@@ -550,6 +594,18 @@ class DurableCodingLoop:
         if hook_decision == "deny":
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_hook_denied"
+            )
+            yield event, denied_state
+            return
+        if hook_decision == "prevent":
+            event, denied_state = await self._commit_denied_tool(
+                input,
+                state,
+                bound,
+                deps,
+                call,
+                "hook_prevented",
+                terminal=True,
             )
             yield event, denied_state
             return
@@ -617,7 +673,9 @@ class DurableCodingLoop:
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="tool.denied",
-                    event_payload={"reason_code": reason_code},
+                    event_payload=_tool_event_payload(
+                        call, reason_code=reason_code
+                    ),
                     loop_state=self._dump_state(input, denied_state),
                     workspace_revision=str(bound.binding.workspace_revision),
                     now=self._clock(),
@@ -671,11 +729,12 @@ class DurableCodingLoop:
             tool_event = await deps.events.append(
                 task_id=input.task_id,
                 event_type="tool.completed",
-                payload={"result": result, "reused": True},
+                payload=_tool_event_payload(call, result=result, reused=True),
                 run_id=input.run_id,
                 tool_call_id=call.tool_call_id,
             )
         else:
+            yield await self._emit_tool_started(input, deps, call), state
             try:
                 if call.name == "spawn_agent.v1":
                     result = await self._run_spawn_agent(
@@ -741,6 +800,12 @@ class DurableCodingLoop:
                     yield item
                 return
             await self._audit_execute_result(bound, call.name, result)
+            tool_event = replace(
+                tool_event,
+                payload=_tool_event_payload(
+                    call, **dict(tool_event.payload)
+                ),
+            )
         self._record_tool_metric(call.name, result)
         yield tool_event, state
         status = str(result.get("status", "ok"))
@@ -825,6 +890,9 @@ class DurableCodingLoop:
         )
         if started.event is not None:
             yield started.event, current
+        for call, _validated, claim in claims:
+            if claim.disposition is not ToolExecutionDisposition.COMPLETED:
+                yield await self._emit_tool_started(input, deps, call), current
 
         async def run_one(call, validated, claim):
             if claim.disposition is ToolExecutionDisposition.COMPLETED:
@@ -864,7 +932,7 @@ class DurableCodingLoop:
                 tool_event = await deps.events.append(
                     task_id=input.task_id,
                     event_type="tool.completed",
-                    payload={"result": result, "reused": True},
+                    payload=_tool_event_payload(call, result=result, reused=True),
                     run_id=input.run_id,
                     tool_call_id=call.tool_call_id,
                 )
@@ -886,6 +954,10 @@ class DurableCodingLoop:
                     raise CodingLoopFailure(
                         "tool_outcome_unknown", retryable=False
                     ) from error
+                tool_event = replace(
+                    tool_event,
+                    payload=_tool_event_payload(call, **dict(tool_event.payload)),
+                )
             self._record_tool_metric(call.name, result)
             yield tool_event, current
             status = str(result.get("status", "ok"))
@@ -931,7 +1003,7 @@ class DurableCodingLoop:
         if not isinstance(raw, Mapping):
             return "deny", "hook_error", None
         decision = raw.get("decision")
-        if decision not in {"allow", "deny", "retry"}:
+        if decision not in {"allow", "deny", "retry", "prevent"}:
             return "deny", "hook_error", None
         reason = raw.get("reason")
         updated = raw.get("updatedInput")
@@ -983,6 +1055,25 @@ class DurableCodingLoop:
             terminal_pending=False,
         )
 
+    def _with_phase_artifacts(
+        self, state: AgentLoopState, text: str
+    ) -> AgentLoopState:
+        phase = parse_phase(state.phase)
+        if phase is CodingAgentPhase.VERIFY:
+            return replace(state, verdict=persist_verify_verdict(text))
+        if phase is CodingAgentPhase.PLAN:
+            return replace(state, critical_files=persist_plan_critical_files(text))
+        return state
+
+    async def _emit_tool_started(self, input, deps, call):
+        return await deps.events.append(
+            task_id=input.task_id,
+            event_type="tool.started",
+            payload=_tool_event_payload(call),
+            run_id=input.run_id,
+            tool_call_id=call.tool_call_id,
+        )
+
     async def _stop_decision(self, reason: str) -> tuple[str, str]:
         try:
             raw = await self._hooks.stop(reason)
@@ -1014,6 +1105,19 @@ class DurableCodingLoop:
             stop_retry_count=state.stop_retry_count + 1,
         )
 
+    def _maybe_empty_retry(self, state: AgentLoopState) -> AgentLoopState | None:
+        if state.empty_retry_count >= EMPTY_RETRY_LIMIT:
+            return None
+        note = "Model produced no public text. Continue or use a tool."
+        transcript = self._append_user_meta(state.transcript, note)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+            terminal_pending=False,
+            empty_retry_count=state.empty_retry_count + 1,
+        )
+
     async def _emit_unknown_tool_result(
         self, input, state, bound, deps, call, *, claim=None, started=None
     ):
@@ -1030,9 +1134,16 @@ class DurableCodingLoop:
             tool_event = await deps.events.append(
                 task_id=input.task_id,
                 event_type="tool.completed",
-                payload={"result": result, "reason_code": "tool_outcome_unknown"},
+                payload=_tool_event_payload(
+                    call, result=result, reason_code="tool_outcome_unknown"
+                ),
                 run_id=input.run_id,
                 tool_call_id=call.tool_call_id,
+            )
+        else:
+            tool_event = replace(
+                tool_event,
+                payload=_tool_event_payload(call, **dict(tool_event.payload)),
             )
         after = await self._after_result(
             state,
@@ -1128,7 +1239,9 @@ class DurableCodingLoop:
             )
         )
 
-    async def _commit_denied_tool(self, input, state, bound, deps, call, reason_code):
+    async def _commit_denied_tool(
+        self, input, state, bound, deps, call, reason_code, *, terminal: bool = False
+    ):
         await self._audit.emit(
             CodingToolAuditEvent.from_result(
                 provider=bound.binding.provider,
@@ -1138,16 +1251,19 @@ class DurableCodingLoop:
                 error_code=reason_code,
             )
         )
-        denied = ToolResultContent(
-            call.tool_call_id, "denied", denial_envelope(call, reason_code)
-        )
+        envelope = dict(denial_envelope(call, reason_code))
+        if reason_code == "hook_prevented":
+            envelope["denied_by"] = "hook"
+        denied = ToolResultContent(call.tool_call_id, "denied", envelope)
         denied_state = await self._after_result(
             state, denied, tool_name=call.name, tool_input=call.input
         )
+        if terminal:
+            denied_state = replace(denied_state, terminal_pending=True)
         committed = await deps.repository.commit_model_checkpoint(
             lease=deps.lease,
             event_type="tool.denied",
-            event_payload={"reason_code": reason_code},
+            event_payload=_tool_event_payload(call, reason_code=reason_code),
             loop_state=self._dump_state(input, denied_state),
             workspace_revision=str(bound.binding.workspace_revision),
             now=self._clock(),
@@ -1247,6 +1363,7 @@ class DurableCodingLoop:
             )
             // 1_000_000
         )
+        reset_empty = bool(calls) or not _is_empty_or_think_only(text)
         return replace(
             state,
             transcript=transcript,
@@ -1259,6 +1376,7 @@ class DurableCodingLoop:
             cost_micros=cost,
             terminal_pending=False,
             compacted_bodies=bodies,
+            empty_retry_count=0 if reset_empty else state.empty_retry_count,
         )
 
     async def _after_result(
@@ -1266,8 +1384,13 @@ class DurableCodingLoop:
     ):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
         bodies = dict(state.compacted_bodies)
-        transcript = await self._compact_with_hook(
+        transcript = self._maybe_ref_latest_tool_result(
             state.transcript + (CanonicalMessage("tool", (result,)),),
+            tool_name=tool_name,
+            bodies=bodies,
+        )
+        transcript = await self._compact_with_hook(
+            transcript,
             preserve_tools=has_more_tools,
             bodies=bodies,
         )
@@ -1276,10 +1399,16 @@ class DurableCodingLoop:
             reason = str(result.content.get("reason_code") or "")
         if result.status == "ok":
             errors = 0
-        elif reason == "tool_outcome_unknown":
-            errors = state.consecutive_tool_errors
+            last_error_signature = ""
+            last_error_count = 0
         else:
-            errors = state.consecutive_tool_errors + 1
+            last_error_signature, last_error_count = _next_error_signature(
+                state, tool_name, tool_input
+            )
+            if reason == "tool_outcome_unknown":
+                errors = state.consecutive_tool_errors
+            else:
+                errors = state.consecutive_tool_errors + 1
         read_paths = state.read_paths
         read_stamps = dict(state.read_stamps)
         if tool_name == "read_file.v1" and result.status == "ok":
@@ -1328,6 +1457,8 @@ class DurableCodingLoop:
             revealed_tools=revealed,
             hook_retry_count=0,
             compacted_bodies=bodies,
+            last_error_signature=last_error_signature,
+            last_error_count=last_error_count,
         )
 
     def _check_usage_budgets(self, state):
@@ -1337,13 +1468,23 @@ class DurableCodingLoop:
             raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
 
     async def _load_workspace_instructions(self, state, bound) -> AgentLoopState:
-        files: dict[str, bytes] = {}
-        for name in INSTRUCTION_CANDIDATES:
+        text = None
+        workspace = getattr(getattr(bound.session, "_record", None), "workspace", None)
+        if workspace is not None:
             try:
-                files[name] = await bound.session.read_file(name)
+                from pathlib import Path
+
+                text = load_workspace_instruction_tree(Path(workspace))
             except Exception:
-                continue
-        text = load_workspace_instructions(files)
+                text = None
+        if text is None:
+            files: dict[str, bytes] = {}
+            for name in INSTRUCTION_CANDIDATES:
+                try:
+                    files[name] = await bound.session.read_file(name)
+                except Exception:
+                    continue
+            text = load_workspace_instructions(files)
         transcript = state.transcript
         digest = state.transcript_digest
         if text:
@@ -1399,6 +1540,8 @@ class DurableCodingLoop:
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
         if call.name == "spawn_agent.v1":
             return None
+        if _is_stall_denied(state, call.name, call.input):
+            return None
         if not tool_allowed_in_phase(call.name, state.phase):
             return None
         try:
@@ -1406,6 +1549,8 @@ class DurableCodingLoop:
         except ToolValidationError:
             return None
         if validated.risk is not ToolRisk.READ_ONLY:
+            return None
+        if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
             return None
         return asyncio.create_task(
             self._executor.execute(
@@ -1556,13 +1701,18 @@ class DurableCodingLoop:
         pending_instruction = raw.get("pending_instruction")
         terminal_pending = bool(raw.get("terminal_pending", False))
         digest = str(raw.get("transcript_digest", self._digest(transcript)))
+        pending_index = int(raw.get("pending_tool_index", 0))
+        has_open_tool_pair = bool(pending) and pending_index < len(pending)
+        empty_retry_count = int(raw.get("empty_retry_count", 0))
         if isinstance(pending_instruction, str) and pending_instruction:
-            transcript = transcript + (
-                CanonicalMessage("user", (TextContent(pending_instruction),)),
-            )
-            pending_instruction = None
-            terminal_pending = False
-            digest = self._digest(transcript)
+            if not has_open_tool_pair:
+                transcript = transcript + (
+                    CanonicalMessage("user", (TextContent(pending_instruction),)),
+                )
+                pending_instruction = None
+                terminal_pending = False
+                digest = self._digest(transcript)
+                empty_retry_count = 0
         else:
             pending_instruction = None
         raw_todos = raw.get("todos") or ()
@@ -1575,7 +1725,7 @@ class DurableCodingLoop:
             int(raw.get("tool_count", 0)),
             int(raw.get("consecutive_tool_errors", 0)),
             pending,
-            int(raw.get("pending_tool_index", 0)),
+            pending_index,
             digest,
             int(raw.get("input_tokens", 0)),
             int(raw.get("output_tokens", 0)),
@@ -1595,6 +1745,11 @@ class DurableCodingLoop:
             _string_mapping(raw.get("compacted_bodies")),
             int(raw.get("stop_retry_count", 0)),
             _read_stamps_mapping(raw.get("read_stamps")),
+            empty_retry_count,
+            str(raw.get("last_error_signature") or ""),
+            int(raw.get("last_error_count", 0)),
+            restore_verify_verdict(raw.get("verdict")),
+            restore_plan_critical_files(raw.get("critical_files")),
         )
 
     @staticmethod
@@ -1647,12 +1802,13 @@ class DurableCodingLoop:
             "hook_retry_count": state.hook_retry_count,
             "compacted_bodies": dict(state.compacted_bodies),
             "stop_retry_count": state.stop_retry_count,
+            "empty_retry_count": state.empty_retry_count,
+            "last_error_signature": state.last_error_signature,
+            "last_error_count": state.last_error_count,
+            "verdict": state.verdict,
+            "critical_files": list(state.critical_files),
             "read_stamps": {
-                path: {
-                    "mtime": stamp["mtime"],
-                    "digest": stamp["digest"],
-                    "full": bool(stamp["full"]),
-                }
+                path: _dump_read_stamp(stamp)
                 for path, stamp in sorted(state.read_stamps.items())
             },
         }
@@ -1715,8 +1871,10 @@ class DurableCodingLoop:
             prefix = transcript[:active_start]
             active = transcript[active_start:]
         stored = bodies if bodies is not None else {}
+        tool_names = _tool_use_names(prefix)
         prefix = tuple(
-            self._shrink_old_tool_results(message, stored) for message in prefix
+            self._shrink_old_tool_results(message, stored, tool_names)
+            for message in prefix
         )
         candidate = prefix + active
         if not force and not self._over_budget(candidate):
@@ -1830,40 +1988,53 @@ class DurableCodingLoop:
         return None
 
     @staticmethod
+    def _maybe_ref_latest_tool_result(
+        transcript: tuple[CanonicalMessage, ...],
+        *,
+        tool_name: str,
+        bodies: dict[str, str],
+    ) -> tuple[CanonicalMessage, ...]:
+        if tool_name == "read_file.v1" or not transcript:
+            return transcript
+        last = transcript[-1]
+        if last.role != "tool":
+            return transcript
+        content = []
+        changed = False
+        for item in last.content:
+            if (
+                isinstance(item, ToolResultContent)
+                and not item.content.get("compacted")
+                and _tool_result_bytes(item.content) >= COMPACT_REF_THRESHOLD_BYTES
+            ):
+                content.append(_ref_tool_result(item, bodies))
+                changed = True
+            else:
+                content.append(item)
+        if not changed:
+            return transcript
+        return transcript[:-1] + (CanonicalMessage(last.role, tuple(content)),)
+
+    @staticmethod
     def _shrink_old_tool_results(
-        message: CanonicalMessage, bodies: dict[str, str]
+        message: CanonicalMessage,
+        bodies: dict[str, str],
+        tool_names: Mapping[str, str] | None = None,
     ) -> CanonicalMessage:
+        names = tool_names or {}
         content = []
         changed = False
         for item in message.content:
             if isinstance(item, ToolResultContent) and not item.content.get(
                 "compacted"
             ):
-                payload = dict(item.content)
-                payload_text = json.dumps(
-                    payload,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                )
-                payload_bytes = payload_text.encode("utf-8")
-                digest = hashlib.sha256(payload_bytes).hexdigest()
-                preview_source = payload.get("preview")
-                if not isinstance(preview_source, str) or not preview_source:
-                    preview_source = payload_text
-                shrunk: dict[str, object] = {
-                    "compacted": True,
-                    "sha256": digest,
-                    "preview": preview_source[:200],
-                }
-                path = DurableCodingLoop._compact_ref_path(payload)
-                bodies[digest] = payload_text
-                if path is None:
-                    path = f"artifact://{digest}"
-                shrunk["path"] = path
-                content.append(
-                    ToolResultContent(item.tool_call_id, item.status, shrunk)
-                )
+                name = names.get(item.tool_call_id)
+                if name == "read_file.v1" or (
+                    name is None and _looks_like_file_read(item.content)
+                ):
+                    content.append(item)
+                    continue
+                content.append(_ref_tool_result(item, bodies))
                 changed = True
             else:
                 content.append(item)
@@ -1899,6 +2070,37 @@ class DurableCodingLoop:
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _is_empty_or_think_only(text: str) -> bool:
+    return not _THINK_BLOCK_RE.sub("", text).strip()
+
+
+def _error_signature(name: str, tool_input: Mapping[str, object]) -> str:
+    canonical = json.dumps(
+        tool_input,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256((name + canonical).encode("utf-8")).hexdigest()
+
+
+def _is_stall_denied(
+    state: AgentLoopState, name: str, tool_input: Mapping[str, object]
+) -> bool:
+    if state.last_error_count < STALL_DENY_AFTER:
+        return False
+    return state.last_error_signature == _error_signature(name, tool_input)
+
+
+def _next_error_signature(
+    state: AgentLoopState, name: str, tool_input: Mapping[str, object]
+) -> tuple[str, int]:
+    signature = _error_signature(name, tool_input)
+    if signature == state.last_error_signature:
+        return signature, state.last_error_count + 1
+    return signature, 1
+
+
 def _string_mapping(value: object) -> dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
@@ -1921,12 +2123,126 @@ def _read_stamps_mapping(value: object) -> dict[str, dict[str, object]]:
         if not isinstance(mtime, str) or not isinstance(digest, str):
             continue
         path = str(normalize_workspace_path(str(raw_path)))
-        stamps[path] = {
+        stamp: dict[str, object] = {
             "mtime": mtime,
             "digest": digest,
             "full": bool(raw_stamp.get("full", True)),
         }
+        offset = raw_stamp.get("offset")
+        limit = raw_stamp.get("limit")
+        if isinstance(offset, int) and not isinstance(offset, bool):
+            stamp["offset"] = offset
+        if isinstance(limit, int) and not isinstance(limit, bool):
+            stamp["limit"] = limit
+        stamps[path] = stamp
     return stamps
+
+
+def _dump_read_stamp(stamp: Mapping[str, object]) -> dict[str, object]:
+    dumped: dict[str, object] = {
+        "mtime": stamp["mtime"],
+        "digest": stamp["digest"],
+        "full": bool(stamp["full"]),
+    }
+    offset = stamp.get("offset")
+    limit = stamp.get("limit")
+    if isinstance(offset, int) and not isinstance(offset, bool):
+        dumped["offset"] = offset
+    if isinstance(limit, int) and not isinstance(limit, bool):
+        dumped["limit"] = limit
+    return dumped
+
+
+_LINE_NUMBERED_RE = re.compile(r"^\s*\d+\|", re.MULTILINE)
+
+
+def _tool_use_names(messages: Sequence[CanonicalMessage]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for message in messages:
+        for item in message.content:
+            if isinstance(item, ToolUseContent):
+                names[item.tool_call_id] = item.name
+    return names
+
+
+def _looks_like_file_read(content: Mapping[str, object]) -> bool:
+    preview = content.get("preview")
+    if not isinstance(preview, str) or not preview:
+        return False
+    if _LINE_NUMBERED_RE.search(preview):
+        return True
+    entries = content.get("entries")
+    if isinstance(entries, (list, tuple)):
+        for entry in entries:
+            if isinstance(entry, Mapping):
+                text = entry.get("text")
+                if isinstance(text, str) and _LINE_NUMBERED_RE.search(text):
+                    return True
+    return False
+
+
+def _tool_result_bytes(content: Mapping[str, object]) -> int:
+    return len(
+        json.dumps(
+            dict(content),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def _ref_tool_result(
+    item: ToolResultContent, bodies: dict[str, str]
+) -> ToolResultContent:
+    payload = dict(item.content)
+    payload_text = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    digest = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+    preview_source = payload.get("preview")
+    if not isinstance(preview_source, str) or not preview_source:
+        preview_source = payload_text
+    shrunk: dict[str, object] = {
+        "compacted": True,
+        "sha256": digest,
+        "preview": preview_source[:200],
+    }
+    path = DurableCodingLoop._compact_ref_path(payload)
+    bodies[digest] = payload_text
+    if path is None:
+        path = f"artifact://{digest}"
+    shrunk["path"] = path
+    return ToolResultContent(item.tool_call_id, item.status, shrunk)
+
+
+def _tool_event_preview(name: str, tool_input: Mapping[str, object]) -> str:
+    detail = ""
+    path = tool_input.get("path")
+    if isinstance(path, str) and path:
+        detail = path
+    else:
+        argv = tool_input.get("argv")
+        if isinstance(argv, (list, tuple)) and argv:
+            detail = str(argv[0])
+    summary = f"{name} {detail}".strip() if detail else name
+    redacted = redact_sensitive(summary)
+    if not isinstance(redacted, str):
+        redacted = name
+    return redacted[:200]
+
+
+def _tool_event_payload(call, **extra: Any) -> dict[str, Any]:
+    payload = dict(extra)
+    payload["name"] = getattr(call, "name", "")
+    payload["preview"] = _tool_event_preview(
+        str(payload["name"]),
+        dict(getattr(call, "input", {}) or {}),
+    )
+    return payload
 
 
 def _executor_read_stamps(executor: object) -> dict[str, dict[str, object]]:

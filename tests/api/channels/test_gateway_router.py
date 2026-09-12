@@ -224,7 +224,7 @@ async def test_workflow_approve_failure_keeps_pending(monkeypatch):
     ]
 
 
-async def test_new_clears_workflow_pending_so_approve_does_not_resume(monkeypatch):
+async def test_new_clears_ram_pending_approve_uses_checkpointer_port(monkeypatch):
     install_channel_settings(
         monkeypatch,
         allowed_users=["U_alice"],
@@ -246,6 +246,79 @@ async def test_new_clears_workflow_pending_so_approve_does_not_resume(monkeypatc
     assert await gateway.workflow_pending_owner("v2:slack:T:C:1") is None
     assert decided == "No coding task in this thread."
     assert approvals.calls == []
+
+
+async def test_approve_without_ram_pending_uses_workflow_approvals(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    approvals = FakeWorkflowApprovals()
+    gateway._workflow_approvals = approvals
+    assert gateway._workflow_pending == {}
+
+    decided = await gateway.dispatch(_message("/approve apr_x", "sess-ckpt"))
+
+    assert decided == "apr_x approved"
+    assert approvals.calls == [("sess-ckpt", "apr_x", True)]
+    assert decided != "No coding task in this thread."
+    assert workflow.calls == []
+    assert coding.decided == []
+
+
+async def test_checkpointer_approve_requires_interrupt_owner(monkeypatch):
+    principals = [
+        ChannelPrincipal(
+            platform="slack",
+            platform_user_id="U_alice",
+            user_id="u_alice",
+        ),
+        ChannelPrincipal(
+            platform="slack",
+            platform_user_id="U_eve",
+            user_id="u_eve",
+        ),
+    ]
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=["U_alice", "U_eve"],
+        coding_invoke=True,
+        coding_owner_user_id="u_shared",
+        principals=principals,
+    )
+
+    class OwnedApprovals(FakeWorkflowApprovals):
+        async def interrupt_owner(self, session_id):
+            del session_id
+            return "u_alice"
+
+    approvals = OwnedApprovals()
+    gateway = ChannelGateway(
+        FakeWorkflow(),
+        coding=FakeCoding(),
+        workflow_approvals=approvals,
+    )
+    denied = await gateway.dispatch(
+        _message("/approve apr_x", "sess-ckpt", slack_user_id="U_eve")
+    )
+    decided = await gateway.dispatch(
+        _message("/approve apr_x", "sess-ckpt", slack_user_id="U_alice")
+    )
+    assert denied == "Owner is not configured."
+    assert decided == "apr_x approved"
+    assert approvals.calls == [("sess-ckpt", "apr_x", True)]
+
+
+async def test_stop_bypasses_held_inflight_on_bound_session(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-ctrl"))
+    assert gateway._inflight.acquire("sess-ctrl") is True
+
+    reply = await gateway.dispatch(_message("/stop", "sess-ctrl"))
+
+    assert reply == "Stopped ct_channel"
+    assert coding.stopped == ["ct_channel"]
+    assert workflow.calls == []
+    assert await gateway.dispatch(_message("hello", "sess-ctrl")) == (
+        "Already working on this thread."
+    )
 
 
 async def test_workflow_input_includes_channel_attachment_blocks(monkeypatch):
@@ -673,7 +746,7 @@ async def test_coding_action_requires_pending_workflow_owner(monkeypatch):
     )
     assert allowed is True
     assert denied is False
-    assert unbound is True
+    assert unbound is False
 
 
 async def test_runtime_workflow_approvals_resumes_without_coding_loop(monkeypatch):
@@ -728,11 +801,22 @@ async def test_runtime_workflow_approvals_resumes_without_coding_loop(monkeypatc
     assert graph.updated == [
         (
             {"configurable": {"thread_id": "sess-1"}},
-            {"approval_decision": "approved"},
+            {
+                "approval_decision": "approved",
+                "pending_approvals": [],
+            },
         )
     ]
     assert graph.streamed
     assert marked == [("apr_1", "u_alice")]
+    replay = await port.decide(
+        session_id="sess-1",
+        request_id="apr_1",
+        owner_id="u_alice",
+        approve=True,
+    )
+    assert "approved" not in replay.lower()
+    assert len(graph.updated) == 1
 
 
 async def test_runtime_workflow_approvals_missing_graph_is_not_success():
@@ -765,6 +849,7 @@ class _FakeResumeGraph:
 
     async def aupdate_state(self, *, config, values):
         self.updated.append((config, values))
+        self.values = {**self.values, **values}
 
     async def astream(self, inp, config=None):
         self.streamed.append((inp, config))
@@ -778,6 +863,45 @@ async def test_inflight_second_message_is_dropped(monkeypatch):
     reply = await gateway.dispatch(_message("hello", "sess-busy"))
     assert reply == "Already working on this thread."
     assert workflow.calls == []
+
+
+async def test_learn_persists_via_postgres_when_factory_set(monkeypatch):
+    import neos.config.settings as settings_module
+    from neos.learn.lessons import LessonStatus, reset_lesson_store
+
+    store = reset_lesson_store()
+    gateway, workflow, coding = _gateway(monkeypatch)
+    monkeypatch.setattr(settings_module.settings.config.learn, "coding_lessons", True)
+    assert settings_module.settings.config.learn.channel_learn is False
+
+    added: list[object] = []
+
+    class FakePostgresLessonStore:
+        def __init__(self, factory) -> None:
+            self.factory = factory
+
+        async def add(self, lesson):
+            added.append(lesson)
+            return lesson
+
+    monkeypatch.setattr(
+        "neos.coding.learn_lessons.resolve_lesson_session_factory",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "neos.coding.learn_lessons.PostgresLessonStore",
+        FakePostgresLessonStore,
+    )
+
+    reply = await gateway.dispatch(_message("/learn the rate limit is 60"))
+
+    assert reply == "Lesson staged."
+    assert len(added) == 1
+    assert added[0].status is LessonStatus.STAGED
+    assert "rate limit is 60" in added[0].body
+    assert store.list() == ()
+    assert workflow.calls == []
+    assert coding.started == []
 
 
 async def test_chat_after_code_steers_bound_task(monkeypatch):
@@ -810,3 +934,125 @@ async def test_new_then_chat_runs_workflow_again(monkeypatch):
     assert reply == "workflow-ok"
     assert workflow.calls
     assert coding.steered == []
+
+
+async def test_clear_does_not_stop_or_unbind_coding_task(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    started = await gateway.dispatch(_message("/code do it", "sess-clear-keep"))
+    reply = await gateway.dispatch(_message("/clear", "sess-clear-keep"))
+    status = await gateway.dispatch(_message("/status", "sess-clear-keep"))
+    steered = await gateway.dispatch(_message("keep going", "sess-clear-keep"))
+
+    assert "ct_channel" in started
+    assert "context" in reply.lower()
+    assert "reset" not in reply.lower()
+    assert coding.stopped == []
+    assert "queued" in status
+    assert steered == "Steered ct_channel"
+    assert workflow.calls == []
+
+
+async def test_clear_drops_workflow_pending_without_session_reset(monkeypatch):
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=["U_alice"],
+        coding_invoke=True,
+        coding_owner_user_id="u_owner",
+    )
+    approvals = FakeWorkflowApprovals()
+    gateway = ChannelGateway(
+        FakeWorkflow(interrupt=True),
+        coding=FakeCoding(),
+        workflow_approvals=approvals,
+    )
+
+    await gateway.dispatch(_message("please run this", "sess-clear-wf"))
+    cleared = await gateway.dispatch(_message("/clear", "sess-clear-wf"))
+    decided = await gateway.dispatch(_message("/approve apr_wf", "sess-clear-wf"))
+
+    assert "context" in cleared.lower()
+    assert await gateway.get_binding("sess-clear-wf") is None
+    assert decided == "apr_wf approved"
+    assert approvals.calls == [("sess-clear-wf", "apr_wf", True)]
+
+
+async def test_compact_cost_export_bypass_held_inflight(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-ctrl-slash"))
+    assert gateway._inflight.acquire("sess-ctrl-slash") is True
+
+    compact = await gateway.dispatch(_message("/compact shrink", "sess-ctrl-slash"))
+    cost = await gateway.dispatch(_message("/cost", "sess-ctrl-slash"))
+    export = await gateway.dispatch(_message("/export", "sess-ctrl-slash"))
+
+    assert "not available" in compact.lower() or "queued" in compact.lower()
+    assert "success" not in compact.lower()
+    assert "compacted" not in compact.lower()
+    assert "cost" in cost.lower() or "token" in cost.lower()
+    assert "code ui" in export.lower()
+    assert "secret" not in export.lower()
+    assert coding.started == [("u_owner", "[U_alice] do it")]
+    assert workflow.calls == []
+
+
+async def test_compact_without_task_does_not_start_loop(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    reply = await gateway.dispatch(_message("/compact shrink", "sess-no-task"))
+
+    assert reply == "No coding task in this thread."
+    assert coding.started == []
+    assert workflow.calls == []
+
+
+async def test_compact_calls_existing_port_method_when_present(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    called: list[tuple[str, str, str]] = []
+
+    async def compact(*, task_id: str, owner_id: str, instruction: str) -> str:
+        called.append((task_id, owner_id, instruction))
+        return f"Compact requested for {task_id}"
+
+    coding.compact = compact
+    await gateway.dispatch(_message("/code do it", "sess-compact"))
+    reply = await gateway.dispatch(_message("/compact keep plan", "sess-compact"))
+
+    assert reply == "Compact requested for ct_channel"
+    assert called == [("ct_channel", "u_owner", "keep plan")]
+    assert workflow.calls == []
+    assert coding.started == [("u_owner", "[U_alice] do it")]
+
+
+async def test_cost_includes_snapshot_fields_when_readable(monkeypatch):
+    gateway, _workflow, coding = _gateway(monkeypatch)
+
+    async def snapshot(*, task_id: str, owner_id: str):
+        del owner_id
+        return SimpleNamespace(
+            latest_checkpoint=SimpleNamespace(
+                loop_state={
+                    "cost_micros": 2500,
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                }
+            )
+        )
+
+    coding.snapshot = snapshot
+    await gateway.dispatch(_message("/code do it", "sess-cost"))
+    reply = await gateway.dispatch(_message("/cost", "sess-cost"))
+
+    assert "2500" in reply
+    assert "11" in reply
+    assert "7" in reply
+
+
+async def test_export_does_not_dump_transcript(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-export"))
+    reply = await gateway.dispatch(_message("/export", "sess-export"))
+
+    assert "code ui" in reply.lower()
+    assert "SECRET" not in reply
+    assert "loop_state" not in reply
+    assert workflow.calls == []
+    assert coding.started == [("u_owner", "[U_alice] do it")]

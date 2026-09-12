@@ -3104,6 +3104,7 @@ class MultiAgentWorkflow:
             channel_source=user_input.get("channel_source", "api"),
             channel_type=user_input.get("channel_type"),
             channel_id=user_input.get("channel_id"),
+            channel_attachments=user_input.get("channel_attachments"),
             # Agent Autonomy Control
             autonomy_level=(
                 _resolve_autonomy_level(user_input.get("autonomy_level"))
@@ -3283,7 +3284,9 @@ class MultiAgentWorkflow:
                 query = user_input.get("query", "")
                 knowledge = f"Query about {query[:80]}: {key_findings[:200]}"
                 if user_input.get("user_id") and not is_imperative(knowledge):
-                    await memory_manager.learn(
+                    from neos.learn.memory_gate import maybe_learn_ltm
+
+                    await maybe_learn_ltm(
                         user_input.get("user_id", ""),
                         key=f"episode:{user_input.get('session_id', '')}",
                         knowledge=knowledge,

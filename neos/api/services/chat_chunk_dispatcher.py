@@ -194,7 +194,9 @@ class ChunkEventDispatcher:
             return
         try:
             result = await handle_search_user_sessions(
-                tool_input, user_id=self._user_id
+                tool_input,
+                user_id=self._user_id,
+                exclude_conversation_id=getattr(self, "_conversation_id", None),
             )
         except ValueError as exc:
             logger.warning("[SessionSearch] %s", exc)

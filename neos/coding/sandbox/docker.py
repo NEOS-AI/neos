@@ -48,19 +48,42 @@ from neos.coding.sandbox.events import (
     WorkspaceChange,
     WorkspaceChangeKind,
 )
+from neos.coding.sandbox.ignore import IGNORE_RUNTIME
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
 )
 from neos.coding.sandbox.streams import BoundedReplayStream
 
+_GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
+
 
 _READ_FILE_HELPER = """\
 from pathlib import Path
 import sys
-p = Path('/workspace') / sys.argv[1]
+rel, offset_s, limit_s, max_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+p = Path('/workspace') / rel
 if not p.is_file() or p.is_symlink(): raise SystemExit(2)
-sys.stdout.buffer.write(p.read_bytes())
+offset = int(offset_s)
+max_bytes = int(max_s)
+if limit_s == '':
+    if p.stat().st_size > max_bytes:
+        raise SystemExit(3)
+    sys.stdout.buffer.write(p.read_bytes())
+else:
+    limit = int(limit_s)
+    start = max(1, offset)
+    end = start + limit - 1
+    remaining = max_bytes
+    with p.open('rb') as handle:
+        for index, line in enumerate(handle, 1):
+            if index < start: continue
+            if index > end: break
+            if len(line) >= remaining:
+                sys.stdout.buffer.write(line[:remaining])
+                break
+            sys.stdout.buffer.write(line)
+            remaining -= len(line)
 """
 _WRITE_FILE_HELPER = """\
 import os, sys, tempfile
@@ -97,131 +120,177 @@ except Exception:
         pass
     raise
 """
-_SEARCH_TEXT_HELPER = """\
+_SEARCH_TEXT_HELPER = (
+    IGNORE_RUNTIME
+    + """
 import fnmatch, json, re, sys
 from pathlib import Path
-query, regex, limit, before, after, output_mode, *patterns = sys.argv[1:]
-expression = re.compile(query if regex == '1' else re.escape(query))
+query, regex, limit, before, after, output_mode, ignore_case, multiline, max_columns, search_path, *patterns = sys.argv[1:]
+flags = 0
+if ignore_case == '1':
+    flags |= re.IGNORECASE
+if multiline == '1':
+    flags |= re.DOTALL
+expression = re.compile(query if regex == '1' else re.escape(query), flags)
 before = max(0, min(int(before), 20))
 after = max(0, min(int(after), 20))
+max_columns = int(max_columns)
 if output_mode not in {'files', 'content', 'count'}:
     output_mode = 'content'
-skip_dirs = {'.git','node_modules','__pycache__','.venv','venv','dist','build','.svn','.hg','.tox','.mypy_cache','.pytest_cache'}
-def load_ignores():
-    pats = []
-    for name in ('.gitignore', '.ignore'):
-        ig = Path('/workspace') / name
-        if ig.is_file():
-            for line in ig.read_text(errors='replace').splitlines():
-                s = line.strip()
-                if s and not s.startswith('#'): pats.append(s)
-    return pats
-def ignored(relative, pats):
-    parts = Path(relative).parts
-    if any(part in skip_dirs for part in parts): return True
-    name = Path(relative).name
-    if name == '.env' or name.startswith('.env.'): return True
-    if '.ssh' in parts or name == 'id_rsa': return True
-    if '.aws' in parts:
-        try:
-            if parts[parts.index('.aws') + 1] == 'credentials': return True
-        except IndexError:
-            pass
-    hit = False
-    for raw in pats:
-        neg = raw.startswith('!')
-        pat = raw[1:] if neg else raw
-        pat = pat.lstrip('/').rstrip('/')
-        if not pat: continue
-        if fnmatch.fnmatch(relative, pat) or fnmatch.fnmatch(name, pat) or any(fnmatch.fnmatch(part, pat) for part in parts):
-            hit = not neg
-    return hit
-ignores = load_ignores()
+root = Path('/workspace')
+start = root / search_path if search_path else root
+rules = load_ignore_rules('/workspace')
 matches = []
-for p in sorted(Path('/workspace').rglob('*')):
-    if not p.is_file() or p.is_symlink(): continue
-    relative = p.relative_to('/workspace').as_posix()
-    if ignored(relative, ignores): continue
+
+def is_binary(item):
+    try:
+        with item.open('rb') as handle:
+            return b'\\x00' in handle.read(8192)
+    except OSError:
+        return True
+
+def emit_content(relative, number, column, line, lines):
+    text = line if max_columns <= 0 else line[:max_columns]
+    ctx = max(0, number - 1 - before)
+    matches.append({'path': relative, 'line': number, 'column': column,
+                    'text': text, 'before': lines[ctx:number - 1],
+                    'after': lines[number:number + after]})
+
+def consider_file(item, relative):
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
-               for pattern in patterns): continue
-    lines = p.read_text(errors='replace').splitlines()
-    file_hits = 0
-    for number, line in enumerate(lines, 1):
-        match = expression.search(line)
-        if not match: continue
-        file_hits += 1
-        if output_mode != 'content': continue
-        start = max(0, number - 1 - before)
-        matches.append({'path': relative, 'line': number,
-                        'column': match.start() + 1, 'text': line,
-                        'before': lines[start:number - 1],
-                        'after': lines[number:number + after]})
-        if len(matches) >= int(limit): break
-    if output_mode == 'content':
-        if len(matches) >= int(limit): break
-        continue
-    if file_hits == 0: continue
+               for pattern in patterns):
+        return False
+    if is_binary(item):
+        return False
+    try:
+        text = item.read_text(errors='replace')
+    except OSError:
+        return False
+    lines = text.splitlines()
+    if multiline == '1':
+        file_hits = 0
+        for match in expression.finditer(text):
+            file_hits += 1
+            if output_mode != 'content':
+                continue
+            number = text.count('\\n', 0, match.start()) + 1
+            line_start = text.rfind('\\n', 0, match.start()) + 1
+            line_end = text.find('\\n', match.start())
+            if line_end < 0:
+                line_end = len(text)
+            line = text[line_start:line_end].rstrip('\\r')
+            emit_content(relative, number, match.start() - line_start + 1, line, lines)
+            if len(matches) >= int(limit):
+                return True
+        if output_mode == 'content' or file_hits == 0:
+            return False
+    else:
+        file_hits = 0
+        for number, line in enumerate(lines, 1):
+            match = expression.search(line)
+            if not match:
+                continue
+            file_hits += 1
+            if output_mode != 'content':
+                continue
+            emit_content(relative, number, match.start() + 1, line, lines)
+            if len(matches) >= int(limit):
+                return True
+        if output_mode == 'content' or file_hits == 0:
+            return False
     if output_mode == 'files':
         matches.append({'path': relative, 'line': 0, 'column': 0, 'text': ''})
     else:
         matches.append({'path': relative, 'line': 0, 'column': 0, 'text': '',
                         'count': file_hits})
-    if len(matches) >= int(limit): break
+    return len(matches) >= int(limit)
+
+done = False
+if start.is_symlink():
+    pass
+elif start.is_file():
+    relative = start.relative_to(root).as_posix()
+    if not should_skip(relative, rules, is_dir=False):
+        consider_file(start, relative)
+elif start.is_dir():
+    for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
+        current = Path(dirpath)
+        dirnames.sort(); filenames.sort()
+        kept = []
+        for name in dirnames:
+            item = current / name
+            if item.is_symlink():
+                continue
+            relative = item.relative_to(root).as_posix()
+            if should_skip(relative, rules, is_dir=True):
+                continue
+            kept.append(name)
+        dirnames[:] = kept
+        for name in filenames:
+            item = current / name
+            if item.is_symlink() or not item.is_file():
+                continue
+            relative = item.relative_to(root).as_posix()
+            if should_skip(relative, rules, is_dir=False):
+                continue
+            if consider_file(item, relative):
+                done = True
+                break
+        if done:
+            break
 sys.stdout.write(json.dumps(matches))
 """
-_GLOB_FILES_HELPER = """\
+)
+_GLOB_FILES_HELPER = (
+    IGNORE_RUNTIME
+    + """
 import fnmatch, json, sys
 from pathlib import Path
 pattern, limit = sys.argv[1], int(sys.argv[2])
 if '..' in Path(pattern).parts:
     raise SystemExit(2)
 limit = max(1, min(limit, 500))
-skip_dirs = {'.git','node_modules','__pycache__','.venv','venv','dist','build','.svn','.hg','.tox','.mypy_cache','.pytest_cache'}
-def load_ignores():
-    pats = []
-    for name in ('.gitignore', '.ignore'):
-        ig = Path('/workspace') / name
-        if ig.is_file():
-            for line in ig.read_text(errors='replace').splitlines():
-                s = line.strip()
-                if s and not s.startswith('#'): pats.append(s)
-    return pats
-def ignored(relative, pats):
-    parts = Path(relative).parts
-    if any(part in skip_dirs for part in parts): return True
-    name = Path(relative).name
-    if name == '.env' or name.startswith('.env.'): return True
-    if '.ssh' in parts or name == 'id_rsa': return True
-    if '.aws' in parts:
-        try:
-            if parts[parts.index('.aws') + 1] == 'credentials': return True
-        except IndexError:
-            pass
-    hit = False
-    for raw in pats:
-        neg = raw.startswith('!')
-        pat = raw[1:] if neg else raw
-        pat = pat.lstrip('/').rstrip('/')
-        if not pat: continue
-        if fnmatch.fnmatch(relative, pat) or fnmatch.fnmatch(name, pat) or any(fnmatch.fnmatch(part, pat) for part in parts):
-            hit = not neg
-    return hit
-ignores = load_ignores()
+root = Path('/workspace')
+rules = load_ignore_rules('/workspace')
 found = []
-for p in sorted(Path('/workspace').rglob('*')):
-    if p.is_symlink(): continue
-    relative = p.relative_to('/workspace').as_posix()
-    if ignored(relative, ignores): continue
-    if fnmatch.fnmatch(relative, pattern) or (
-        pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
-    ):
-        found.append(relative)
-        if len(found) >= limit: break
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    current = Path(dirpath)
+    dirnames.sort(); filenames.sort()
+    kept = []
+    for name in dirnames:
+        item = current / name
+        if item.is_symlink():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if should_skip(relative, rules, is_dir=True):
+            continue
+        kept.append(name)
+    dirnames[:] = kept
+    stop = False
+    for name in filenames:
+        item = current / name
+        if item.is_symlink() or not item.is_file():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if should_skip(relative, rules, is_dir=False):
+            continue
+        if fnmatch.fnmatch(relative, pattern) or (
+            pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
+        ):
+            found.append(relative)
+            if len(found) >= limit:
+                stop = True
+                break
+    if stop:
+        break
 sys.stdout.write(json.dumps(found))
 """
-_FILE_METADATA_HELPER = """\
-import json, sys
+)
+_FILE_METADATA_HELPER = (
+    IGNORE_RUNTIME
+    + """
+import json, os, sys
 from datetime import UTC, datetime
 from pathlib import Path
 root = Path('/workspace')
@@ -233,13 +302,34 @@ def encode(item):
             'size': value.st_size,
             'modified_at': datetime.fromtimestamp(value.st_mtime, UTC).isoformat()}
 if sys.argv[2] == 'tree':
-    result = [encode(item) for item in sorted(p.rglob('*'))]
+    rules = load_ignore_rules('/workspace')
+    result = []
+    if p.is_dir() and not p.is_symlink():
+        for dirpath, dirnames, filenames in os.walk(p, followlinks=False):
+            current = Path(dirpath)
+            kept = []
+            for name in dirnames:
+                item = current / name
+                relative = item.relative_to(root).as_posix()
+                if should_skip(relative, rules, is_dir=True):
+                    continue
+                kept.append(name)
+                result.append(encode(item))
+            dirnames[:] = kept
+            for name in filenames:
+                item = current / name
+                relative = item.relative_to(root).as_posix()
+                if should_skip(relative, rules, is_dir=False):
+                    continue
+                result.append(encode(item))
+    result.sort(key=lambda row: row['path'])
 else:
     if not p.exists() and not p.is_symlink():
         raise SystemExit(2)
     result = encode(p)
 sys.stdout.write(json.dumps(result))
 """
+)
 _SNAPSHOT_HELPER = """\
 import sys, tarfile
 from pathlib import Path
@@ -922,13 +1012,21 @@ class DockerSandboxSession:
         return terminal
 
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
+        from neos.coding.sandbox.ignore import should_skip_walk
+
         relative = normalize_workspace_path(path)
         result = await self._run_helper(
             _FILE_METADATA_HELPER,
             relative.as_posix(),
             "tree",
         )
-        return tuple(self._file_entry(value) for value in self._load_json(result.stdout))
+        return tuple(
+            entry
+            for entry in (
+                self._file_entry(value) for value in self._load_json(result.stdout)
+            )
+            if not should_skip_walk(entry.path)
+        )
 
     async def stat(self, path: str) -> FileEntry:
         relative = normalize_workspace_path(path)
@@ -944,10 +1042,30 @@ class DockerSandboxSession:
             raise
         return self._file_entry(self._load_json(result.stdout))
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 1,
+        limit: int | None = None,
+    ) -> bytes:
         relative = normalize_workspace_path(path)
-        result = await self._run_helper(_READ_FILE_HELPER, relative.as_posix())
-        return result.stdout
+        if offset < 1 or (limit is not None and limit < 1):
+            raise SandboxPolicyViolation("invalid_read_request")
+        max_bytes = self._record.sandbox.limits.max_output_bytes
+        try:
+            result = await self._run_helper(
+                _READ_FILE_HELPER,
+                relative.as_posix(),
+                str(offset),
+                "" if limit is None else str(limit),
+                str(max_bytes),
+            )
+        except SandboxUnavailable as error:
+            if str(error) == "docker_command_failed:3":
+                raise SandboxPolicyViolation("file_read_limit_exceeded") from error
+            raise
+        return result.stdout[:max_bytes]
 
     async def write_file(
         self, path: str, content: bytes, *, parents: bool = True
@@ -1044,15 +1162,26 @@ class DockerSandboxSession:
         before: int = 0,
         after: int = 0,
         output_mode: str = "content",
+        ignore_case: bool = False,
+        multiline: bool = False,
+        context: int = 0,
+        path: str | None = None,
+        max_columns: int = 500,
     ) -> tuple[SearchMatch, ...]:
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
         if output_mode not in {"files", "content", "count"}:
             output_mode = "content"
+        if context > 0:
+            before = after = context
         before = max(0, min(int(before), 20))
         after = max(0, min(int(after), 20))
-        for path in paths:
-            normalize_workspace_path(path)
+        for candidate in paths:
+            normalize_workspace_path(candidate)
+        search_path = ""
+        if path is not None:
+            normalized = normalize_workspace_path(path)
+            search_path = "" if normalized.as_posix() == "." else normalized.as_posix()
         result = await self._run_helper(
             _SEARCH_TEXT_HELPER,
             query,
@@ -1061,6 +1190,10 @@ class DockerSandboxSession:
             str(before),
             str(after),
             output_mode,
+            "1" if ignore_case else "0",
+            "1" if multiline else "0",
+            str(max_columns),
+            search_path,
             *paths,
         )
         try:
@@ -1105,12 +1238,21 @@ class DockerSandboxSession:
     async def git_status(self) -> CommandResult:
         return await self.execute(
             CommandRequest(
-                argv=("git", "status", "--short", "--untracked-files=all")
+                argv=(
+                    *_GIT_SAFE,
+                    "status",
+                    "--short",
+                    "--untracked-files=all",
+                )
             )
         )
 
     async def git_diff(self, *, staged: bool = False) -> CommandResult:
-        argv = ("git", "diff", "--cached") if staged else ("git", "diff")
+        argv = (
+            (*_GIT_SAFE, "diff", "--cached", "--no-ext-diff")
+            if staged
+            else (*_GIT_SAFE, "diff", "--no-ext-diff")
+        )
         return await self.execute(CommandRequest(argv=argv))
 
     async def git_log(self, *, limit: int = 20) -> CommandResult:
@@ -1118,7 +1260,13 @@ class DockerSandboxSession:
             raise SandboxPolicyViolation("git_log_limit_invalid")
         return await self.execute(
             CommandRequest(
-                argv=("git", "log", f"--max-count={limit}", "--oneline")
+                argv=(
+                    *_GIT_SAFE,
+                    "log",
+                    "--no-ext-diff",
+                    f"--max-count={limit}",
+                    "--oneline",
+                )
             )
         )
 

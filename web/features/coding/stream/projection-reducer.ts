@@ -23,6 +23,10 @@ export const emptyProjection = (taskId: string): CodingProjectionState => ({
   orderedTextPartIds: [],
   todos: [],
   workspace: { revision: "uninitialized", git_head: null, changed_files: [] },
+  costMicros: null,
+  inputTokens: null,
+  outputTokens: null,
+  maxCostMicros: null,
   gap: null,
   projectionIssue: null,
 });
@@ -44,7 +48,16 @@ export function reduceSnapshot(
       phase_id: phaseId(phase.kind, phase.attempt),
     })),
     toolsById: Object.fromEntries(
-      snapshot.tools.map((tool) => [tool.tool_call_id, tool])
+      snapshot.tools.map((tool) => [
+        tool.tool_call_id,
+        {
+          ...tool,
+          name: tool.name ?? nameFromUnknown(tool.result),
+          preview: clippedPreview(tool.preview ?? previewFromUnknown(tool.result)),
+          denied_by: tool.denied_by ?? stringField(tool.result, "denied_by"),
+          reason_code: tool.reason_code ?? stringField(tool.result, "reason_code"),
+        },
+      ])
     ),
     approvalsById: Object.fromEntries(
       snapshot.approvals.map((approval) => [approval.approval_id, approval])
@@ -53,6 +66,7 @@ export function reduceSnapshot(
     orderedTextPartIds: parts.map((part) => part.part_id),
     todos: snapshot.todos,
     workspace: snapshot.workspace,
+    ...usageFromSnapshot(snapshot),
     gap: null,
     projectionIssue: null,
   };
@@ -158,17 +172,42 @@ export function reduceProjectionEvent(
   }
   if (event.type.startsWith("tool.") && event.tool_call_id) {
     const previous = state.toolsById[event.tool_call_id];
+    const result = payloadRecord(event.payload.result) ?? previous?.result ?? null;
+    const name = pickToolName(event.payload, result, previous);
+    const preview = clippedPreview(
+      pickToolPreview(event.payload, result, previous)
+    );
+    const deniedBy =
+      stringField(event.payload, "denied_by") ??
+      stringField(result, "denied_by") ??
+      previous?.denied_by ??
+      null;
+    const reasonCode =
+      stringField(event.payload, "reason_code") ??
+      stringField(result, "reason_code") ??
+      previous?.reason_code ??
+      null;
+    const status =
+      event.type === "tool.started"
+        ? "running"
+        : event.type.slice("tool.".length);
     const tool: CodingToolView = {
       tool_call_id: event.tool_call_id,
       run_id: event.run_id ?? previous?.run_id ?? "",
-      status: event.type.slice("tool.".length),
-      result:
-        event.payload.result && typeof event.payload.result === "object"
-          ? (event.payload.result as Record<string, unknown>)
-          : (previous?.result ?? null),
+      status,
+      result,
+      name,
+      preview,
+      denied_by: status === "denied" ? deniedBy : previous?.denied_by ?? null,
+      reason_code: status === "denied" ? reasonCode : previous?.reason_code ?? null,
     };
+    const todos =
+      event.type === "tool.completed" && name === "todo_write.v1"
+        ? todosFromToolEvent(event.payload, result) ?? state.todos
+        : state.todos;
     return {
       ...base,
+      todos,
       toolsById: { ...state.toolsById, [tool.tool_call_id]: tool },
     };
   }
@@ -203,4 +242,114 @@ export function reduceProjectionEvent(
     return { ...base, taskStatus: event.payload.status };
   }
   return base;
+}
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function payloadRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringField(
+  source: Record<string, unknown> | null | undefined,
+  key: string
+): string | null {
+  return source ? asTrimmedString(source[key]) : null;
+}
+
+function nameFromUnknown(value: unknown): string | null {
+  const record = payloadRecord(value);
+  return (
+    stringField(record, "name") ??
+    stringField(record, "tool_name") ??
+    stringField(record, "function_id")
+  );
+}
+
+function previewFromUnknown(value: unknown): string | null {
+  return stringField(payloadRecord(value), "preview");
+}
+
+function clippedPreview(value: string | null): string | null {
+  return value ? value.slice(0, 200) : null;
+}
+
+function pickToolName(
+  payload: Record<string, unknown>,
+  result: Record<string, unknown> | null,
+  previous: CodingToolView | undefined
+): string | null {
+  return (
+    stringField(payload, "name") ??
+    stringField(payload, "tool_name") ??
+    nameFromUnknown(result) ??
+    previous?.name ??
+    null
+  );
+}
+
+function pickToolPreview(
+  payload: Record<string, unknown>,
+  result: Record<string, unknown> | null,
+  previous: CodingToolView | undefined
+): string | null {
+  return (
+    stringField(payload, "preview") ??
+    previewFromUnknown(result) ??
+    previous?.preview ??
+    null
+  );
+}
+
+function asTodoRecords(value: unknown): Record<string, unknown>[] | null {
+  if (!Array.isArray(value)) return null;
+  const todos = value.filter(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object" && !Array.isArray(item)
+  );
+  return todos;
+}
+
+function todosFromToolEvent(
+  payload: Record<string, unknown>,
+  result: Record<string, unknown> | null
+): Record<string, unknown>[] | null {
+  return (
+    asTodoRecords(payload.todos) ??
+    asTodoRecords(result?.todos) ??
+    asTodoRecords(result?.entries)
+  );
+}
+
+function numericField(source: Record<string, unknown>, key: string): number | null {
+  const value = source[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function usageFromSnapshot(snapshot: CodingProjectionSnapshot): {
+  costMicros: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  maxCostMicros: number | null;
+} {
+  const checkpoint = payloadRecord(snapshot.latest_checkpoint);
+  const loopState = payloadRecord(checkpoint?.loop_state);
+  if (!loopState) {
+    return {
+      costMicros: null,
+      inputTokens: null,
+      outputTokens: null,
+      maxCostMicros: null,
+    };
+  }
+  return {
+    costMicros: numericField(loopState, "cost_micros"),
+    inputTokens: numericField(loopState, "input_tokens"),
+    outputTokens: numericField(loopState, "output_tokens"),
+    maxCostMicros: numericField(loopState, "max_cost_micros"),
+  };
 }

@@ -33,10 +33,6 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "read_file.v1",
         "search_text.v1",
         "glob_files.v1",
-        "git_status.v1",
-        "git_diff.v1",
-        "git_log.v1",
-        "web_fetch.v1",
         "edit_file.v1",
         "write_file.v1",
         "todo_write.v1",
@@ -45,12 +41,23 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "ask_user.v1",
         "load_skill.v1",
         "search_tools.v1",
-        "spawn_agent.v1",
     ]
     assert all(item.input_schema["additionalProperties"] is False for item in definitions)
     names = [item.name for item in definitions]
     assert names.index("edit_file.v1") == names.index("write_file.v1") - 1
     assert names.index("todo_write.v1") == names.index("execute.v1") - 1
+    assert "git_status.v1" not in names
+    assert "web_fetch.v1" not in names
+    assert "spawn_agent.v1" not in names
+    revealed = [
+        item.name
+        for item in registry().definitions(
+            revealed=frozenset({"git_status.v1", "web_fetch.v1", "spawn_agent.v1"})
+        )
+    ]
+    assert "git_status.v1" in revealed
+    assert "web_fetch.v1" in revealed
+    assert "spawn_agent.v1" in revealed
 
 
 def test_explore_definitions_omit_write_and_execute() -> None:
@@ -103,8 +110,42 @@ def test_search_text_accepts_before_and_after_context() -> None:
     assert call.input["before"] == 2
     assert call.input["after"] == 3
     assert call.input["output_mode"] == "content"
+    assert call.input["ignore_case"] is False
+    assert call.input["multiline"] is False
+    assert call.input["context"] == 0
+    assert call.input["path"] is None
     assert denied.allowed is False
     assert denied.reason_code == "policy_schema_invalid"
+
+
+def test_search_text_accepts_grep_schema_extras() -> None:
+    call = registry().validate(
+        "search_text.v1",
+        {
+            "query": "needle",
+            "ignore_case": True,
+            "multiline": True,
+            "context": 4,
+            "path": "src/./lib",
+            "limit": 250,
+        },
+    )
+    denied = registry().decide(
+        "search_text.v1", {"query": "needle", "limit": 251}
+    )
+    escaped = registry().decide(
+        "search_text.v1", {"query": "needle", "path": "../secret"}
+    )
+
+    assert call.input["ignore_case"] is True
+    assert call.input["multiline"] is True
+    assert call.input["context"] == 4
+    assert call.input["path"] == "src/lib"
+    assert call.input["limit"] == 250
+    assert denied.allowed is False
+    assert denied.reason_code == "policy_schema_invalid"
+    assert escaped.allowed is False
+    assert escaped.reason_code.startswith("policy_workspace_path_")
 
 
 def test_search_text_accepts_output_mode() -> None:
@@ -232,11 +273,20 @@ def test_write_file_is_workspace_write_and_denies_git_control_files() -> None:
         "write_file.v1",
         {"path": ".git/hooks/pre-commit", "content": "exit 0"},
     )
+    bare = registry().decide(
+        "write_file.v1",
+        {"path": "HEAD", "content": "ref: refs/heads/main"},
+    )
 
     assert allowed.risk is ToolRisk.WORKSPACE_WRITE
     assert allowed.input["parents"] is False
     assert denied.allowed is False
     assert denied.reason_code == "policy_protected_git_path"
+    assert bare.allowed is False
+    assert bare.reason_code in {
+        "policy_workspace_bare_git_path",
+        "policy_protected_git_path",
+    }
 
 
 def test_write_file_parents_defaults_to_false_and_is_opt_in() -> None:
@@ -335,13 +385,25 @@ def test_command_policy_denies_unsafe_argv(
 
 @pytest.mark.parametrize(
     "argv",
-    [["cat", "README.md"], ["rg", "needle"], ["find", "."], ["grep", "x"]],
+    [
+        ["cat", "README.md"],
+        ["rg", "needle"],
+        ["find", "."],
+        ["grep", "x"],
+        ["sed", "s/a/b/"],
+        ["awk", "{print}"],
+        ["env", "cat", "README.md"],
+        ["busybox", "grep", "x"],
+        ["xargs", "rg", "needle"],
+        ["env", "sed", "s/a/b/"],
+        ["busybox", "awk", "{print}"],
+    ],
 )
 def test_dedicated_tools_are_hard_denied_even_when_allowlisted(
     argv: list[str],
 ) -> None:
     unsafe = CodingToolRegistry.default(
-        command_allowlist=frozenset({argv[0], "pytest"}),
+        command_allowlist=frozenset({argv[0], argv[-2] if len(argv) > 2 else argv[0], "pytest"}),
         allowed_env_names=frozenset(),
     )
 
@@ -349,6 +411,119 @@ def test_dedicated_tools_are_hard_denied_even_when_allowlisted(
 
     assert decision.allowed is False
     assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-c", "print(1)"],
+        ["python3", "-c", "print(1)"],
+        ["node", "-e", "console.log(1)"],
+        ["nodejs", "-e", "console.log(1)"],
+        ["perl", "-e", "print 1"],
+        ["ruby", "-e", "puts 1"],
+        ["php", "-r", "echo 1;"],
+        ["lua", "-e", "print(1)"],
+        ["env", "python3", "-c", "print(1)"],
+    ],
+)
+def test_inline_interpreter_argv_is_denied(argv: list[str]) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({argv[0], "python3", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_inline_interpreter_denied"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pytest", "/tmp/test.py"],
+        ["ruff", "check", "../secret"],
+        ["mypy", "src/../../etc/passwd"],
+    ],
+)
+def test_execute_path_operands_outside_workspace_are_denied(
+    argv: list[str],
+) -> None:
+    decision = registry().decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_command_path_denied"
+
+
+def test_execute_secret_path_operands_are_denied() -> None:
+    decision = registry().decide("execute.v1", {"argv": ["pytest", ".env"]})
+    cased = registry().decide("execute.v1", {"argv": ["ruff", "check", "svc/.ENV"]})
+    flagged = registry().decide(
+        "execute.v1", {"argv": ["ruff", "--config=/etc/passwd"]}
+    )
+    flagged_secret = registry().decide(
+        "execute.v1", {"argv": ["ruff", "--config=../.env"]}
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_secret_path_denied"
+    assert cased.allowed is False
+    assert cased.reason_code == "policy_secret_path_denied"
+    assert flagged.allowed is False
+    assert flagged.reason_code == "policy_command_path_denied"
+    assert flagged_secret.allowed is False
+    assert flagged_secret.reason_code == "policy_secret_path_denied"
+
+
+@pytest.mark.parametrize(
+    ("argv", "reason"),
+    [
+        (["env", "sh", "-c", "pytest"], "policy_shell_command_denied"),
+        (["env", "bash", "-c", "echo hi"], "policy_shell_command_denied"),
+        (["busybox", "sh", "-c", "id"], "policy_shell_command_denied"),
+        (["env", "curl", "https://example.com"], "policy_network_client_denied"),
+        (["env", "git", "push"], "policy_git_operation_denied"),
+        (["env", "pnpm", "install"], "policy_network_operation_denied"),
+    ],
+)
+def test_wrapper_does_not_bypass_shell_network_or_git_denies(
+    argv: list[str], reason: str
+) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({"env", "busybox", "sh", "bash", "curl", "git", "pnpm"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["rm", "/"],
+        ["rm", "/*"],
+        ["rm", "*"],
+        ["rm", "~"],
+        ["rm", "-rf", "/"],
+        ["rmdir", "/tmp"],
+        ["rm", "../outside"],
+        ["env", "rm", "-rf", "/"],
+    ],
+)
+def test_dangerous_removal_argv_is_denied(argv: list[str]) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({"rm", "rmdir", "env", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dangerous_removal"
 
 
 def test_ask_user_accepts_mcq_questions() -> None:

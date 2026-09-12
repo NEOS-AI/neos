@@ -1,10 +1,14 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from neos.coding.domain.durability import RunAlreadyLeased
 from neos.coding.workers.development_supervisor import (
     CodingDevelopmentSupervisor,
 )
+
+pytestmark = pytest.mark.no_db
 
 
 class EmptyWorkRepository:

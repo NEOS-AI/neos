@@ -7,7 +7,11 @@ from neos.coding.phases import (
     parse_phase,
     parse_plan_critical_files,
     parse_verify_verdict,
+    persist_plan_critical_files,
+    persist_verify_verdict,
     phase_change_requires_approval,
+    restore_plan_critical_files,
+    restore_verify_verdict,
     tool_allowed_in_phase,
     write_risk_blocked,
 )
@@ -60,3 +64,25 @@ def test_parse_plan_critical_files_requires_heading() -> None:
         "src/a.py",
         "src/b.py",
     ]
+
+
+def test_persist_verify_verdict_and_restore() -> None:
+    assert persist_verify_verdict("notes\nVERDICT: FAIL\n") == "FAIL"
+    assert persist_verify_verdict("no verdict") is None
+    assert restore_verify_verdict("PASS") == "PASS"
+    assert restore_verify_verdict("PARTIAL") == "PARTIAL"
+    assert restore_verify_verdict("nope") is None
+    assert restore_verify_verdict(None) is None
+
+
+def test_persist_plan_critical_files_is_empty_tuple_when_missing() -> None:
+    assert persist_plan_critical_files("I will edit later") == ()
+    assert persist_plan_critical_files("## Critical Files:\n- src/app.py\n") == (
+        "src/app.py",
+    )
+    assert restore_plan_critical_files(["src/a.py", " src/b.py "]) == (
+        "src/a.py",
+        "src/b.py",
+    )
+    assert restore_plan_critical_files(None) == ()
+    assert restore_plan_critical_files("src/a.py") == ()

@@ -16,6 +16,7 @@ from neos.api.channels.authz import (
     GateContext,
     evaluate_channel_gate,
     resolve_channel_policy,
+    slack_event_mentions_bot,
     slack_text_mentions_bot,
     telegram_text_mentions_bot,
 )
@@ -260,6 +261,61 @@ def test_slack_mention_token_detects_bot_user() -> None:
     assert slack_text_mentions_bot("hey <@U_OTHER>", "U0BOT") is False
     assert slack_text_mentions_bot("", "U0BOT") is False
     assert slack_text_mentions_bot("<@U0BOT>", "") is False
+
+
+def test_slack_text_mention_ignores_quoted_lines() -> None:
+    assert slack_text_mentions_bot("> <@U0BOT> hello", "U0BOT") is False
+    assert slack_text_mentions_bot("  > <@U0BOT> hello", "U0BOT") is False
+    assert slack_text_mentions_bot("> <@U0BOT> quoted\n<@U0BOT> real", "U0BOT") is True
+
+
+def test_slack_event_mentions_bot_from_text_and_blocks() -> None:
+    assert slack_event_mentions_bot({"text": "hey <@U0BOT>"}, "U0BOT") is True
+    assert slack_event_mentions_bot({"text": "> <@U0BOT> hello"}, "U0BOT") is False
+    assert (
+        slack_event_mentions_bot(
+            {
+                "text": "please look",
+                "blocks": [
+                    {
+                        "type": "rich_text",
+                        "elements": [
+                            {
+                                "type": "rich_text_section",
+                                "elements": [
+                                    {"type": "user", "user_id": "U0BOT"},
+                                    {"type": "text", "text": " please look"},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            "U0BOT",
+        )
+        is True
+    )
+    assert (
+        slack_event_mentions_bot(
+            {
+                "text": "see above",
+                "blocks": [
+                    {
+                        "type": "rich_text",
+                        "elements": [
+                            {
+                                "type": "rich_text_quote",
+                                "elements": [{"type": "user", "user_id": "U0BOT"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+            "U0BOT",
+        )
+        is False
+    )
+    assert slack_event_mentions_bot({"text": "hey <@U0BOT>"}, "") is False
 
 
 def test_inbound_media_and_draft_streaming_default_off() -> None:

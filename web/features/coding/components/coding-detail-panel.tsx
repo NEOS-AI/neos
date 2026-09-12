@@ -31,6 +31,8 @@ export function CodingDetailPanel({
             tools.map((tool) => {
               const name = toolName(tool);
               const preview = toolPreview(tool);
+              const deniedBy = toolDeniedBy(tool);
+              const reasonCode = toolReasonCode(tool);
               return (
                 <div
                   className="border border-border/70 px-3 py-2"
@@ -39,15 +41,20 @@ export function CodingDetailPanel({
                   <div className="flex items-center justify-between gap-3">
                     <span className="flex min-w-0 items-center gap-2 font-mono text-xs">
                       <Wrench className="size-3 shrink-0 text-amber-400" />
-                      <span className="truncate">{name}</span>
+                      <span className="truncate">
+                        {name}
+                        {preview ? ` · ${preview}` : ""}
+                      </span>
                     </span>
                     <span className="shrink-0 text-muted-foreground text-xs">
                       {tool.status}
                     </span>
                   </div>
-                  {preview ? (
-                    <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                      {preview}
+                  {tool.status === "denied" && (deniedBy || reasonCode) ? (
+                    <p className="mt-1 font-mono text-[11px] text-rose-300">
+                      {deniedBy ? `denied_by ${deniedBy}` : null}
+                      {deniedBy && reasonCode ? " · " : null}
+                      {reasonCode ? `reason_code ${reasonCode}` : null}
                     </p>
                   ) : null}
                   <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">
@@ -127,4 +134,17 @@ function toolPreview(tool: CodingToolView): string | null {
   const preview =
     asTrimmedString(tool.preview) ?? asTrimmedString(tool.result?.preview);
   return preview ? preview.slice(0, 200) : null;
+}
+
+function toolDeniedBy(tool: CodingToolView): string | null {
+  return (
+    asTrimmedString(tool.denied_by) ?? asTrimmedString(tool.result?.denied_by)
+  );
+}
+
+function toolReasonCode(tool: CodingToolView): string | null {
+  return (
+    asTrimmedString(tool.reason_code) ??
+    asTrimmedString(tool.result?.reason_code)
+  );
 }

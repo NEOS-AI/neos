@@ -202,9 +202,9 @@ class VoteService:
 
         if user_id and feedback_text and not is_imperative(feedback_text):
             try:
-                from neos.memory.manager import memory_manager
+                from neos.learn.memory_gate import maybe_learn_ltm
 
-                await memory_manager.learn(
+                await maybe_learn_ltm(
                     user_id,
                     key=f"feedback:{chat_id}:{message_id}",
                     knowledge=feedback_text,

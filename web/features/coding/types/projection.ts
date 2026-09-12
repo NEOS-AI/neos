@@ -24,6 +24,8 @@ export type CodingToolView = {
   result: Record<string, unknown> | null;
   name?: string | null;
   preview?: string | null;
+  denied_by?: string | null;
+  reason_code?: string | null;
 };
 
 export type CodingApprovalView = {
@@ -80,6 +82,10 @@ export type CodingProjectionState = {
   orderedTextPartIds: string[];
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
+  costMicros: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  maxCostMicros: number | null;
   gap: { expected: number; received: number } | null;
   projectionIssue: { code: "unknown_text_part"; eventSeq: number } | null;
 };

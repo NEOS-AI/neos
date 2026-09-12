@@ -1076,12 +1076,12 @@ def test_compact_shrinks_old_results_to_preview_and_sha256() -> None:
         CanonicalMessage("user", (TextContent("start"),)),
         CanonicalMessage(
             "assistant",
-            (ToolUseContent("old", "read_file.v1", {"path": "src/a.py"}),),
+            (ToolUseContent("old", "execute.v1", {"argv": ["pytest"]}),),
         ),
         CanonicalMessage("tool", (ToolResultContent("old", "ok", old_body),)),
         CanonicalMessage(
             "assistant",
-            (ToolUseContent("active", "read_file.v1", {"path": "src/b.py"}),),
+            (ToolUseContent("active", "execute.v1", {"argv": ["ruff"]}),),
         ),
         CanonicalMessage(
             "tool",

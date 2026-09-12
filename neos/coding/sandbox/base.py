@@ -233,7 +233,13 @@ class SandboxSession(Protocol):
 
     async def stat(self, path: str) -> FileEntry: ...
 
-    async def read_file(self, path: str) -> bytes: ...
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 1,
+        limit: int | None = None,
+    ) -> bytes: ...
 
     async def write_file(
         self, path: str, content: bytes, *, parents: bool = True
@@ -257,6 +263,11 @@ class SandboxSession(Protocol):
         before: int = 0,
         after: int = 0,
         output_mode: str = "content",
+        ignore_case: bool = False,
+        multiline: bool = False,
+        context: int = 0,
+        path: str | None = None,
+        max_columns: int = 500,
     ) -> tuple[SearchMatch, ...]: ...
 
     async def glob_files(

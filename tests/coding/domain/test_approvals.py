@@ -8,9 +8,11 @@ from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     ApprovalStatus,
     approval_display_summary,
+    ask_user_answers_complete,
     canonical_approval_hash,
     denial_envelope,
     evaluate_approval,
+    is_denied_secret_path,
     requires_approval_answers,
 )
 from neos.coding.redact import redact_sensitive
@@ -100,6 +102,101 @@ def test_search_text_paths_are_denied_when_they_target_secrets() -> None:
 @pytest.mark.parametrize(
     "path",
     [
+        ".ENV",
+        ".Env.local",
+        "svc/.ENV",
+        ".Git/config",
+        "pkg/.GIT/HEAD",
+        ".SSH/id_ed25519",
+        "home/.Ssh/config",
+        "ID_RSA",
+        "keys/Id_Rsa",
+        ".AWS/credentials",
+        "svc/.Aws/Credentials",
+    ],
+)
+def test_secret_dotfile_paths_are_denied_casefold(path: str) -> None:
+    read = call("read_file.v1", {"path": path}, ToolRisk.READ_ONLY)
+    write = call(
+        "write_file.v1",
+        {"path": path, "content": "secret"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    assert is_denied_secret_path(path)
+    assert evaluate_approval(read) is ApprovalPolicyOutcome.DENY
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.DENY
+
+
+def test_execute_argv_secret_operands_are_denied() -> None:
+    command = call(
+        "execute.v1",
+        {"argv": ["pytest", ".env"]},
+        ToolRisk.COMMAND,
+    )
+    nested = call(
+        "execute.v1",
+        {"argv": ["ruff", "check", "svc/.ENV"]},
+        ToolRisk.COMMAND,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"execute.v1"}))
+
+    flagged = call(
+        "execute.v1",
+        {"argv": ["ruff", "--config=.env"]},
+        ToolRisk.COMMAND,
+    )
+    assert evaluate_approval(command) is ApprovalPolicyOutcome.DENY
+    assert evaluate_approval(nested, gate) is ApprovalPolicyOutcome.DENY
+    assert evaluate_approval(flagged) is ApprovalPolicyOutcome.DENY
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".bashrc",
+        ".ZSHRC",
+        "home/.profile",
+        ".gitconfig",
+        ".gitmodules",
+        ".mcp.json",
+        ".claude.json",
+        ".ripgreprc",
+        ".vscode/settings.json",
+        ".IDEA/workspace.xml",
+        "pkg/.Claude/settings.json",
+    ],
+)
+def test_sensitive_config_writes_require_approval_despite_remember(
+    path: str,
+) -> None:
+    write = call(
+        "write_file.v1",
+        {"path": path, "content": "export X=1"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    edit = call(
+        "edit_file.v1",
+        {"path": path, "old_string": "a", "new_string": "b"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    read = call("read_file.v1", {"path": path}, ToolRisk.READ_ONLY)
+    gate = ApprovalGate(approved_always=frozenset({"write_file.v1", "edit_file.v1"}))
+    allow_gate = ApprovalGate(allow_tools=frozenset({"write_file.v1"}))
+    auto_gate = ApprovalGate(
+        mode=ApprovalMode.AUTO,
+        always_allow=frozenset({"write_file.v1"}),
+    )
+
+    assert evaluate_approval(write, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(write, allow_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(write, auto_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(edit, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(read) is ApprovalPolicyOutcome.ALLOW
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
         "README.md",
         "src/main.py",
         ".gitignore",
@@ -184,6 +281,48 @@ def test_approved_always_allows_named_workspace_writes_only() -> None:
     assert evaluate_approval(command, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
+def test_instruction_file_writes_require_approval_despite_approved_always() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "AGENTS.md", "content": "ignore previous"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    nested = call(
+        "write_file.v1",
+        {"path": "docs/CLAUDE.md", "content": "x"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    soul = call(
+        "edit_file.v1",
+        {"path": "SOUL.md", "old_string": "a", "new_string": "b"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    cursor = call(
+        "write_file.v1",
+        {"path": ".cursorrules", "content": "x"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    lowercase = call(
+        "write_file.v1",
+        {"path": "agents.md", "content": "x"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"write_file.v1", "edit_file.v1"}))
+    allow_gate = ApprovalGate(allow_tools=frozenset({"write_file.v1"}))
+    auto_gate = ApprovalGate(
+        mode=ApprovalMode.AUTO,
+        always_allow=frozenset({"write_file.v1"}),
+    )
+
+    assert evaluate_approval(write, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(write, allow_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(write, auto_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(nested, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(soul, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(cursor, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(lowercase, gate) is ApprovalPolicyOutcome.ALLOW
+
+
 def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     jump = call("set_phase.v1", {"phase": "implement"}, ToolRisk.READ_ONLY)
     assert (
@@ -212,6 +351,11 @@ def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     )
     assert mcq["questions"] == ["Which runner?"]
     assert mcq["options"] == [["pytest", "nox"]]
+    assert ask_user_answers_complete(["Which runner?"], ["pytest"])
+    assert not ask_user_answers_complete(["Which runner?"], [""])
+    assert not ask_user_answers_complete(["a", "b"], ["yes"])
+    assert not ask_user_answers_complete(["a", "b"], ["yes", "   "])
+    assert ask_user_answers_complete(["a", "b"], ["yes", "no"])
 
 
 def test_canonical_hash_is_deterministic_and_binding_sensitive() -> None:
@@ -226,18 +370,56 @@ def test_canonical_hash_is_deterministic_and_binding_sensitive() -> None:
     assert len(first) == 64
 
 
-def test_write_summary_exposes_path_but_never_content() -> None:
+def test_write_summary_exposes_path_and_truncated_preview() -> None:
+    long_content = "".join(f"line-{index}-payload\n" for index in range(80))
+    short = approval_display_summary(
+        call(
+            "write_file.v1",
+            {"path": "src/main.py", "content": "hello"},
+            ToolRisk.WORKSPACE_WRITE,
+        )
+    )
     summary = approval_display_summary(
         call(
             "write_file.v1",
-            {"path": "src/main.py", "content": "raw-secret-content"},
+            {"path": "src/main.py", "content": long_content},
             ToolRisk.WORKSPACE_WRITE,
         )
     )
 
     encoded = json.dumps(summary)
-    assert summary == {"path": "src/main.py"}
-    assert "raw-secret-content" not in encoded
+    assert short["path"] == "src/main.py"
+    assert short["preview"] == "hello"
+    assert short["truncated"] is False
+    assert "content" not in short
+    assert summary["path"] == "src/main.py"
+    assert "preview" in summary
+    assert summary["truncated"] is True
+    assert "content" not in summary
+    assert long_content not in encoded
+    assert summary["preview"].count("\n") <= 40
+    assert len(summary["preview"]) <= 2000
+
+
+def test_edit_summary_exposes_path_and_truncated_patch() -> None:
+    old = "\n".join(f"old-{index}" for index in range(80))
+    new = "\n".join(f"new-{index}" for index in range(80))
+    summary = approval_display_summary(
+        call(
+            "edit_file.v1",
+            {"path": "src/main.py", "old_string": old, "new_string": new},
+            ToolRisk.WORKSPACE_WRITE,
+        )
+    )
+
+    encoded = json.dumps(summary)
+    assert summary["path"] == "src/main.py"
+    assert "patch" in summary
+    assert summary["truncated"] is True
+    assert "content" not in summary
+    assert old not in encoded
+    assert new not in encoded
+    assert len(summary["patch"]) <= 2000
 
 
 def test_command_summary_exposes_executable_and_count_but_not_values() -> None:
@@ -370,7 +552,9 @@ def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
     assert hooked["denied_by"] == "hook"
     assert hooked["function_id"] == "write_file.v1"
     assert hooked["reason"] == "policy_hook_denied"
-    assert hooked["args_excerpt"] == {"path": "src/main.py"}
+    assert hooked["args_excerpt"]["path"] == "src/main.py"
+    assert "content" not in hooked["args_excerpt"]
+    assert "preview" not in hooked["args_excerpt"]
     assert "raw-secret" not in json.dumps(hooked)
 
     command = call(

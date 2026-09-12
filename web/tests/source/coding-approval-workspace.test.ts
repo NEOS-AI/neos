@@ -30,8 +30,14 @@ test("ask_user approval card collects answers instead of echoing questions", () 
 
   assert.match(card, /ask_user\.v1/);
   assert.match(card, /answers/);
-  assert.match(card, /type="radio"/);
+  assert.match(card, /multiSelect \? "checkbox" : "radio"/);
+  assert.match(card, /"checkbox"/);
+  assert.match(card, /"radio"/);
+  assert.match(card, /multi_select/);
   assert.match(card, /Other/);
   assert.match(card, /warnings/);
+  assert.match(card, /set_phase\.v1/);
+  assert.match(card, /plan_preview/);
+  assert.match(card, /critical_files/);
   assert.match(api, /answers/);
 });

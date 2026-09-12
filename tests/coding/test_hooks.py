@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from neos.coding.hooks import NullCodingHooks, StopDecision
+from neos.coding.hooks import HookDecision, NullCodingHooks, StopDecision
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 
 pytestmark = pytest.mark.no_db
@@ -19,12 +19,14 @@ async def test_null_hooks_are_silent() -> None:
 
 
 def test_hook_decision_typed_shape() -> None:
-    allow = {"decision": "allow"}
-    deny = {"decision": "deny", "reason": "blocked"}
-    retry = {"decision": "retry", "reason": "try again"}
-    assert allow["decision"] in {"allow", "deny", "retry"}
+    allow: HookDecision = {"decision": "allow"}
+    deny: HookDecision = {"decision": "deny", "reason": "blocked"}
+    retry: HookDecision = {"decision": "retry", "reason": "try again"}
+    prevent: HookDecision = {"decision": "prevent", "reason": "stop now"}
+    assert allow["decision"] in {"allow", "deny", "retry", "prevent"}
     assert deny["decision"] == "deny"
     assert retry["reason"] == "try again"
+    assert prevent["decision"] == "prevent"
 
 
 def test_stop_decision_allows_prevent_and_retry() -> None:

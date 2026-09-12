@@ -36,13 +36,20 @@ def test_prompt_contains_required_sections_in_order() -> None:
         "## System",
         "## Tasks",
         "## Actions",
+        "## Using tools",
+        "## Session",
+        "## Environment",
         "## Tools",
         "## Skills",
         "## Tone",
     ]
     positions = [prompt.index(heading) for heading in headings]
     assert positions == sorted(positions)
-    assert prompt.index("<!-- neos:dynamic -->") < prompt.index("## Tools")
+    boundary = prompt.index("<!-- neos:dynamic -->")
+    assert prompt.index("## Using tools") < boundary
+    assert boundary < prompt.index("## Session")
+    assert boundary < prompt.index("## Environment")
+    assert boundary < prompt.index("## Tools")
 
 
 def test_prompt_states_the_six_behavior_contracts() -> None:
@@ -121,3 +128,57 @@ def test_staged_text_does_not_appear_unless_passed() -> None:
     prompt = build_coding_system_prompt(_tools())
     assert "## Lessons" not in prompt
     assert staged not in prompt
+
+
+def test_using_tools_is_static_and_prefers_dedicated() -> None:
+    prompt = build_coding_system_prompt(_tools())
+    using = prompt[prompt.index("## Using tools") : prompt.index("<!-- neos:dynamic -->")]
+    assert "dedicated" in using.lower()
+    assert "execute.v1" in using
+    assert "parallel" in using.lower()
+
+
+def test_session_requires_one_in_progress_todo() -> None:
+    prompt = build_coding_system_prompt(_tools())
+    session = prompt[prompt.index("## Session") : prompt.index("## Environment")]
+    assert "in_progress" in session
+    assert "one" in session.lower()
+    assert "complete" in session.lower()
+    assert "explore" in session.lower()
+
+
+def test_environment_holds_workspace_and_allowlist() -> None:
+    prompt = build_coding_system_prompt(
+        _tools(),
+        env=CodingPromptEnv(
+            workspace_root="/tmp/ws",
+            command_allowlist=("pytest", "ruff"),
+        ),
+    )
+    intro = prompt[prompt.index("## Intro") : prompt.index("## System")]
+    environment = prompt[prompt.index("## Environment") : prompt.index("## Tools")]
+    tools = prompt[prompt.index("## Tools") : prompt.index("## Skills")]
+    assert "/tmp/ws" not in intro
+    assert "/tmp/ws" in environment
+    assert "pytest" in environment
+    assert "ruff" in environment
+    assert "execute.v1 allowlist" not in tools
+
+
+def test_skill_listing_prefers_when_to_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    from neos.skills.markdown_catalog import MarkdownSkill
+
+    skill = MarkdownSkill(
+        name="demo",
+        description="Fallback description that must not appear.",
+        path=REPO_ROOT / "neos" / "coding" / "skills" / "verify.md",
+        source="coding",
+        when_to_use="Use this when planning a change.",
+    )
+    monkeypatch.setattr(
+        "neos.skills.markdown_catalog.list_skills",
+        lambda: (skill,),
+    )
+    prompt = build_coding_system_prompt(_tools())
+    assert "Use this when planning a change." in prompt
+    assert "Fallback description that must not appear." not in prompt

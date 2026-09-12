@@ -71,7 +71,13 @@ async def test_handler_rejects_other_user_id_from_tool_args(
 ) -> None:
     called: dict[str, object] = {}
 
-    async def fake_search(user_id: str, query: str, *, limit: int = 5):
+    async def fake_search(
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        exclude_conversation_id: str | None = None,
+    ):
         called["user_id"] = user_id
         return [{"message_id": "m1", "content": "secret", "user_id": user_id}]
 
@@ -93,10 +99,17 @@ async def test_handler_uses_authenticated_user_and_returns_snippets(
 ) -> None:
     called: dict[str, object] = {}
 
-    async def fake_search(user_id: str, query: str, *, limit: int = 5):
+    async def fake_search(
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        exclude_conversation_id: str | None = None,
+    ):
         called["user_id"] = user_id
         called["query"] = query
         called["limit"] = limit
+        called["exclude_conversation_id"] = exclude_conversation_id
         return [
             {
                 "message_id": "m1",
@@ -122,6 +135,7 @@ async def test_handler_uses_authenticated_user_and_returns_snippets(
         "user_id": "auth-user",
         "query": "rate limit",
         "limit": 10,
+        "exclude_conversation_id": None,
     }
     assert result["type"] == "tool_result"
     assert "summary" not in result
@@ -135,6 +149,102 @@ async def test_handler_uses_authenticated_user_and_returns_snippets(
             "similarity_score": 0.91,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_handler_clips_content_and_hides_cron_subagent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_search(
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        exclude_conversation_id: str | None = None,
+    ):
+        return [
+            {
+                "message_id": "m1",
+                "conversation_id": "c1",
+                "conversation_title": "long",
+                "content": "A" * 400,
+                "role": "assistant",
+                "similarity_score": 0.9,
+            },
+            {
+                "message_id": "m2",
+                "conversation_id": "c2",
+                "conversation_title": "nightly",
+                "content": "cron tick",
+                "source": "cron",
+                "role": "assistant",
+                "similarity_score": 0.8,
+            },
+            {
+                "message_id": "m3",
+                "conversation_id": "c3",
+                "conversation_title": "child",
+                "content": "spawned work",
+                "origin": "subagent",
+                "role": "assistant",
+                "similarity_score": 0.7,
+            },
+            {
+                "message_id": "m4",
+                "conversation_id": "c4",
+                "conversation_title": "hit",
+                "content": "full message body that should not leak",
+                "snippet": "short hit",
+                "role": "assistant",
+                "similarity_score": 0.6,
+            },
+        ]
+
+    monkeypatch.setattr(
+        "neos.learn.session_search_tool.search_user_sessions", fake_search
+    )
+
+    result = await handle_search_user_sessions({"query": "rate limit"}, user_id="u1")
+
+    assert "summary" not in result
+    snippets = result["snippets"]
+    assert [item["message_id"] for item in snippets] == ["m1", "m4"]
+    assert snippets[0]["snippet"] == "A" * 240
+    assert snippets[1]["snippet"] == "short hit"
+
+
+@pytest.mark.asyncio
+async def test_handler_passes_exclude_conversation_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: dict[str, object] = {}
+
+    async def fake_search(
+        user_id: str,
+        query: str,
+        *,
+        limit: int = 5,
+        exclude_conversation_id: str | None = None,
+    ):
+        called["exclude_conversation_id"] = exclude_conversation_id
+        return []
+
+    monkeypatch.setattr(
+        "neos.learn.session_search_tool.search_user_sessions", fake_search
+    )
+
+    await handle_search_user_sessions(
+        {"query": "rate limit", "exclude_conversation_id": "from-input"},
+        user_id="u1",
+        exclude_conversation_id="from-caller",
+    )
+    assert called["exclude_conversation_id"] == "from-caller"
+
+    await handle_search_user_sessions(
+        {"query": "rate limit", "exclude_conversation_id": "from-input"},
+        user_id="u1",
+    )
+    assert called["exclude_conversation_id"] == "from-input"
 
 
 def _imported_modules(path: Path) -> list[str]:

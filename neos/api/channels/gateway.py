@@ -40,6 +40,69 @@ _LEARN_DISABLED = "Learning is disabled."
 _LEARN_STAGED = "Lesson staged."
 _LEARN_USAGE = "Usage: /learn <text>"
 _SESSION_RESET = "Session reset."
+_COMPACT_UNAVAILABLE = "Compact is not available."
+_CONTEXT_CLEAR_REQUESTED = "Conversation context clear is requested."
+_COST_TRACKED = "Cost is tracked on the task."
+_EXPORT_UI = "Transcript export is available in the Code UI."
+_CONTROL_LOCK_BYPASS = frozenset(
+    {
+        ChannelCommandKind.STOP,
+        ChannelCommandKind.NEW,
+        ChannelCommandKind.APPROVE,
+        ChannelCommandKind.DENY,
+        ChannelCommandKind.STATUS,
+        ChannelCommandKind.COMPACT,
+        ChannelCommandKind.CLEAR,
+        ChannelCommandKind.COST,
+        ChannelCommandKind.EXPORT,
+    }
+)
+
+
+def _loop_state_from_snapshot(snapshot: Any) -> dict[str, Any]:
+    if snapshot is None:
+        return {}
+    checkpoint = getattr(snapshot, "latest_checkpoint", None)
+    if checkpoint is None and isinstance(snapshot, dict):
+        checkpoint = snapshot.get("latest_checkpoint")
+    if checkpoint is None:
+        return {}
+    loop_state = getattr(checkpoint, "loop_state", None)
+    if loop_state is None and isinstance(checkpoint, dict):
+        loop_state = checkpoint.get("loop_state")
+    return loop_state if isinstance(loop_state, dict) else {}
+
+
+def _cost_line_from_snapshot(snapshot: Any, task_id: str) -> str:
+    loop_state = _loop_state_from_snapshot(snapshot)
+    if not loop_state:
+        return ""
+    cost = loop_state.get("cost_micros")
+    inbound = loop_state.get("input_tokens")
+    outbound = loop_state.get("output_tokens")
+    parts: list[str] = []
+    if isinstance(cost, int):
+        parts.append(f"cost_micros={cost}")
+    if isinstance(inbound, int) or isinstance(outbound, int):
+        parts.append(f"tokens={int(inbound or 0)}+{int(outbound or 0)}")
+    if not parts:
+        return ""
+    return f"{task_id} " + " ".join(parts)
+
+
+async def _read_coding_snapshot(coding: Any, *, task_id: str, owner_id: str) -> Any:
+    snapshot_fn = getattr(coding, "snapshot", None)
+    if not callable(snapshot_fn):
+        return None
+    try:
+        return await snapshot_fn(task_id=task_id, owner_id=owner_id)
+    except TypeError:
+        try:
+            return await snapshot_fn(task_id, owner_id)
+        except Exception:
+            return None
+    except Exception:
+        return None
 
 
 def _sender_label(message: ChannelMessage) -> str:
@@ -149,6 +212,7 @@ class ChannelGateway:
         self._coding = coding
         self._workflow_approvals = workflow_approvals
         self._workflow_pending: Dict[str, Dict[str, str]] = {}
+        self._workflow_reset: set[str] = set()
         self._inflight = inflight or SessionInflightLock()
         if binds is None:
             from .session_bind import InMemoryChannelCodingBindStore
@@ -210,7 +274,9 @@ class ChannelGateway:
             if prior is not None and prior.outcome:
                 return prior.outcome
 
-        if not self._inflight.acquire(message.session_id):
+        command = parse_channel_command(message.text)
+        skip_lock = command.kind in _CONTROL_LOCK_BYPASS
+        if not skip_lock and not self._inflight.acquire(message.session_id):
             return _BUSY
         breaker = self._get_breaker(message.channel_type)
         try:
@@ -234,7 +300,8 @@ class ChannelGateway:
                 await self._inbound.abandon(message.session_id, idem)
             response = "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         finally:
-            self._inflight.release(message.session_id)
+            if not skip_lock:
+                self._inflight.release(message.session_id)
 
         return response
 
@@ -255,6 +322,14 @@ class ChannelGateway:
             return await self._run_learn(message, command)
         if command.kind is ChannelCommandKind.NEW:
             return await self._run_new(message)
+        if command.kind is ChannelCommandKind.CLEAR:
+            return await self._run_clear(message)
+        if command.kind is ChannelCommandKind.COMPACT:
+            return await self._run_compact(message, command)
+        if command.kind is ChannelCommandKind.COST:
+            return await self._run_cost(message)
+        if command.kind is ChannelCommandKind.EXPORT:
+            return await self._run_export(message)
         return await self._run_coding_command(message, command)
 
     async def _run_workflow(self, message: ChannelMessage) -> str:
@@ -320,6 +395,7 @@ class ChannelGateway:
             pending = result.get("pending_approvals") or []
             first = pending[0] if pending else {}
             request_id = str(first.get("request_id") or "")
+            self._workflow_reset.discard(message.session_id)
             self._workflow_pending[message.session_id] = {
                 "request_id": request_id,
                 "owner_id": user_id,
@@ -378,12 +454,11 @@ class ChannelGateway:
 
         binding = await self._binds.get(message.session_id)
         if binding is None:
-            pending = self._workflow_pending.get(message.session_id)
-            if pending and command.kind in {
+            if command.kind in {
                 ChannelCommandKind.APPROVE,
                 ChannelCommandKind.DENY,
             }:
-                return await self._resume_workflow_approval(message, command, pending)
+                return await self._resume_workflow_approval(message, command)
             return _NO_TASK
         task_id = binding.task_id
         owner = binding.owner_id or settings.config.channels.coding_owner_user_id
@@ -393,18 +468,24 @@ class ChannelGateway:
             return f"Stopped {task_id}"
         if command.kind is ChannelCommandKind.STATUS:
             return await coding.status(task_id=task_id, owner_id=owner)
-        return await coding.decide(
-            task_id=task_id,
-            owner_id=owner,
-            approve=command.kind is ChannelCommandKind.APPROVE,
-            approval_id=command.rest,
-        )
+        if command.kind in {
+            ChannelCommandKind.APPROVE,
+            ChannelCommandKind.DENY,
+        }:
+            return await coding.decide(
+                task_id=task_id,
+                owner_id=owner,
+                approve=command.kind is ChannelCommandKind.APPROVE,
+                approval_id=command.rest,
+            )
+        return _NO_TASK
 
     async def _run_learn(self, message: ChannelMessage, command) -> str:
         from dataclasses import replace
 
+        from neos.coding.learn_lessons import _persist_lesson
         from neos.config.settings import settings
-        from neos.learn.lessons import LessonStatus, get_lesson_store, new_lesson
+        from neos.learn.lessons import LessonStatus, new_lesson
         from neos.learn.policy import clip_knowledge, namespace, write_approval_required
 
         from .principals import platform_user_id_from_message, resolve_channel_principal
@@ -437,7 +518,7 @@ class ChannelGateway:
         )
         if not write_approval_required():
             lesson = replace(lesson, status=LessonStatus.APPROVED)
-        get_lesson_store().add(lesson)
+        await _persist_lesson(lesson)
         return _LEARN_STAGED
 
     async def _run_new(self, message: ChannelMessage) -> str:
@@ -449,6 +530,7 @@ class ChannelGateway:
             )
         await self._binds.unbind(message.session_id)
         self._workflow_pending.pop(message.session_id, None)
+        self._workflow_reset.add(message.session_id)
         self._code_starts = {
             key: value
             for key, value in self._code_starts.items()
@@ -457,12 +539,81 @@ class ChannelGateway:
         await self._inbound.clear_session(message.session_id)
         return _SESSION_RESET
 
+    async def _run_clear(self, message: ChannelMessage) -> str:
+        self._workflow_pending.pop(message.session_id, None)
+        await self._inbound.clear_session(message.session_id)
+        return _CONTEXT_CLEAR_REQUESTED
+
+    async def _run_compact(self, message: ChannelMessage, command) -> str:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK
+        coding = self._coding_port()
+        compact_fn = getattr(coding, "compact", None)
+        if not callable(compact_fn):
+            return _COMPACT_UNAVAILABLE
+        try:
+            result = await compact_fn(
+                task_id=binding.task_id,
+                owner_id=binding.owner_id,
+                instruction=command.rest,
+            )
+        except Exception:
+            return _COMPACT_UNAVAILABLE
+        if isinstance(result, str) and result.strip():
+            return result
+        return _COMPACT_UNAVAILABLE
+
+    async def _run_cost(self, message: ChannelMessage) -> str:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK
+        coding = self._coding_port()
+        cost_fn = getattr(coding, "cost", None)
+        if callable(cost_fn):
+            try:
+                text = await cost_fn(
+                    task_id=binding.task_id, owner_id=binding.owner_id
+                )
+            except Exception:
+                text = None
+            if isinstance(text, str) and text.strip():
+                return text
+        snapshot = await _read_coding_snapshot(
+            coding, task_id=binding.task_id, owner_id=binding.owner_id
+        )
+        line = _cost_line_from_snapshot(snapshot, binding.task_id)
+        return line or _COST_TRACKED
+
+    async def _run_export(self, message: ChannelMessage) -> str:
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK
+        return _EXPORT_UI
+
     async def _resume_workflow_approval(
-        self, message: ChannelMessage, command, pending: Dict[str, str]
+        self, message: ChannelMessage, command, pending: Dict[str, str] | None = None
     ) -> str:
         from neos.config.settings import settings
 
         from .principals import platform_user_id_from_message, resolve_channel_principal
+
+        if pending is None:
+            if message.session_id in self._workflow_reset:
+                return _NO_TASK
+            pending = self._workflow_pending.get(message.session_id)
+        port = self._workflow_approvals
+        if port is None:
+            return _APPROVAL_NOT_CONFIGURED
+        owner_id = ""
+        request_id = command.rest or ""
+        if pending:
+            owner_id = pending.get("owner_id") or ""
+            request_id = request_id or pending.get("request_id") or ""
+        else:
+            peek = getattr(port, "interrupt_owner", None)
+            if peek is not None:
+                owner_id = str(await peek(message.session_id) or "")
 
         channels = settings.config.channels
         if channels.principals:
@@ -471,18 +622,14 @@ class ChannelGateway:
                 platform_user_id=platform_user_id_from_message(message),
                 channels=channels,
             )
-            if actor != pending.get("owner_id"):
+            if not owner_id or actor != owner_id:
                 return _NO_OWNER
 
-        request_id = command.rest or pending.get("request_id") or ""
         approve = command.kind is ChannelCommandKind.APPROVE
-        port = self._workflow_approvals
-        if port is None:
-            return _APPROVAL_NOT_CONFIGURED
         result = await port.decide(
             session_id=message.session_id,
             request_id=request_id,
-            owner_id=pending.get("owner_id") or "",
+            owner_id=owner_id,
             approve=approve,
         )
         applied = str(result)
@@ -501,10 +648,16 @@ class ChannelGateway:
         return await self._binds.get(session_id)
 
     async def workflow_pending_owner(self, session_id: str) -> str | None:
-        pending = self._workflow_pending.get(session_id)
-        if not pending:
+        if session_id in self._workflow_reset:
             return None
-        return pending.get("owner_id") or None
+        pending = self._workflow_pending.get(session_id)
+        if pending:
+            return pending.get("owner_id") or None
+        peek = getattr(self._workflow_approvals, "interrupt_owner", None)
+        if peek is None:
+            return None
+        owner = await peek(session_id)
+        return str(owner) if owner else None
 
     async def unbind_session(self, session_id: str) -> None:
         await self._binds.unbind(session_id)

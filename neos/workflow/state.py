@@ -183,6 +183,7 @@ class AgentState(TypedDict):
     channel_type: Optional[str]                          # 요청 채널 "api"|"telegram"|"discord"|"slack"
     channel_id: Optional[str]                            # 외부 채널 식별자 (Telegram chat_id 등)
     channel_source: Optional[str]                        # query_history.channel_source: "api"|"telegram"|"discord"|"slack"
+    channel_attachments: Optional[List[Dict[str, Any]]]  # inbound channel media blocks
 
     # ROMA: Recursive Open Meta-Agent
     recursive_task_tree: Optional[Dict[str, Any]]       # 전체 태스크 트리 (직렬화된 RecursiveTaskNode)

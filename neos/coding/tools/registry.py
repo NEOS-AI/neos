@@ -35,8 +35,94 @@ _DEDICATED_EXECUTE_DENY = frozenset(
         "find",
         "fd",
         "fdfind",
+        "sed",
+        "awk",
     }
 )
+_EXECUTE_WRAPPERS = frozenset({"env", "busybox", "xargs"})
+_INLINE_INTERPRETERS = frozenset(
+    {"python", "python3", "node", "nodejs", "perl", "ruby", "php", "lua"}
+)
+_REMOVAL_EXECUTABLES = frozenset({"rm", "rmdir"})
+_DANGEROUS_REMOVAL_OPERANDS = frozenset({"/", "/*", "*", "~"})
+
+
+def is_path_like_operand(value: object) -> bool:
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        return False
+    if value.startswith("."):
+        return True
+    return "/" in value.replace("\\", "/")
+
+
+def path_operands_from_argv(argv: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    operands: list[str] = []
+    for part in tuple(argv)[1:]:
+        if part == "--":
+            continue
+        if part.startswith("-") and "=" in part:
+            value = part.split("=", 1)[1]
+            if is_path_like_operand(value):
+                operands.append(value)
+            continue
+        if is_path_like_operand(part):
+            operands.append(part)
+    return tuple(operands)
+
+
+def _command_name(value: str) -> str:
+    return PurePosixPath(value).name
+
+
+def _unwrapped_command_names(argv: tuple[str, ...]) -> tuple[str, ...]:
+    names = [_command_name(argv[0])]
+    if names[0] not in _EXECUTE_WRAPPERS:
+        return tuple(names)
+    for part in argv[1:]:
+        if part.startswith("-"):
+            continue
+        if names[0] == "env" and "=" in part:
+            continue
+        names.append(_command_name(part))
+    return tuple(names)
+
+
+def _command_operands(argv: tuple[str, ...]) -> tuple[str, ...]:
+    operands: list[str] = []
+    for part in argv[1:]:
+        if part == "--":
+            continue
+        if part.startswith("-") and "=" in part:
+            operands.append(part.split("=", 1)[1])
+            continue
+        if part.startswith("-"):
+            continue
+        operands.append(part)
+    return tuple(operands)
+
+
+def _subcommand_after(argv: tuple[str, ...], executable: str) -> str | None:
+    seen = False
+    for part in argv:
+        if not seen:
+            if _command_name(part) == executable:
+                seen = True
+            continue
+        if part.startswith("-"):
+            continue
+        return _command_name(part)
+    return None
+
+
+def _operand_escapes_workspace(value: str) -> bool:
+    if value.startswith("/") or value.startswith("~"):
+        return True
+    parts = [
+        part
+        for part in value.replace("\\", "/").split("/")
+        if part not in {"", "."}
+    ]
+    return ".." in parts
 
 
 def _deferred_tools_threshold() -> int:
@@ -90,9 +176,13 @@ class _SearchTextInput(_ToolInput):
     query: str = Field(min_length=1)
     paths: list[str] = Field(default_factory=lambda: ["**/*"], min_length=1)
     regex: bool = False
-    limit: int = Field(default=100, ge=1, le=100)
+    limit: int = Field(default=100, ge=1, le=250)
     before: int = Field(default=0, ge=0, le=20)
     after: int = Field(default=0, ge=0, le=20)
+    ignore_case: bool = False
+    multiline: bool = False
+    context: int = Field(default=0, ge=0, le=20)
+    path: str | None = None
     output_mode: Literal["files", "content", "count"] = "content"
 
 
@@ -464,14 +554,12 @@ class CodingToolRegistry:
 
         hidden = hidden_tools_for_phase(phase)
         revealed_names = revealed or frozenset()
-        defer = len(self._TOOL_SPECS) > _deferred_tools_threshold()
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
             if tool.name not in hidden
             and (
-                not defer
-                or tool.name in self._CORE_TOOL_NAMES
+                tool.name in self._CORE_TOOL_NAMES
                 or tool.name in revealed_names
             )
         )
@@ -540,13 +628,14 @@ class CodingToolRegistry:
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:
-            if "path" in data:
+            raw_path = data.get("path")
+            if isinstance(raw_path, str):
                 normalizer = (
                     ensure_mutable_workspace_path
                     if name in {"write_file.v1", "edit_file.v1"}
                     else normalize_workspace_path
                 )
-                data["path"] = str(normalizer(data["path"]))
+                data["path"] = str(normalizer(raw_path))
             if "pattern" in data:
                 data["pattern"] = str(normalize_workspace_path(data["pattern"]))
             if "paths" in data:
@@ -562,30 +651,43 @@ class CodingToolRegistry:
             raise ToolValidationError(f"policy_{code}") from error
 
     def _validate_command(self, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
         argv = tuple(data["argv"])
         if any("\0" in value for value in argv):
             raise ToolValidationError("policy_schema_invalid")
         if PurePosixPath(argv[0]).name != argv[0]:
             raise ToolValidationError("policy_executable_path_denied")
         executable = PurePosixPath(argv[0]).name
-        if executable in _DEDICATED_EXECUTE_DENY:
+        names = _unwrapped_command_names(argv)
+        if any(name in _DEDICATED_EXECUTE_DENY for name in names):
             raise ToolValidationError("policy_dedicated_tool_required")
-        if executable in {"sh", "bash", "zsh"} and len(argv) > 1 and argv[1] == "-c":
+        if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
             raise ToolValidationError("policy_shell_command_denied")
-        if executable in {
-            "curl",
-            "ftp",
-            "nc",
-            "ncat",
-            "rsync",
-            "scp",
-            "sftp",
-            "ssh",
-            "telnet",
-            "wget",
-        }:
+        if any(name in _INLINE_INTERPRETERS for name in names):
+            later = argv[1:]
+            if "-c" in later or "-e" in later:
+                raise ToolValidationError("policy_inline_interpreter_denied")
+            if "php" in names and "-r" in later:
+                raise ToolValidationError("policy_inline_interpreter_denied")
+        if any(
+            name
+            in {
+                "curl",
+                "ftp",
+                "nc",
+                "ncat",
+                "rsync",
+                "scp",
+                "sftp",
+                "ssh",
+                "telnet",
+                "wget",
+            }
+            for name in names
+        ):
             raise ToolValidationError("policy_network_client_denied")
-        if executable in {"npm", "pnpm", "yarn", "pip", "pip3"} and any(
+        if any(name in {"npm", "pnpm", "yarn", "pip", "pip3"} for name in names) and any(
             value
             in {
                 "add",
@@ -598,13 +700,25 @@ class CodingToolRegistry:
             for value in argv[1:]
         ):
             raise ToolValidationError("policy_network_operation_denied")
+        if any(name in _REMOVAL_EXECUTABLES for name in names):
+            for operand in _command_operands(argv):
+                if (
+                    operand in _DANGEROUS_REMOVAL_OPERANDS
+                    or _operand_escapes_workspace(operand)
+                ):
+                    raise ToolValidationError("policy_dangerous_removal")
+        for operand in _command_operands(argv):
+            if is_denied_secret_path(operand):
+                raise ToolValidationError("policy_secret_path_denied")
+            if _operand_escapes_workspace(operand):
+                raise ToolValidationError("policy_command_path_denied")
         if executable not in self._command_allowlist:
             raise ToolValidationError("policy_executable_not_allowed")
-        if executable == "git" and (
-            len(argv) < 2 or argv[1] not in {"status", "diff", "log"}
-        ):
-            raise ToolValidationError("policy_git_operation_denied")
-        if executable in {"npm", "pnpm", "yarn"} and any(
+        if "git" in names:
+            subcommand = _subcommand_after(argv, "git")
+            if subcommand not in {"status", "diff", "log"}:
+                raise ToolValidationError("policy_git_operation_denied")
+        if any(name in {"npm", "pnpm", "yarn"} for name in names) and any(
             value in {"publish", "release"} for value in argv[1:]
         ):
             raise ToolValidationError("policy_publish_denied")

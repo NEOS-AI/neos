@@ -80,6 +80,30 @@ def test_regular_workspace_path_is_mutable() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "HEAD",
+        "objects",
+        "objects/pack/foo",
+        "refs",
+        "refs/heads/main",
+        "hooks",
+        "hooks/pre-commit",
+    ],
+)
+def test_mutation_rejects_workspace_root_bare_git_paths(path: str) -> None:
+    with pytest.raises(
+        SandboxPolicyViolation,
+        match="workspace_bare_git_path|protected_git_path",
+    ):
+        ensure_mutable_workspace_path(path)
+
+
+def test_nested_head_file_is_still_mutable() -> None:
+    assert ensure_mutable_workspace_path("src/HEAD") == PurePosixPath("src/HEAD")
+
+
 def test_resolve_mutable_rejects_symlink_leaf(tmp_path: Path) -> None:
     (tmp_path / "link.txt").symlink_to(tmp_path / "missing.txt")
 

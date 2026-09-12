@@ -543,7 +543,7 @@ class SlackAdapter(ChannelAdapterBase):
             GateContext,
             evaluate_channel_gate,
             policy_from_settings,
-            slack_text_mentions_bot,
+            slack_event_mentions_bot,
         )
 
         text = message.get("text") or ""
@@ -556,16 +556,17 @@ class SlackAdapter(ChannelAdapterBase):
         bound = await session_wakes_without_mention(
             self._gateway, self._session_id(message)
         )
+        channel_id = str(message.get("channel") or "")
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=str(message.get("user") or ""),
-            channel_id=str(message.get("channel") or ""),
+            channel_id=channel_id,
             text=text,
-            is_dm=message.get("channel_type") == "im",
+            is_dm=message.get("channel_type") == "im" or channel_id.startswith("D"),
             is_bot=bool(message.get("bot_id")) or message.get("subtype") == "bot_message",
             is_self=bool(self._bot_user_id)
             and str(message.get("user")) == self._bot_user_id,
-            mentioned=slack_text_mentions_bot(text, self._bot_user_id or ""),
+            mentioned=slack_event_mentions_bot(message, self._bot_user_id or ""),
             bound_session=bound,
             has_attachment=has_attachment,
         )

@@ -10,6 +10,7 @@ _PROTECTED_GIT_FILES = {
     PurePosixPath(".git/config.worktree"),
     PurePosixPath(".git/credentials"),
 }
+_BARE_GIT_ROOT_PARTS = frozenset({"HEAD", "objects", "refs", "hooks"})
 
 
 def normalize_workspace_path(path: str) -> PurePosixPath:
@@ -36,6 +37,9 @@ def ensure_mutable_workspace_path(path: str) -> PurePosixPath:
         PurePosixPath(".git/hooks")
     ):
         raise SandboxPolicyViolation("protected_git_path")
+    parts = tuple(part for part in candidate.parts if part != ".")
+    if parts and parts[0] in _BARE_GIT_ROOT_PARTS:
+        raise SandboxPolicyViolation("workspace_bare_git_path")
     return candidate
 
 

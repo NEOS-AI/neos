@@ -14,6 +14,8 @@ from neos.coding.workers.execution import (
     CodingTaskRunner,
 )
 
+pytestmark = pytest.mark.no_db
+
 
 class RecordingRuns:
     def __init__(self, effects) -> None:

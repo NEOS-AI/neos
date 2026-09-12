@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
+from neos.coding.tools.registry import (
+    ToolRisk,
+    ValidatedToolCall,
+    path_operands_from_argv,
+)
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.phases import phase_change_requires_approval
@@ -119,6 +123,19 @@ def requires_approval_answers(tool_name: str) -> bool:
     return tool_name == "ask_user.v1"
 
 
+def ask_user_answers_complete(questions, answers) -> bool:
+    if not isinstance(questions, (list, tuple)) or not questions:
+        return False
+    if not isinstance(answers, (list, tuple)):
+        return False
+    if len(answers) < len(questions):
+        return False
+    return all(
+        isinstance(answers[index], str) and answers[index].strip() != ""
+        for index in range(len(questions))
+    )
+
+
 def evaluate_approval(
     call: ValidatedToolCall,
     gate: ApprovalGate | None = None,
@@ -137,6 +154,10 @@ def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
     raw_paths = call.input.get("paths")
     if isinstance(raw_paths, (list, tuple)):
         found.extend(str(item) for item in raw_paths if item)
+    if call.name == "execute.v1":
+        argv = call.input.get("argv")
+        if isinstance(argv, (list, tuple)):
+            found.extend(path_operands_from_argv(tuple(str(item) for item in argv)))
     return tuple(found)
 
 
@@ -154,17 +175,75 @@ def is_denied_secret_path(path: object) -> bool:
     parts = _posix_path_parts(path)
     if not parts:
         return False
-    name = parts[-1]
+    folded = tuple(part.casefold() for part in parts)
+    name = folded[-1]
     if name == ".env" or name.startswith(".env."):
         return True
-    if ".git" in parts or ".ssh" in parts:
+    if ".git" in folded or ".ssh" in folded:
         return True
     if name == "id_rsa":
         return True
     return any(
-        part == ".aws" and parts[index + 1] == "credentials"
-        for index, part in enumerate(parts[:-1])
+        part == ".aws" and folded[index + 1] == "credentials"
+        for index, part in enumerate(folded[:-1])
     )
+
+
+_PROTECTED_INSTRUCTION_BASENAMES = frozenset(
+    {"AGENTS.md", "CLAUDE.md", "SOUL.md", ".cursorrules"}
+)
+_INSTRUCTION_WRITE_TOOLS = frozenset({"write_file.v1", "edit_file.v1"})
+_SENSITIVE_CONFIG_BASENAMES = frozenset(
+    {
+        ".bashrc",
+        ".zshrc",
+        ".profile",
+        ".gitconfig",
+        ".gitmodules",
+        ".mcp.json",
+        ".claude.json",
+        ".ripgreprc",
+    }
+)
+_SENSITIVE_CONFIG_DIR_PARTS = frozenset({".vscode", ".idea", ".claude"})
+_PREVIEW_MAX_LINES = 40
+_PREVIEW_MAX_CHARS = 2000
+
+
+def _is_protected_instruction_write(call: ValidatedToolCall) -> bool:
+    if call.name not in _INSTRUCTION_WRITE_TOOLS:
+        return False
+    for path in _call_paths(call):
+        parts = _posix_path_parts(path)
+        if parts and parts[-1] in _PROTECTED_INSTRUCTION_BASENAMES:
+            return True
+    return False
+
+
+def _is_sensitive_config_write(call: ValidatedToolCall) -> bool:
+    if call.name not in _INSTRUCTION_WRITE_TOOLS:
+        return False
+    names = {item.casefold() for item in _SENSITIVE_CONFIG_BASENAMES}
+    dirs = {item.casefold() for item in _SENSITIVE_CONFIG_DIR_PARTS}
+    for path in _call_paths(call):
+        parts = _posix_path_parts(path)
+        if not parts:
+            continue
+        folded = [part.casefold() for part in parts]
+        if folded[-1] in names or any(part in dirs for part in folded):
+            return True
+    return False
+
+
+def _truncated_text(text: str) -> tuple[str, bool]:
+    lines = text.splitlines(keepends=True)
+    truncated = len(lines) > _PREVIEW_MAX_LINES
+    if truncated:
+        lines = lines[:_PREVIEW_MAX_LINES]
+    preview = "".join(lines)
+    if len(preview) > _PREVIEW_MAX_CHARS:
+        return preview[:_PREVIEW_MAX_CHARS], True
+    return preview, truncated
 
 
 def _evaluate_approval(
@@ -174,6 +253,11 @@ def _evaluate_approval(
         return ApprovalPolicyOutcome.DENY
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY
+    # Instruction files persist agent behavior; never auto-approve writes.
+    if _is_protected_instruction_write(call):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    if _is_sensitive_config_write(call):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
     if call.name in gate.approved_always:
@@ -243,6 +327,34 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         summary: dict[str, object] = {"questions": rendered}
         if any(options):
             summary["options"] = options
+        multi_select = [
+            bool(item.get("multi_select"))
+            if isinstance(item, Mapping)
+            else False
+            for item in questions
+        ]
+        if any(multi_select):
+            summary["multi_select"] = multi_select
+        return redact_sensitive(summary)
+    if call.name == "set_phase.v1":
+        summary: dict[str, object] = {
+            "phase": str(call.input.get("phase") or ""),
+        }
+        return redact_sensitive(summary)
+    if call.name in {"write_file.v1", "edit_file.v1"}:
+        path = call.input.get("path")
+        summary: dict[str, object] = (
+            {"path": path} if isinstance(path, str) else {"operation": call.name}
+        )
+        if call.name == "write_file.v1":
+            preview, truncated = _truncated_text(str(call.input.get("content") or ""))
+            summary["preview"] = preview
+        else:
+            old = str(call.input.get("old_string") or "")
+            new = str(call.input.get("new_string") or "")
+            preview, truncated = _truncated_text(f"--- old\n{old}\n+++ new\n{new}\n")
+            summary["patch"] = preview
+        summary["truncated"] = truncated
         return redact_sensitive(summary)
     path = call.input.get("path")
     if isinstance(path, str):
@@ -262,13 +374,18 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
         if isinstance(call, ValidatedToolCall)
         else ValidatedToolCall(call.name, dict(call.input), ToolRisk.READ_ONLY)
     )
+    excerpt = dict(approval_display_summary(summary_call))
+    excerpt.pop("preview", None)
+    excerpt.pop("patch", None)
+    excerpt.pop("content", None)
+    excerpt.pop("truncated", None)
     return {
         "reason_code": reason_code,
         "status": "denied",
         "denied_by": denied_by,
         "function_id": call.name,
         "reason": reason_code,
-        "args_excerpt": redact_sensitive(dict(approval_display_summary(summary_call))),
+        "args_excerpt": redact_sensitive(excerpt),
     }
 
 

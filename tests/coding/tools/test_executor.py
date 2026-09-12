@@ -151,6 +151,21 @@ async def test_read_file_decodes_invalid_utf8_with_replacement() -> None:
     assert result.preview == "     1|a\ufffdb"
 
 
+class RangeFakeSession(FakeSession):
+    async def read_file(
+        self, path: str, *, offset: int = 1, limit: int | None = None
+    ) -> bytes:
+        self._raise()
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        self.called = ("read_file", path, offset, limit)
+        text = self.files[path].decode("utf-8")
+        lines = text.splitlines(keepends=True)
+        start = max(offset - 1, 0)
+        end = None if limit is None else start + limit
+        return "".join(lines[start:end]).encode("utf-8")
+
+
 @pytest.mark.asyncio
 async def test_read_file_offset_limit_uses_cat_n_prefixes() -> None:
     session = FakeSession()
@@ -162,6 +177,23 @@ async def test_read_file_offset_limit_uses_cat_n_prefixes() -> None:
     assert result.status == "ok"
     assert result.preview == "     2|beta\n"
     assert result.original_bytes == len(b"alpha\nbeta\ngamma\n")
+    assert result.truncated is True
+    assert result.start_line == 2
+    assert result.total_lines == 3
+    assert result.unchanged is False
+
+
+@pytest.mark.asyncio
+async def test_read_file_does_not_reslice_sandbox_range() -> None:
+    session = RangeFakeSession()
+    session.files["lines.txt"] = b"alpha\nbeta\ngamma\n"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call("read_file.v1", {"path": "lines.txt", "offset": 2, "limit": 1}),
+    )
+    assert result.status == "ok"
+    assert result.preview == "     2|beta\n"
+    assert result.start_line == 2
     assert result.truncated is True
 
 
@@ -176,6 +208,72 @@ async def test_read_file_works_when_path_is_seeded() -> None:
     assert result.preview == "     1|hello"
     assert result.original_bytes == 5
     assert result.truncated is False
+    assert result.start_line == 1
+    assert result.total_lines == 1
+
+
+@pytest.mark.asyncio
+async def test_read_file_normalizes_crlf_and_strips_bom() -> None:
+    session = FakeSession()
+    session.files["win.txt"] = b"\xef\xbb\xbfalpha\r\nbeta\r\n"
+    result = await SandboxToolExecutor(64, 10).execute(
+        session, call("read_file.v1", {"path": "win.txt"})
+    )
+    assert result.status == "ok"
+    assert result.preview == "     1|alpha\n     2|beta\n"
+    assert result.start_line == 1
+    assert result.total_lines == 2
+
+
+@pytest.mark.asyncio
+async def test_read_file_returns_unchanged_stub_for_same_range() -> None:
+    session = FakeSession()
+    session.files["a.txt"] = b"hello\n"
+    executor = SandboxToolExecutor(64, 10)
+    first = await executor.execute(session, call("read_file.v1", {"path": "a.txt"}))
+    second = await executor.execute(session, call("read_file.v1", {"path": "a.txt"}))
+    stamps = executor.export_read_stamps()
+
+    assert first.status == "ok"
+    assert first.unchanged is False
+    assert first.preview == "     1|hello\n"
+    assert second.status == "ok"
+    assert second.unchanged is True
+    assert "unchanged" in second.preview.lower()
+    assert "File unchanged since last read." in second.preview
+    assert stamps["a.txt"]["offset"] == 1
+    assert stamps["a.txt"]["limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_read_file_after_write_is_not_unchanged() -> None:
+    session = FakeSession()
+    session.files["a.txt"] = b"old"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "a.txt"}))
+    await executor.execute(
+        session, call("write_file.v1", {"path": "a.txt", "content": "new"})
+    )
+    result = await executor.execute(session, call("read_file.v1", {"path": "a.txt"}))
+    assert result.status == "ok"
+    assert result.unchanged is False
+    assert result.preview == "     1|new"
+
+
+@pytest.mark.asyncio
+async def test_read_file_denies_binary_extension_and_nul() -> None:
+    session = FakeSession()
+    session.files["photo.PNG"] = b"not-really-png"
+    session.files["blob.bin"] = b"head\x00tail"
+    executor = SandboxToolExecutor(64, 10)
+    image = await executor.execute(session, call("read_file.v1", {"path": "photo.PNG"}))
+    session.files["blob"] = b"head\x00tail"
+    nul = await executor.execute(session, call("read_file.v1", {"path": "blob"}))
+
+    assert image.status in {"denied", "error"}
+    assert image.reason_code in {"policy_binary_file", "error/binary_file", "binary_file"}
+    assert nul.status in {"denied", "error"}
+    assert nul.reason_code in {"policy_binary_file", "error/binary_file", "binary_file"}
 
 
 @pytest.mark.asyncio
@@ -331,20 +429,13 @@ async def test_search_text_forwards_before_and_after() -> None:
         ),
     )
     assert result.status == "ok"
-    assert session.called == (
-        "search_text",
-        (
-            "needle",
-            {
-                "paths": ("src",),
-                "regex": False,
-                "limit": 10,
-                "before": 2,
-                "after": 3,
-                "output_mode": "content",
-            },
-        ),
-    )
+    forwarded = session.called[1][1]
+    assert forwarded["paths"] == ("src",)
+    assert forwarded["regex"] is False
+    assert forwarded["limit"] == 10
+    assert forwarded["before"] == 2
+    assert forwarded["after"] == 3
+    assert forwarded["output_mode"] == "content"
     assert result.entries == (
         {
             "path": "a.py",
@@ -417,6 +508,33 @@ async def test_search_text_count_mode_returns_path_and_match_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_text_forwards_grep_schema_extras() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["src"],
+                "regex": False,
+                "limit": 10,
+                "ignore_case": True,
+                "multiline": True,
+                "context": 2,
+                "path": "src",
+            },
+        ),
+    )
+    assert result.status == "ok"
+    forwarded = session.called[1][1]
+    assert forwarded["ignore_case"] is True
+    assert forwarded["multiline"] is True
+    assert forwarded["context"] == 2
+    assert forwarded["path"] == "src"
+
+
+@pytest.mark.asyncio
 async def test_glob_files_forwards_pattern_and_limit() -> None:
     session = FakeSession()
     result = await SandboxToolExecutor(10, 10).execute(
@@ -425,6 +543,33 @@ async def test_glob_files_forwards_pattern_and_limit() -> None:
     assert result.status == "ok"
     assert session.called == ("glob_files", ("**/*.py", 12))
     assert result.entries == ({"path": "**/*.py"},)
+
+
+def _allow_web_fetch_host(monkeypatch, host: str = "docs.example.com") -> None:
+    monkeypatch.setattr(
+        "neos.coding.tools.executor._web_fetch_hosts", lambda: (host,)
+    )
+
+
+def _resolve_web_fetch_ips(monkeypatch, *ips: str) -> None:
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        results = []
+        for ip in ips:
+            if ":" in ip:
+                results.append(
+                    (socket.AF_INET6, socket.SOCK_STREAM, 6, "", (ip, 0, 0, 0))
+                )
+            else:
+                results.append(
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))
+                )
+        return results
+
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.socket.getaddrinfo", fake_getaddrinfo
+    )
 
 
 @pytest.mark.asyncio
@@ -440,6 +585,296 @@ async def test_web_fetch_denied_when_allowlist_empty(monkeypatch) -> None:
         "denied",
         "policy_web_fetch_host_denied",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "token=abc",
+        "Token=abc",
+        "api_key=abc",
+        "access_token=abc",
+        "password=abc",
+        "secret=abc",
+        "authorization=abc",
+        "key=abc",
+        "foo=1&ACCESS_TOKEN=abc",
+    ],
+)
+async def test_web_fetch_blocks_secret_query_param_names(
+    monkeypatch, query: str
+) -> None:
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call(
+            "web_fetch.v1",
+            {"url": f"https://docs.example.com/doc?{query}"},
+        ),
+    )
+    payload = json.dumps(result.to_mapping())
+    assert result.status == "error"
+    assert result.reason_code == "web_fetch_blocked"
+    assert "1.2.3.4" not in payload
+    assert "abc" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "169.254.169.254",
+        "169.254.1.1",
+        "127.0.0.1",
+        "0.0.0.1",
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.8",
+        "100.64.0.1",
+        "::1",
+        "fc00::1",
+        "fe80::1",
+    ],
+)
+async def test_web_fetch_blocks_resolved_private_and_link_local_ips(
+    monkeypatch, ip: str
+) -> None:
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, ip)
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    payload = json.dumps(result.to_mapping())
+    assert result.status == "error"
+    assert result.reason_code == "web_fetch_ssrf"
+    assert ip not in payload
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_if_any_resolved_address_is_private(
+    monkeypatch,
+) -> None:
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4", "10.0.0.1")
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    payload = json.dumps(result.to_mapping())
+    assert (result.status, result.reason_code) == ("error", "web_fetch_ssrf")
+    assert "10.0.0.1" not in payload
+    assert "1.2.3.4" not in payload
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_denies_dns_failure(monkeypatch) -> None:
+    import socket
+
+    _allow_web_fetch_host(monkeypatch)
+
+    def fail_getaddrinfo(*args, **kwargs):
+        raise socket.gaierror(8, "nodename nor servname provided")
+
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.socket.getaddrinfo", fail_getaddrinfo
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    payload = json.dumps(result.to_mapping())
+    assert (result.status, result.reason_code) == ("error", "web_fetch_ssrf")
+    assert "nodename" not in payload
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_keeps_scheme_and_empty_allowlist_before_ssrf(
+    monkeypatch,
+) -> None:
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    ftp = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "ftp://docs.example.com/doc"}),
+    )
+    monkeypatch.setattr(
+        "neos.coding.tools.executor._web_fetch_hosts", lambda: ()
+    )
+    empty = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc?token=abc"}),
+    )
+    assert (ftp.status, ftp.reason_code) == (
+        "denied",
+        "policy_web_fetch_host_denied",
+    )
+    assert (empty.status, empty.reason_code) == (
+        "denied",
+        "policy_web_fetch_host_denied",
+    )
+
+
+def _fake_web_response(
+    body: bytes,
+    url: str = "https://docs.example.com/doc",
+    content_type: str = "text/plain",
+):
+    from email.message import EmailMessage
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.headers = EmailMessage()
+            self.headers["Content-Type"] = content_type
+
+        def geturl(self) -> str:
+            return url
+
+        def read(self, _n: int = -1) -> bytes:
+            return body
+
+        def close(self) -> None:
+            return None
+
+    return FakeResponse()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_allows_public_allowlisted_host(monkeypatch) -> None:
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            del request, timeout
+            return _fake_web_response(b"hello")
+
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.urllib.request.build_opener",
+        lambda *args, **kwargs: FakeOpener(),
+    )
+    result = await SandboxToolExecutor(32, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    assert result.status == "ok"
+    assert result.entries == (
+        {"url": "https://docs.example.com/doc", "text": "hello"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_userinfo_and_upgrades_http(monkeypatch) -> None:
+    opened: list[str] = []
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            del timeout
+            opened.append(request.full_url)
+            return _fake_web_response(b"hello", url=request.full_url)
+
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.urllib.request.build_opener",
+        lambda *args, **kwargs: FakeOpener(),
+    )
+    userinfo = await SandboxToolExecutor(32, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://user:pass@docs.example.com/doc"}),
+    )
+    upgraded = await SandboxToolExecutor(32, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "http://docs.example.com/doc"}),
+    )
+    assert userinfo.status in {"denied", "error"}
+    assert "userinfo" in userinfo.reason_code or userinfo.reason_code in {
+        "web_fetch_blocked",
+        "web_fetch_userinfo",
+        "policy_web_fetch_userinfo",
+    }
+    assert upgraded.status == "ok"
+    assert opened == ["https://docs.example.com/doc"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_rejects_unsupported_type_and_strips_html(
+    monkeypatch,
+) -> None:
+    payloads = [
+        _fake_web_response(b"\x89PNG", content_type="image/png"),
+        _fake_web_response(
+            b"<html><script>alert(1)</script><p>Hello</p></html>",
+            content_type="text/html; charset=utf-8",
+        ),
+    ]
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            del request, timeout
+            return payloads.pop(0)
+
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.urllib.request.build_opener",
+        lambda *args, **kwargs: FakeOpener(),
+    )
+    binary = await SandboxToolExecutor(64, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    html = await SandboxToolExecutor(64, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/doc"}),
+    )
+    assert (binary.status, binary.reason_code) == (
+        "error",
+        "web_fetch_unsupported_type",
+    )
+    assert html.status == "ok"
+    text = html.entries[0]["text"]
+    assert "Hello" in text
+    assert "<p>" not in text
+    assert "alert(1)" not in text
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_does_not_follow_redirect_to_private_ip(
+    monkeypatch,
+) -> None:
+    import urllib.error
+    from email.message import EmailMessage
+
+    opened: list[str] = []
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            del timeout
+            url = request.full_url
+            opened.append(url)
+            headers = EmailMessage()
+            headers["Location"] = "http://169.254.169.254/latest"
+            raise urllib.error.HTTPError(
+                url, 302, "Found", headers, __import__("io").BytesIO()
+            )
+
+    _allow_web_fetch_host(monkeypatch)
+    _resolve_web_fetch_ips(monkeypatch, "1.2.3.4")
+    monkeypatch.setattr(
+        "neos.coding.tools.executor.urllib.request.build_opener",
+        lambda *args, **kwargs: FakeOpener(),
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        FakeSession(),
+        call("web_fetch.v1", {"url": "https://docs.example.com/open"}),
+    )
+    payload = json.dumps(result.to_mapping())
+    assert result.status in {"error", "denied"}
+    assert result.reason_code in {"web_fetch_ssrf", "policy_web_fetch_host_denied"}
+    assert opened == ["https://docs.example.com/open"]
+    assert "169.254" not in payload
 
 
 @pytest.mark.asyncio
@@ -706,7 +1141,25 @@ async def test_edit_non_unique_old_string_without_replace_all_is_denied() -> Non
         "denied",
         "edit_old_string_not_unique",
     )
+    assert result.matches == 2
     assert session.files["app.py"] == b"foo foo"
+
+
+@pytest.mark.asyncio
+async def test_edit_noop_old_equals_new_is_denied() -> None:
+    session = FakeSession()
+    session.files["app.py"] = b"foo"
+    executor = SandboxToolExecutor(64, 10)
+    await executor.execute(session, call("read_file.v1", {"path": "app.py"}))
+    result = await executor.execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "app.py", "old_string": "foo", "new_string": "foo"},
+        ),
+    )
+    assert (result.status, result.reason_code) == ("denied", "edit_noop")
+    assert session.files["app.py"] == b"foo"
 
 
 @pytest.mark.asyncio

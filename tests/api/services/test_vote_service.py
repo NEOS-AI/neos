@@ -32,9 +32,9 @@ async def test_submit_feedback_learns_factual_text() -> None:
     knowledge = "The sources cited were outdated"
 
     with patch(
-        "neos.memory.manager.MemoryManager.learn",
+        "neos.learn.memory_gate.maybe_learn_ltm",
         new_callable=AsyncMock,
-        return_value=True,
+        return_value="staged",
     ) as learn:
         response = await service.submit_feedback(
             chat_id="c1",
@@ -65,9 +65,9 @@ async def test_submit_feedback_skips_imperative_learn() -> None:
     service = _vote_service(existing)
 
     with patch(
-        "neos.memory.manager.MemoryManager.learn",
+        "neos.learn.memory_gate.maybe_learn_ltm",
         new_callable=AsyncMock,
-        return_value=True,
+        return_value="learned",
     ) as learn:
         response = await service.submit_feedback(
             chat_id="c1",

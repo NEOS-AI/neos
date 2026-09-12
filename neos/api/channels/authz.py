@@ -11,6 +11,7 @@ user allowlist (empty = fail-closed).
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -105,7 +106,44 @@ def slack_text_mentions_bot(text: str, bot_user_id: str) -> bool:
     if not text or not bot_user_id:
         return False
     pattern = rf"<@{re.escape(bot_user_id)}(?:\|[^>]+)?>"
-    return re.search(pattern, text) is not None
+    for line in text.splitlines():
+        if line.strip().startswith(">"):
+            continue
+        if re.search(pattern, line) is not None:
+            return True
+    return False
+
+
+def slack_event_mentions_bot(raw: Mapping[str, object] | None, bot_user_id: str) -> bool:
+    if not raw or not bot_user_id:
+        return False
+    text = raw.get("text") or ""
+    if isinstance(text, str) and slack_text_mentions_bot(text, bot_user_id):
+        return True
+    return _slack_blocks_mention_bot(raw.get("blocks"), bot_user_id)
+
+
+def _slack_blocks_mention_bot(
+    node: object, bot_user_id: str, *, in_quote: bool = False
+) -> bool:
+    if isinstance(node, (list, tuple)):
+        return any(
+            _slack_blocks_mention_bot(item, bot_user_id, in_quote=in_quote)
+            for item in node
+        )
+    if not isinstance(node, Mapping):
+        return False
+    node_type = node.get("type")
+    quoted = in_quote or node_type == "rich_text_quote"
+    if node_type == "user" and not quoted and node.get("user_id") == bot_user_id:
+        return True
+    for key in ("elements", "element"):
+        child = node.get(key)
+        if child is not None and _slack_blocks_mention_bot(
+            child, bot_user_id, in_quote=quoted
+        ):
+            return True
+    return False
 
 
 def telegram_text_mentions_bot(text: str, bot_username: str) -> bool:

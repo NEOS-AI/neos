@@ -82,7 +82,7 @@ async def coding_action_actor_allowed(
         pending_owner = await pending_owner_fn(session_id)
         if pending_owner:
             return actor is not None and actor == pending_owner
-    return True
+    return False
 
 
 def resolve_coding_owner(

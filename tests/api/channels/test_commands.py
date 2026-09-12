@@ -31,12 +31,29 @@ pytestmark = pytest.mark.no_db
         ("!new", ChannelCommandKind.NEW, ""),
         ("!reset", ChannelCommandKind.NEW, ""),
         ("<@U_BOT> /new", ChannelCommandKind.NEW, ""),
+        ("/compact keep the plan", ChannelCommandKind.COMPACT, "keep the plan"),
+        ("!compact", ChannelCommandKind.COMPACT, ""),
+        ("/compact@NeosBot shrink", ChannelCommandKind.COMPACT, "shrink"),
+        ("/clear", ChannelCommandKind.CLEAR, ""),
+        ("!clear", ChannelCommandKind.CLEAR, ""),
+        ("<@U_BOT> /clear", ChannelCommandKind.CLEAR, ""),
+        ("/cost", ChannelCommandKind.COST, ""),
+        ("!cost", ChannelCommandKind.COST, ""),
+        ("/export", ChannelCommandKind.EXPORT, ""),
+        ("!export", ChannelCommandKind.EXPORT, ""),
     ],
 )
 def test_parse_channel_command(text: str, kind: ChannelCommandKind, rest: str) -> None:
     command = parse_channel_command(text)
     assert command.kind is kind
     assert command.rest == rest
+
+
+def test_clear_is_not_aliased_to_new() -> None:
+    assert parse_channel_command("/clear").kind is ChannelCommandKind.CLEAR
+    assert parse_channel_command("/reset").kind is ChannelCommandKind.NEW
+    assert parse_channel_command("/new").kind is ChannelCommandKind.NEW
+    assert parse_channel_command("/clear").kind is not ChannelCommandKind.NEW
 
 
 def test_neutralize_strips_control_and_bidi_and_flattens_newlines() -> None:

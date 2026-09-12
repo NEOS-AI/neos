@@ -5,8 +5,13 @@ from neos.api.channels.lifecycle import (
     push_bound_lifecycle,
 )
 from neos.api.channels.session_bind import InMemoryChannelCodingBindStore
+from neos.workflow.state import AgentState
 
 pytestmark = pytest.mark.no_db
+
+
+def test_agent_state_declares_channel_attachments() -> None:
+    assert "channel_attachments" in AgentState.__annotations__
 
 
 def test_lifecycle_card_omits_housekeeping_and_running() -> None:

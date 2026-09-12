@@ -182,6 +182,68 @@ async def test_dm_without_mention_dispatches_when_allowlisted(
     assert say.calls == []
 
 
+async def test_dm_channel_id_without_channel_type_is_dm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    payload = _slack_message(text="hello", channel="D_alice")
+    payload.pop("channel_type")
+
+    await adapter._handle_message(payload, say, client=None)
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].text == "hello"
+    assert gateway.calls[0].channel_id == "D_alice"
+    assert say.calls == []
+
+
+async def test_quoted_text_mention_does_not_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(text="> <@U_BOT> hello"),
+        say,
+        client=None,
+    )
+
+    assert gateway.calls == []
+    assert say.calls == []
+
+
+async def test_block_user_mention_of_bot_wakes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, gateway, say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+
+    await adapter._handle_message(
+        _slack_message(
+            text="please look",
+            blocks=[
+                {
+                    "type": "rich_text",
+                    "elements": [
+                        {
+                            "type": "rich_text_section",
+                            "elements": [
+                                {"type": "user", "user_id": "U_BOT"},
+                                {"type": "text", "text": " please look"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        ),
+        say,
+        client=None,
+    )
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0].text == "please look"
+    assert say.calls == []
+
+
 async def test_bot_or_self_message_is_dropped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

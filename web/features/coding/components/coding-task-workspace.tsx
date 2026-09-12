@@ -13,6 +13,7 @@ import { CodingWorkspaceDock } from "@/features/coding/components/workspace/codi
 import { stopCodingTask } from "@/features/coding/api/coding-api";
 import { useSandboxStatus } from "@/features/coding/sandbox/use-sandbox-status";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
+import type { CodingProjectionState } from "@/features/coding/types/projection";
 
 const TERMINAL_TASK_STATUSES = new Set([
   "cancelled",
@@ -91,6 +92,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
               waiting_approval
             </span>
           ) : null}
+          <UsageBadge projection={projection} />
         </div>
         <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground uppercase tracking-[0.14em]">
           <Radio
@@ -246,5 +248,35 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
         />
       </div>
     </main>
+  );
+}
+
+function formatMicros(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+function UsageBadge({ projection }: { projection: CodingProjectionState }) {
+  const parts: string[] = [];
+  if (typeof projection.costMicros === "number") {
+    const cost = formatMicros(projection.costMicros);
+    parts.push(
+      typeof projection.maxCostMicros === "number"
+        ? `${cost} / ${formatMicros(projection.maxCostMicros)}`
+        : cost
+    );
+  }
+  if (
+    typeof projection.inputTokens === "number" ||
+    typeof projection.outputTokens === "number"
+  ) {
+    parts.push(
+      `${projection.inputTokens ?? 0}+${projection.outputTokens ?? 0} tok`
+    );
+  }
+  if (parts.length === 0) return null;
+  return (
+    <span className="hidden border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
+      {parts.join(" · ")}
+    </span>
   );
 }

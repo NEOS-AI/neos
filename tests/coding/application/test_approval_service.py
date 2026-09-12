@@ -10,6 +10,7 @@ from neos.coding.domain.approvals import (
     ApprovalResolutionCommit,
     ApprovalStatus,
     CodingApproval,
+    ask_user_answers_complete,
 )
 from neos.coding.domain.events import make_event
 from neos.coding.tools.registry import ToolRisk
@@ -81,6 +82,25 @@ def resolution(status, *, conflict_code=None):
         payload={"approval_id": "ca_1", "status": status.value}, now=NOW,
     )
     return ApprovalResolutionCommit(resolved, (event,), conflict_code)
+
+
+async def test_resolve_rejects_empty_ask_user_answers() -> None:
+    repository = Repository(resolution(ApprovalStatus.APPROVED))
+    wake = Wake()
+    service = CodingApprovalService(repository, wake=wake, clock=lambda: NOW)
+
+    with pytest.raises(ApprovalConflict, match="answers_required"):
+        await service.resolve(
+            task_id="ct_1",
+            approval_id="ca_1",
+            owner_id="user-1",
+            decision=ApprovalDecision.APPROVE,
+            answers=("",),
+        )
+
+    assert repository.calls == []
+    assert wake.calls == []
+    assert not ask_user_answers_complete(["Which runner?"], [""])
 
 
 async def test_resolve_wakes_checkpoint_only_after_repository_commit() -> None:

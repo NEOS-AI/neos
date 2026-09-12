@@ -1091,6 +1091,7 @@ class ChatLLMService:
                             session_result = await handle_search_user_sessions(
                                 tool_use.input or {},
                                 user_id=auth_user_id,
+                                exclude_conversation_id=conversation_id,
                             )
                         except ValueError as exc:
                             session_result = {

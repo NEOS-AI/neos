@@ -10,6 +10,7 @@ The default catalog is the coding index (``neos/coding/skills/``). Repo-root
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -31,6 +32,10 @@ class MarkdownSkill:
     description: str
     path: Path
     source: SkillSource
+    disable_model_invocation: bool = False
+    allowed_tools: tuple[str, ...] = ()
+    when_to_use: str = ""
+    user_invocable: bool = True
 
 
 def default_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
@@ -109,6 +114,47 @@ def _is_safe_name(name: str) -> bool:
     return True
 
 
+def _frontmatter_str(parsed: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = parsed.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _frontmatter_bool(
+    parsed: dict, keys: tuple[str, ...], *, default: bool
+) -> bool:
+    for key in keys:
+        if key not in parsed:
+            continue
+        value = parsed[key]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "1"}:
+                return True
+            if lowered in {"false", "no", "0"}:
+                return False
+        if isinstance(value, (int, float)) and value in {0, 1}:
+            return bool(value)
+    return default
+
+
+def _frontmatter_tools(parsed: dict) -> tuple[str, ...]:
+    value = parsed.get("allowed-tools", parsed.get("allowed_tools"))
+    if isinstance(value, str):
+        return tuple(part for part in re.split(r"[\s,]+", value) if part)
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                names.append(item.strip())
+        return tuple(names)
+    return ()
+
+
 def _fallback_description(content: str) -> str:
     heading = ""
     for line in content.splitlines():
@@ -136,6 +182,10 @@ def _parse_markdown_skill(
 
     name = fallback_name
     description = ""
+    disable_model_invocation = False
+    allowed_tools: tuple[str, ...] = ()
+    when_to_use = ""
+    user_invocable = True
     frontmatter, body = extract_frontmatter(content)
     if frontmatter is not None:
         try:
@@ -158,6 +208,20 @@ def _parse_markdown_skill(
             raw_desc = parsed.get("description")
             if isinstance(raw_desc, str):
                 description = raw_desc.strip()
+            disable_model_invocation = _frontmatter_bool(
+                parsed,
+                ("disable-model-invocation", "disable_model_invocation"),
+                default=False,
+            )
+            allowed_tools = _frontmatter_tools(parsed)
+            when_to_use = _frontmatter_str(
+                parsed, ("when_to_use", "when-to-use")
+            )
+            user_invocable = _frontmatter_bool(
+                parsed,
+                ("user_invocable", "user-invocable"),
+                default=True,
+            )
         elif parsed is not None:
             logger.warning("Skipping skill with non-mapping frontmatter %s", path)
             return None
@@ -196,6 +260,10 @@ def _parse_markdown_skill(
         description=description,
         path=resolved,
         source=source,
+        disable_model_invocation=disable_model_invocation,
+        allowed_tools=allowed_tools,
+        when_to_use=when_to_use,
+        user_invocable=user_invocable,
     )
 
 
@@ -213,9 +281,15 @@ class MarkdownSkillCatalog:
     def reload(self) -> None:
         self._index = self._scan()
 
-    def list_skills(self) -> tuple[MarkdownSkill, ...]:
+    def list_skills(
+        self, *, include_disabled: bool = False
+    ) -> tuple[MarkdownSkill, ...]:
         index = self._ensure_index()
-        return tuple(index[name] for name in sorted(index))
+        return tuple(
+            index[name]
+            for name in sorted(index)
+            if include_disabled or not index[name].disable_model_invocation
+        )
 
     def get(self, name: str) -> MarkdownSkill | None:
         if not _is_safe_name(name):

@@ -32,6 +32,8 @@ test("workspace is phase-oriented and exposes both steering actions", () => {
   assert.match(composer, INTERRUPT_NOW_PATTERN);
   assert.match(workspace, WAITING_APPROVAL_PATTERN);
   assert.match(timeline, /waitingApproval/);
+  assert.match(workspace, /costMicros|cost_micros|maxCostMicros/);
+  assert.match(workspace, /inputTokens|outputTokens/);
 });
 
 

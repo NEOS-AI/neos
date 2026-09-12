@@ -3,14 +3,21 @@ from __future__ import annotations
 import asyncio
 import errno
 import hashlib
+import http.client
 import inspect
+import ipaddress
+import re
+import socket
+import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from html.parser import HTMLParser
+from pathlib import PurePosixPath
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 from neos.coding.sandbox.base import (
     CommandRequest,
@@ -29,13 +36,43 @@ from neos.coding.tools.registry import CodingToolRegistry, ValidatedToolCall
 
 _WEB_FETCH_TIMEOUT_SEC = 15
 _WEB_FETCH_MAX_BYTES = 200_000
+_WEB_FETCH_MAX_REDIRECTS = 5
 _MISSING_PARENT_REASON = "workspace_path_not_resolvable"
 _PARENTS_FIX: dict[str, object] = {"parents": True}
+_BINARY_EXTENSIONS = frozenset(
+    {
+        "exe",
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "pdf",
+        "zip",
+        "pyc",
+        "so",
+        "dylib",
+        "woff",
+        "woff2",
+        "class",
+    }
+)
+_UNCHANGED_PREVIEW = "File unchanged since last read."
+_WEB_FETCH_TEXT_TYPES = frozenset(
+    {"text/html", "text/plain", "text/markdown", "application/json"}
+)
 
 
-def _parse_known_stamp(
-    raw: Mapping[str, object],
-) -> tuple[datetime, str, bool] | None:
+@dataclass(frozen=True, slots=True)
+class _ReadStamp:
+    mtime: datetime
+    digest: str
+    full: bool
+    offset: int | None = None
+    limit: int | None = None
+
+
+def _parse_known_stamp(raw: Mapping[str, object]) -> _ReadStamp | None:
     mtime_raw = raw.get("mtime")
     digest = raw.get("digest")
     if not isinstance(mtime_raw, str) or not isinstance(digest, str) or not digest:
@@ -46,7 +83,27 @@ def _parse_known_stamp(
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed, digest, bool(raw.get("full", True))
+    offset_raw = raw.get("offset")
+    limit_raw = raw.get("limit")
+    offset = offset_raw if isinstance(offset_raw, int) else None
+    limit = limit_raw if isinstance(limit_raw, int) else None
+    return _ReadStamp(
+        parsed, digest, bool(raw.get("full", True)), offset, limit
+    )
+
+
+def _is_binary_path(path: str) -> bool:
+    name = PurePosixPath(path).name
+    if "." not in name or name.startswith("."):
+        return False
+    return name.rsplit(".", 1)[-1].casefold() in _BINARY_EXTENSIONS
+
+
+def _normalize_text(content: bytes) -> str:
+    text = content.decode("utf-8", errors="replace")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _write_accepts_parents(write_file: Any) -> bool:
@@ -91,6 +148,38 @@ class _WebFetchHostDenied(Exception):
     pass
 
 
+class _WebFetchUnsafe(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+_WEB_FETCH_SECRET_QUERY_NAMES = frozenset(
+    {
+        "token",
+        "api_key",
+        "access_token",
+        "password",
+        "secret",
+        "authorization",
+        "key",
+    }
+)
+_WEB_FETCH_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+_WEB_FETCH_IMDS = ipaddress.ip_address("169.254.169.254")
+
+
 def _web_fetch_hosts() -> tuple[str, ...]:
     try:
         from neos.config.settings import settings
@@ -124,25 +213,197 @@ def _web_fetch_url_allowed(url: str, allowlist: tuple[str, ...]) -> bool:
     return _web_fetch_host_allowed(parsed.hostname, allowlist)
 
 
-def _http_get(url: str, allowlist: tuple[str, ...]) -> tuple[str, bytes]:
-    if not _web_fetch_url_allowed(url, allowlist):
-        raise _WebFetchHostDenied
-    request = urllib.request.Request(url, method="GET")
-    response: urllib.request.addinfourl | urllib.error.HTTPError | None = None
+def _web_fetch_query_blocked(url: str) -> bool:
+    parsed = urlparse(url)
+    for name, _value in parse_qsl(parsed.query, keep_blank_values=True):
+        if name.lower() in _WEB_FETCH_SECRET_QUERY_NAMES:
+            return True
+    return False
+
+
+def _web_fetch_ip_blocked(value: str) -> bool:
     try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return True
+    if address.version == 6 and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address == _WEB_FETCH_IMDS:
+        return True
+    return any(address in network for network in _WEB_FETCH_BLOCKED_NETWORKS)
+
+
+def _web_fetch_resolve(host: str) -> tuple[str, ...]:
+    infos = socket.getaddrinfo(host, None)
+    addresses: list[str] = []
+    for info in infos:
+        sockaddr = info[4]
+        if sockaddr:
+            addresses.append(str(sockaddr[0]))
+    return tuple(addresses)
+
+
+def _web_fetch_resolved_public(host: str) -> bool:
+    try:
+        addresses = _web_fetch_resolve(host)
+    except OSError:
+        return False
+    if not addresses:
+        return False
+    return all(not _web_fetch_ip_blocked(address) for address in addresses)
+
+
+def _upgrade_to_https(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme == "http":
+        return parsed._replace(scheme="https").geturl()
+    return url
+
+
+def _web_fetch_media_type(content_type: str) -> str:
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def _response_media_type(response: object) -> str:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return ""
+    raw = headers.get("Content-Type") or headers.get("content-type") or ""
+    return _web_fetch_media_type(str(raw))
+
+
+class _HTMLTextParser(HTMLParser):
+    _SKIP = frozenset({"script", "style", "noscript"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._chunks: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in self._SKIP:
+            self._skip += 1
+        elif tag in {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4"}:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP and self._skip:
+            self._skip -= 1
+        elif tag in {"p", "div", "tr", "li", "h1", "h2", "h3", "h4"}:
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip:
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        return re.sub(r"\n{3,}", "\n\n", "".join(self._chunks)).strip()
+
+
+def _html_to_text(value: str) -> str:
+    parser = _HTMLTextParser()
+    parser.feed(value)
+    parser.close()
+    return parser.text()
+
+
+def _web_fetch_safety_reason(url: str, allowlist: tuple[str, ...]) -> str | None:
+    parsed = urlparse(url)
+    if parsed.username is not None or parsed.password is not None:
+        return "web_fetch_userinfo"
+    if not _web_fetch_url_allowed(url, allowlist):
+        return "policy_web_fetch_host_denied"
+    if _web_fetch_query_blocked(url):
+        return "web_fetch_blocked"
+    host = parsed.hostname
+    if not host or not _web_fetch_resolved_public(host):
+        return "web_fetch_ssrf"
+    return None
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned_ip: str) -> None:
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req):
+        pinned_ip = self._pinned_ip
+
+        class Bound(http.client.HTTPSConnection):
+            def connect(self) -> None:
+                sock = socket.create_connection(
+                    (pinned_ip, self.port), self.timeout
+                )
+                context = self._context or ssl.create_default_context()
+                self.sock = context.wrap_socket(
+                    sock, server_hostname=self.host
+                )
+                try:
+                    peer = str(self.sock.getpeername()[0])
+                except Exception:
+                    peer = pinned_ip
+                if _web_fetch_ip_blocked(peer):
+                    self.sock.close()
+                    raise OSError("web_fetch_ssrf")
+
+        return self.do_open(Bound, req)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+def _raise_web_fetch_reason(reason: str) -> None:
+    if reason == "policy_web_fetch_host_denied":
+        raise _WebFetchHostDenied
+    raise _WebFetchUnsafe(reason)
+
+
+def _http_get(url: str, allowlist: tuple[str, ...]) -> tuple[str, str, bytes]:
+    current = _upgrade_to_https(url)
+    for _ in range(_WEB_FETCH_MAX_REDIRECTS + 1):
+        current = _upgrade_to_https(current)
+        reason = _web_fetch_safety_reason(current, allowlist)
+        if reason is not None:
+            _raise_web_fetch_reason(reason)
+        host = urlparse(current).hostname or ""
         try:
-            response = urllib.request.urlopen(
-                request, timeout=_WEB_FETCH_TIMEOUT_SEC
-            )
-        except urllib.error.HTTPError as error:
-            response = error
-        final_url = response.geturl()
-        if not _web_fetch_url_allowed(final_url, allowlist):
-            raise _WebFetchHostDenied
-        return final_url, response.read(_WEB_FETCH_MAX_BYTES)
-    finally:
-        if response is not None:
-            response.close()
+            addresses = [
+                address
+                for address in _web_fetch_resolve(host)
+                if not _web_fetch_ip_blocked(address)
+            ]
+        except OSError as error:
+            raise _WebFetchUnsafe("web_fetch_ssrf") from error
+        if not addresses:
+            raise _WebFetchUnsafe("web_fetch_ssrf")
+        opener = urllib.request.build_opener(
+            _NoRedirect(), _PinnedHTTPSHandler(addresses[0])
+        )
+        request = urllib.request.Request(current, method="GET")
+        response: urllib.request.addinfourl | urllib.error.HTTPError | None = None
+        try:
+            try:
+                response = opener.open(request, timeout=_WEB_FETCH_TIMEOUT_SEC)
+            except urllib.error.HTTPError as error:
+                if error.code in {301, 302, 303, 307, 308}:
+                    location = error.headers.get("Location")
+                    error.close()
+                    if not location:
+                        raise _WebFetchUnsafe("web_fetch_ssrf") from error
+                    current = urljoin(current, location)
+                    continue
+                response = error
+            media = _response_media_type(response)
+            if media not in _WEB_FETCH_TEXT_TYPES:
+                raise _WebFetchUnsafe("web_fetch_unsupported_type")
+            return current, media, response.read(_WEB_FETCH_MAX_BYTES)
+        finally:
+            if response is not None:
+                response.close()
+    raise _WebFetchUnsafe("web_fetch_ssrf")
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +422,10 @@ class ToolResult:
     audit: Mapping[str, object] | None = None
     retryable: bool = False
     fix: dict[str, object] | None = None
+    start_line: int | None = None
+    total_lines: int | None = None
+    unchanged: bool = False
+    matches: int | None = None
 
     @classmethod
     def ok(
@@ -182,7 +447,7 @@ class SandboxToolExecutor:
         self._max_preview_bytes = max_preview_bytes
         self._max_entries = max_entries
         self._read_paths: dict[str, set[str]] = {}
-        self._read_stamps: dict[str, dict[str, tuple[datetime, str, bool]]] = {}
+        self._read_stamps: dict[str, dict[str, _ReadStamp]] = {}
 
     async def execute(
         self,
@@ -206,11 +471,13 @@ class SandboxToolExecutor:
     def export_read_stamps(self) -> dict[str, dict[str, object]]:
         exported: dict[str, dict[str, object]] = {}
         for stamps in self._read_stamps.values():
-            for path, (mtime, digest, full) in stamps.items():
+            for path, stamp in stamps.items():
                 exported[path] = {
-                    "mtime": mtime.isoformat(),
-                    "digest": digest,
-                    "full": full,
+                    "mtime": stamp.mtime.isoformat(),
+                    "digest": stamp.digest,
+                    "full": stamp.full,
+                    "offset": stamp.offset,
+                    "limit": stamp.limit,
                 }
         return exported
 
@@ -271,23 +538,74 @@ class SandboxToolExecutor:
         offset = int(call.input.get("offset", 1))
         raw_limit = call.input.get("limit")
         limit = int(raw_limit) if raw_limit is not None else None
-        content = await session.read_file(path)
-        lines = content.decode("utf-8", errors="replace").splitlines(keepends=True)
-        start = max(offset - 1, 0)
-        end = None if limit is None else start + limit
-        sliced = lines[start:end]
-        omitted = start > 0 or (end is not None and end < len(lines))
+        if _is_binary_path(path):
+            return await self._denied(session, "policy_binary_file")
+        ranged = False
+        try:
+            content = await session.read_file(path, offset=offset, limit=limit)
+            ranged = True
+        except TypeError:
+            content = await session.read_file(path)
+        if b"\x00" in content[:8192]:
+            return await self._denied(session, "policy_binary_file")
+        text = _normalize_text(content)
+        lines = text.splitlines(keepends=True)
+        if ranged and limit is not None:
+            sliced = lines
+            omitted = offset > 1 or len(lines) >= limit
+            total_lines = offset + len(lines) - 1 if lines else 0
+        else:
+            start = max(offset - 1, 0)
+            end = None if limit is None else start + limit
+            sliced = lines[start:end]
+            omitted = start > 0 or (end is not None and end < len(lines))
+            total_lines = len(lines)
         numbered = "".join(
             f"{number:>6}|{line}" for number, line in enumerate(sliced, start=offset)
         )
+        digest = hashlib.sha256(content).hexdigest()
+        stamp = self._stamp_for(session, path)
+        if (
+            stamp is not None
+            and stamp.offset is not None
+            and stamp.offset == offset
+            and stamp.limit == limit
+            and stamp.digest == digest
+        ):
+            same_mtime = False
+            try:
+                entry = await session.stat(path)
+                same_mtime = entry.modified_at == stamp.mtime
+            except Exception:
+                same_mtime = False
+            if same_mtime:
+                return ToolResult(
+                    status="ok",
+                    reason_code="ok",
+                    preview=_UNCHANGED_PREVIEW,
+                    original_bytes=len(content),
+                    truncated=False,
+                    checksum=digest,
+                    workspace_revision=await self._revision(session),
+                    start_line=offset,
+                    total_lines=total_lines,
+                    unchanged=True,
+                )
         result = self._bounded_bytes(
             numbered.encode("utf-8"),
             workspace_revision=await self._revision(session),
             already_truncated=omitted,
             original_bytes=len(content),
+            start_line=offset,
+            total_lines=total_lines,
         )
         await self._mark_read(
-            session, path, content, full=offset <= 1 and raw_limit is None
+            session,
+            path,
+            content,
+            full=offset <= 1 and raw_limit is None,
+            offset=offset,
+            limit=limit,
         )
         return result
 
@@ -347,11 +665,15 @@ class SandboxToolExecutor:
         old_string = str(call.input["old_string"])
         new_string = str(call.input["new_string"])
         replace_all = bool(call.input.get("replace_all", False))
+        if old_string == new_string:
+            return await self._denied(session, "edit_noop")
         matches = text.count(old_string)
         if matches == 0:
             return await self._denied(session, "edit_old_string_not_found")
         if matches > 1 and not replace_all:
-            return await self._denied(session, "edit_old_string_not_unique")
+            return await self._denied(
+                session, "edit_old_string_not_unique", matches=matches
+            )
         updated = (
             text.replace(old_string, new_string)
             if replace_all
@@ -387,7 +709,7 @@ class SandboxToolExecutor:
             return None
         if self._was_read(session, path, known_reads=known_reads):
             stamp = self._stamp_for(session, path)
-            if stamp is not None and not stamp[2]:
+            if stamp is not None and not stamp.full:
                 return await self._denied(session, "precondition_read_required")
             return None
         return await self._denied(session, "precondition_read_required")
@@ -404,7 +726,7 @@ class SandboxToolExecutor:
         except (SandboxNotFound, FileNotFoundError, SandboxPolicyViolation):
             return None
         digest = hashlib.sha256(disk).hexdigest()
-        if entry.modified_at > stamp[0] and digest != stamp[1]:
+        if entry.modified_at > stamp.mtime and digest != stamp.digest:
             return await self._denied(session, "precondition_stale_read")
         return None
 
@@ -427,6 +749,8 @@ class SandboxToolExecutor:
         *,
         full: bool,
         modified: datetime | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
     ) -> None:
         normalized = str(normalize_workspace_path(path))
         self._read_paths.setdefault(session.sandbox_id, set()).add(normalized)
@@ -436,15 +760,15 @@ class SandboxToolExecutor:
                 modified = entry.modified_at
             except Exception:
                 modified = datetime.now(UTC)
-        self._read_stamps.setdefault(session.sandbox_id, {})[normalized] = (
+        self._read_stamps.setdefault(session.sandbox_id, {})[normalized] = _ReadStamp(
             modified,
             hashlib.sha256(content).hexdigest(),
             full,
+            offset,
+            limit,
         )
 
-    def _stamp_for(
-        self, session: SandboxSession, path: str
-    ) -> tuple[datetime, str, bool] | None:
+    def _stamp_for(self, session: SandboxSession, path: str) -> _ReadStamp | None:
         stamps = self._read_stamps.get(session.sandbox_id) or {}
         return stamps.get(str(normalize_workspace_path(path)))
 
@@ -461,7 +785,13 @@ class SandboxToolExecutor:
         recorded = self._read_paths.get(session.sandbox_id, set())
         return normalized in recorded
 
-    async def _denied(self, session: SandboxSession, reason: str) -> ToolResult:
+    async def _denied(
+        self,
+        session: SandboxSession,
+        reason: str,
+        *,
+        matches: int | None = None,
+    ) -> ToolResult:
         return ToolResult(
             "denied",
             reason,
@@ -470,6 +800,7 @@ class SandboxToolExecutor:
             False,
             None,
             await self._revision(session),
+            matches=matches,
         )
 
     async def _dispatch_non_file_tool(
@@ -515,15 +846,33 @@ class SandboxToolExecutor:
             return self._entry_result((entry,), await self._revision(session))
         if call.name == "search_text.v1":
             output_mode = str(call.input.get("output_mode", "content"))
-            matches = await session.search_text(
-                str(call.input["query"]),
-                paths=tuple(str(path) for path in call.input["paths"]),
-                regex=bool(call.input["regex"]),
-                limit=int(call.input["limit"]),
-                before=int(call.input.get("before", 0)),
-                after=int(call.input.get("after", 0)),
-                output_mode=output_mode,
-            )
+            kwargs: dict[str, Any] = {
+                "paths": tuple(str(path) for path in call.input["paths"]),
+                "regex": bool(call.input["regex"]),
+                "limit": int(call.input["limit"]),
+                "before": int(call.input.get("before", 0)),
+                "after": int(call.input.get("after", 0)),
+                "output_mode": output_mode,
+            }
+            extras: dict[str, Any] = {}
+            if call.input.get("ignore_case"):
+                extras["ignore_case"] = True
+            if call.input.get("multiline"):
+                extras["multiline"] = True
+            context = int(call.input.get("context") or 0)
+            if context:
+                extras["context"] = context
+            search_root = call.input.get("path")
+            if search_root:
+                extras["path"] = str(search_root)
+            try:
+                matches = await session.search_text(
+                    str(call.input["query"]), **kwargs, **extras
+                )
+            except TypeError:
+                matches = await session.search_text(
+                    str(call.input["query"]), **kwargs
+                )
             return self._search_text_result(
                 matches,
                 await self._revision(session),
@@ -623,14 +972,21 @@ class SandboxToolExecutor:
     async def _web_fetch(
         self, session: SandboxSession, call: ValidatedToolCall
     ) -> ToolResult:
-        url = str(call.input["url"])
+        url = _upgrade_to_https(str(call.input["url"]))
         allowlist = _web_fetch_hosts()
-        if not _web_fetch_url_allowed(url, allowlist):
-            return await self._denied(session, "policy_web_fetch_host_denied")
+        reason = _web_fetch_safety_reason(url, allowlist)
+        if reason == "policy_web_fetch_host_denied":
+            return await self._denied(session, reason)
+        if reason is not None:
+            return self._failure("error", reason)
         try:
-            final_url, body = await asyncio.to_thread(_http_get, url, allowlist)
+            final_url, media, body = await asyncio.to_thread(
+                _http_get, url, allowlist
+            )
         except _WebFetchHostDenied:
             return await self._denied(session, "policy_web_fetch_host_denied")
+        except _WebFetchUnsafe as error:
+            return self._failure("error", error.reason)
         except TimeoutError:
             return self._failure("error", "sandbox_timeout")
         except urllib.error.URLError as error:
@@ -641,7 +997,9 @@ class SandboxToolExecutor:
         except OSError:
             return self._failure("error", "sandbox_error")
         text = body.decode("utf-8", errors="replace")
-        bounded = self._bytes_mapping(body)
+        if media == "text/html":
+            text = _html_to_text(text)
+        bounded = self._bytes_mapping(text.encode("utf-8"))
         return ToolResult(
             status="ok",
             reason_code="ok",
@@ -675,6 +1033,8 @@ class SandboxToolExecutor:
         workspace_revision: str,
         already_truncated: bool = False,
         original_bytes: int | None = None,
+        start_line: int | None = None,
+        total_lines: int | None = None,
     ) -> ToolResult:
         bounded = self._bytes_mapping(content, already_truncated=already_truncated)
         return ToolResult(
@@ -685,6 +1045,8 @@ class SandboxToolExecutor:
             truncated=bool(bounded["truncated"]),
             checksum=str(bounded["checksum"]),
             workspace_revision=workspace_revision,
+            start_line=start_line,
+            total_lines=total_lines,
         )
 
     def _bytes_mapping(

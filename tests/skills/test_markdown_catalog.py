@@ -240,3 +240,81 @@ def test_load_markdown_refuses_path_outside_roots(tmp_path: Path) -> None:
     }
 
     assert catalog.load_markdown("evil") is None
+
+
+def _write_coding_skill(root: Path, name: str, frontmatter: str) -> None:
+    (root / f"{name}.md").write_text(
+        f"---\n{frontmatter}\n---\n\n"
+        "## When to Use\n\nUse it.\n\n## Boundaries\n\nDo not invent.\n",
+        encoding="utf-8",
+    )
+
+
+def test_parses_optional_frontmatter_fields(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    root.mkdir()
+    _write_coding_skill(
+        root,
+        "guided",
+        "\n".join(
+            [
+                "name: guided",
+                "description: Fallback line",
+                "disable-model-invocation: false",
+                "allowed-tools:",
+                "  - read_file.v1",
+                "  - execute.v1",
+                "when_to_use: Use when planning.",
+                "user_invocable: false",
+            ]
+        ),
+    )
+    _write_coding_skill(
+        root,
+        "kebab",
+        "\n".join(
+            [
+                "name: kebab",
+                "description: Kebab skill",
+                "allowed-tools: Read, Write Edit",
+                "when-to-use: Prefer this line.",
+            ]
+        ),
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+
+    guided = catalog.get("guided")
+    kebab = catalog.get("kebab")
+    assert guided is not None
+    assert guided.disable_model_invocation is False
+    assert guided.allowed_tools == ("read_file.v1", "execute.v1")
+    assert guided.when_to_use == "Use when planning."
+    assert guided.user_invocable is False
+    assert kebab is not None
+    assert kebab.allowed_tools == ("Read", "Write", "Edit")
+    assert kebab.when_to_use == "Prefer this line."
+    assert kebab.user_invocable is True
+    assert kebab.disable_model_invocation is False
+
+
+def test_list_skills_hides_disable_model_invocation(tmp_path: Path) -> None:
+    root = tmp_path / "coding"
+    root.mkdir()
+    _write_coding_skill(
+        root,
+        "hidden",
+        "name: hidden\ndescription: Hidden\ndisable-model-invocation: true\n",
+    )
+    _write_coding_skill(
+        root,
+        "visible",
+        "name: visible\ndescription: Visible\n",
+    )
+    catalog = MarkdownSkillCatalog(roots=(("coding", root),))
+
+    names = {skill.name for skill in catalog.list_skills()}
+    assert names == {"visible"}
+    hidden = catalog.get("hidden")
+    assert hidden is not None
+    assert hidden.disable_model_invocation is True
+    assert catalog.load_markdown("hidden") is not None

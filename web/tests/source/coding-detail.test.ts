@@ -20,6 +20,9 @@ test("detail panel shows tool name, status, and short preview", () => {
   assert.match(panel, /\bpreview\b/);
   assert.match(panel, /tool\.status/);
   assert.match(panel, /tool_call_id/);
+  assert.match(panel, /denied_by/);
+  assert.match(panel, /reason_code/);
+  assert.match(panel, /status === "denied"/);
   assert.doesNotMatch(panel, /JSON\.stringify/);
   assert.doesNotMatch(panel, /result\.(env|secret|token|password)/);
 });

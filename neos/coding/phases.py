@@ -47,6 +47,27 @@ def parse_verify_verdict(text: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
+def persist_verify_verdict(text: str) -> str | None:
+    return parse_verify_verdict(text)
+
+
+def persist_plan_critical_files(text: str) -> tuple[str, ...]:
+    files = parse_plan_critical_files(text)
+    return tuple(files or ())
+
+
+def restore_verify_verdict(value: object) -> str | None:
+    if value in {"PASS", "FAIL", "PARTIAL"}:
+        return str(value)
+    return None
+
+
+def restore_plan_critical_files(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
 def parse_plan_critical_files(text: str) -> list[str] | None:
     blob = text or ""
     heading = _CRITICAL_HEADING_RE.search(blob)

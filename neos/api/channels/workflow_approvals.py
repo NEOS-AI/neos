@@ -30,6 +30,29 @@ async def _mark_resolved_best_effort(request_id: str, owner_id: str) -> None:
 class RuntimeWorkflowApprovals:
     def __init__(self, workflow: Any) -> None:
         self._workflow = workflow
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, session_id: str) -> asyncio.Lock:
+        lock = self._locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[session_id] = lock
+        return lock
+
+    async def interrupt_owner(self, session_id: str) -> str | None:
+        workflow = self._workflow
+        graph = getattr(workflow, "graph", None)
+        if graph is None:
+            return None
+        try:
+            current = await graph.aget_state(
+                {"configurable": {"thread_id": session_id}}
+            )
+        except Exception:
+            return None
+        values = getattr(current, "values", None) or {}
+        owner = values.get("user_id")
+        return str(owner) if owner else None
 
     async def decide(
         self,
@@ -50,81 +73,92 @@ class RuntimeWorkflowApprovals:
             return _NOT_READY
 
         config = {"configurable": {"thread_id": session_id}}
-        try:
-            current_graph_state = await graph.aget_state(config)
-            values = getattr(current_graph_state, "values", None) or {}
-            pending = values.get("pending_approvals") or []
-        except Exception as error:
-            logger.error(
-                "[RuntimeWorkflowApprovals] aget_state failed: session=%s: %s",
-                session_id,
-                error,
-            )
-            return _STATE_FAILED
-
-        valid_ids = {
-            str(item.get("request_id"))
-            for item in pending
-            if isinstance(item, dict) and item.get("request_id")
-        }
-        if not request_id or request_id not in valid_ids:
-            return _INVALID_REQUEST
-
-        try:
-            from neos.workflow.resume_graph import (
-                ResumeGraphUnavailable,
-                resume_graph_for,
-            )
-
-            resume_graph = await resume_graph_for(
-                values,
-                workflow=workflow,
-                checkpointer=graph.checkpointer,
-            )
-        except ResumeGraphUnavailable as error:
-            logger.error(
-                "[RuntimeWorkflowApprovals] resume graph unavailable: "
-                "session=%s reason=%s",
-                session_id,
-                error.reason,
-            )
-            return _RESUME_FAILED
-        except Exception as error:
-            logger.error(
-                "[RuntimeWorkflowApprovals] resume_graph_for failed: "
-                "session=%s: %s",
-                session_id,
-                error,
-            )
-            return _RESUME_FAILED
-
-        try:
-            await resume_graph.aupdate_state(
-                config=config,
-                values={"approval_decision": decision},
-            )
-        except Exception as error:
-            logger.error(
-                "[RuntimeWorkflowApprovals] aupdate_state failed: "
-                "session=%s: %s",
-                session_id,
-                error,
-            )
-            return _UPDATE_FAILED
-
-        await _mark_resolved_best_effort(request_id, owner_id)
-
-        async def _resume() -> None:
+        async with self._lock_for(session_id):
             try:
-                async for _chunk in resume_graph.astream(None, config=config):
-                    pass
+                current_graph_state = await graph.aget_state(config)
+                values = getattr(current_graph_state, "values", None) or {}
+                pending = values.get("pending_approvals") or []
             except Exception as error:
                 logger.error(
-                    "[RuntimeWorkflowApprovals] astream failed: "
+                    "[RuntimeWorkflowApprovals] aget_state failed: session=%s: %s",
+                    session_id,
+                    error,
+                )
+                return _STATE_FAILED
+
+            remaining = [
+                item
+                for item in pending
+                if isinstance(item, dict)
+                and str(item.get("request_id") or "") != request_id
+            ]
+            claimed = any(
+                isinstance(item, dict) and str(item.get("request_id") or "") == request_id
+                for item in pending
+            )
+            if not request_id or not claimed:
+                return _INVALID_REQUEST
+
+            try:
+                from neos.workflow.resume_graph import (
+                    ResumeGraphUnavailable,
+                    resume_graph_for,
+                )
+
+                resume_graph = await resume_graph_for(
+                    values,
+                    workflow=workflow,
+                    checkpointer=graph.checkpointer,
+                )
+            except ResumeGraphUnavailable as error:
+                logger.error(
+                    "[RuntimeWorkflowApprovals] resume graph unavailable: "
+                    "session=%s reason=%s",
+                    session_id,
+                    error.reason,
+                )
+                return _RESUME_FAILED
+            except Exception as error:
+                logger.error(
+                    "[RuntimeWorkflowApprovals] resume_graph_for failed: "
                     "session=%s: %s",
                     session_id,
                     error,
                 )
+                return _RESUME_FAILED
 
-        asyncio.create_task(_resume(), name=f"channel_approval_resume_{session_id}")
-        return f"{request_id} {'approved' if approve else 'denied'}"
+            try:
+                await resume_graph.aupdate_state(
+                    config=config,
+                    values={
+                        "approval_decision": decision,
+                        "pending_approvals": remaining,
+                    },
+                )
+            except Exception as error:
+                logger.error(
+                    "[RuntimeWorkflowApprovals] aupdate_state failed: "
+                    "session=%s: %s",
+                    session_id,
+                    error,
+                )
+                return _UPDATE_FAILED
+
+            await _mark_resolved_best_effort(request_id, owner_id)
+
+            async def _resume() -> None:
+                try:
+                    async for _chunk in resume_graph.astream(None, config=config):
+                        pass
+                except Exception as error:
+                    logger.error(
+                        "[RuntimeWorkflowApprovals] astream failed: "
+                        "session=%s: %s",
+                        session_id,
+                        error,
+                    )
+
+            asyncio.create_task(
+                _resume(), name=f"channel_approval_resume_{session_id}"
+            )
+            return f"{request_id} {'approved' if approve else 'denied'}"

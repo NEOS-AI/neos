@@ -6,6 +6,8 @@ from neos.coding.workers.dispatcher import (
     CodingDispatchSource,
 )
 
+pytestmark = pytest.mark.no_db
+
 
 class RecordingCeleryApp:
     def __init__(self, *, error: Exception | None = None) -> None:

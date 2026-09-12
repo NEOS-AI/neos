@@ -6,6 +6,7 @@ from neos.coding.domain.approvals import (
     ApprovalConflict,
     ApprovalDecision,
     ApprovalResolutionCommit,
+    ask_user_answers_complete,
 )
 from neos.coding.sandbox.observability import (
     CodingApprovalAuditEvent,
@@ -80,6 +81,9 @@ class CodingApprovalService:
         answers: tuple[str, ...] = (),
         remember: bool = False,
     ) -> ApprovalResolutionCommit:
+        if decision is ApprovalDecision.APPROVE and answers:
+            if not ask_user_answers_complete(answers, answers):
+                raise ApprovalConflict("answers_required")
         commit = await self._repository.resolve_tool_approval(
             task_id=task_id,
             approval_id=approval_id,

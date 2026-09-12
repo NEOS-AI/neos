@@ -31,6 +31,10 @@ class ChannelCommandKind(StrEnum):
     DENY = "deny"
     LEARN = "learn"
     NEW = "new"
+    COMPACT = "compact"
+    CLEAR = "clear"
+    COST = "cost"
+    EXPORT = "export"
 
 
 def neutralize_untrusted_inline(text: str, max_len: int = 240) -> str:
@@ -128,6 +132,14 @@ def parse_channel_command(text: str) -> ChannelCommand:
         "/reset": ChannelCommandKind.NEW,
         "!new": ChannelCommandKind.NEW,
         "!reset": ChannelCommandKind.NEW,
+        "/compact": ChannelCommandKind.COMPACT,
+        "!compact": ChannelCommandKind.COMPACT,
+        "/clear": ChannelCommandKind.CLEAR,
+        "!clear": ChannelCommandKind.CLEAR,
+        "/cost": ChannelCommandKind.COST,
+        "!cost": ChannelCommandKind.COST,
+        "/export": ChannelCommandKind.EXPORT,
+        "!export": ChannelCommandKind.EXPORT,
     }
     kind = mapping.get(token)
     if kind is None:

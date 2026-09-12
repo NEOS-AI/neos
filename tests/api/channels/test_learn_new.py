@@ -90,6 +90,26 @@ async def test_reset_aliases_unbind_this_session(monkeypatch, text: str) -> None
     assert await store.get(session_id) is None
 
 
+async def test_clear_keeps_other_session_and_this_bind(monkeypatch) -> None:
+    store = InMemoryChannelCodingBindStore()
+    gateway, workflow, coding = _bound_gateway(monkeypatch, binds=store)
+    other = "v2:slack:T:C:other"
+    this = "v2:slack:T:C:1"
+    await gateway.dispatch(_message("/code fix a", this))
+    await gateway.dispatch(_message("/code fix b", other))
+
+    reply = await gateway.dispatch(_message("/clear", this))
+
+    assert "context" in reply.lower()
+    remaining_this = await store.get(this)
+    remaining_other = await store.get(other)
+    assert remaining_this is not None
+    assert remaining_other is not None
+    assert coding.stopped == []
+    assert workflow.calls == []
+    assert "queued" in await gateway.dispatch(_message("/status", this))
+
+
 async def test_in_memory_unbind_is_session_scoped() -> None:
     store = InMemoryChannelCodingBindStore()
     await store.bind("sess-a", "ct_a", "u1")

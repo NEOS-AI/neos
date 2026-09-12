@@ -828,7 +828,17 @@ class PostgresCodingRunRepository:
                         workspace_revision=workspace_revision,
                     )
                 )
-                summary = approval_display_summary(validated)
+                summary = dict(approval_display_summary(validated))
+                if (
+                    validated.name == "set_phase.v1"
+                    and str(validated.input.get("phase") or "") == "implement"
+                ):
+                    dumped = loop_state if isinstance(loop_state, Mapping) else {}
+                    files = dumped.get("critical_files")
+                    if isinstance(files, (list, tuple)) and files:
+                        summary["critical_files"] = [
+                            str(item) for item in files if item
+                        ]
                 approval = CodingApproval(
                     approval_id=f"ca_{uuid4().hex}",
                     task_id=lease.task_id,
