@@ -310,16 +310,24 @@ class HarnessRunner:
         checks: list[HarnessCheckResult],
         repair_attempts: int,
     ) -> HarnessVerdict:
-        critical_failures = [
-            check for check in checks if not check.passed and check.severity == "critical"
-        ]
+        optional = set(contract.optional_checks or [])
+        required = set(contract.required_checks or [])
         required_failures = [
             check
             for check in checks
-            if not check.passed and check.name in set(contract.required_checks or [])
+            if not check.passed and check.name in required
+        ]
+        critical_failures = [
+            check
+            for check in checks
+            if not check.passed
+            and check.severity == "critical"
+            and check.name not in optional
         ]
         repairable_failures = [
-            check for check in checks if not check.passed and check.repairable
+            check
+            for check in checks
+            if not check.passed and check.repairable and check.name not in optional
         ]
         attempts_remaining = repair_attempts < contract.max_repair_attempts
 

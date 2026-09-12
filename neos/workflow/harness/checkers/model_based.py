@@ -14,6 +14,16 @@ from neos.workflow.harness.models import HarnessCheckResult, HarnessContract
 from neos.workflow.harness.models import HarnessMode
 
 
+def _failed_severity(contract: HarnessContract, *, name: str) -> str:
+    if contract.mode != HarnessMode.GATE:
+        return "warning"
+    required = set(contract.required_checks or [])
+    optional = set(contract.optional_checks or [])
+    if name in optional and name not in required:
+        return "warning"
+    return "critical"
+
+
 class TopicCoverageChecker:
     name = "topic_coverage"
 
@@ -90,7 +100,7 @@ class FactualityChecker:
             name=self.name,
             passed=not required,
             score=1.0 if not required else 0.0,
-            severity="critical" if required and contract.mode == HarnessMode.GATE else "warning",
+            severity=_failed_severity(contract, name=self.name) if required else "warning",
             summary="Model-based factuality check requires the async runner.",
             repairable=False,
             metadata={"skipped": True, "reason": "requires_async_runner"},
@@ -114,7 +124,7 @@ class FactualityChecker:
                     name=self.name,
                     passed=False,
                     score=0.0,
-                    severity="critical" if contract.mode == HarnessMode.GATE else "warning",
+                    severity=_failed_severity(contract, name=self.name),
                     summary="Required model-based factuality check is disabled.",
                     repairable=False,
                     metadata={"reason": "model_checks_disabled"},
@@ -141,7 +151,7 @@ class FactualityChecker:
             name=self.name,
             passed=passed,
             score=float(payload.get("score") or 0.0),
-            severity="info" if passed else ("critical" if contract.mode == HarnessMode.GATE else "warning"),
+            severity="info" if passed else _failed_severity(contract, name=self.name),
             summary=str(payload.get("summary") or "Factuality check completed."),
             evidence=evidence,
             failed_items=failed_items,
@@ -212,7 +222,7 @@ class BiasPerspectiveChecker:
             name=self.name,
             passed=not required,
             score=1.0 if not required else 0.0,
-            severity="critical" if required and contract.mode == HarnessMode.GATE else "warning",
+            severity=_failed_severity(contract, name=self.name) if required else "warning",
             summary="Model-based bias/perspective check requires the async runner.",
             repairable=False,
             metadata={"skipped": True, "reason": "requires_async_runner"},
@@ -236,7 +246,7 @@ class BiasPerspectiveChecker:
                     name=self.name,
                     passed=False,
                     score=0.0,
-                    severity="critical" if contract.mode == HarnessMode.GATE else "warning",
+                    severity=_failed_severity(contract, name=self.name),
                     summary="Required model-based bias/perspective check is disabled.",
                     repairable=False,
                     metadata={"reason": "model_checks_disabled"},
@@ -259,7 +269,7 @@ class BiasPerspectiveChecker:
             name=self.name,
             passed=passed,
             score=float(payload.get("score") or 0.0),
-            severity="info" if passed else ("critical" if contract.mode == HarnessMode.GATE else "warning"),
+            severity="info" if passed else _failed_severity(contract, name=self.name),
             summary=str(payload.get("summary") or "Bias/perspective check completed."),
             evidence=evidence,
             failed_items=failed_items,

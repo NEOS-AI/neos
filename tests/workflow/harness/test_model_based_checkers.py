@@ -141,6 +141,30 @@ async def test_factuality_checker_fails_gate_with_repairable_unsupported_claims(
     assert result.failed_items[0]["claim"] == "Unsupported market-share claim"
 
 
+async def test_factuality_checker_optional_gate_fail_is_warning():
+    result = await FactualityChecker(judge=FailingJudge()).arun(
+        report="Unsupported market-share claim [1].",
+        sources=[
+            {
+                "id": "1",
+                "title": "Source",
+                "url": "https://example.com",
+                "content": "Different evidence.",
+            }
+        ],
+        contract=factuality_contract(
+            required_checks=[],
+            optional_checks=["factuality"],
+        ),
+        context={},
+    )
+
+    assert result.passed is False
+    assert result.severity == "warning"
+    assert result.repairable is True
+    assert result.failed_items[0]["claim"] == "Unsupported market-share claim"
+
+
 async def test_factuality_checker_required_gate_fails_when_model_checks_disabled():
     result = await FactualityChecker(
         judge=PassingJudge(),

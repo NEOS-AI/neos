@@ -151,3 +151,66 @@ def test_failed_required_repairable_check_requests_repair_when_attempts_remain()
     )
 
     assert run.verdict == HarnessVerdict.NEEDS_REPAIR
+
+
+def test_optional_critical_failure_does_not_block_gate_when_score_passes():
+    runner = HarnessRunner(
+        checkers=[
+            StaticChecker(check("source_count", passed=True, score=1.0)),
+            StaticChecker(
+                check(
+                    "factuality",
+                    passed=False,
+                    score=0.9,
+                    severity="critical",
+                    repairable=True,
+                )
+            ),
+        ]
+    )
+
+    run = runner.run(
+        report="answer [1]",
+        sources=[{"id": "1", "url": "https://a.com"}],
+        contract=gate_contract(
+            required_checks=["source_count"],
+            optional_checks=["factuality"],
+        ),
+        repair_attempts=0,
+    )
+
+    assert run.verdict == HarnessVerdict.PASS
+    assert run.score >= 0.82
+    assert "factuality" in run.failed_checks
+
+
+def test_optional_failure_can_still_lower_score_below_threshold():
+    runner = HarnessRunner(
+        checkers=[
+            StaticChecker(check("source_count", passed=True, score=1.0)),
+            StaticChecker(
+                check(
+                    "factuality",
+                    passed=False,
+                    score=0.0,
+                    severity="critical",
+                    repairable=True,
+                )
+            ),
+        ]
+    )
+
+    run = runner.run(
+        report="answer [1]",
+        sources=[{"id": "1", "url": "https://a.com"}],
+        contract=gate_contract(
+            required_checks=["source_count"],
+            optional_checks=["factuality"],
+        ),
+        repair_attempts=0,
+    )
+
+    assert run.verdict != HarnessVerdict.NEEDS_REPAIR
+    assert run.verdict == HarnessVerdict.FAIL
+    assert run.score < 0.82
+    assert "factuality" in run.failed_checks
