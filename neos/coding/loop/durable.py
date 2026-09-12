@@ -251,6 +251,13 @@ class DelegatedSpawn:
     step_kind: str
 
 
+@dataclass(frozen=True, slots=True)
+class SpawnWork:
+    kind: str
+    call: ToolCallCompleted | None
+    child: ActiveChildRef | None
+
+
 class DurableCodingLoop:
     def __init__(
         self,
@@ -585,14 +592,24 @@ class DurableCodingLoop:
         prefetch = prefetch or {}
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
-        call = state.pending_tool_calls[state.pending_tool_index]
+        max_active = _subagent_max_active(self._config)
+        work = _select_spawn_work(state, max_active=max_active)
+        if work is not None and work.call is not None:
+            call = work.call
+        else:
+            # resume with a missing pending id (mutation / corruption) uses
+            # pending[index] so the existing cap guard still fails closed
+            call = state.pending_tool_calls[state.pending_tool_index]
         if _is_stall_denied(state, call.name, call.input):
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_stall_denied"
             )
             yield event, denied_state
             return
-        batch = self._leading_readonly_batch(state)
+        if work is not None and work.call is not None:
+            batch = None
+        else:
+            batch = self._leading_readonly_batch(state)
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
@@ -803,6 +820,7 @@ class DurableCodingLoop:
                 yield await self._emit_tool_started(input, deps, call), state
             try:
                 if call.name == "spawn_agent.v1":
+                    await self._adopt_all_live_claims(state, deps)
                     result = await self._run_spawn_agent(
                         call, bound, state, input=input, deps=deps
                     )
@@ -1965,6 +1983,13 @@ class DurableCodingLoop:
         except Exception:
             return None
 
+    async def _adopt_all_live_claims(self, state, deps) -> None:
+        refs = ()
+        if state is not None:
+            refs = state.active_children or _legacy_single(state)
+        for ref in refs:
+            await self._adopt_spawn_claim(deps, ref.tool_call_id)
+
     async def _complete_spawn_claim(self, deps, claim, bound, reason: str) -> None:
         if deps is None or claim is None:
             return
@@ -2132,10 +2157,11 @@ class DurableCodingLoop:
             return error
         if not self._config.subagent_enabled:
             return self._legacy_explore_handoff(bound)
+        max_active = _subagent_max_active(self._config)
         if (
             live
             and call.tool_call_id not in {child.tool_call_id for child in live}
-            and len(live) >= self._config.subagent_max_active
+            and len(live) >= max_active
         ):
             return self._spawn_tool_error(bound, "policy_child_already_active")
         if self._subagents is None:
@@ -3073,6 +3099,45 @@ def _tool_result_ids(transcript) -> set[str]:
         for item in message.content
         if isinstance(item, ToolResultContent)
     }
+
+
+def _subagent_max_active(config) -> int:
+    return min(4, max(1, getattr(config, "subagent_max_active", 1)))
+
+
+def _spawn_window(state) -> tuple[ToolCallCompleted, ...]:
+    window: list[ToolCallCompleted] = []
+    for call in state.pending_tool_calls[state.pending_tool_index :]:
+        if call.name != "spawn_agent.v1":
+            break
+        window.append(call)
+    return tuple(window)
+
+
+def _pending_by_id(state, tool_call_id: str) -> ToolCallCompleted | None:
+    for call in state.pending_tool_calls:
+        if call.tool_call_id == tool_call_id:
+            return call
+    return None
+
+
+def _select_spawn_work(state, *, max_active: int) -> SpawnWork | None:
+    window = _spawn_window(state)
+    live = list(state.active_children or _legacy_single(state))
+    live_ids = {child.tool_call_id for child in live}
+    done = _tool_result_ids(state.transcript)
+    unstarted = [
+        call
+        for call in window
+        if call.tool_call_id not in live_ids and call.tool_call_id not in done
+    ]
+    if len(live) < max_active and unstarted:
+        return SpawnWork(kind="start", call=unstarted[0], child=None)
+    if live:
+        picked = min(live, key=lambda child: (child.last_advanced_at, child.tool_call_id))
+        call = _pending_by_id(state, picked.tool_call_id)
+        return SpawnWork(kind="resume", call=call, child=picked)
+    return None
 
 
 def _legacy_single(state) -> tuple[ActiveChildRef, ...]:

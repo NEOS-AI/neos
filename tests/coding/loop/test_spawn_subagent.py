@@ -6,7 +6,11 @@ from datetime import timedelta
 
 import pytest
 
-from neos.coding.domain.durability import ToolExecutionClaim, ToolExecutionDisposition
+from neos.coding.domain.durability import (
+    StaleExecutionLease,
+    ToolExecutionClaim,
+    ToolExecutionDisposition,
+)
 from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
@@ -65,10 +69,12 @@ class FakeChildTools:
 class RecordingSubagents:
     def __init__(self, inner: SubagentRuntime) -> None:
         self.inner = inner
+        self.advance_tickets: list[SubagentTicket] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.cancel_for_parent_calls: list[tuple[object, str, str]] = []
 
     async def advance(self, ticket):
+        self.advance_tickets.append(ticket)
         return await self.inner.advance(ticket)
 
     async def fold(self, run_id):
@@ -155,6 +161,62 @@ def _spawn_turns(prompt: str = "look around", call_id: str = "s1"):
             completed(),
         ]
     ]
+
+
+class TickableClock:
+    def __init__(self, now=NOW) -> None:
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def tick(self, seconds: int = 1):
+        self.now = self.now + timedelta(seconds=seconds)
+        return self.now
+
+
+def _two_spawn_turns():
+    return [
+        [
+            tool_call("s1", "spawn_agent.v1", {"prompt": "look one", "max_turns": 4}),
+            tool_call("s2", "spawn_agent.v1", {"prompt": "look two", "max_turns": 4}),
+            completed(),
+        ]
+    ]
+
+
+def _subagent_store(runtime):
+    return runtime.inner._store if hasattr(runtime, "inner") else runtime._store
+
+
+def _child_by_id(state, tool_call_id: str):
+    for child in state.get("active_children") or ():
+        if child["tool_call_id"] == tool_call_id:
+            return child
+    return None
+
+
+async def _park_two(h, clock):
+    await collect(h)
+    clock.tick()
+    parked = h.repository.checkpoints[-1]
+    await collect(h, parked)
+    clock.tick()
+    return h.repository.checkpoints[-1]
+
+
+async def _collect_until_folded(h, clock, checkpoint, tool_call_id: str, *, limit: int = 8):
+    current = checkpoint
+    for _ in range(limit):
+        await collect(h, current)
+        clock.tick()
+        current = h.repository.checkpoints[-1]
+        if any(
+            item["tool_call_id"] == tool_call_id
+            for item in _tool_results(current.loop_state)
+        ):
+            return current
+    raise AssertionError(f"{tool_call_id} never folded")
 
 
 @pytest.mark.asyncio
@@ -525,3 +587,309 @@ async def test_coding_tool_port_intersects_and_refuses_writes() -> None:
         await port.execute("write_file.v1", {"path": "a.txt", "content": "x"})
     write = registry.validate("write_file.v1", {"path": "a.txt", "content": "x"})
     assert write.risk is not ToolRisk.READ_ONLY
+
+
+@pytest.mark.asyncio
+async def test_max_active_2_allows_two_different_tool_call_ids() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _child_tool()])
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    state = parked.loop_state
+    ids = [child["tool_call_id"] for child in state["active_children"]]
+    assert ids == ["s1", "s2"]
+    assert state["pending_tool_index"] == 0
+    s1_claim, _ = h.repository.tool_claims[("ct_1", "s1")]
+    s2_claim, _ = h.repository.tool_claims[("ct_1", "s2")]
+    assert s1_claim.disposition is ToolExecutionDisposition.DELEGATED
+    assert s2_claim.disposition is ToolExecutionDisposition.DELEGATED
+
+
+@pytest.mark.asyncio
+async def test_same_tool_call_id_resume_still_parks() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _child_tool()])
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    first = h.repository.checkpoints[-1]
+    first_run = first.loop_state["active_child_run_id"]
+    clock.tick()
+    await collect(h, first)
+    again = h.repository.checkpoints[-1].loop_state
+    assert again["active_child_run_id"] == first_run
+    assert again["active_child_tool_call_id"] == "s1"
+    assert again["pending_tool_index"] == 0
+    assert _tool_results(again) == []
+    store = _subagent_store(runtime)
+    assert len(store._runs) == 1
+    assert list(store._by_parent.values()) == [first_run]
+
+
+@pytest.mark.asyncio
+async def test_one_delivery_advances_exactly_one_child() -> None:
+    inner, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    assert len(parked.loop_state["active_children"]) == 2
+    before = len(runtime.advance_tickets)
+    await collect(h, parked)
+    assert len(runtime.advance_tickets) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_fill_before_rr() -> None:
+    inner, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    await collect(h)
+    first = h.repository.checkpoints[-1]
+    s1 = _child_by_id(first.loop_state, "s1")
+    assert s1 is not None
+    assert _child_by_id(first.loop_state, "s2") is None
+    s1_stamp = s1["last_advanced_at"]
+    s1_run = s1["run_id"]
+    store = _subagent_store(runtime)
+    s1_seq = (await store.get(s1_run)).latest_seq
+    clock.tick()
+    await collect(h, first)
+    second = h.repository.checkpoints[-1].loop_state
+    assert [child["tool_call_id"] for child in second["active_children"]] == [
+        "s1",
+        "s2",
+    ]
+    assert _child_by_id(second, "s1")["last_advanced_at"] == s1_stamp
+    assert (await store.get(s1_run)).latest_seq == s1_seq
+    assert runtime.advance_tickets[-1].parent_tool_call_id == "s2"
+    assert runtime.advance_tickets[-1].run_id is None
+
+
+@pytest.mark.asyncio
+async def test_rr_picks_oldest_last_advanced_at() -> None:
+    runtime, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    store = _subagent_store(runtime)
+    s1 = _child_by_id(parked.loop_state, "s1")
+    s2 = _child_by_id(parked.loop_state, "s2")
+    s1_before = await store.get(s1["run_id"])
+    s2_before = await store.get(s2["run_id"])
+    await collect(h, parked)
+    clock.tick()
+    after_s1 = h.repository.checkpoints[-1]
+    s1_mid = await store.get(s1["run_id"])
+    s2_mid = await store.get(s2["run_id"])
+    assert s1_mid.latest_seq == s1_before.latest_seq + 1
+    assert s1_mid.latest_checkpoint_id != s1_before.latest_checkpoint_id
+    assert s2_mid.latest_seq == s2_before.latest_seq
+    assert s2_mid.turn_count == s2_before.turn_count
+    await collect(h, after_s1)
+    s2_after = await store.get(s2["run_id"])
+    assert s2_after.latest_seq == s2_before.latest_seq + 1
+    assert s2_after.latest_checkpoint_id != s2_before.latest_checkpoint_id
+    assert s2_after.turn_count >= s2_before.turn_count
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_child_ref_not_scalars() -> None:
+    inner, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    state = parked.loop_state
+    s1 = _child_by_id(state, "s1")
+    s2 = _child_by_id(state, "s2")
+    assert state["active_child_run_id"] == s1["run_id"]
+    assert state["active_child_checkpoint_id"] == s1["checkpoint_id"]
+    assert state["active_child_tool_call_id"] == "s1"
+    await collect(h, parked)
+    clock.tick()
+    after_s1 = h.repository.checkpoints[-1]
+    runtime.advance_tickets.clear()
+    await collect(h, after_s1)
+    assert len(runtime.advance_tickets) == 1
+    ticket = runtime.advance_tickets[0]
+    assert ticket.parent_tool_call_id == "s2"
+    assert ticket.run_id == s2["run_id"]
+    assert ticket.expected_checkpoint_id == s2["checkpoint_id"]
+
+
+@pytest.mark.asyncio
+async def test_fold_of_one_child_does_not_complete_the_sibling() -> None:
+    runtime, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _text("s1 report"), _child_tool()]
+    )
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    folded = await _collect_until_folded(h, clock, parked, "s1")
+    state = folded.loop_state
+    assert [child["tool_call_id"] for child in state["active_children"]] == ["s2"]
+    assert state["pending_tool_index"] == 1
+    assert state["active_child_tool_call_id"] == "s2"
+    results = _tool_results(state)
+    assert {item["tool_call_id"] for item in results} == {"s1"}
+    s2_claim, _ = h.repository.tool_claims[("ct_1", "s2")]
+    assert s2_claim.disposition is ToolExecutionDisposition.DELEGATED
+    assert ("ct_1", "s1") in h.repository.completed_tools
+    assert ("ct_1", "s2") not in h.repository.completed_tools
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_fold_does_not_double_append() -> None:
+    runtime, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _text("s2 report"), _text("s1 report")]
+    )
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    state = dict(parked.loop_state)
+    children = [dict(child) for child in state["active_children"]]
+    children[1]["last_advanced_at"] = "1970-01-01T00:00:00+00:00"
+    state["active_children"] = children
+    mutated = replace(parked, loop_state=state)
+    after_s2 = await _collect_until_folded(h, clock, mutated, "s2")
+    mid = after_s2.loop_state
+    s2_results = [
+        item for item in _tool_results(mid) if item["tool_call_id"] == "s2"
+    ]
+    assert len(s2_results) == 1
+    assert mid["pending_tool_index"] == 0
+    assert [child["tool_call_id"] for child in mid["active_children"]] == ["s1"]
+    await _collect_until_folded(h, clock, after_s2, "s1")
+    final = h.repository.checkpoints[-1].loop_state
+    s2_results = [
+        item for item in _tool_results(final) if item["tool_call_id"] == "s2"
+    ]
+    s1_results = [
+        item for item in _tool_results(final) if item["tool_call_id"] == "s1"
+    ]
+    assert len(s2_results) == 1
+    assert len(s1_results) == 1
+    assert final["pending_tool_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_non_spawn_breaks_the_window() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _child_tool()])
+    clock = TickableClock()
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1", "spawn_agent.v1", {"prompt": "look one", "max_turns": 4}
+                ),
+                tool_call("r1", "read_file.v1", {"path": "a.py"}),
+                tool_call(
+                    "s2", "spawn_agent.v1", {"prompt": "look two", "max_turns": 4}
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    await collect(h)
+    clock.tick()
+    first = h.repository.checkpoints[-1]
+    assert [child["tool_call_id"] for child in first.loop_state["active_children"]] == [
+        "s1"
+    ]
+    await collect(h, first)
+    second = h.repository.checkpoints[-1].loop_state
+    assert [child["tool_call_id"] for child in second["active_children"]] == ["s1"]
+    assert _child_by_id(second, "s2") is None
+    assert ("ct_1", "s2") not in h.repository.tool_claims
+    assert second["pending_tool_index"] == 0
+    assert not any(item["tool_call_id"] == "r1" for item in _tool_results(second))
+
+
+@pytest.mark.asyncio
+async def test_adopt_all_rewrites_sibling_fencing() -> None:
+    runtime, _child = _make_runtime(
+        [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
+    )
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_flag_on(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    claim_a_s1, _ = h.repository.tool_claims[("ct_1", "s1")]
+    lease_a = h.deps.lease
+    await h.repository.release_execution_lease(lease_a, now=clock.now)
+    lease_b = await h.repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-b",
+        now=clock.now,
+        expires_at=clock.now + timedelta(minutes=1),
+    )
+    assert lease_b is not None
+    h.deps = replace(h.deps, lease=lease_b)
+    await collect(h, parked)
+    s1_claim, _ = h.repository.tool_claims[("ct_1", "s1")]
+    s2_claim, _ = h.repository.tool_claims[("ct_1", "s2")]
+    assert s1_claim.lease.worker_id == "worker-b"
+    assert s2_claim.lease.worker_id == "worker-b"
+    assert s1_claim.lease.fencing_token == lease_b.fencing_token
+    assert s2_claim.lease.fencing_token == lease_b.fencing_token
+    await h.repository.complete_tool_execution(
+        s2_claim, result={"folded": True}, now=clock.now
+    )
+    assert h.repository.completed_tools[("ct_1", "s2")] == {"folded": True}
+    with pytest.raises(StaleExecutionLease):
+        await h.repository.complete_tool_execution(
+            claim_a_s1, result={"folded": False}, now=clock.now
+        )
