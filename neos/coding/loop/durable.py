@@ -981,16 +981,20 @@ class DurableCodingLoop:
             and state.pending_tool_calls[state.pending_tool_index].tool_call_id
             == call.tool_call_id
         )
-        after = await self._after_result(
-            state,
-            ToolResultContent(call.tool_call_id, canonical_status, result),
-            tool_name=call.name,
-            tool_input=call.input,
-            advance_index=advance_index,
-        )
+        if call.tool_call_id in _tool_result_ids(state.transcript):
+            after = state
+        else:
+            after = await self._after_result(
+                state,
+                ToolResultContent(call.tool_call_id, canonical_status, result),
+                tool_name=call.name,
+                tool_input=call.input,
+                advance_index=advance_index,
+            )
         if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
-        if ran_spawn or child_fold:
+        still_live = self._child_ref(after, call.tool_call_id) is not None
+        if ran_spawn or child_fold or still_live:
             after = self._sync_active_children(
                 after,
                 tuple(

@@ -1095,6 +1095,45 @@ async def test_cost_rollup_completed_reuse_counts_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_flag_off_completed_reuse_drops_child_and_counts_result_once() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text()])
+    runtime = RecordingSubagents(inner)
+    h = harness(_two_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    assert _child_by_id(parked.loop_state, "s1") is not None
+    assert _child_by_id(parked.loop_state, "s2") is None
+    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    original = h.repository.commit_phase_checkpoint
+
+    async def kill(**kwargs):
+        raise RuntimeError("killed before checkpoint")
+
+    h.repository.commit_phase_checkpoint = kill
+    with pytest.raises(RuntimeError, match="killed before checkpoint"):
+        await collect(h, parked)
+    assert ("ct_1", "s1") in h.repository.completed_tools
+    assert "child_status" not in h.repository.completed_tools[("ct_1", "s1")]
+    assert h.repository.checkpoints[-1].checkpoint_id == parked.checkpoint_id
+    h.repository.commit_phase_checkpoint = original
+    advances_before = len(runtime.advance_tickets)
+    await collect(h, parked)
+    after = h.repository.checkpoints[-1].loop_state
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+    assert results[0]["status"] == "error"
+    assert after.get("active_children") in (None, [], ())
+    assert after["active_child_run_id"] is None
+    assert _child_by_id(after, "s1") is None
+    await collect(h, h.repository.checkpoints[-1])
+    final = h.repository.checkpoints[-1].loop_state
+    results = [item for item in _tool_results(final) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+    assert _child_by_id(final, "s1") is None
+    assert len(runtime.advance_tickets) == advances_before
+
+
+@pytest.mark.asyncio
 async def test_budget_exceed_keeps_folded_result_and_cancels_siblings() -> None:
     inner, _child = _make_runtime(
         [
