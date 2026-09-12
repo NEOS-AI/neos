@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,7 @@ from neos.subagent.catalog import SpecRegistry, UnknownSpec
 from neos.subagent.fold import FoldNotReady
 from neos.subagent.memory import InMemorySubagentStore
 from neos.subagent.ports import SystemClock
-from neos.subagent.runtime import SubagentRuntime
+from neos.subagent.runtime import DEFAULT_STALE_AFTER_SEC, SubagentRuntime
 from neos.subagent.stepper import ChildStepper, REFUSED_TOOLS
 from neos.subagent.types import (
     ModelPin,
@@ -358,3 +360,83 @@ async def test_tool_execute_cancel_then_commit_stays_killed() -> None:
     assert second.status is SubagentStatus.KILLED
     assert (await store.get(first.run_id)).status is SubagentStatus.KILLED
     assert tools.calls == [("read_file.v1", {"path": "a.py"})]
+
+
+def _backdate(store: InMemorySubagentStore, run_id: str, *, age_sec: float) -> None:
+    record = store._runs[run_id]
+    store._runs[run_id] = replace(
+        record, updated_at=record.updated_at - timedelta(seconds=age_sec)
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_if_stale_marks_pending_failed_stalled() -> None:
+    runtime, store, _tools, model, events = _runtime([_text("should not run")])
+    record = await store.resolve_or_create(_ticket())
+    assert record.status is SubagentStatus.PENDING
+    _backdate(store, record.run_id, age_sec=DEFAULT_STALE_AFTER_SEC + 1)
+    now = datetime.now(UTC)
+    snap = await runtime.fail_if_stale(record.run_id, now=now)
+    assert snap.status is SubagentStatus.FAILED
+    assert snap.error_code == "stalled"
+    loaded = await store.get(record.run_id)
+    assert loaded.status is SubagentStatus.FAILED
+    assert loaded.error_code == "stalled"
+    folded = await runtime.fold(record.run_id)
+    assert folded.exit_reason == "stalled"
+    assert folded.status is SubagentStatus.FAILED
+    assert any(
+        kind == "subagent.failed" and payload.get("error_code") == "stalled"
+        for kind, payload in events.events
+    )
+    assert model.requests == []
+
+
+@pytest.mark.asyncio
+async def test_fail_if_stale_marks_running_failed_stalled() -> None:
+    runtime, store, *_ = _runtime([_tool()])
+    first = await runtime.advance(_ticket())
+    assert first.status is SubagentStatus.RUNNING
+    _backdate(store, first.run_id, age_sec=DEFAULT_STALE_AFTER_SEC)
+    snap = await runtime.fail_if_stale(first.run_id, now=datetime.now(UTC))
+    assert snap.status is SubagentStatus.FAILED
+    assert snap.error_code == "stalled"
+    folded = await runtime.fold(first.run_id)
+    assert folded.exit_reason == "stalled"
+
+
+@pytest.mark.asyncio
+async def test_fail_if_stale_leaves_fresh_run_alone() -> None:
+    runtime, store, _tools, model, events = _runtime([_text("fresh")])
+    record = await store.resolve_or_create(_ticket())
+    snap = await runtime.fail_if_stale(
+        record.run_id, now=datetime.now(UTC), stale_after_sec=990
+    )
+    assert snap.status is SubagentStatus.PENDING
+    assert snap.error_code == ""
+    loaded = await store.get(record.run_id)
+    assert loaded.status is SubagentStatus.PENDING
+    assert model.requests == []
+    assert not any(kind == "subagent.failed" for kind, _ in events.events)
+
+
+@pytest.mark.asyncio
+async def test_fail_if_stale_does_not_overwrite_terminal() -> None:
+    runtime, store, *_ = _runtime([_text("done")])
+    first = await runtime.advance(_ticket())
+    assert first.status is SubagentStatus.COMPLETED
+    _backdate(store, first.run_id, age_sec=DEFAULT_STALE_AFTER_SEC + 50)
+    snap = await runtime.fail_if_stale(
+        first.run_id, now=datetime.now(UTC), stale_after_sec=0
+    )
+    assert snap.status is SubagentStatus.COMPLETED
+    assert (await store.get(first.run_id)).status is SubagentStatus.COMPLETED
+    killed_runtime, killed_store, *_ = _runtime([_tool()])
+    running = await killed_runtime.advance(_ticket())
+    await killed_runtime.cancel(running.run_id, "aborted")
+    _backdate(killed_store, running.run_id, age_sec=DEFAULT_STALE_AFTER_SEC + 50)
+    again = await killed_runtime.fail_if_stale(
+        running.run_id, now=datetime.now(UTC), stale_after_sec=0
+    )
+    assert again.status is SubagentStatus.KILLED
+    assert (await killed_store.get(running.run_id)).error_code == "aborted"

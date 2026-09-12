@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from neos.subagent.catalog import SpecRegistry
 from neos.subagent.fold import fold_run
 from neos.subagent.ports import Clock
@@ -18,9 +20,19 @@ from neos.subagent.types import (
     SubagentTicket,
 )
 
+# Conservative default: max_turns=8 * model_timeout=120s + slack.
+DEFAULT_STALE_AFTER_SEC = 8 * 120 + 30
+_LIVE = frozenset({SubagentStatus.PENDING, SubagentStatus.RUNNING})
+
 _TERMINAL = frozenset(
     {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.KILLED}
 )
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _step_kind(status: SubagentStatus) -> StepKind:
@@ -148,6 +160,35 @@ class SubagentRuntime:
 
     async def status(self, run_id: str) -> SubagentSnapshot:
         return (await self._store.get(run_id)).snapshot()
+
+    async def fail_if_stale(
+        self,
+        run_id: str,
+        *,
+        now: datetime,
+        stale_after_sec: float = DEFAULT_STALE_AFTER_SEC,
+    ) -> SubagentSnapshot:
+        record = await self._store.get(run_id)
+        if record.status not in _LIVE:
+            return record.snapshot()
+        # <= 0: parent already decided stale (last_advanced_at vs parent clock
+        # can disagree with store updated_at, which uses wall time).
+        if stale_after_sec > 0:
+            age = (_aware(now) - _aware(record.updated_at)).total_seconds()
+            if age < stale_after_sec:
+                return record.snapshot()
+        failed = await self._store.fail(run_id, "stalled")
+        if failed.status is SubagentStatus.FAILED and failed.error_code == "stalled":
+            await self._events.emit(
+                "subagent.failed",
+                {
+                    "run_id": failed.run_id,
+                    "error_code": failed.error_code,
+                    "spec": failed.spec,
+                    "parent_kind": failed.parent_kind.value,
+                },
+            )
+        return failed.snapshot()
 
     async def cancel(self, run_id: str, reason: str) -> SubagentSnapshot:
         record = await self._store.cancel(run_id, reason)

@@ -407,7 +407,16 @@ class PostgresSubagentStore:
     async def cancel(self, run_id: str, reason: str) -> RunRecord:
         async with await self._session_factory() as session:
             async with session.begin():
-                return await self._cancel_in_session(session, run_id, reason)
+                return await self._mark_terminal_in_session(
+                    session, run_id, SubagentStatus.KILLED, reason
+                )
+
+    async def fail(self, run_id: str, error_code: str) -> RunRecord:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                return await self._mark_terminal_in_session(
+                    session, run_id, SubagentStatus.FAILED, error_code
+                )
 
     async def cancel_for_parent(
         self, parent_kind: ParentKind, parent_id: str, reason: str
@@ -425,13 +434,19 @@ class PostgresSubagentStore:
                 ).all()
                 return tuple(
                     [
-                        await self._cancel_in_session(session, row.run_id, reason)
+                        await self._mark_terminal_in_session(
+                            session, row.run_id, SubagentStatus.KILLED, reason
+                        )
                         for row in rows
                     ]
                 )
 
-    async def _cancel_in_session(
-        self, session: AsyncSession, run_id: str, reason: str
+    async def _mark_terminal_in_session(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        status: SubagentStatus,
+        error_code: str,
     ) -> RunRecord:
         row = (
             await session.execute(_SELECT_RUN_FOR_UPDATE, {"run_id": run_id})
@@ -446,13 +461,13 @@ class PostgresSubagentStore:
             _UPDATE_RUN,
             {
                 "run_id": run_id,
-                "status": SubagentStatus.KILLED.value,
+                "status": status.value,
                 "turn_count": run.turn_count,
                 "tool_count": run.tool_count,
                 "input_tokens": run.input_tokens,
                 "output_tokens": run.output_tokens,
                 "cost_micros": run.cost_micros,
-                "error_code": reason,
+                "error_code": error_code,
                 "updated_at": now,
                 "completed_at": now,
             },
