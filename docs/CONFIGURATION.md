@@ -399,9 +399,11 @@ override in env YAML (`everyday: claude-sonnet-5`). Legacy conversion does
 ### Model Routing
 
 `model_routing` maps a provider and a workload role to a role alias or a
-catalog pin. The resolver accepts either; the value it returns is always the
-pin. It only governs **automatic** workloads — a model the user picked is
-never overwritten.
+catalog pin. The resolver accepts either and returns the pin when the pick
+is a known alias or pin; unknown values pass through. Remaps apply only to
+USER/cookie strings — a stored conversation pin or a feature override is
+not rewritten. Automatic workloads that omit a model still follow the
+role default.
 
 ```yaml
 model_routing:

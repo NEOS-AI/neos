@@ -91,7 +91,7 @@ def test_recursive_planner_uses_powerful_role_without_feature_override() -> None
             role="powerful",
             feature_override=recursive.planner_model,
         ).model
-        == "claude-opus-5"
+        == model_config.catalog.role_aliases["opus-5"].current
     )
 
 
@@ -112,7 +112,7 @@ def test_explicit_recursive_planner_model_wins_over_powerful_role() -> None:
 @pytest.mark.parametrize(
     ("feature_model", "expected_model"),
     [
-        (None, "claude-opus-5"),
+        (None, model_config.catalog.role_aliases["opus-5"].current),
         ("claude-manual", "claude-manual"),
     ],
 )

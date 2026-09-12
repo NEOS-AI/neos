@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from neos.config.model_config import model_config
 from neos.config.schema import LLMConfig, ModelRoutingConfig
 from neos.utils.llm_factory import LLMFactory, get_default_model
 
@@ -84,7 +85,10 @@ def test_automatic_call_resolves_anthropic_everyday_default(monkeypatch, factory
 
     LLMFactory.create_llm(use_cache=False)
 
-    assert factory.anthropic.calls[0]["model"] == "claude-sonnet-5"
+    assert (
+        factory.anthropic.calls[0]["model"]
+        == model_config.catalog.role_aliases["sonnet-5"].current
+    )
 
 
 def test_openai_provider_resolves_openai_everyday_default(monkeypatch, factory):
@@ -121,7 +125,7 @@ def test_get_default_model_reports_the_effective_automatic_model(monkeypatch, fa
     """CLI 상태 표시는 None이 아니라 실제로 쓰일 모델을 보여줘야 한다."""
     monkeypatch.setattr("neos.utils.llm_factory.settings", _settings(llm_model=None))
 
-    assert get_default_model() == "claude-sonnet-5"
+    assert get_default_model() == model_config.catalog.role_aliases["sonnet-5"].current
     assert get_default_model("openai") == "gpt-5.6-terra"
 
 

@@ -9,6 +9,7 @@ from neos.api.models.chat_models import (
 )
 from neos.api.services import chat_service
 from neos.api.services.chat_service import ChatService, resolve_new_chat_model
+from neos.config.model_config import model_config
 from neos.services import chat_llm_service
 import neos.utils.anthropic_client as anthropic_client_module
 from neos.services.chat_llm_service import (
@@ -16,16 +17,24 @@ from neos.services.chat_llm_service import (
     resolve_conversation_chat_model,
 )
 
+pytestmark = pytest.mark.no_db
+
+_EVERYDAY = model_config.catalog.role_aliases["sonnet-5"].current
+
 
 def test_new_chat_without_selection_uses_anthropic_everyday() -> None:
     request = CreateConversationRequest()
 
     assert request.model_name is None
-    assert resolve_new_chat_model(request.model_name) == "claude-sonnet-5"
+    assert resolve_new_chat_model(request.model_name) == _EVERYDAY
 
 
 def test_explicit_chat_model_is_not_replaced() -> None:
-    assert resolve_new_chat_model("openai/gpt-4.1") == "openai/gpt-4.1"
+    assert resolve_new_chat_model("gpt-5.6-sol") == "gpt-5.6-sol"
+
+
+def test_new_chat_user_cookie_is_remapped() -> None:
+    assert resolve_new_chat_model("openai/gpt-4.1") == "gpt-5.6-sol"
 
 
 def test_stored_conversation_model_is_not_replaced() -> None:
@@ -65,7 +74,7 @@ async def test_template_creation_stores_the_everyday_role_model(monkeypatch) -> 
 
     await ChatService.create_template(name="Research", created_by="owner")
 
-    assert inserted[0][_DEFAULT_MODEL_ARG] == "claude-sonnet-5"
+    assert inserted[0][_DEFAULT_MODEL_ARG] == _EVERYDAY
 
 
 @pytest.mark.asyncio
@@ -75,10 +84,10 @@ async def test_explicit_template_model_is_not_replaced(monkeypatch) -> None:
     await ChatService.create_template(
         name="Research",
         created_by="owner",
-        default_model="openai/gpt-4.1",
+        default_model="gpt-5.6-sol",
     )
 
-    assert inserted[0][_DEFAULT_MODEL_ARG] == "openai/gpt-4.1"
+    assert inserted[0][_DEFAULT_MODEL_ARG] == "gpt-5.6-sol"
 
 
 @pytest.mark.asyncio
@@ -98,7 +107,7 @@ async def test_title_generation_uses_the_everyday_role_model(monkeypatch) -> Non
     title = await ChatService.generate_title("conversation-1", "hello there")
 
     assert title == "Generated title"
-    assert recorded["model_name"] == "claude-sonnet-5"
+    assert recorded["model_name"] == _EVERYDAY
 
 
 class _RecordingAnthropicStream:
@@ -206,12 +215,12 @@ async def test_claude_5_tool_streams_normalize_direct_sdk_kwargs(
     ]
 
     assert len(sdk_calls) == 1
-    assert sdk_calls[0]["model"] == "claude-sonnet-5"
+    assert sdk_calls[0]["model"] == _EVERYDAY
     assert sdk_calls[0]["thinking"] == {"type": "adaptive"}
     assert "temperature" not in sdk_calls[0]
     assert events[0] == {
         "type": "start",
-        "model": "claude-sonnet-5",
+        "model": _EVERYDAY,
         "provider": "anthropic",
     }
 
