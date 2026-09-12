@@ -244,6 +244,60 @@ async def test_cancel_for_parent_kills_every_active_child(
     assert statuses[done.run_id] is SubagentStatus.COMPLETED
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "write_status",
+    [SubagentStatus.RUNNING, SubagentStatus.COMPLETED],
+)
+async def test_commit_does_not_overwrite_killed_status(
+    store: InMemorySubagentStore,
+    write_status: SubagentStatus,
+) -> None:
+    run = await store.resolve_or_create(_ticket())
+    reserved = await store.reserve(run.run_id, None)
+    killed = await store.cancel(run.run_id, "stop")
+    assert killed.status is SubagentStatus.KILLED
+    assert killed.error_code == "stop"
+    snapshot = await store.commit(
+        reserved,
+        _write(
+            status=write_status,
+            turn_count=3,
+            tool_count=2,
+            input_tokens=10,
+            output_tokens=20,
+            cost_micros=30,
+            error_code="late-complete",
+        ),
+    )
+    assert snapshot.status is SubagentStatus.KILLED
+    assert snapshot.error_code == "stop"
+    assert snapshot.completed_at == killed.completed_at
+    assert snapshot.turn_count == killed.turn_count
+    assert snapshot.tool_count == killed.tool_count
+    assert snapshot.input_tokens == killed.input_tokens
+    assert snapshot.output_tokens == killed.output_tokens
+    assert snapshot.cost_micros == killed.cost_micros
+    state = await store.get_loop_state(run.run_id)
+    assert state.get("messages") == [{"role": "user", "content": "brief"}]
+    assert state.get("_placeholder") is not True
+    loaded = await store.get(run.run_id)
+    assert loaded.status is SubagentStatus.KILLED
+    assert loaded.error_code == "stop"
+
+
+def test_postgres_commit_skips_terminal_run_update() -> None:
+    source = Path("neos/subagent/postgres.py").read_text()
+    commit_src = source.split("async def commit", 1)[1].split("async def cancel", 1)[0]
+    assert "_SELECT_RUN_FOR_UPDATE" in commit_src
+    assert "_UPDATE_CHECKPOINT" in commit_src
+    assert "_UPDATE_RUN_IF_LIVE" in commit_src
+    assert "_UPDATE_RUN," not in commit_src
+    assert "AND status NOT IN ('completed', 'failed', 'killed')" in source
+    cancel_src = source.split("async def _cancel_in_session", 1)[1]
+    assert "_UPDATE_RUN," in cancel_src
+
+
 def test_migration_055_creates_subagent_tables_without_coding_fk() -> None:
     sql = _MIGRATION.read_text()
     assert "CREATE TABLE IF NOT EXISTS subagent_runs" in sql

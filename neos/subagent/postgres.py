@@ -135,6 +135,22 @@ _UPDATE_RUN = text(
      WHERE run_id = :run_id
     """
 )
+_UPDATE_RUN_IF_LIVE = text(
+    """
+    UPDATE subagent_runs
+       SET status = :status,
+           turn_count = :turn_count,
+           tool_count = :tool_count,
+           input_tokens = :input_tokens,
+           output_tokens = :output_tokens,
+           cost_micros = :cost_micros,
+           error_code = :error_code,
+           updated_at = :updated_at,
+           completed_at = :completed_at
+     WHERE run_id = :run_id
+       AND status NOT IN ('completed', 'failed', 'killed')
+    """
+)
 _LIST_PARENT = text(
     """
     SELECT run_id
@@ -350,6 +366,14 @@ class PostgresSubagentStore:
     ) -> RunRecord:
         async with await self._session_factory() as session:
             async with session.begin():
+                row = (
+                    await session.execute(
+                        _SELECT_RUN_FOR_UPDATE,
+                        {"run_id": reservation.run.run_id},
+                    )
+                ).first()
+                if row is None:
+                    raise SubagentNotFound(reservation.run.run_id)
                 now = _now()
                 await session.execute(
                     _UPDATE_CHECKPOINT,
@@ -359,26 +383,25 @@ class PostgresSubagentStore:
                         "loop_state_json": _json(write.loop_state),
                     },
                 )
-                completed_at = (
-                    now
-                    if write.status in _TERMINAL
-                    else reservation.run.completed_at
-                )
-                await session.execute(
-                    _UPDATE_RUN,
-                    {
-                        "run_id": reservation.run.run_id,
-                        "status": write.status.value,
-                        "turn_count": write.turn_count,
-                        "tool_count": write.tool_count,
-                        "input_tokens": write.input_tokens,
-                        "output_tokens": write.output_tokens,
-                        "cost_micros": write.cost_micros,
-                        "error_code": write.error_code,
-                        "updated_at": now,
-                        "completed_at": completed_at,
-                    },
-                )
+                if SubagentStatus(row.status) not in _TERMINAL:
+                    completed_at = (
+                        now if write.status in _TERMINAL else row.completed_at
+                    )
+                    await session.execute(
+                        _UPDATE_RUN_IF_LIVE,
+                        {
+                            "run_id": reservation.run.run_id,
+                            "status": write.status.value,
+                            "turn_count": write.turn_count,
+                            "tool_count": write.tool_count,
+                            "input_tokens": write.input_tokens,
+                            "output_tokens": write.output_tokens,
+                            "cost_micros": write.cost_micros,
+                            "error_code": write.error_code,
+                            "updated_at": now,
+                            "completed_at": completed_at,
+                        },
+                    )
         return await self.get(reservation.run.run_id)
 
     async def cancel(self, run_id: str, reason: str) -> RunRecord:

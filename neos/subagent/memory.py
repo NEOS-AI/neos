@@ -171,6 +171,8 @@ class InMemorySubagentStore:
                 raise SubagentNotFound(reservation.run.run_id)
             state = strip_channel_keys(dict(write.loop_state))
             row["loop_state"] = state
+            if run.status in _TERMINAL:
+                return run
             now = _now()
             completed_at = (
                 now if write.status in _TERMINAL else run.completed_at
