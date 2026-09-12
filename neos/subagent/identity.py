@@ -33,4 +33,5 @@ def strip_channel_keys(value: Any) -> Any:
 
 
 def persist_payload(value: Any) -> Any:
-    return redact_sensitive(strip_channel_keys(value))
+    # Child fold/steer read this back; do not clip last_assistant_text.
+    return redact_sensitive(strip_channel_keys(value), clip=False)

@@ -90,3 +90,18 @@ def test_persist_payload_strips_channel_keys_and_redacts_secrets() -> None:
     }
     assert "session_key" in payload
     assert payload["api_key"] == "super-secret"
+
+
+def test_persist_payload_does_not_clip_report_or_steer_text() -> None:
+    report = "r" * 2000
+    steer = "s" * 800
+    persisted = persist_payload(
+        {
+            "last_assistant_text": report,
+            "steer_applied": steer,
+            "api_key": "super-secret",
+        }
+    )
+    assert persisted["last_assistant_text"] == report
+    assert persisted["steer_applied"] == steer
+    assert persisted["api_key"] == "<redacted>"

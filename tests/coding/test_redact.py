@@ -62,3 +62,15 @@ def test_redact_sensitive_still_clips_long_strings_after_value_redaction() -> No
     assert redacted["note"].endswith("…")
     assert len(redacted["note"]) == 401
     assert token not in redacted["note"]
+
+
+def test_redact_sensitive_clip_false_keeps_long_nonsecret_strings() -> None:
+    token = "sk-" + ("e" * 20)
+    long_note = "n" * 800
+    redacted = redact_sensitive(
+        {"note": long_note, "preview": f"token {token}"},
+        clip=False,
+    )
+    assert redacted["note"] == long_note
+    assert redacted["preview"] == "token <redacted>"
+    assert token not in redacted["preview"]

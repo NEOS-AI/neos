@@ -171,6 +171,37 @@ async def test_commit_redacts_secrets_in_loop_state(
 
 
 @pytest.mark.asyncio
+async def test_commit_keeps_long_report_and_steer_for_fold(
+    store: InMemorySubagentStore,
+) -> None:
+    from neos.subagent.fold import fold_run
+
+    report = "r" * 2000
+    steer = "s" * 800
+    created = await store.resolve_or_create(_ticket())
+    reserved = await store.reserve(created.run_id, None)
+    committed = await store.commit(
+        reserved,
+        _write(
+            status=SubagentStatus.COMPLETED,
+            loop_state={
+                "last_assistant_text": report,
+                "steer_applied": steer,
+                "api_key": "super-secret",
+            },
+        ),
+    )
+    state = await store.get_loop_state(created.run_id)
+    assert state["last_assistant_text"] == report
+    assert state["steer_applied"] == steer
+    assert state["api_key"] == "<redacted>"
+    folded = fold_run(committed, state)
+    assert folded.summary == report
+    assert folded.truncated is False
+    assert folded.full_summary == ""
+
+
+@pytest.mark.asyncio
 async def test_cas_inserts_seq_one_when_no_rows_and_expected_is_none(
     store: InMemorySubagentStore,
 ) -> None:
