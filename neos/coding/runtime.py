@@ -475,6 +475,10 @@ def _coding_api_key(config: AppConfig, provider: str) -> str | None:
     return coding_credential_for(config, provider)
 
 
+def _resolve_coding_session_factory(session_factory):
+    return session_factory or db_manager.get_session
+
+
 class _NullSubagentSink:
     async def emit(self, event_type: str, payload) -> None:
         del event_type, payload
@@ -533,9 +537,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_output_bytes=execution.max_output_bytes,
         max_stdin_bytes=execution.max_stdin_bytes,
     )
-    repository = PostgresSandboxBindingRepository(
-        session_factory or db_manager.get_session
-    )
+    factory = _resolve_coding_session_factory(session_factory)
+    repository = PostgresSandboxBindingRepository(factory)
     allowlist = coding.command_allowlist if coding.command_enabled else []
     tools = CodingToolRegistry.default(
         command_allowlist=frozenset(allowlist),
@@ -593,7 +596,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         model=model,
         tools=tools,
         executor=executor,
-        session_factory=session_factory,
+        session_factory=factory,
         enabled=coding.subagent_enabled,
     )
 
@@ -670,7 +673,10 @@ def create_development_coding_runtime(
         raise RuntimeError("fake and real coding loops cannot be enabled together")
     finish_loop = None
     if config.coding_model.enabled:
-        finish_loop = _prepare_real_coding_loop(config=config)
+        finish_loop = _prepare_real_coding_loop(
+            config=config,
+            session_factory=db_manager.get_session,
+        )
     sandboxes = create_sandbox_provider(config.sandbox)
     try:
         if settings.CODING_FAKE_LOOP_ENABLED:
