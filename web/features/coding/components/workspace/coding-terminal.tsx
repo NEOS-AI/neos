@@ -6,6 +6,7 @@ import {
   buildWorkspaceSocketUrl,
   emptyPtyState,
   reducePtyFrame,
+  workspaceTicketProtocols,
 } from "@/features/coding/workspace/workspace-stream-client";
 
 export function CodingTerminal({
@@ -45,11 +46,13 @@ export function CodingTerminal({
       const url = buildWorkspaceSocketUrl({
         websocketUrl: authorization.websocket_url,
         taskId,
-        ticket: authorization.ticket,
         afterCursor: reconnectState.afterCursor,
         ptyId: reconnectState.ptyId,
       });
-      const socket = new WebSocket(url, "neos.coding.pty.v1");
+      const socket = new WebSocket(
+        url,
+        workspaceTicketProtocols("neos.coding.pty.v1", authorization.ticket)
+      );
       socketRef.current = socket;
       socket.onmessage = (message) => {
         try {

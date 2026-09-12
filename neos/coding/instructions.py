@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -10,7 +11,9 @@ from neos.coding.domain.approvals import is_denied_secret_path
 
 INSTRUCTION_CANDIDATES = ("AGENTS.md", "CLAUDE.md")
 _EXTRA_INSTRUCTION_FILES = ("CLAUDE.local.md", ".claude/CLAUDE.md")
+_RULES_DIR = Path(".claude") / "rules"
 _INCLUDE_TEXT_SUFFIXES = frozenset({".md", ".txt", ".markdown"})
+_RULE_SUFFIXES = frozenset({".md", ".markdown"})
 MAX_INSTRUCTION_BYTES = 16_384
 MAX_INCLUDE_DEPTH = 5
 _BEGIN = "----- begin workspace instructions -----"
@@ -40,10 +43,12 @@ def load_workspace_instruction_tree(
     workspace: Path,
     start: Path | None = None,
 ) -> str | None:
-    """Load AGENTS.md/CLAUDE.md from start up to workspace root.
+    """Load instruction files from start up to workspace root.
 
     Deeper files are appended after parent files so they can refine.
-    AGENTS.md wins over CLAUDE.md in the same directory.
+    AGENTS.md wins over CLAUDE.md in the same directory. Each directory
+    also contributes CLAUDE.local.md, .claude/CLAUDE.md, and markdown
+    files under .claude/rules (walk, followlinks=False).
     """
     try:
         root = workspace.resolve()
@@ -98,6 +103,34 @@ def _pick_instruction_files(
         loaded = _try_instruction_file(directory / name, workspace)
         if loaded is not None:
             picked.append(loaded)
+    picked.extend(_collect_rule_files(directory / _RULES_DIR, workspace))
+    return picked
+
+
+def _collect_rule_files(
+    rules_dir: Path, workspace: Path
+) -> list[tuple[str, str]]:
+    if rules_dir.is_symlink() or not rules_dir.is_dir():
+        return []
+    picked: list[tuple[str, str]] = []
+    for dirpath, dirnames, filenames in os.walk(rules_dir, followlinks=False):
+        current = Path(dirpath)
+        dirnames.sort()
+        filenames.sort()
+        kept: list[str] = []
+        for name in dirnames:
+            item = current / name
+            if item.is_symlink():
+                continue
+            kept.append(name)
+        dirnames[:] = kept
+        for name in filenames:
+            path = current / name
+            if path.suffix.casefold() not in _RULE_SUFFIXES:
+                continue
+            loaded = _try_instruction_file(path, workspace)
+            if loaded is not None:
+                picked.append(loaded)
     return picked
 
 

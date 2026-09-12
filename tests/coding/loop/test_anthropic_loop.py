@@ -50,6 +50,8 @@ from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.registry import CodingToolRegistry
 from tests.coding.fakes import InMemoryCodingRunRepository, RecordingCodingAuditSink
 
+pytestmark = pytest.mark.no_db
+
 NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
 
@@ -161,6 +163,7 @@ def harness(
     approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
     hooks=None,
     subagents=None,
+    command_allowlist=frozenset({"git"}),
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
@@ -174,7 +177,7 @@ def harness(
     bindings = bindings or Bindings()
     loop = AnthropicCodingLoop(
         model=model,
-        tools=CodingToolRegistry.default(command_allowlist=frozenset({"git"})),
+        tools=CodingToolRegistry.default(command_allowlist=frozenset(command_allowlist)),
         executor=executor,
         bindings=bindings,
         config=config or AnthropicLoopConfig(model="claude-test", system="code"),
@@ -335,13 +338,15 @@ async def test_remember_write_approval_adds_tool_to_approved_always() -> None:
     )
 
     await collect(h, h.repository.checkpoints[-1])
-    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
+    remembered = h.repository.checkpoints[-1].loop_state["approved_always"]
+    assert "write_file.v1:a.txt" in remembered
+    assert "write_file.v1" not in remembered
 
     events = await collect(h, h.repository.checkpoints[-1])
 
-    assert not any(event.type == "approval.requested" for event in events)
-    assert h.bindings.session.writes == 2
-    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
+    assert any(event.type == "approval.requested" for event in events)
+    assert h.bindings.session.writes == 1
+    assert "write_file.v1:a.txt" in h.repository.checkpoints[-1].loop_state["approved_always"]
 
 
 @pytest.mark.asyncio
@@ -1462,7 +1467,7 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
         transcript=(state.transcript[0],) + long_prefix,
         llm_compact_attempts=0,
     )
-    compacted, attempts = await h.loop._maybe_llm_compact(state, state.transcript)
+    compacted, attempts, _summary = await h.loop._maybe_llm_compact(state, state.transcript)
     assert attempts == 1
     assert compacted[0].content[0].text == "Fix it"
     assert "old files were edited" in compacted[1].content[0].text

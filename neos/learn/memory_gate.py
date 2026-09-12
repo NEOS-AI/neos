@@ -43,6 +43,13 @@ async def maybe_learn_ltm(
     Store or learn failures propagate. Never fall through to learn() after a
     staging error.
     """
+    from neos.learn.session_search import is_hidden_session_row
+
+    payload = dict(metadata or {})
+    if "session_id" not in payload and key.startswith("episode:"):
+        payload["session_id"] = key.split(":", 1)[1]
+    if is_hidden_session_row(payload) or str(key).startswith("episode:scheduled_"):
+        return "skipped"
     if write_approval_required():
         lesson = force_stage_on_write(
             new_lesson(

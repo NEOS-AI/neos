@@ -187,3 +187,98 @@ async def test_archive_refuses_non_terminal_tasks() -> None:
     assert (await store.get(child.run_id)).parent_id == "ct_live"
     listed = await service.list_owned("u1", limit=20)
     assert [task.task_id for task in listed] == ["ct_live"]
+
+
+async def _plant_child(store: InMemorySubagentStore, parent_id: str, tool_call_id: str):
+    child = await store.resolve_or_create(_child_ticket(parent_id, tool_call_id))
+    reserved = await store.reserve(child.run_id, None)
+    await store.commit(
+        reserved,
+        CheckpointWrite(
+            loop_state={"messages": [{"role": "user", "content": "brief"}]},
+            status=SubagentStatus.RUNNING,
+            turn_count=1,
+            tool_count=0,
+        ),
+    )
+    return child
+
+
+async def test_hard_delete_removes_only_that_parent_subagent_runs() -> None:
+    store = InMemorySubagentStore()
+    repo = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
+    )
+    await service.create_task(owner_id="u1", prompt="Keep", task_id="ct_keep")
+    await service.create_task(owner_id="u1", prompt="Drop", task_id="ct_drop")
+    victim = await _plant_child(store, "ct_drop", "toolu_1")
+    kept = await store.resolve_or_create(_child_ticket("ct_keep", "toolu_1"))
+
+    assert await service.delete("ct_drop", "u1") is True
+    assert await service.delete("ct_drop", "u2") is False
+    listed = await service.list_owned("u1", limit=20)
+    assert [task.task_id for task in listed] == ["ct_keep"]
+    assert await repo.get("ct_drop") is None
+    with pytest.raises(SubagentNotFound):
+        await store.get(victim.run_id)
+    remaining = await store.get(kept.run_id)
+    assert remaining.parent_id == "ct_keep"
+
+    retried = await store.resolve_or_create(_child_ticket("ct_drop", "toolu_retry"))
+    assert await service.delete("ct_drop", "u1") is False
+    with pytest.raises(SubagentNotFound):
+        await store.get(retried.run_id)
+    assert (await store.get(kept.run_id)).parent_id == "ct_keep"
+
+
+async def test_fail_without_archive_removes_parent_subagent_runs() -> None:
+    store = InMemorySubagentStore()
+    repo = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
+    )
+    keep = await service.create_task(owner_id="u1", prompt="Keep", task_id="ct_keep")
+    drop = await service.create_task(owner_id="u1", prompt="Drop", task_id="ct_drop")
+    await repo.save(replace(drop, status=CodingTaskStatus.RUNNING))
+    victim = await _plant_child(store, "ct_drop", "toolu_1")
+    kept = await store.resolve_or_create(_child_ticket("ct_keep", "toolu_1"))
+
+    assert await service.fail("ct_drop", "u1") is True
+    assert await service.fail("ct_drop", "u2") is False
+    failed = await repo.get("ct_drop")
+    assert failed is not None
+    assert failed.status is CodingTaskStatus.FAILED
+    listed = await service.list_owned("u1", limit=20)
+    assert {task.task_id for task in listed} == {"ct_keep", "ct_drop"}
+    with pytest.raises(SubagentNotFound):
+        await store.get(victim.run_id)
+    remaining = await store.get(kept.run_id)
+    assert remaining.parent_id == "ct_keep"
+    assert keep.status is CodingTaskStatus.QUEUED
+
+    retried = await store.resolve_or_create(_child_ticket("ct_drop", "toolu_retry"))
+    assert await service.fail("ct_drop", "u1") is True
+    with pytest.raises(SubagentNotFound):
+        await store.get(retried.run_id)
+    still = await repo.get("ct_drop")
+    assert still is not None
+    assert still.status is CodingTaskStatus.FAILED
+    assert (await store.get(kept.run_id)).parent_id == "ct_keep"
+
+
+async def test_fail_refuses_invalid_transition_and_keeps_children() -> None:
+    store = InMemorySubagentStore()
+    repo = InMemoryCodingTaskRepository()
+    service = CodingTaskService(
+        repo, InMemoryCodingEventStore(), clock=lambda: NOW, subagents=store
+    )
+    await service.create_task(owner_id="u1", prompt="Live", task_id="ct_live")
+    child = await store.resolve_or_create(_child_ticket("ct_live", "toolu_1"))
+
+    with pytest.raises(InvalidTaskTransition, match="queued.*failed"):
+        await service.fail("ct_live", "u1")
+    assert (await store.get(child.run_id)).parent_id == "ct_live"
+    live = await repo.get("ct_live")
+    assert live is not None
+    assert live.status is CodingTaskStatus.QUEUED

@@ -75,6 +75,15 @@ class InMemoryCodingTaskRepository:
         self.mark_deleted(task_id, now)
         return True
 
+    async def delete(self, task_id: str, owner_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        if task is None or task.owner_id != owner_id:
+            return False
+        self._tasks.pop(task_id, None)
+        self._last_activity_at.pop(task_id, None)
+        self._deleted_at.pop(task_id, None)
+        return True
+
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
         owned = [
             task
@@ -186,11 +195,48 @@ class CodingTaskService:
                 marker = getattr(self.tasks, "mark_deleted", None)
                 if marker is not None:
                     marker(task_id)
-        if self._subagents is not None:
-            from neos.subagent.types import ParentKind
-
-            await self._subagents.delete_for_parent(ParentKind.CODING, task_id)
+        await self._purge_parent_subagents(task_id)
         return True
+
+    async def delete(self, task_id: str, owner_id: str) -> bool:
+        raw = await self._lookup_task(task_id)
+        if raw is None:
+            await self._purge_parent_subagents(task_id)
+            return False
+        if raw.owner_id != owner_id:
+            return False
+        deleter = getattr(self.tasks, "delete", None)
+        if deleter is not None:
+            await deleter(task_id, owner_id)
+        else:
+            marker = getattr(self.tasks, "mark_deleted", None)
+            if marker is not None:
+                marker(task_id)
+        await self._purge_parent_subagents(task_id)
+        return True
+
+    async def fail(self, task_id: str, owner_id: str) -> bool:
+        task = await self.tasks.get_owned(task_id, owner_id)
+        if task is None:
+            return False
+        if task.status is not CodingTaskStatus.FAILED:
+            task = transition_task(task, CodingTaskStatus.FAILED, self._clock())
+            await self.tasks.save(task)
+        await self._purge_parent_subagents(task_id)
+        return True
+
+    async def _purge_parent_subagents(self, task_id: str) -> None:
+        if self._subagents is None:
+            return
+        from neos.subagent.types import ParentKind
+
+        await self._subagents.delete_for_parent(ParentKind.CODING, task_id)
+
+    async def _lookup_task(self, task_id: str) -> CodingTask | None:
+        getter = getattr(self.tasks, "get", None)
+        if getter is not None:
+            return await getter(task_id)
+        return None
 
     async def _owned_including_archived(
         self, task_id: str, owner_id: str

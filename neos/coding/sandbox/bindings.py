@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Callable, Protocol
@@ -75,6 +76,22 @@ class SandboxBindingRepository(Protocol):
     ) -> SandboxBinding | None: ...
 
     async def delete_admin(self, task_id: str, *, expected_version: int) -> bool: ...
+
+    async def list_bound_sandbox_ids(self) -> frozenset[str]: ...
+
+
+async def reap_unbound_idle_sandboxes(
+    provider,
+    *,
+    bound_sandbox_ids: Collection[str] = (),
+    now: datetime | None = None,
+) -> tuple[str, ...]:
+    """Release idle sandboxes that are not bound to an active coding lease."""
+    method = getattr(provider, "reap_idle", None)
+    if not callable(method):
+        return ()
+    reaped = await method(bound_sandbox_ids=bound_sandbox_ids, now=now)
+    return tuple(reaped)
 
 
 class SandboxBindingService:
@@ -314,6 +331,14 @@ class SandboxBindingService:
             raise SandboxBindingError("sandbox_binding_conflict", retryable=True)
         await self._provider.suspend(current.sandbox_id)
         return updated
+
+    async def reap_unbound_idle(self, *, now: datetime | None = None) -> tuple[str, ...]:
+        bound = await self._repository.list_bound_sandbox_ids()
+        return await reap_unbound_idle_sandboxes(
+            self._provider,
+            bound_sandbox_ids=bound,
+            now=now or self._clock(),
+        )
 
     async def destroy_terminal_admin(self, task_id: str) -> None:
         current = await self._repository.get(task_id)

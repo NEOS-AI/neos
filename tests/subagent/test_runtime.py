@@ -78,7 +78,14 @@ def _ticket(**overrides) -> SubagentTicket:
     return SubagentTicket(**payload)
 
 
-def _runtime(script, *, store=None, tools=None):
+def _runtime(
+    script,
+    *,
+    store=None,
+    tools=None,
+    input_cost_micros_per_million: int = 0,
+    output_cost_micros_per_million: int = 0,
+):
     store = store or InMemorySubagentStore()
     tools = tools or FakeToolPort()
     model = ScriptedCodingModel(script)
@@ -86,7 +93,12 @@ def _runtime(script, *, store=None, tools=None):
     runtime = SubagentRuntime(
         store=store,
         catalog=SpecRegistry(),
-        stepper=ChildStepper(model=model, tools=tools),
+        stepper=ChildStepper(
+            model=model,
+            tools=tools,
+            input_cost_micros_per_million=input_cost_micros_per_million,
+            output_cost_micros_per_million=output_cost_micros_per_million,
+        ),
         events=events,
         clock=SystemClock(),
     )
@@ -122,6 +134,60 @@ async def test_advance_completes_when_model_returns_no_tools() -> None:
     assert (await store.get(outcome.run_id)).latest_seq == 1
     assert events.events[0][0] == "subagent.started"
     assert any(kind == "subagent.completed" for kind, _ in events.events)
+
+
+@pytest.mark.asyncio
+async def test_child_cost_micros_stays_zero_without_prices() -> None:
+    runtime, store, _tools, _model, events = _runtime([_text("handler is login.py")])
+    outcome = await runtime.advance(_ticket())
+    snap = await runtime.status(outcome.run_id)
+    assert snap.input_tokens == 3
+    assert snap.output_tokens == 2
+    assert snap.cost_micros == 0
+    folded = await runtime.fold(outcome.run_id)
+    assert folded.cost_micros == 0
+    completed = next(payload for kind, payload in events.events if kind == "subagent.completed")
+    assert completed["cost_micros"] == 0
+    assert (await store.get(outcome.run_id)).cost_micros == 0
+
+
+@pytest.mark.asyncio
+async def test_child_cost_micros_uses_stepper_injected_prices() -> None:
+    runtime, store, _tools, _model, events = _runtime(
+        [_text("handler is login.py")],
+        input_cost_micros_per_million=1_000_000,
+        output_cost_micros_per_million=2_000_000,
+    )
+    outcome = await runtime.advance(_ticket())
+    snap = await runtime.status(outcome.run_id)
+    assert snap.input_tokens == 3
+    assert snap.output_tokens == 2
+    assert snap.cost_micros == 7
+    folded = await runtime.fold(outcome.run_id)
+    assert folded.cost_micros == 7
+    completed = next(payload for kind, payload in events.events if kind == "subagent.completed")
+    assert completed["cost_micros"] == 7
+    assert (await store.get(outcome.run_id)).cost_micros == 7
+
+
+@pytest.mark.asyncio
+async def test_child_cost_micros_prefers_ticket_prices() -> None:
+    runtime, store, *_ = _runtime(
+        [_text("handler is login.py")],
+        input_cost_micros_per_million=1_000_000,
+        output_cost_micros_per_million=1_000_000,
+    )
+    outcome = await runtime.advance(
+        _ticket(
+            input_cost_micros_per_million=2_000_000,
+            output_cost_micros_per_million=0,
+        )
+    )
+    snap = await runtime.status(outcome.run_id)
+    assert snap.cost_micros == 6
+    folded = await runtime.fold(outcome.run_id)
+    assert folded.cost_micros == 6
+    assert (await store.get(outcome.run_id)).cost_micros == 6
 
 
 @pytest.mark.asyncio

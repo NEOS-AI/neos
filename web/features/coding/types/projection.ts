@@ -55,6 +55,12 @@ export type CodingTextPartView = {
   last_seq: number;
 };
 
+export type CodingActiveChildView = {
+  run_id: string;
+  status?: string | null;
+  spec?: string | null;
+};
+
 export type CodingProjectionSnapshot = {
   task: CodingTask;
   active_run: CodingRunView | null;
@@ -67,6 +73,7 @@ export type CodingProjectionSnapshot = {
   latest_checkpoint: Record<string, unknown> | null;
   head_seq: number;
   connection_basis: "checkpoint";
+  active_children?: CodingActiveChildView[];
 };
 
 export type CodingProjectionState = {

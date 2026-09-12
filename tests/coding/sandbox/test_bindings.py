@@ -138,6 +138,11 @@ class Repository:
         self.current = None
         return True
 
+    async def list_bound_sandbox_ids(self) -> frozenset[str]:
+        if self.current is None:
+            return frozenset()
+        return frozenset({self.current.sandbox_id})
+
 
 def lease_for_binding(value: SandboxBinding) -> ExecutionLease:
     return lease(value.run_id)

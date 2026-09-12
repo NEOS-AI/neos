@@ -583,3 +583,81 @@ def test_anthropic_create_llm_sends_model_when_wire_id_unset(monkeypatch) -> Non
         )
 
     assert chat_anthropic.call_args.kwargs["model"] == "claude-not-in-catalog"
+
+
+# ---- catalog metrics -------------------------------------------------------
+
+
+def _resolve_count(source: str) -> float:
+    from neos.observability.metrics import get_metrics_collector
+
+    return get_metrics_collector().catalog_resolve_total.labels(
+        source=source
+    )._value.get()
+
+
+def _remap_count() -> float:
+    from neos.observability.metrics import get_metrics_collector
+
+    return get_metrics_collector().catalog_remap_total._value.get()
+
+
+def test_canonicalize_increments_resolve_total_by_source_only() -> None:
+    catalog = _catalog(
+        {
+            "models": {
+                "claude-sonnet-5": _pin(
+                    role_alias="sonnet-5",
+                    gateway_id="anthropic/claude-sonnet-5",
+                    id_forms=["claude-sonnet"],
+                )
+            },
+            "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5"}},
+            "remaps": {"old/cookie": "claude-sonnet-5"},
+        }
+    )
+
+    cases = [
+        ("sonnet-5", "role_alias"),
+        ("claude-sonnet-5", "pin"),
+        ("old/cookie", "remap"),
+        ("anthropic/claude-sonnet-5", "gateway"),
+        ("claude-sonnet", "id_form"),
+        ("not-a-model", "unknown"),
+    ]
+    for raw, source in cases:
+        before = _resolve_count(source)
+        canonicalize(raw, catalog=catalog)
+        assert _resolve_count(source) == before + 1
+
+    sample = (
+        __import__("neos.observability.metrics", fromlist=["get_metrics_collector"])
+        .get_metrics_collector()
+        .catalog_resolve_total.collect()[0]
+    )
+    for metric in sample.samples:
+        assert "id" not in metric.labels
+        assert set(metric.labels) <= {"source"}
+
+
+def test_remap_total_increments_without_raw_id_label() -> None:
+    catalog = _catalog(
+        {
+            "models": {"claude-opus-5": _pin()},
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+        }
+    )
+
+    before = _remap_count()
+    canonicalize("anthropic/claude-opus-4.5", catalog=catalog)
+    canonicalize("claude-opus-5", catalog=catalog)
+    after = _remap_count()
+
+    assert after == before + 1
+    sample = (
+        __import__("neos.observability.metrics", fromlist=["get_metrics_collector"])
+        .get_metrics_collector()
+        .catalog_remap_total.collect()[0]
+    )
+    for metric in sample.samples:
+        assert "id" not in metric.labels

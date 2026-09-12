@@ -118,6 +118,21 @@ def _resolve_declared(
     return None
 
 
+def _record_catalog_metrics(source: IdentitySource | None, *, remapped: bool) -> None:
+    """Cardinality-safe: source label only, never a raw id."""
+    try:
+        from neos.observability.metrics import get_metrics_collector
+
+        collector = get_metrics_collector()
+        collector.catalog_resolve_total.labels(
+            source=source or "unknown"
+        ).inc()
+        if remapped:
+            collector.catalog_remap_total.inc()
+    except Exception:
+        return
+
+
 def canonicalize(
     raw: str,
     *,
@@ -137,6 +152,7 @@ def canonicalize(
     if apply_remap:
         while current in catalog.remaps:
             if current in seen or len(seen) >= _MAX_REMAP_HOPS:
+                _record_catalog_metrics("remap", remapped=True)
                 raise RemapCycleError(
                     f"remap cycle involving {current!r} (seen {seen})"
                 )
@@ -144,12 +160,16 @@ def canonicalize(
             current = catalog.remaps[current]
         if seen:
             if current not in catalog.models:
+                _record_catalog_metrics(None, remapped=True)
                 return None
-            return _identity_from_pin(catalog, current, "remap")
+            ident = _identity_from_pin(catalog, current, "remap")
+            _record_catalog_metrics(ident.source, remapped=True)
+            return ident
 
     by_gateway, by_id_form = _lookup_surfaces(catalog)
     hit = _resolve_declared(current, catalog, by_gateway, by_id_form)
     if hit is not None:
+        _record_catalog_metrics(hit.source, remapped=False)
         return hit
 
     # Spelling-only retry, once. Turns anthropic/claude-sonnet-5 into the
@@ -157,7 +177,10 @@ def canonicalize(
     # anthropic/claude-haiku-4.5 into claude-haiku-4-5-20251001.
     spelled = catalog_shaped(current)
     if spelled != current:
-        return _resolve_declared(spelled, catalog, by_gateway, by_id_form)
+        hit = _resolve_declared(spelled, catalog, by_gateway, by_id_form)
+        _record_catalog_metrics(hit.source if hit else None, remapped=False)
+        return hit
+    _record_catalog_metrics(None, remapped=False)
     return None
 
 

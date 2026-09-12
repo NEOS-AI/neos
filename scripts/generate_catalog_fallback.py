@@ -92,12 +92,16 @@ def render() -> str:
         "/** raw cookie / gateway id → gateway_id still in models[] */\n"
         f"export const generatedRemaps: Record<string, string> = {_ts_record(payload.remaps)};\n"
         "\n"
+        "/** helper slot → catalog pin (title / artifact / fast) */\n"
+        f"export const generatedAux: Record<string, string> = {_ts_record(catalog.aux)};\n"
+        "\n"
         "export const generatedCatalog = {\n"
         "  version: 1,\n"
         "  default_id: generatedDefaultId,\n"
         "  default_pin: generatedDefaultPin,\n"
         "  models: generatedModels,\n"
         "  remaps: generatedRemaps,\n"
+        "  aux: generatedAux,\n"
         "};\n"
     )
 

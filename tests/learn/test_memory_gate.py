@@ -89,3 +89,23 @@ async def test_store_failure_is_fail_closed_and_does_not_learn(
         )
 
     learn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_origin_is_not_injected_as_user_lesson(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from neos.config.settings import settings
+
+    store = reset_lesson_store()
+    monkeypatch.setattr(settings.config.learn, "write_approval", True)
+
+    result = await maybe_learn_ltm(
+        "u1",
+        key="episode:scheduled_abc",
+        knowledge="Query about nightly: ticker closed at 12",
+        metadata={"origin": "scheduler", "category": "episode"},
+    )
+
+    assert result == "skipped"
+    assert store.list(namespace("u1")) == ()

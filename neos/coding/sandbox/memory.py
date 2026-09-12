@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import fcntl
+import hashlib
 import os
 import pty
 import re
@@ -12,9 +13,9 @@ import struct
 import tempfile
 import termios
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 
 from neos.coding.sandbox.base import (
@@ -68,6 +69,36 @@ _GUEST_PATH = "/usr/bin:/bin"
 _GUEST_LANG = "C.UTF-8"
 _RESERVED_GUEST_ENV = frozenset({"PATH", "HOME", "TMPDIR"})
 _DEFAULT_SEARCH_CAP_BYTES = 1024 * 1024
+_MAX_EDIT_FILE_BYTES = 10 * 1024 * 1024
+
+
+def changed_files_since(
+    workspace: Path, revision: float | int | str
+) -> tuple[str, ...]:
+    stamp = _revision_mtime(revision)
+    found: list[str] = []
+    rules = load_ignore_rules(workspace)
+    for item, relative in iter_workspace_files(workspace, rules=rules):
+        try:
+            mtime = item.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > stamp:
+            found.append(relative)
+    found.sort()
+    return tuple(found)
+
+
+def _revision_mtime(revision: float | int | str) -> float:
+    if isinstance(revision, (int, float)):
+        return float(revision)
+    text = str(revision).strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return 0.0
 
 
 class MemoryPty:
@@ -223,6 +254,8 @@ class MemorySandboxProvider:
         pty_replay_bytes: int = 1024 * 1024,
         watcher_debounce_sec: float = 0.05,
         watcher_replay_events: int = 1024,
+        clock: Callable[[], datetime] | None = None,
+        idle_timeout: timedelta | None = None,
     ) -> None:
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
@@ -236,6 +269,8 @@ class MemorySandboxProvider:
         self._pty_replay_bytes = pty_replay_bytes
         self._watcher_debounce_sec = watcher_debounce_sec
         self._watcher_replay_events = watcher_replay_events
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._idle_timeout = idle_timeout or timedelta(seconds=900)
         self._records: dict[str, _MemorySandboxRecord] = {}
         self._lock = asyncio.Lock()
 
@@ -245,7 +280,7 @@ class MemorySandboxProvider:
         owner_id: str,
         limits: SandboxLimits,
     ) -> Sandbox:
-        now = datetime.now(UTC)
+        now = self._clock()
         sandbox_id = f"sb_{uuid.uuid4().hex}"
         workspace = self._root / sandbox_id
         sandbox = Sandbox.creating(
@@ -254,6 +289,7 @@ class MemorySandboxProvider:
             limits,
             now,
             provider="memory",
+            idle_expires_at=now + self._idle_timeout,
         )
         workspace.mkdir(mode=0o700)
         running = sandbox.transition(SandboxState.RUNNING, now)
@@ -422,14 +458,48 @@ class MemorySandboxProvider:
             )
         return record
 
+    def _touch_idle(self, record: _MemorySandboxRecord) -> None:
+        now = self._clock()
+        record.sandbox = replace(
+            record.sandbox,
+            idle_expires_at=now + self._idle_timeout,
+            updated_at=now,
+        )
+
+    async def list_sandboxes(self) -> tuple[Sandbox, ...]:
+        async with self._lock:
+            return tuple(record.sandbox for record in self._records.values())
+
+    async def reap_idle(
+        self,
+        *,
+        bound_sandbox_ids: Collection[str] = (),
+        now: datetime | None = None,
+    ) -> tuple[str, ...]:
+        now = now or self._clock()
+        bound = set(bound_sandbox_ids)
+        async with self._lock:
+            candidates = tuple(
+                sandbox_id
+                for sandbox_id, record in self._records.items()
+                if sandbox_id not in bound
+                and record.sandbox.idle_expires_at is not None
+                and record.sandbox.idle_expires_at <= now
+            )
+        for sandbox_id in candidates:
+            await self.destroy(sandbox_id)
+        return candidates
+
     async def _increment_revision(
         self,
         record: _MemorySandboxRecord,
     ) -> int:
+        now = self._clock()
         record.sandbox = replace(
             record.sandbox,
             workspace_revision=record.sandbox.workspace_revision + 1,
-            updated_at=datetime.now(UTC),
+            updated_at=now,
+            idle_expires_at=now + self._idle_timeout,
         )
         return record.sandbox.workspace_revision
 
@@ -478,6 +548,18 @@ class MemorySandboxSession:
     async def workspace_revision(self) -> int:
         await self._require_running()
         return self._record.sandbox.workspace_revision
+
+    async def changed_files_since(
+        self, revision: float | int | str
+    ) -> tuple[str, ...]:
+        await self._require_running()
+        stamp: float | int | str = revision
+        if isinstance(revision, str) and revision.startswith("ss_"):
+            manifest = await asyncio.to_thread(
+                self._provider._snapshot_store.load_manifest, revision
+            )
+            stamp = manifest.created_at.timestamp()
+        return changed_files_since(self._record.workspace, stamp)
 
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
         await self._require_running()
@@ -557,6 +639,26 @@ class MemorySandboxSession:
             _read_file_range, item, offset, limit, max_bytes
         )
 
+    async def read_file_for_edit(self, path: str) -> bytes:
+        await self._require_running()
+        item = resolve_readable_workspace_path(self._record.workspace, path)
+        if item.is_symlink() or not item.is_file():
+            raise SandboxPolicyViolation("workspace_path_is_not_file")
+        max_bytes = max(
+            _MAX_EDIT_FILE_BYTES,
+            self._record.sandbox.limits.max_output_bytes,
+        )
+        if item.stat().st_size > max_bytes:
+            raise SandboxPolicyViolation("file_edit_limit_exceeded")
+        return await asyncio.to_thread(item.read_bytes)
+
+    async def hash_file(self, path: str) -> str:
+        await self._require_running()
+        item = resolve_readable_workspace_path(self._record.workspace, path)
+        if item.is_symlink() or not item.is_file():
+            raise SandboxPolicyViolation("workspace_path_is_not_file")
+        return await asyncio.to_thread(_hash_file, item)
+
     async def write_file(
         self, path: str, content: bytes, *, parents: bool = True
     ) -> int:
@@ -614,6 +716,147 @@ class MemorySandboxSession:
                         if existed
                         else WorkspaceChangeKind.CREATED
                     ),
+                ),
+                revision=revision,
+            )
+            return revision
+
+    async def mkdir(self, path: str, *, parents: bool = False) -> int:
+        await self._require_running()
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._require_running()
+            if parents:
+                self._create_safe_parents(relative)
+            else:
+                parent = relative.parent
+                if parent.parts and str(parent) not in {".", ""}:
+                    parent_item = resolve_mutable_workspace_path(
+                        self._record.workspace, parent.as_posix()
+                    )
+                    if not parent_item.exists() or not parent_item.is_dir():
+                        raise SandboxPolicyViolation(
+                            "workspace_path_not_resolvable"
+                        )
+                item = resolve_mutable_workspace_path(
+                    self._record.workspace, relative.as_posix()
+                )
+                if item.exists():
+                    raise SandboxPolicyViolation("workspace_path_exists")
+                item.mkdir()
+            revision = await self._provider._increment_revision(self._record)
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=relative.as_posix(),
+                    kind=WorkspaceChangeKind.CREATED,
+                ),
+                revision=revision,
+            )
+            return revision
+
+    async def rm(self, path: str, *, recursive: bool = False) -> int:
+        await self._require_running()
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._require_running()
+            item = resolve_mutable_workspace_path(
+                self._record.workspace, relative.as_posix()
+            )
+            if not item.exists() and not item.is_symlink():
+                raise SandboxPolicyViolation("workspace_path_not_resolvable")
+            if item.is_dir() and not item.is_symlink():
+                if any(item.iterdir()) and not recursive:
+                    raise SandboxPolicyViolation("workspace_directory_not_empty")
+                if recursive:
+                    shutil.rmtree(item)
+                else:
+                    item.rmdir()
+            else:
+                item.unlink()
+            revision = await self._provider._increment_revision(self._record)
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=relative.as_posix(),
+                    kind=WorkspaceChangeKind.DELETED,
+                ),
+                revision=revision,
+            )
+            return revision
+
+    async def mv(
+        self, src: str, dest: str, *, overwrite: bool = False
+    ) -> int:
+        await self._require_running()
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        src_rel = ensure_mutable_workspace_path(src)
+        dest_rel = ensure_mutable_workspace_path(dest)
+        if is_denied_secret_path(src_rel.as_posix()) or is_denied_secret_path(
+            dest_rel.as_posix()
+        ):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._require_running()
+            src_item = resolve_mutable_workspace_path(
+                self._record.workspace, src_rel.as_posix()
+            )
+            dest_item = resolve_mutable_workspace_path(
+                self._record.workspace, dest_rel.as_posix()
+            )
+            if not src_item.exists() and not src_item.is_symlink():
+                raise SandboxPolicyViolation("workspace_path_not_resolvable")
+            dest_parent = dest_item.parent
+            if not dest_parent.exists() or not dest_parent.is_dir():
+                raise SandboxPolicyViolation("workspace_path_not_resolvable")
+            if dest_item.exists() or dest_item.is_symlink():
+                if not overwrite:
+                    raise SandboxPolicyViolation("workspace_path_exists")
+                if dest_item.is_dir() and not dest_item.is_symlink():
+                    shutil.rmtree(dest_item)
+                else:
+                    dest_item.unlink()
+            src_item.rename(dest_item)
+            revision = await self._provider._increment_revision(self._record)
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=dest_rel.as_posix(),
+                    kind=WorkspaceChangeKind.MODIFIED,
+                ),
+                revision=revision,
+            )
+            return revision
+
+    async def chmod(self, path: str, mode: int) -> int:
+        await self._require_running()
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()) and mode & 0o002:
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._require_running()
+            item = resolve_mutable_workspace_path(
+                self._record.workspace, relative.as_posix()
+            )
+            if not item.exists() and not item.is_symlink():
+                raise SandboxPolicyViolation("workspace_path_not_resolvable")
+            try:
+                os.chmod(item, mode, follow_symlinks=False)
+            except NotImplementedError:
+                os.chmod(item, mode)
+            revision = await self._provider._increment_revision(self._record)
+            await self._record.watcher.record(
+                WorkspaceChange(
+                    path=relative.as_posix(),
+                    kind=WorkspaceChangeKind.MODIFIED,
                 ),
                 revision=revision,
             )
@@ -741,24 +984,45 @@ class MemorySandboxSession:
                 return tuple(matches)
         return tuple(matches)
 
-    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+    async def glob_files(
+        self,
+        pattern: str,
+        *,
+        limit: int = 100,
+        path: str | None = None,
+    ) -> tuple[str, ...]:
         await self._require_running()
         from neos.coding.sandbox.paths import normalize_workspace_path
 
         if not pattern or limit < 1:
             raise SandboxPolicyViolation("invalid_glob_request")
         normalize_workspace_path(pattern.replace("*", "x").replace("?", "x") or "x")
-        # Keep lex path order; mtime sort would break existing glob assertions.
-        found: list[str] = []
-        rules = load_ignore_rules(self._record.workspace)
-        for _item, relative in iter_workspace_files(
-            self._record.workspace, rules=rules
+        workspace = self._record.workspace
+        start = (
+            resolve_workspace_path(workspace, path)
+            if path is not None
+            else workspace
+        )
+        found: list[tuple[float, str]] = []
+        rules = load_ignore_rules(workspace)
+        for item, relative in iter_workspace_files(
+            workspace, root=start, rules=rules
         ):
-            if self._matches_path(relative, pattern):
-                found.append(relative)
-                if len(found) >= limit:
-                    break
-        return tuple(found)
+            rel_from_start = (
+                item.relative_to(start).as_posix()
+                if start != workspace
+                else relative
+            )
+            if self._matches_path(relative, pattern) or self._matches_path(
+                rel_from_start, pattern
+            ):
+                try:
+                    mtime = item.stat().st_mtime
+                except OSError:
+                    mtime = 0.0
+                found.append((mtime, relative))
+        found.sort(key=lambda pair: (-pair[0], pair[1]))
+        return tuple(relative for _mtime, relative in found[:limit])
 
     async def git_status(self) -> CommandResult:
         return await self.execute(
@@ -905,7 +1169,8 @@ class MemorySandboxSession:
         return self._record.watcher.open(after_cursor=after_cursor)
 
     async def _require_running(self) -> None:
-        await self._provider._running_record(self.sandbox_id)
+        record = await self._provider._running_record(self.sandbox_id)
+        self._provider._touch_idle(record)
 
     def _create_safe_parents(self, parent: PurePosixPath) -> None:
         current = PurePosixPath(".")
@@ -1054,6 +1319,17 @@ def _file_is_binary(item: Path) -> bool:
     except OSError:
         return True
     return b"\0" in sample
+
+
+def _hash_file(item: Path) -> str:
+    digest = hashlib.sha256()
+    with item.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_file_range(

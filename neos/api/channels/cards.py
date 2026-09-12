@@ -14,11 +14,16 @@ ACTION_APPROVE = "neos_code_approve"
 ACTION_DENY = "neos_code_deny"
 ACTION_PREFIX = "neos_code_"
 
+_OUTCOME_PREFIX = re.compile(r"^(?:halt|cancel|drop|park):\s*")
 _STARTED = re.compile(r"^Started coding task (\S+)$")
 _STOPPED = re.compile(r"^Stopped (\S+)$")
 _APPROVAL = re.compile(r"^(\S+) (approved|denied)$")
 _STATUS = re.compile(r"^(\S+) (\S+)$")
 _WAITING = re.compile(r"^(\S+) waiting_approval(?: (\S+)(?: (\S+))?)?$")
+
+
+def _card_text(text: str) -> str:
+    return _OUTCOME_PREFIX.sub("", (text or "").strip())
 
 _TEXT_ONLY = frozenset(
     {
@@ -153,7 +158,7 @@ def discord_buttons(text: str) -> list[dict[str, str]] | None:
 
 
 def coding_blocks(text: str) -> list[dict[str, Any]] | None:
-    stripped = (text or "").strip()
+    stripped = _card_text(text)
     if not stripped or stripped in _TEXT_ONLY:
         return None
 

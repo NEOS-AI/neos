@@ -130,10 +130,18 @@ export const generatedRemaps: Record<string, string> = {
   "xai/grok-code-fast-1-thinking": "anthropic/claude-sonnet-5",
 };
 
+/** helper slot → catalog pin (title / artifact / fast) */
+export const generatedAux: Record<string, string> = {
+  "fast": "claude-haiku-4-5-20251001",
+  "title": "claude-haiku-4-5-20251001",
+  "artifact": "claude-haiku-4-5-20251001",
+};
+
 export const generatedCatalog = {
   version: 1,
   default_id: generatedDefaultId,
   default_pin: generatedDefaultPin,
   models: generatedModels,
   remaps: generatedRemaps,
+  aux: generatedAux,
 };

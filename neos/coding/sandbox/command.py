@@ -90,9 +90,15 @@ class DockerCommandRunner:
 class DockerInteractiveProcess:
     """Interactive Docker CLI process attached to a local POSIX PTY."""
 
-    def __init__(self, process: asyncio.subprocess.Process, master_fd: int) -> None:
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        master_fd: int,
+        guest: str | None = None,
+    ) -> None:
         self._process = process
         self._master_fd = master_fd
+        self._guest = guest
 
     @classmethod
     async def start(cls, *args: str) -> DockerInteractiveProcess:
@@ -113,7 +119,7 @@ class DockerInteractiveProcess:
             raise SandboxUnavailable("docker_cli_unavailable") from error
         finally:
             os.close(slave_fd)
-        return cls(process, master_fd)
+        return cls(process, master_fd, _docker_guest_id(args))
 
     async def read(self, maximum: int) -> bytes:
         loop = asyncio.get_running_loop()
@@ -147,6 +153,10 @@ class DockerInteractiveProcess:
         )
 
     async def terminate(self) -> None:
+        # Interactive `docker exec` targets the long-lived sandbox
+        # container name. Kill only the CLI process group — same as
+        # stream overflow. `_terminate_docker_process` is for timeout
+        # of a container the CLI actually owns (`docker run`).
         await terminate_process_group(self._process)
 
     async def wait(self) -> int:
@@ -302,7 +312,12 @@ def _docker_guest_id(args: tuple[str, ...]) -> str | None:
             return target if target and "\0" not in target else None
         if arg.startswith("-"):
             key, separator, _value = arg.partition("=")
-            if separator or key not in _DOCKER_VALUE_OPTS:
+            # `docker exec/run -t` is --tty. `-t` is --time only on
+            # stop/restart/rm.
+            takes_value = key in _DOCKER_VALUE_OPTS and not (
+                key == "-t" and args[0] in {"exec", "run", "create"}
+            )
+            if separator or not takes_value:
                 index += 1
                 continue
             index += 2

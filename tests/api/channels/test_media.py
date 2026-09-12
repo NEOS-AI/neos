@@ -254,3 +254,105 @@ async def test_telegram_empty_photo_dispatches_when_media_on(
     await adapter._handle_message(update, None)
     assert len(gateway.calls) == 1
     assert gateway.calls[0].metadata["attachments"][0]["bytes"] == b"photo"
+
+
+def _telegram_video_update():
+    from tests.api.channels.test_telegram_adapter import _fake_update
+
+    update = _fake_update(text="")
+    update.effective_message.text = None
+    update.effective_message.caption = None
+    update.effective_message.photo = None
+    update.effective_message.document = None
+    update.effective_message.video = SimpleNamespace(
+        file_id="vid1",
+        file_name="clip.mp4",
+        mime_type="video/mp4",
+        file_size=11,
+    )
+    return update
+
+
+async def test_telegram_video_is_ignored_when_inbound_media_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.api.channels.test_telegram_adapter import (
+        ALLOWLISTED_USER_ID,
+        FakeGateway,
+        _make_adapter,
+    )
+
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=[str(ALLOWLISTED_USER_ID)],
+        inbound_media=False,
+        require_mention=False,
+    )
+    gateway = FakeGateway()
+    adapter = _make_adapter(gateway)
+    fetched: list[str] = []
+
+    async def fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        fetched.append(url)
+        return 200, b"video-bytes"
+
+    adapter._media_fetch = fetch  # type: ignore[attr-defined]
+    adapter._media_resolve = lambda _host: ["1.2.3.4"]  # type: ignore[attr-defined]
+    update = _telegram_video_update()
+    await adapter._handle_message(update, None)
+    assert gateway.calls == []
+    assert fetched == []
+
+
+async def test_telegram_video_downloads_when_inbound_media_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.api.channels.test_telegram_adapter import (
+        ALLOWLISTED_USER_ID,
+        FakeGateway,
+        _make_adapter,
+    )
+
+    install_channel_settings(
+        monkeypatch,
+        allowed_users=[str(ALLOWLISTED_USER_ID)],
+        inbound_media=True,
+        require_mention=False,
+    )
+    gateway = FakeGateway()
+    adapter = _make_adapter(gateway)
+
+    async def fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        return 200, b"video-bytes"
+
+    adapter._media_fetch = fetch  # type: ignore[attr-defined]
+    adapter._media_resolve = lambda _host: ["1.2.3.4"]  # type: ignore[attr-defined]
+
+    async def get_file(file_id: str) -> SimpleNamespace:
+        assert file_id == "vid1"
+        return SimpleNamespace(file_path="videos/clip.mp4")
+
+    adapter._app.bot.get_file = get_file
+    adapter._app.bot.token = "test-token"
+    update = _telegram_video_update()
+    await adapter._handle_message(update, None)
+    assert len(gateway.calls) == 1
+    attachment = gateway.calls[0].metadata["attachments"][0]
+    assert attachment["name"] == "clip.mp4"
+    assert attachment["content_type"] == "video/mp4"
+    assert attachment["bytes"] == b"video-bytes"
+
+
+def test_telegram_inbound_filters_include_video() -> None:
+    from neos.api.channels.adapters.telegram import telegram_inbound_filters
+
+    video = object()
+    filters = SimpleNamespace(
+        TEXT="text",
+        PHOTO="photo",
+        Document=SimpleNamespace(ALL="docs"),
+        CAPTION="caption",
+        VIDEO=video,
+    )
+    inbound = telegram_inbound_filters(filters)
+    assert video in inbound

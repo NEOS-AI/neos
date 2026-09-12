@@ -3,6 +3,8 @@ import base64
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
+from neos.api.handlers.coding_ws_handlers import ticket_from_websocket
+
 from neos.coding.application.workspace_stream_service import (
     CodingWorkspaceStreamService,
     WorkspaceStreamConflict,
@@ -52,7 +54,6 @@ def _watcher_frame(event) -> dict:
 async def coding_workspace_watcher(
     websocket: WebSocket,
     task_id: str = Query(...),
-    ticket: str = Query(...),
     after_cursor: int = Query(0, ge=0),
     tickets: WorkspaceTicketStore = Depends(get_workspace_ticket_store),
     streams: CodingWorkspaceStreamService = Depends(get_workspace_stream_service),
@@ -60,6 +61,10 @@ async def coding_workspace_watcher(
     protocol = "neos.coding.workspace.v1"
     if not _has_protocol(websocket, protocol):
         await websocket.close(code=4406, reason="Unsupported protocol")
+        return
+    ticket = ticket_from_websocket(websocket)
+    if not ticket:
+        await websocket.close(code=4401, reason="Authentication required")
         return
     owner_id = await tickets.consume(
         ticket,
@@ -114,7 +119,6 @@ def _pty_frame(event) -> dict:
 async def coding_workspace_pty(
     websocket: WebSocket,
     task_id: str = Query(...),
-    ticket: str = Query(...),
     pty_id: str | None = Query(None),
     after_cursor: int = Query(0, ge=0),
     tickets: WorkspaceTicketStore = Depends(get_workspace_ticket_store),
@@ -123,6 +127,10 @@ async def coding_workspace_pty(
     protocol = "neos.coding.pty.v1"
     if not _has_protocol(websocket, protocol):
         await websocket.close(code=4406, reason="Unsupported protocol")
+        return
+    ticket = ticket_from_websocket(websocket)
+    if not ticket:
+        await websocket.close(code=4401, reason="Authentication required")
         return
     owner_id = await tickets.consume(
         ticket,

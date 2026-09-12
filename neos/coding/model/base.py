@@ -19,9 +19,18 @@ class ModelLimits:
 class ModelUsage:
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if self.input_tokens < 0 or self.output_tokens < 0:
+        if (
+            self.input_tokens < 0
+            or self.output_tokens < 0
+            or self.cache_read_tokens < 0
+            or self.cache_write_tokens < 0
+            or self.reasoning_tokens < 0
+        ):
             raise ValueError("model usage cannot be negative")
 
 

@@ -83,6 +83,8 @@ class SubagentTicket:
     run_id: str | None = None  # set on resume
     lineage_kind: LineageKind = LineageKind.DELEGATE
     pending_steer: str = ""
+    input_cost_micros_per_million: int = 0
+    output_cost_micros_per_million: int = 0
 
     def __post_init__(self) -> None:
         if self.lineage_kind is not LineageKind.DELEGATE:

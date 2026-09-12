@@ -1,5 +1,8 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.no_db
 
 from neos.api.handlers.coding_handlers import get_coding_service
 from neos.api.handlers.coding_handlers import get_ws_ticket_store
@@ -280,6 +283,8 @@ def test_websocket_live_gap_forces_resync() -> None:
 def test_websocket_accepts_single_use_task_ticket() -> None:
     import asyncio
 
+    import pytest
+
     service = CodingTaskService(
         InMemoryCodingTaskRepository(), InMemoryCodingEventStore()
     )
@@ -292,12 +297,36 @@ def test_websocket_accepts_single_use_task_ticket() -> None:
     app.dependency_overrides[get_ws_ticket_store] = lambda: tickets
 
     with TestClient(app).websocket_connect(
-        f"/api/v1/coding/ws?task_id={task.task_id}&after_seq=0&ticket={ticket}",
+        f"/api/v1/coding/ws?task_id={task.task_id}&after_seq=0",
+        headers={"X-Neos-Ticket": ticket},
         subprotocols=["neos.coding.v1"],
     ) as socket:
         assert socket.receive_json()["type"] == "hello"
 
+    with pytest.raises(Exception):
+        with TestClient(app).websocket_connect(
+            f"/api/v1/coding/ws?task_id={task.task_id}",
+            headers={"X-Neos-Ticket": ticket},
+            subprotocols=["neos.coding.v1"],
+        ):
+            pass
+
+
+def test_websocket_rejects_querystring_ticket() -> None:
+    import asyncio
+
     import pytest
+
+    service = CodingTaskService(
+        InMemoryCodingTaskRepository(), InMemoryCodingEventStore()
+    )
+    task = asyncio.run(service.create_task(owner_id="u1", prompt="Fix it"))
+    tickets = InMemoryWsTicketStore()
+    ticket = asyncio.run(tickets.issue(owner_id="u1", task_id=task.task_id))
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.dependency_overrides[get_coding_service] = lambda: service
+    app.dependency_overrides[get_ws_ticket_store] = lambda: tickets
 
     with pytest.raises(Exception):
         with TestClient(app).websocket_connect(

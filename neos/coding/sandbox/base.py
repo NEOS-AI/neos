@@ -245,6 +245,16 @@ class SandboxSession(Protocol):
         self, path: str, content: bytes, *, parents: bool = True
     ) -> int: ...
 
+    async def mkdir(self, path: str, *, parents: bool = False) -> int: ...
+
+    async def rm(self, path: str, *, recursive: bool = False) -> int: ...
+
+    async def mv(
+        self, src: str, dest: str, *, overwrite: bool = False
+    ) -> int: ...
+
+    async def chmod(self, path: str, mode: int) -> int: ...
+
     async def write_file_if_revision(
         self,
         path: str,
@@ -271,7 +281,11 @@ class SandboxSession(Protocol):
     ) -> tuple[SearchMatch, ...]: ...
 
     async def glob_files(
-        self, pattern: str, *, limit: int = 100
+        self,
+        pattern: str,
+        *,
+        limit: int = 100,
+        path: str | None = None,
     ) -> tuple[str, ...]: ...
 
     async def git_status(self) -> CommandResult: ...

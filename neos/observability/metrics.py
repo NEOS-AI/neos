@@ -413,6 +413,24 @@ class EnterpriseMetricsCollector:
             registry=self.registry
         )
 
+        # Catalog identity. Labels are cardinality-safe: never a raw model id.
+        self.catalog_resolve_total = Counter(
+            "neos_catalog_resolve_total",
+            "Catalog canonicalize results by identity source",
+            ["source"],
+            registry=self.registry,
+        )
+        self.catalog_remap_total = Counter(
+            "neos_catalog_remap_total",
+            "Catalog remaps applied to a user/cookie string",
+            registry=self.registry,
+        )
+        self.catalog_live_unknown_total = Counter(
+            "neos_catalog_live_unknown_total",
+            "Live Anthropic ids not present in the YAML catalog",
+            registry=self.registry,
+        )
+
         # === Database Metrics ===
 
         self.db_queries_total = Counter(

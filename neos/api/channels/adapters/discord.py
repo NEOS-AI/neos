@@ -56,6 +56,9 @@ class DiscordAdapter(ChannelAdapterBase):
         self._gateway = gateway
         self._client: Optional[Any] = None   # discord.Client
         self._bot_task: Optional[asyncio.Task] = None
+        register = getattr(gateway, "register_adapter", None)
+        if callable(register):
+            register(self)
 
     async def start(self) -> None:
         """Discord 봇을 시작한다."""
@@ -251,8 +254,26 @@ class DiscordAdapter(ChannelAdapterBase):
     ) -> None:
         from neos.api.channels.outbound import resolve_outbound_file
 
-        if resolve_outbound_file(path, allow_dirs) is None:
+        resolved = resolve_outbound_file(path, allow_dirs)
+        if resolved is None:
             return
+        if not self._client:
+            logger.warning("[DiscordAdapter] send_file called before start()")
+            return
+        try:
+            import discord
+
+            channel = self._client.get_channel(int(channel_id))
+            if channel is None:
+                channel = await self._client.fetch_channel(int(channel_id))
+            target = await _fetch_reply_target(channel, thread_id)
+            payload = discord.File(str(resolved))
+            if target is not None and callable(getattr(target, "send", None)):
+                await target.send(file=payload)
+            elif channel is not None:
+                await channel.send(file=payload)
+        except Exception as e:
+            logger.warning("[DiscordAdapter] send_file failed to %s: %s", channel_id, e)
 
     async def _handle_message(self, message: Any) -> None:
         """on_message 이벤트 핸들러."""

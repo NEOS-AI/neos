@@ -319,9 +319,22 @@ async def test_verify_end_turn_without_verdict_stays_in_verify() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_end_turn_with_verdict_is_terminal() -> None:
+async def test_verify_pass_without_command_stays_in_verify() -> None:
     h = harness(
         [[TextDelta("ran pytest\nVERDICT: PASS"), ModelCompleted("end_turn", ModelUsage(2, 1))]]
+    )
+    await collect(h, _phase_checkpoint(h, "verify"))
+
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["phase"] == "verify"
+    assert state["terminal_pending"] is False
+    assert state.get("verdict") not in {"PASS"}
+
+
+@pytest.mark.asyncio
+async def test_verify_end_turn_with_verdict_is_terminal() -> None:
+    h = harness(
+        [[TextDelta("Command: pytest -q\nVERDICT: PASS"), ModelCompleted("end_turn", ModelUsage(2, 1))]]
     )
     await collect(h, _phase_checkpoint(h, "verify"))
 
@@ -350,11 +363,28 @@ async def test_plan_end_turn_without_critical_files_stays_in_plan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
+async def test_plan_end_turn_with_only_critical_files_stays_in_plan() -> None:
     h = harness(
         [
             [
                 TextDelta("## Critical Files:\n- src/app.py\n"),
+                ModelCompleted("end_turn", ModelUsage(2, 1)),
+            ]
+        ]
+    )
+    await collect(h, _phase_checkpoint(h, "plan"))
+
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["phase"] == "plan"
+    assert state["terminal_pending"] is False
+
+
+@pytest.mark.asyncio
+async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("Add auth middleware.\n\n## Critical Files:\n- src/app.py\n"),
                 ModelCompleted("end_turn", ModelUsage(2, 1)),
             ]
         ]

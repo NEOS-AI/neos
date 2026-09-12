@@ -50,6 +50,7 @@ class ApprovalGate:
     approved_always: frozenset[str] = frozenset()
     current_phase: str | None = None
     unattended: bool = False
+    workspace_root: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,11 +151,35 @@ def evaluate_approval(
         return ApprovalPolicyOutcome.DENY
 
 
+def approval_remember_key(call: ValidatedToolCall) -> str:
+    raw_path = call.input.get("path")
+    if isinstance(raw_path, str) and raw_path.strip():
+        try:
+            from neos.coding.sandbox.paths import normalize_workspace_path
+
+            scoped = str(normalize_workspace_path(raw_path))
+        except Exception:
+            scoped = raw_path.replace("\\", "/").strip()
+        if scoped:
+            return f"{call.name}:{scoped}"
+    if call.name == "execute.v1":
+        argv = call.input.get("argv")
+        if isinstance(argv, (list, tuple)) and argv:
+            token = str(argv[0]).strip()
+            if token:
+                return f"{call.name}:{token}"
+    return call.name
+
+
 def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
     found: list[str] = []
     raw_path = call.input.get("path")
     if isinstance(raw_path, str) and raw_path:
         found.append(raw_path)
+    for key in ("src", "dest"):
+        raw = call.input.get(key)
+        if isinstance(raw, str) and raw:
+            found.append(raw)
     raw_paths = call.input.get("paths")
     if isinstance(raw_paths, (list, tuple)):
         found.extend(str(item) for item in raw_paths if item)
@@ -181,7 +206,9 @@ def is_denied_secret_path(path: object) -> bool:
     parts = _posix_path_parts(path)
     if not parts:
         return False
-    folded = tuple(part.casefold() for part in parts)
+    from neos.coding.sandbox.paths import compare_path_key
+
+    folded = tuple(compare_path_key(part) for part in parts)
     name = folded[-1]
     if name == ".env" or name.startswith(".env."):
         return True
@@ -218,7 +245,16 @@ _PROTECTED_INSTRUCTION_BASENAMES = frozenset(
         "claude.local.md",
     }
 )
-_INSTRUCTION_WRITE_TOOLS = frozenset({"write_file.v1", "edit_file.v1"})
+_INSTRUCTION_WRITE_TOOLS = frozenset(
+    {
+        "write_file.v1",
+        "edit_file.v1",
+        "mkdir.v1",
+        "rm.v1",
+        "mv.v1",
+        "chmod.v1",
+    }
+)
 _SENSITIVE_CONFIG_BASENAMES = frozenset(
     {
         ".bashrc",
@@ -237,20 +273,53 @@ _PREVIEW_MAX_CHARS = 2000
 
 
 def _has_protected_instruction_basename(path: str) -> bool:
+    from neos.coding.sandbox.paths import compare_path_key
+
     parts = _posix_path_parts(path)
-    return bool(parts) and parts[-1].casefold() in _PROTECTED_INSTRUCTION_BASENAMES
+    return bool(parts) and compare_path_key(parts[-1]) in _PROTECTED_INSTRUCTION_BASENAMES
 
 
-def _is_protected_instruction_write(call: ValidatedToolCall) -> bool:
+def _is_claude_rules_path(path: str) -> bool:
+    from neos.coding.sandbox.paths import compare_path_key
+
+    parts = _posix_path_parts(path)
+    folded = tuple(compare_path_key(part) for part in parts)
+    for index, part in enumerate(folded[:-1]):
+        if part == ".claude" and folded[index + 1] == "rules":
+            return index + 2 < len(folded)
+    return False
+
+
+def _looks_like_instruction_file(path: str) -> bool:
+    return _has_protected_instruction_basename(path) or _is_claude_rules_path(path)
+
+
+def _is_instruction_file_path(path: str, workspace_root: str | None = None) -> bool:
+    if _looks_like_instruction_file(path):
+        return True
+    if not workspace_root:
+        return False
+    from neos.coding.sandbox.paths import realpath_for_compare
+
+    resolved = realpath_for_compare(workspace_root, path)
+    return resolved != path and _looks_like_instruction_file(resolved)
+
+
+def _is_protected_instruction_write(
+    call: ValidatedToolCall,
+    workspace_root: str | None = None,
+) -> bool:
     if call.name not in _INSTRUCTION_WRITE_TOOLS and call.name != "execute.v1":
         return False
-    if any(_has_protected_instruction_basename(path) for path in _call_paths(call)):
+    if any(
+        _is_instruction_file_path(path, workspace_root) for path in _call_paths(call)
+    ):
         return True
     if call.name == "execute.v1":
         argv = call.input.get("argv")
         if isinstance(argv, (list, tuple)):
             return any(
-                _has_protected_instruction_basename(str(item))
+                _is_instruction_file_path(str(item), workspace_root)
                 for item in argv
                 if item
             )
@@ -283,6 +352,16 @@ def _truncated_text(text: str) -> tuple[str, bool]:
     return preview, truncated
 
 
+def _approved_always_allows(
+    call: ValidatedToolCall, approved_always: frozenset[str]
+) -> bool:
+    if not approved_always:
+        return False
+    if call.name in approved_always:
+        return True
+    return approval_remember_key(call) in approved_always
+
+
 def _evaluate_approval(
     call: ValidatedToolCall, gate: ApprovalGate
 ) -> ApprovalPolicyOutcome:
@@ -291,13 +370,13 @@ def _evaluate_approval(
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY
     # Instruction files persist agent behavior; never auto-approve writes.
-    if _is_protected_instruction_write(call):
+    if _is_protected_instruction_write(call, gate.workspace_root):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if _is_sensitive_config_write(call):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
-    if call.name in gate.approved_always:
+    if _approved_always_allows(call, gate.approved_always):
         return ApprovalPolicyOutcome.ALLOW
     if call.name in gate.always_allow and gate.mode is ApprovalMode.AUTO:
         return ApprovalPolicyOutcome.ALLOW

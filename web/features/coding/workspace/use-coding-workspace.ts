@@ -12,7 +12,10 @@ import {
   createCodingWorkspaceStore,
   type WorkspaceWatcherFrame,
 } from "./workspace-store";
-import { buildWorkspaceSocketUrl } from "./workspace-stream-client";
+import {
+  buildWorkspaceSocketUrl,
+  workspaceTicketProtocols,
+} from "./workspace-stream-client";
 
 export function useCodingWorkspace(taskId: string) {
   const store = useMemo(() => createCodingWorkspaceStore(taskId), [taskId]);
@@ -80,10 +83,12 @@ export function useCodingWorkspace(taskId: string) {
       const url = buildWorkspaceSocketUrl({
         websocketUrl: ticket.websocket_url,
         taskId,
-        ticket: ticket.ticket,
         afterCursor: store.getSnapshot().watcherCursor,
       });
-      socket = new WebSocket(url, "neos.coding.workspace.v1");
+      socket = new WebSocket(
+        url,
+        workspaceTicketProtocols("neos.coding.workspace.v1", ticket.ticket)
+      );
       socket.onmessage = (message) => {
         try {
           const frame = JSON.parse(message.data) as WorkspaceWatcherFrame;

@@ -155,6 +155,8 @@ class ModelCatalog(StrictConfigModel):
     # YAML 에서는 anthropic_families: 뒤에 둔다 (FE 정규식 잠금).
     role_aliases: dict[str, RoleAlias] = Field(default_factory=dict)
     remaps: dict[str, str] = Field(default_factory=dict)
+    # Optional helper slots (fast / title / artifact) → catalog pin.
+    aux: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_families(self) -> "ModelCatalog":
@@ -287,6 +289,12 @@ class ModelCatalog(StrictConfigModel):
 
         for name in self.role_aliases:
             claim(name, name, "role_alias")
+
+        for slot, pin in self.aux.items():
+            if pin not in self.models:
+                raise ValueError(
+                    f"aux.{slot} points to unknown model {pin!r}"
+                )
 
         return self
 
@@ -549,6 +557,9 @@ class ModelConfig:
                 self._catalog = ModelCatalog()
             return
         self._catalog = new_catalog
+        from neos.config.model_discovery import sync_live_overlay
+
+        sync_live_overlay(new_catalog)
         logger.info("Model catalog loaded from: %s", path)
 
     # ---- 레거시 API ----
@@ -630,7 +641,12 @@ def get_embedding_model_id(model_name: str | None = None) -> str:
 
 
 def get_model_spec(model: str) -> ModelSpec | None:
-    return model_config.catalog.get_model_spec(model)
+    spec = model_config.catalog.get_model_spec(model)
+    if spec is not None:
+        return spec
+    from neos.config.model_discovery import live_model_spec
+
+    return live_model_spec(model)
 
 
 def model_known(model: str) -> bool:

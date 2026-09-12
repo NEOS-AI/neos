@@ -122,6 +122,103 @@ except Exception:
         pass
     raise
 """
+_MKDIR_HELPER = """\
+from pathlib import Path
+import sys
+rel, parents = sys.argv[1], sys.argv[2] == '1'
+root = Path('/workspace')
+parts = Path(rel).parts
+p = root.joinpath(*parts)
+cur = root
+for part in parts[:-1]:
+    cur = cur / part
+    if cur.is_symlink():
+        raise SystemExit(3)
+    if not cur.exists():
+        if not parents:
+            raise SystemExit(2)
+        cur.mkdir(exist_ok=True)
+    elif not cur.is_dir():
+        raise SystemExit(2)
+if p.exists() and not parents:
+    raise SystemExit(5)
+if parents:
+    p.mkdir(parents=True, exist_ok=True)
+else:
+    p.mkdir()
+"""
+_REFUSE_SYMLINK_PARENTS = """\
+def _join_refusing_symlink_parents(root, rel):
+    parts = Path(rel).parts
+    cur = root
+    for part in parts[:-1]:
+        cur = cur / part
+        if cur.is_symlink():
+            raise SystemExit(3)
+    return root.joinpath(*parts)
+"""
+_RM_HELPER = (
+    _REFUSE_SYMLINK_PARENTS
+    + """\
+import shutil
+from pathlib import Path
+import sys
+rel, recursive = sys.argv[1], sys.argv[2] == '1'
+root = Path('/workspace')
+p = _join_refusing_symlink_parents(root, rel)
+if p.is_symlink():
+    p.unlink()
+elif p.is_dir():
+    if any(p.iterdir()) and not recursive:
+        raise SystemExit(6)
+    shutil.rmtree(p) if recursive else p.rmdir()
+elif p.exists():
+    p.unlink()
+else:
+    raise SystemExit(2)
+"""
+)
+_MV_HELPER = (
+    _REFUSE_SYMLINK_PARENTS
+    + """\
+import shutil
+from pathlib import Path
+import sys
+src, dest, overwrite = sys.argv[1], sys.argv[2], sys.argv[3] == '1'
+root = Path('/workspace')
+s = _join_refusing_symlink_parents(root, src)
+d = _join_refusing_symlink_parents(root, dest)
+if not s.exists() and not s.is_symlink():
+    raise SystemExit(2)
+if not d.parent.exists():
+    raise SystemExit(2)
+if (d.exists() or d.is_symlink()) and not overwrite:
+    raise SystemExit(5)
+if d.exists() or d.is_symlink():
+    if d.is_dir() and not d.is_symlink():
+        shutil.rmtree(d)
+    else:
+        d.unlink()
+s.rename(d)
+"""
+)
+_CHMOD_HELPER = (
+    _REFUSE_SYMLINK_PARENTS
+    + """\
+import os
+from pathlib import Path
+import sys
+rel, mode = sys.argv[1], int(sys.argv[2])
+root = Path('/workspace')
+p = _join_refusing_symlink_parents(root, rel)
+if not p.exists() and not p.is_symlink():
+    raise SystemExit(2)
+try:
+    os.chmod(p, mode, follow_symlinks=False)
+except NotImplementedError:
+    os.chmod(p, mode)
+"""
+)
 _SEARCH_TEXT_HELPER = (
     IGNORE_RUNTIME
     + """
@@ -257,13 +354,25 @@ _GLOB_FILES_HELPER = (
 import fnmatch, json, sys
 from pathlib import Path
 pattern, limit = sys.argv[1], int(sys.argv[2])
-if '..' in Path(pattern).parts:
+start = sys.argv[3] if len(sys.argv) > 3 else ''
+if '..' in Path(pattern).parts or (start and '..' in Path(start).parts):
     raise SystemExit(2)
 limit = max(1, min(limit, 500))
 root = Path('/workspace')
+base = (root / start) if start else root
+if not base.exists():
+    sys.stdout.write(json.dumps([]))
+    raise SystemExit(0)
 rules = load_ignore_rules('/workspace')
 found = []
-for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+def matches(relative, from_start):
+    for candidate in (relative, from_start):
+        if fnmatch.fnmatch(candidate, pattern) or (
+            pattern.startswith('**/') and fnmatch.fnmatch(candidate, pattern[3:])
+        ):
+            return True
+    return False
+for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
     current = Path(dirpath)
     dirnames.sort(); filenames.sort()
     kept = []
@@ -276,7 +385,6 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             continue
         kept.append(name)
     dirnames[:] = kept
-    stop = False
     for name in filenames:
         item = current / name
         if item.is_symlink() or not item.is_file():
@@ -284,16 +392,11 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         relative = item.relative_to(root).as_posix()
         if should_skip(relative, rules, is_dir=False):
             continue
-        if fnmatch.fnmatch(relative, pattern) or (
-            pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
-        ):
-            found.append(relative)
-            if len(found) >= limit:
-                stop = True
-                break
-    if stop:
-        break
-sys.stdout.write(json.dumps(found))
+        from_start = item.relative_to(base).as_posix()
+        if matches(relative, from_start):
+            found.append((item.stat().st_mtime, relative))
+found.sort(key=lambda pair: (-pair[0], pair[1]))
+sys.stdout.write(json.dumps([path for _mtime, path in found[:limit]]))
 """
 )
 _FILE_METADATA_HELPER = (
@@ -1223,6 +1326,113 @@ class DockerSandboxSession:
             )
             return self._record.sandbox.workspace_revision
 
+    async def _record_mutation(
+        self, path: str, *, kind: WorkspaceChangeKind
+    ) -> int:
+        self._record.known_paths.add(path)
+        self._record.sandbox = replace(
+            self._record.sandbox,
+            workspace_revision=self._record.sandbox.workspace_revision + 1,
+            updated_at=self._provider._clock(),
+        )
+        await self._record.watcher.record(
+            WorkspaceChange(path=path, kind=kind),
+            revision=self._record.sandbox.workspace_revision,
+        )
+        return self._record.sandbox.workspace_revision
+
+    def _raise_helper_error(self, error: SandboxUnavailable) -> None:
+        code = str(error)
+        if code == "docker_command_failed:2":
+            raise SandboxPolicyViolation("workspace_path_not_resolvable") from error
+        if code == "docker_command_failed:3":
+            raise SandboxPolicyViolation("workspace_symlink_parent") from error
+        if code == "docker_command_failed:5":
+            raise SandboxPolicyViolation("workspace_path_exists") from error
+        if code == "docker_command_failed:6":
+            raise SandboxPolicyViolation("workspace_directory_not_empty") from error
+        raise error
+
+    async def mkdir(self, path: str, *, parents: bool = False) -> int:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            try:
+                await self._run_helper(
+                    _MKDIR_HELPER, relative.as_posix(), "1" if parents else "0"
+                )
+            except SandboxUnavailable as error:
+                self._raise_helper_error(error)
+            return await self._record_mutation(
+                relative.as_posix(), kind=WorkspaceChangeKind.CREATED
+            )
+
+    async def rm(self, path: str, *, recursive: bool = False) -> int:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            try:
+                await self._run_helper(
+                    _RM_HELPER, relative.as_posix(), "1" if recursive else "0"
+                )
+            except SandboxUnavailable as error:
+                self._raise_helper_error(error)
+            return await self._record_mutation(
+                relative.as_posix(), kind=WorkspaceChangeKind.DELETED
+            )
+
+    async def mv(
+        self, src: str, dest: str, *, overwrite: bool = False
+    ) -> int:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        src_rel = ensure_mutable_workspace_path(src)
+        dest_rel = ensure_mutable_workspace_path(dest)
+        if is_denied_secret_path(src_rel.as_posix()) or is_denied_secret_path(
+            dest_rel.as_posix()
+        ):
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            try:
+                await self._run_helper(
+                    _MV_HELPER,
+                    src_rel.as_posix(),
+                    dest_rel.as_posix(),
+                    "1" if overwrite else "0",
+                )
+            except SandboxUnavailable as error:
+                self._raise_helper_error(error)
+            return await self._record_mutation(
+                dest_rel.as_posix(), kind=WorkspaceChangeKind.MODIFIED
+            )
+
+    async def chmod(self, path: str, mode: int) -> int:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        relative = ensure_mutable_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()) and mode & 0o002:
+            raise SandboxPolicyViolation("workspace_secret_path")
+        async with self._record.lock:
+            await self._provider._running_record(self.sandbox_id)
+            try:
+                await self._run_helper(
+                    _CHMOD_HELPER, relative.as_posix(), str(int(mode))
+                )
+            except SandboxUnavailable as error:
+                self._raise_helper_error(error)
+            return await self._record_mutation(
+                relative.as_posix(), kind=WorkspaceChangeKind.MODIFIED
+            )
+
     async def watch_files(self, *, after_cursor: int = 0):
         await self._provider._running_record(self.sandbox_id)
         self._record.watching = True
@@ -1294,16 +1504,24 @@ class DockerSandboxSession:
         ) as error:
             raise SandboxUnavailable("docker_helper_output_invalid") from error
 
-    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+    async def glob_files(
+        self,
+        pattern: str,
+        *,
+        limit: int = 100,
+        path: str | None = None,
+    ) -> tuple[str, ...]:
         if not pattern or limit < 1:
             raise SandboxPolicyViolation("invalid_glob_request")
         normalize_workspace_path(
             pattern.replace("*", "x").replace("?", "x") or "x"
         )
+        args = [pattern, str(min(int(limit), 500))]
+        if path:
+            args.append(normalize_workspace_path(path).as_posix())
         result = await self._run_helper(
             _GLOB_FILES_HELPER,
-            pattern,
-            str(min(int(limit), 500)),
+            *args,
         )
         try:
             values = json.loads(result.stdout)

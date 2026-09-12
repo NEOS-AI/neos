@@ -744,4 +744,4 @@ async def test_stop_in_autothread_resolves_bind(
     )
 
     assert coding.stopped == ["ct_channel"]
-    assert thread.sent[-1] == "Stopped ct_channel"
+    assert thread.sent[-1] == "cancel: Stopped ct_channel"

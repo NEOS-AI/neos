@@ -164,6 +164,12 @@ class CodingCheckpointSnapshot(BaseModel):
     created_at: datetime
 
 
+class CodingActiveChildSnapshot(BaseModel):
+    run_id: str
+    status: str | None = None
+    spec: str | None = None
+
+
 class CodingProjectionSnapshotResponse(BaseModel):
     task: CodingTaskResponse
     active_run: CodingRunSnapshot | None
@@ -176,6 +182,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     latest_checkpoint: CodingCheckpointSnapshot | None
     head_seq: int
     connection_basis: Literal["checkpoint"]
+    active_children: list[CodingActiveChildSnapshot] = Field(default_factory=list)
 
 
 class CodingCommandRequest(BaseModel):

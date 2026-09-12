@@ -260,6 +260,7 @@ async def collect_telegram_attachments(
     size = 0
     document = getattr(message, "document", None)
     photo = getattr(message, "photo", None) or ()
+    video = getattr(message, "video", None)
     if document is not None:
         file_id = str(getattr(document, "file_id", "") or "")
         name = str(getattr(document, "file_name", None) or "file")
@@ -273,6 +274,11 @@ async def collect_telegram_attachments(
         name = "photo.jpg"
         content_type = "image/jpeg"
         size = int(getattr(largest, "file_size", None) or 0)
+    elif video is not None:
+        file_id = str(getattr(video, "file_id", "") or "")
+        name = str(getattr(video, "file_name", None) or "video.mp4")
+        content_type = str(getattr(video, "mime_type", None) or "video/mp4")
+        size = int(getattr(video, "file_size", None) or 0)
     if not file_id or bot is None:
         return []
     if size > MAX_INBOUND_MEDIA_BYTES:

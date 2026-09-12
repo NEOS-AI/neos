@@ -22,17 +22,23 @@ type PtyFrame =
   | { v: 1; type: "pty.resync_required" }
   | { v: 1; type: "pong" };
 
+export function workspaceTicketProtocols(
+  protocol: string,
+  ticket: string
+): string[] {
+  return [protocol, `neos.ticket.${ticket}`];
+}
+
 export function buildWorkspaceSocketUrl(options: {
   websocketUrl: string;
   taskId: string;
-  ticket: string;
+  ticket?: string;
   afterCursor: number;
   ptyId?: string | null;
 }): URL {
-  const { websocketUrl, taskId, ticket, afterCursor, ptyId } = options;
+  const { websocketUrl, taskId, afterCursor, ptyId } = options;
   const url = new URL(websocketUrl);
   url.searchParams.set("task_id", taskId);
-  url.searchParams.set("ticket", ticket);
   url.searchParams.set("after_cursor", String(afterCursor));
   if (ptyId) {
     url.searchParams.set("pty_id", ptyId);

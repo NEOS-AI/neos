@@ -39,8 +39,53 @@ _DEDICATED_EXECUTE_DENY = frozenset(
         "fdfind",
         "sed",
         "awk",
+        "mkdir",
+        "rm",
+        "rmdir",
+        "mv",
+        "chmod",
     }
 )
+_DEDICATED_TOOL_FOR = {
+    "cat": "read_file.v1",
+    "tac": "read_file.v1",
+    "head": "read_file.v1",
+    "tail": "read_file.v1",
+    "less": "read_file.v1",
+    "more": "read_file.v1",
+    "nl": "read_file.v1",
+    "rg": "search_text.v1",
+    "grep": "search_text.v1",
+    "egrep": "search_text.v1",
+    "fgrep": "search_text.v1",
+    "ag": "search_text.v1",
+    "ack": "search_text.v1",
+    "find": "glob_files.v1",
+    "fd": "glob_files.v1",
+    "fdfind": "glob_files.v1",
+    "sed": "edit_file.v1",
+    "awk": "edit_file.v1",
+    "mkdir": "mkdir.v1",
+    "rm": "rm.v1",
+    "rmdir": "rm.v1",
+    "mv": "mv.v1",
+    "chmod": "chmod.v1",
+}
+_POLICY_FIX_NOTES = {
+    "policy_inline_interpreter_denied": "run a file with execute.v1, not -c/-e",
+    "policy_command_path_denied": "use a workspace-relative path",
+    "policy_secret_path_denied": "do not pass secret paths",
+    "policy_executable_path_denied": "use a bare executable name",
+    "policy_git_operation_denied": "git via execute is status/diff/log only",
+    "policy_shell_command_denied": "use argv execute, not a shell -c",
+    "policy_network_client_denied": "network clients are not allowed",
+    "policy_network_operation_denied": "package install/update is not allowed",
+    "policy_dangerous_removal": "refusing a destructive rm operand",
+    "policy_executable_not_allowed": "executable is not on the allowlist",
+    "policy_protected_git_path": "do not mutate .git",
+    "policy_workspace_path_escape": "use a workspace-relative path",
+    "policy_workspace_secret_path": "secret paths are not readable",
+}
 _EXECUTE_WRAPPERS = frozenset(
     {
         "env",
@@ -201,6 +246,30 @@ def _subcommand_after(argv: tuple[str, ...], executable: str) -> str | None:
     return None
 
 
+_NUMERIC_MODE = re.compile(r"^0?[0-7]{3,4}$")
+
+
+def _parse_numeric_mode(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ToolValidationError("policy_schema_invalid")
+    if isinstance(value, int):
+        if value < 0 or value > 0o7777:
+            raise ToolValidationError("policy_schema_invalid")
+        return value
+    if not _NUMERIC_MODE.fullmatch(value):
+        raise ToolValidationError("policy_schema_invalid")
+    return int(value, 8)
+
+
+def _dedicated_tool_fix_note(name: str) -> str:
+    tool = _DEDICATED_TOOL_FOR.get(name, "a dedicated tool")
+    return f"use {tool} instead of {name}"
+
+
+def _policy_fix_note(reason_code: str) -> str | None:
+    return _POLICY_FIX_NOTES.get(reason_code)
+
+
 def _operand_escapes_workspace(value: str) -> bool:
     if value.startswith("/") or value.startswith("~"):
         return True
@@ -268,6 +337,7 @@ class ToolRisk(StrEnum):
 class PolicyDecision:
     allowed: bool
     reason_code: str
+    fix_note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,9 +348,10 @@ class ValidatedToolCall:
 
 
 class ToolValidationError(ValueError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, fix_note: str | None = None) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.fix_note = fix_note
 
 
 class _ToolInput(BaseModel):
@@ -312,6 +383,7 @@ class _SearchTextInput(_ToolInput):
 class _GlobFilesInput(_ToolInput):
     pattern: str = Field(min_length=1)
     limit: int = Field(default=100, ge=1, le=500)
+    path: str | None = None
 
 
 class _WebFetchInput(_ToolInput):
@@ -368,6 +440,24 @@ class _EditFileInput(_PathInput):
 class _WriteFileInput(_PathInput):
     content: str
     parents: bool = False
+
+
+class _MkdirInput(_PathInput):
+    parents: bool = False
+
+
+class _RmInput(_PathInput):
+    recursive: bool = False
+
+
+class _MvInput(_ToolInput):
+    src: str
+    dest: str
+    overwrite: bool = False
+
+
+class _ChmodInput(_PathInput):
+    mode: int | str
 
 
 class _TodoItem(_ToolInput):
@@ -548,6 +638,47 @@ class CodingToolRegistry:
             _WriteFileInput,
         ),
         _RegisteredTool(
+            "mkdir.v1",
+            (
+                "Create a workspace directory. parents defaults to false. "
+                "Do not use execute.v1 mkdir. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _MkdirInput,
+        ),
+        _RegisteredTool(
+            "rm.v1",
+            (
+                "Remove a workspace file or empty directory. "
+                "recursive defaults to false and is required for a non-empty directory. "
+                "Do not use execute.v1 rm. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _RmInput,
+        ),
+        _RegisteredTool(
+            "mv.v1",
+            (
+                "Move or rename a workspace path. overwrite defaults to false. "
+                "Do not use execute.v1 mv. "
+                "On policy_* denial, do not retry the same src."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _MvInput,
+        ),
+        _RegisteredTool(
+            "chmod.v1",
+            (
+                "Change a workspace path mode. Numeric mode only. "
+                "Do not use execute.v1 chmod. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _ChmodInput,
+        ),
+        _RegisteredTool(
             "todo_write.v1",
             (
                 "Replace the coding-task checklist. "
@@ -655,6 +786,10 @@ class CodingToolRegistry:
             "stat.v1",
             "edit_file.v1",
             "write_file.v1",
+            "mkdir.v1",
+            "rm.v1",
+            "mv.v1",
+            "chmod.v1",
             "execute.v1",
             "todo_write.v1",
             "set_phase.v1",
@@ -807,7 +942,11 @@ class CodingToolRegistry:
         try:
             self.validate(name, input)
         except ToolValidationError as error:
-            return PolicyDecision(False, error.reason_code)
+            return PolicyDecision(
+                False,
+                error.reason_code,
+                fix_note=error.fix_note or _policy_fix_note(error.reason_code),
+            )
         return PolicyDecision(True, "policy_allowed")
 
     def validate(
@@ -842,6 +981,9 @@ class CodingToolRegistry:
                 if key not in provided:
                     data.pop(key, None)
         self._normalize_paths(name, data)
+        if name == "chmod.v1":
+            data["mode"] = _parse_numeric_mode(data["mode"])
+            self._deny_secret_world_writable(data)
         if name == "search_text.v1" and data["regex"]:
             try:
                 re.compile(data["query"])
@@ -857,10 +999,22 @@ class CodingToolRegistry:
             if isinstance(raw_path, str):
                 normalizer = (
                     ensure_mutable_workspace_path
-                    if name in {"write_file.v1", "edit_file.v1"}
+                    if name
+                    in {
+                        "write_file.v1",
+                        "edit_file.v1",
+                        "mkdir.v1",
+                        "rm.v1",
+                        "chmod.v1",
+                    }
                     else normalize_workspace_path
                 )
                 data["path"] = str(normalizer(raw_path))
+            for key in ("src", "dest"):
+                raw = data.get(key)
+                if isinstance(raw, str):
+                    data[key] = str(ensure_mutable_workspace_path(raw))
+            self._deny_secret_write_paths(name, data)
             if "pattern" in data:
                 data["pattern"] = str(normalize_workspace_path(data["pattern"]))
             if "paths" in data:
@@ -875,6 +1029,31 @@ class CodingToolRegistry:
                 raise ToolValidationError("policy_protected_git_path") from error
             raise ToolValidationError(f"policy_{code}") from error
 
+    def _deny_secret_write_paths(self, name: str, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        if name not in {"mkdir.v1", "rm.v1", "mv.v1"}:
+            return
+        candidates = [data.get("path"), data.get("src"), data.get("dest")]
+        if any(
+            isinstance(path, str) and is_denied_secret_path(path)
+            for path in candidates
+        ):
+            raise ToolValidationError("policy_secret_path_denied")
+
+    def _deny_secret_world_writable(self, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        path = data.get("path")
+        mode = data.get("mode")
+        if (
+            isinstance(path, str)
+            and isinstance(mode, int)
+            and is_denied_secret_path(path)
+            and mode & 0o002
+        ):
+            raise ToolValidationError("policy_secret_path_denied")
+
     def _validate_command(self, data: dict[str, Any]) -> None:
         from neos.coding.domain.approvals import is_denied_secret_path
 
@@ -887,8 +1066,19 @@ class CodingToolRegistry:
         names = _unwrapped_command_names(argv)
         if "git" in names and any(_is_git_dangerous_flag(part) for part in argv):
             raise ToolValidationError("policy_git_operation_denied")
-        if any(name in _DEDICATED_EXECUTE_DENY for name in names):
-            raise ToolValidationError("policy_dedicated_tool_required")
+        if any(name in _REMOVAL_EXECUTABLES for name in names):
+            for operand in _command_operands(argv):
+                if (
+                    operand in _DANGEROUS_REMOVAL_OPERANDS
+                    or _operand_escapes_workspace(operand)
+                ):
+                    raise ToolValidationError("policy_dangerous_removal")
+        denied = next((name for name in names if name in _DEDICATED_EXECUTE_DENY), None)
+        if denied is not None:
+            raise ToolValidationError(
+                "policy_dedicated_tool_required",
+                fix_note=_dedicated_tool_fix_note(denied),
+            )
         if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
             raise ToolValidationError("policy_shell_command_denied")
         if any(name in _INLINE_INTERPRETERS for name in names):
@@ -932,13 +1122,6 @@ class CodingToolRegistry:
             for value in argv[1:]
         ):
             raise ToolValidationError("policy_network_operation_denied")
-        if any(name in _REMOVAL_EXECUTABLES for name in names):
-            for operand in _command_operands(argv):
-                if (
-                    operand in _DANGEROUS_REMOVAL_OPERANDS
-                    or _operand_escapes_workspace(operand)
-                ):
-                    raise ToolValidationError("policy_dangerous_removal")
         for operand in _command_operands(argv):
             if is_denied_secret_path(operand):
                 raise ToolValidationError("policy_secret_path_denied")

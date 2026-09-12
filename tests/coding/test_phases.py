@@ -10,6 +10,7 @@ from neos.coding.phases import (
     persist_plan_critical_files,
     persist_verify_verdict,
     phase_change_requires_approval,
+    plan_text_has_body,
     restore_plan_critical_files,
     restore_verify_verdict,
     tool_allowed_in_phase,
@@ -46,11 +47,30 @@ def test_plan_hides_writes_and_gates_implement() -> None:
 
 
 def test_parse_verify_verdict_reads_pass_fail_partial() -> None:
-    assert parse_verify_verdict("ran tests\nVERDICT: PASS\n") == "PASS"
+    assert (
+        parse_verify_verdict("Command: pytest -q\nVERDICT: PASS\n") == "PASS"
+    )
     assert parse_verify_verdict("VERDICT: FAIL") == "FAIL"
     assert parse_verify_verdict("notes\nverdict: partial") == "PARTIAL"
     assert parse_verify_verdict("looks good") is None
     assert parse_verify_verdict("") is None
+
+
+def test_parse_verify_verdict_pass_requires_command_block() -> None:
+    assert parse_verify_verdict("ran tests\nVERDICT: PASS\n") is None
+    assert parse_verify_verdict("```\npytest -q\n```\nVERDICT: PASS") == "PASS"
+    assert parse_verify_verdict("Command:\nVERDICT: PASS") is None
+    assert parse_verify_verdict("Command: pytest -q\nVERDICT: PASS") == "PASS"
+
+
+def test_plan_text_requires_body_beyond_critical_files() -> None:
+    assert plan_text_has_body("") is False
+    assert plan_text_has_body("## Critical Files:\n- src/app.py\n") is False
+    assert plan_text_has_body("Critical Files: src/a.py") is False
+    assert (
+        plan_text_has_body("Add auth middleware.\n\n## Critical Files:\n- src/app.py\n")
+        is True
+    )
 
 
 def test_parse_plan_critical_files_requires_heading() -> None:

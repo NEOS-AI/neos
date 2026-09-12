@@ -51,9 +51,22 @@ _COMPACT_CHAR_CAP = 64 * 1024
 
 
 class ChildStepper:
-    def __init__(self, *, model: CodingModel, tools: ToolPort) -> None:
+    def __init__(
+        self,
+        *,
+        model: CodingModel,
+        tools: ToolPort,
+        input_cost_micros_per_million: int = 0,
+        output_cost_micros_per_million: int = 0,
+    ) -> None:
         self._model = model
         self._tools = tools
+        self._input_cost_micros_per_million = max(
+            0, int(input_cost_micros_per_million or 0)
+        )
+        self._output_cost_micros_per_million = max(
+            0, int(output_cost_micros_per_million or 0)
+        )
 
     async def step(
         self,
@@ -65,10 +78,10 @@ class ChildStepper:
         state = _restore(ticket, reservation)
         if int(state["turn_count"]) >= ticket.max_turns:
             state["error_code"] = "turns_exhausted"
-            return _write(state, SubagentStatus.COMPLETED)
+            return self._write(ticket, state, SubagentStatus.COMPLETED)
         pending = list(state.get("pending_tools") or [])
         if pending:
-            return await self._run_tools(state, spec, pending)
+            return await self._run_tools(ticket, state, spec, pending)
         return await self._run_model(ticket, spec, reservation, state)
 
     async def _run_model(
@@ -110,7 +123,7 @@ class ChildStepper:
             if exc.retryable:
                 raise
             state["error_code"] = exc.code
-            return _write(state, SubagentStatus.FAILED)
+            return self._write(ticket, state, SubagentStatus.FAILED)
         text = "".join(text_parts)
         state["last_assistant_text"] = text
         state["turn_count"] = int(state["turn_count"]) + 1
@@ -128,12 +141,13 @@ class ChildStepper:
             {"role": "assistant", "text": text, "tool_calls": recorded_calls}
         )
         if not pending:
-            return _write(state, SubagentStatus.COMPLETED)
+            return self._write(ticket, state, SubagentStatus.COMPLETED)
         state["pending_tools"] = pending
-        return _write(state, SubagentStatus.RUNNING)
+        return self._write(ticket, state, SubagentStatus.RUNNING)
 
     async def _run_tools(
         self,
+        ticket: SubagentTicket,
         state: dict[str, Any],
         spec: SubagentSpec,
         pending: list[dict[str, Any]],
@@ -169,9 +183,33 @@ class ChildStepper:
         state["pending_tools"] = rest
         if _transcript_bytes(state) > _MAX_TRANSCRIPT_BYTES:
             state["error_code"] = "child_transcript_too_large"
-            return _write(state, SubagentStatus.FAILED)
+            return self._write(ticket, state, SubagentStatus.FAILED)
         _compact(state)
-        return _write(state, SubagentStatus.RUNNING)
+        return self._write(ticket, state, SubagentStatus.RUNNING)
+
+    def _rates(self, ticket: SubagentTicket) -> tuple[int, int]:
+        in_ppm = int(getattr(ticket, "input_cost_micros_per_million", 0) or 0)
+        out_ppm = int(getattr(ticket, "output_cost_micros_per_million", 0) or 0)
+        if in_ppm or out_ppm:
+            return max(0, in_ppm), max(0, out_ppm)
+        return (
+            self._input_cost_micros_per_million,
+            self._output_cost_micros_per_million,
+        )
+
+    def _write(
+        self,
+        ticket: SubagentTicket,
+        state: dict[str, Any],
+        status: SubagentStatus,
+    ) -> CheckpointWrite:
+        in_ppm, out_ppm = self._rates(ticket)
+        if in_ppm or out_ppm:
+            state["cost_micros"] = (
+                int(state.get("input_tokens") or 0) * in_ppm
+                + int(state.get("output_tokens") or 0) * out_ppm
+            ) // 1_000_000
+        return _write(state, status)
 
 
 def _restore(ticket: SubagentTicket, reservation: CasReservation) -> dict[str, Any]:

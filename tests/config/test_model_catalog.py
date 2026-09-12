@@ -1031,3 +1031,59 @@ def test_committed_remap_targets_are_selectable_pins() -> None:
     for raw, pin in catalog.remaps.items():
         spec = catalog.models[pin]
         assert spec.selectable, f"{raw} remaps to non-selectable {pin}"
+
+
+# ---- aux helper slots ------------------------------------------------------
+
+
+def test_aux_defaults_to_empty_map(tmp_path: Path) -> None:
+    catalog = load_catalog(
+        _write(tmp_path, {"models": {"claude-a": {"provider": "anthropic"}}})
+    )
+
+    assert catalog.aux == {}
+
+
+def test_aux_accepts_fast_title_artifact_pins(tmp_path: Path) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-haiku-4-5-20251001": {"provider": "anthropic"},
+                },
+                "aux": {
+                    "fast": "claude-haiku-4-5-20251001",
+                    "title": "claude-haiku-4-5-20251001",
+                    "artifact": "claude-haiku-4-5-20251001",
+                },
+            },
+        )
+    )
+
+    assert catalog.aux["fast"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["title"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["artifact"] == "claude-haiku-4-5-20251001"
+
+
+def test_aux_rejects_unknown_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "aux": {"title": "claude-missing"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="aux"):
+        load_catalog(path)
+
+
+def test_committed_aux_points_at_dated_haiku_pin() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.aux["fast"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["title"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["artifact"] == "claude-haiku-4-5-20251001"
+    for slot, pin in catalog.aux.items():
+        assert pin in catalog.models, slot

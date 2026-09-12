@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-HIDDEN_SESSION_ORIGINS = frozenset({"cron", "subagent", "subrun", "tool", "kanban"})
+HIDDEN_SESSION_ORIGINS = frozenset(
+    {"cron", "subagent", "subrun", "tool", "kanban", "scheduler"}
+)
 SNIPPET_MAX_CHARS = 240
-_ORIGIN_KEYS = ("origin", "source", "mode")
+_ORIGIN_KEYS = ("origin", "source", "mode", "channel_source")
 
 
 def _as_origin_token(value: object) -> str | None:

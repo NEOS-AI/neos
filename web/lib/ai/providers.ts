@@ -6,6 +6,22 @@ import {
 } from "ai";
 import { isTestEnvironment } from "../constants";
 import { getAiGatewayApiKey } from "../server-config";
+import { generatedAux, generatedModels } from "./catalog.generated";
+
+const AUX_GATEWAY_FALLBACK = "anthropic/claude-haiku-4.5";
+
+export function resolveAuxGatewayId(
+  slot: "fast" | "title" | "artifact",
+  aux: Record<string, string> = generatedAux,
+  models: ReadonlyArray<{ id: string; catalog_id: string }> = generatedModels
+): string {
+  const pin = aux[slot];
+  if (!pin) {
+    return AUX_GATEWAY_FALLBACK;
+  }
+  const row = models.find((model) => model.catalog_id === pin);
+  return row?.id ?? AUX_GATEWAY_FALLBACK;
+}
 
 const THINKING_SUFFIX_REGEX = /-thinking$/;
 
@@ -56,12 +72,12 @@ export function getTitleModel() {
   if (isTestEnvironment && myProvider) {
     return myProvider.languageModel("title-model");
   }
-  return gateway.languageModel("anthropic/claude-haiku-4.5");
+  return gateway.languageModel(resolveAuxGatewayId("title"));
 }
 
 export function getArtifactModel() {
   if (isTestEnvironment && myProvider) {
     return myProvider.languageModel("artifact-model");
   }
-  return gateway.languageModel("anthropic/claude-haiku-4.5");
+  return gateway.languageModel(resolveAuxGatewayId("artifact"));
 }

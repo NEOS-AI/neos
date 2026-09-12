@@ -88,9 +88,11 @@ class FakeSession:
         self.called = ("search_text", (query, kwargs))
         return self.search_matches
 
-    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+    async def glob_files(
+        self, pattern: str, *, limit: int = 100, path: str | None = None
+    ) -> tuple[str, ...]:
         self._raise()
-        self.called = ("glob_files", (pattern, limit))
+        self.called = ("glob_files", (pattern, limit, path))
         return (f"{pattern}",)
 
     async def git_status(self) -> CommandResult:
@@ -443,6 +445,30 @@ async def test_known_sandbox_policy_codes_pass_through(code: str) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "hint"),
+    [
+        ("workspace_path_is_not_file", "file"),
+        ("workspace_path_escape", "workspace"),
+        ("file_too_large", "offset"),
+    ],
+)
+async def test_fs_policy_denial_includes_fix_note(code: str, hint: str) -> None:
+    session = FakeSession()
+    session.error = SandboxPolicyViolation(code)
+    result = await SandboxToolExecutor(10, 10).execute(
+        session, call("read_file.v1", {"path": "a.txt"})
+    )
+    payload = json.dumps(result.to_mapping())
+    assert (result.status, result.reason_code) == ("denied", code)
+    assert result.fix_note is not None
+    assert hint in result.fix_note.casefold()
+    assert result.to_mapping()["fix_note"] == result.fix_note
+    assert "a.txt" not in result.fix_note
+    assert code in payload
+
+
+@pytest.mark.asyncio
 async def test_command_timed_out_flag_maps_to_timeout() -> None:
     session = FakeSession()
     session.command_result = CommandResult(None, b"partial", b"", timed_out=True)
@@ -583,8 +609,9 @@ async def test_glob_files_forwards_pattern_and_limit() -> None:
         session, call("glob_files.v1", {"pattern": "**/*.py", "limit": 12})
     )
     assert result.status == "ok"
-    assert session.called == ("glob_files", ("**/*.py", 12))
+    assert session.called == ("glob_files", ("**/*.py", 13, None))
     assert result.entries == ({"path": "**/*.py"},)
+    assert result.truncated is False
 
 
 def _allow_web_fetch_host(monkeypatch, host: str = "docs.example.com") -> None:
@@ -1728,3 +1755,73 @@ async def test_execute_does_not_retry_without_fix_or_when_not_retryable() -> Non
     assert second.fix == {"parents": True}
     assert retryable_without_fix.calls == 1
     assert nonretryable_with_fix.calls == 1
+
+
+class HashingSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_calls: list[str] = []
+        self.hash_calls: list[str] = []
+
+    async def read_file(self, path: str) -> bytes:
+        self.read_calls.append(path)
+        raise SandboxPolicyViolation("file_read_limit_exceeded")
+
+    async def hash_file(self, path: str) -> str:
+        self.hash_calls.append(path)
+        return hashlib.sha256(self.files[path]).hexdigest()
+
+    async def read_file_for_edit(self, path: str) -> bytes:
+        return self.files[path]
+
+
+@pytest.mark.asyncio
+async def test_stale_since_read_uses_hash_not_preview_read() -> None:
+    session = HashingSession()
+    session.files["big.txt"] = b"changed-on-disk" + (b"x" * 80)
+    session.modified["big.txt"] = datetime(2026, 8, 1, tzinfo=UTC)
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call("write_file.v1", {"path": "big.txt", "content": "new"}),
+        known_reads=frozenset({"big.txt"}),
+        known_stamps={
+            "big.txt": {
+                "mtime": NOW.isoformat(),
+                "digest": hashlib.sha256(b"old").hexdigest(),
+                "full": True,
+            }
+        },
+    )
+
+    assert (result.status, result.reason_code) == (
+        "denied",
+        "precondition_stale_read",
+    )
+    assert session.hash_calls == ["big.txt"]
+    assert session.read_calls == []
+
+
+@pytest.mark.asyncio
+async def test_edit_uses_edit_read_not_preview_cap() -> None:
+    session = HashingSession()
+    session.files["big.txt"] = b"alpha beta"
+    session.modified["big.txt"] = NOW
+    result = await SandboxToolExecutor(64, 10).execute(
+        session,
+        call(
+            "edit_file.v1",
+            {"path": "big.txt", "old_string": "beta", "new_string": "gamma"},
+        ),
+        known_reads=frozenset({"big.txt"}),
+        known_stamps={
+            "big.txt": {
+                "mtime": NOW.isoformat(),
+                "digest": hashlib.sha256(b"alpha beta").hexdigest(),
+                "full": True,
+            }
+        },
+    )
+
+    assert result.status == "ok"
+    assert session.files["big.txt"] == b"alpha gamma"
+    assert session.read_calls == []

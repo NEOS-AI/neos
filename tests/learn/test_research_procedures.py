@@ -116,3 +116,26 @@ def test_workflow_success_hook_calls_research_stager() -> None:
     )
     assert "stage_research_procedure_from_run" in source
     assert "skill.py" not in source
+
+
+@pytest.mark.asyncio
+async def test_from_run_skips_scheduler_origin(monkeypatch) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(settings.config.learn, "research_procedures", True)
+    store = reset_lesson_store()
+    lesson = await stage_research_procedure_from_run(
+        user_input={
+            "user_id": "u1",
+            "channel_source": "scheduler",
+            "origin": "scheduler",
+        },
+        result={"success": True, "template_id": "pdf-html-gate"},
+        final_state={
+            "template_id": "pdf-html-gate",
+            "required_agents": ["knowledge_search"],
+            "execution_steps": [{"step": "html gate"}],
+        },
+    )
+    assert lesson is None
+    assert store.list() == ()

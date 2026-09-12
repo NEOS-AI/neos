@@ -16,6 +16,7 @@ from neos.coding.sandbox.base import (
 from neos.coding.sandbox.command import (
     DockerCommandResult,
     DockerCommandRunner,
+    DockerInteractiveProcess,
     build_create_args,
 )
 
@@ -368,3 +369,38 @@ async def test_execute_docker_overflow_does_not_kill_guest_container(
 
     assert result.stdout_truncated is True
     assert killed == []
+
+
+async def test_pty_terminate_sigterm_then_sigkill_host_and_guest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDockerProcess(exit_on=signal.SIGKILL)
+    sent: list[int] = []
+    spawned: list[tuple[str, ...]] = []
+
+    async def create_subprocess_exec(*args: object, **kwargs: object) -> object:
+        argv = tuple(str(arg) for arg in args)
+        spawned.append(argv)
+        if len(argv) > 1 and argv[1] == "kill":
+            return _ImmediateProcess()
+        assert kwargs.get("start_new_session") is True
+        return fake
+
+    def killpg(pid: int, sig: int) -> None:
+        if pid == fake.pid:
+            sent.append(sig)
+            fake.deliver(sig)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(process_mod, "TERMINATE_GRACE_SEC", 0.01)
+    monkeypatch.setattr(command_mod, "TERMINATE_GRACE_SEC", 0.01)
+
+    process = await DockerInteractiveProcess.start(
+        "exec", "-i", "-t", "neos-sb_guest", "/bin/sh"
+    )
+    await process.terminate()
+    await process.wait()
+
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert all(argv[1] != "kill" for argv in spawned if len(argv) > 1)

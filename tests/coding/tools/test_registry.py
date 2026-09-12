@@ -35,6 +35,10 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "glob_files.v1",
         "edit_file.v1",
         "write_file.v1",
+        "mkdir.v1",
+        "rm.v1",
+        "mv.v1",
+        "chmod.v1",
         "todo_write.v1",
         "execute.v1",
         "set_phase.v1",
@@ -65,6 +69,10 @@ def test_explore_definitions_omit_write_and_execute() -> None:
 
     assert "edit_file.v1" not in names
     assert "write_file.v1" not in names
+    assert "mkdir.v1" not in names
+    assert "rm.v1" not in names
+    assert "mv.v1" not in names
+    assert "chmod.v1" not in names
     assert "execute.v1" not in names
     assert "read_file.v1" in names
     assert "glob_files.v1" in names
@@ -179,7 +187,11 @@ def test_glob_files_is_read_only_and_rejects_escape() -> None:
     denied = registry().decide("glob_files.v1", {"pattern": "../secret"})
 
     assert allowed.risk is ToolRisk.READ_ONLY
-    assert allowed.input == {"pattern": "src/**/*.py", "limit": 20}
+    assert allowed.input == {
+        "pattern": "src/**/*.py",
+        "limit": 20,
+        "path": None,
+    }
     assert denied.allowed is False
     assert denied.reason_code.startswith("policy_workspace_path_")
 
@@ -482,6 +494,34 @@ def test_dedicated_tools_are_hard_denied_even_when_allowlisted(
 
     assert decision.allowed is False
     assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+@pytest.mark.parametrize(
+    ("argv", "tool", "denied"),
+    [
+        (["cat", "README.md"], "read_file.v1", "cat"),
+        (["rg", "needle"], "search_text.v1", "rg"),
+        (["find", "."], "glob_files.v1", "find"),
+        (["sed", "s/a/b/"], "edit_file.v1", "sed"),
+        (["env", "cat", "README.md"], "read_file.v1", "cat"),
+    ],
+)
+def test_dedicated_tool_denial_includes_fix_note(
+    argv: list[str], tool: str, denied: str
+) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({argv[0], "cat", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dedicated_tool_required"
+    assert decision.fix_note is not None
+    assert tool in decision.fix_note
+    assert denied in decision.fix_note
+    assert "README.md" not in decision.fix_note
 
 
 @pytest.mark.parametrize(

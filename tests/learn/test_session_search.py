@@ -121,6 +121,18 @@ async def test_search_hides_cron_and_subagent_origins(
                 "content": "card",
                 "conversation": {"mode": "kanban"},
             },
+            {
+                "message_id": "sched",
+                "conversation_id": "c7",
+                "content": "cron result",
+                "origin": "scheduler",
+            },
+            {
+                "message_id": "sched-src",
+                "conversation_id": "c8",
+                "content": "nightly",
+                "channel_source": "scheduler",
+            },
         ],
     )
 

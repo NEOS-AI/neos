@@ -113,6 +113,10 @@ async def stage_research_procedure_from_run(
 ) -> Lesson | None:
     if not result.get("success"):
         return None
+    from neos.learn.session_search import is_hidden_session_row
+
+    if is_hidden_session_row(dict(user_input)):
+        return None
     derived = procedure_from_run(final_state, result)
     if derived is None:
         return None

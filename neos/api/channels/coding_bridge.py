@@ -42,6 +42,10 @@ class RuntimeChannelCoding:
         if snapshot is None:
             return "Coding task not found."
         status = snapshot.task.status.value
+        if status in {"paused", "pausing", "cancelled", "cancelling"}:
+            from neos.api.channels.replies import format_coding_status_reply
+
+            return format_coding_status_reply(snapshot.task.task_id, status)
         if status == "waiting_approval":
             from neos.coding.domain.approvals import ApprovalStatus
             from neos.coding.runtime import coding_snapshot_service
@@ -153,3 +157,16 @@ class RuntimeChannelCoding:
         return await self.invoke_command(
             task_id=task_id, owner_id=owner_id, text="/export"
         )
+
+    async def turn_diff(self, *, task_id: str, owner_id: str) -> str:
+        from neos.api.channels.turn_diff import format_turn_diff
+        from neos.coding.domain.errors import CodingTaskNotFound
+        from neos.coding.runtime import coding_snapshot_service
+
+        try:
+            snapshot = await coding_snapshot_service.get_owned(task_id, owner_id)
+        except CodingTaskNotFound:
+            return "No coding task in this thread."
+        if snapshot is None:
+            return "No coding task in this thread."
+        return format_turn_diff(snapshot)

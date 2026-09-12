@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path, PurePosixPath
 
 from neos.coding.sandbox.base import SandboxPolicyViolation
@@ -11,6 +12,11 @@ _PROTECTED_GIT_FILES = {
     PurePosixPath(".git/credentials"),
 }
 _BARE_GIT_ROOT_PARTS = frozenset({"HEAD", "objects", "refs", "hooks"})
+
+
+def compare_path_key(value: str) -> str:
+    """NFKC + casefold for comparisons only. Does not mutate the input."""
+    return unicodedata.normalize("NFKC", value).casefold()
 
 
 def normalize_workspace_path(path: str) -> PurePosixPath:
@@ -112,6 +118,23 @@ def resolve_readable_workspace_path(root: Path, path: str) -> Path:
     if resolved_rel != "." and is_denied_secret_path(resolved_rel):
         raise SandboxPolicyViolation("workspace_secret_path")
     return current
+
+
+def realpath_for_compare(root: str | Path, path: str) -> str:
+    """Resolve the leaf for comparison only. Never mutates the input path."""
+    try:
+        relative = normalize_workspace_path(path)
+        root_real = Path(root).resolve(strict=True)
+        candidate = root_real.joinpath(*relative.parts)
+        if not candidate.exists() and not candidate.is_symlink():
+            return path
+        resolved = candidate.resolve()
+        try:
+            return resolved.relative_to(root_real).as_posix()
+        except ValueError:
+            return resolved.name
+    except (OSError, RuntimeError, SandboxPolicyViolation):
+        return path
 
 
 def resolve_mutable_workspace_path(root: Path, path: str) -> Path:

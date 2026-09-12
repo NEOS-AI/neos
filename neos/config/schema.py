@@ -1625,6 +1625,7 @@ class CodingModelConfig(StrictConfigModel):
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
     subagent_max_active: int = Field(default=1, ge=1, le=4)
+    file_watch: bool = False
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":

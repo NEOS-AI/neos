@@ -74,7 +74,7 @@ async def test_bind_from_gateway_a_is_visible_to_gateway_b(monkeypatch):
     stopped = await second.dispatch(_message("/stop", "v2:slack:T:C:9"))
 
     assert "ct_channel" in started
-    assert stopped == "Stopped ct_channel"
+    assert stopped == "cancel: Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
 
@@ -98,7 +98,7 @@ async def test_code_then_new_gateway_stop_uses_persisted_task_id(monkeypatch):
     second, workflow, _ = _gateway(monkeypatch, binds=store, coding=coding)
     reply = await second.dispatch(_message("/stop", "sess-persist"))
 
-    assert reply == "Stopped ct_channel"
+    assert reply == "cancel: Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
 
@@ -111,7 +111,7 @@ async def test_channel_stop_does_not_call_execute_workflow(monkeypatch):
 
     reply = await gateway.dispatch(_message("/stop", "sess-stop"))
 
-    assert reply == "Stopped ct_channel"
+    assert reply == "cancel: Stopped ct_channel"
     assert workflow.calls == []
 
 

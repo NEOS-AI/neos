@@ -540,6 +540,8 @@ def _build_subagent_runtime(
     session_factory,
     enabled: bool,
     parent_events=None,
+    input_cost_micros_per_million: int = 0,
+    output_cost_micros_per_million: int = 0,
 ):
     """Construct the parent-driven child runtime.
 
@@ -568,7 +570,12 @@ def _build_subagent_runtime(
     return SubagentRuntime(
         store=store,
         catalog=SpecRegistry(),
-        stepper=ChildStepper(model=model, tools=port),
+        stepper=ChildStepper(
+            model=model,
+            tools=port,
+            input_cost_micros_per_million=input_cost_micros_per_million,
+            output_cost_micros_per_million=output_cost_micros_per_million,
+        ),
         events=MetricsEventSink(
             ParentSubagentEventAdapter(parent_events),
             get_metrics_collector(),
@@ -655,6 +662,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         session_factory=factory,
         enabled=coding.subagent_enabled,
         parent_events=coding_service,
+        input_cost_micros_per_million=coding.input_cost_micros_per_million,
+        output_cost_micros_per_million=coding.output_cost_micros_per_million,
     )
 
     def finish(sandboxes) -> DurableCodingLoop:

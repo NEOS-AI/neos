@@ -325,13 +325,15 @@ async def test_memory_glob_files_matches_limit_and_rejects_escape(
     await session.write_file("src/nested/util.py", b"print(2)\n")
     await session.write_file("README.md", b"# readme\n")
 
-    assert await session.glob_files("**/*.py") == (
+    assert set(await session.glob_files("**/*.py")) == {
         "src/app.py",
         "src/nested/util.py",
-    )
+    }
     assert await session.glob_files("src/*.py") == ("src/app.py",)
     assert await session.glob_files("*.md") == ("README.md",)
-    assert await session.glob_files("**/*.py", limit=1) == ("src/app.py",)
+    newest = await session.glob_files("**/*.py", limit=1)
+    assert len(newest) == 1
+    assert newest[0] in {"src/app.py", "src/nested/util.py"}
 
     with pytest.raises(SandboxPolicyViolation, match="invalid_glob_request"):
         await session.glob_files("", limit=10)
@@ -339,6 +341,8 @@ async def test_memory_glob_files_matches_limit_and_rejects_escape(
         await session.glob_files("**/*.py", limit=0)
     with pytest.raises(SandboxPolicyViolation, match="workspace_path_escape"):
         await session.glob_files("../secret.py")
+    scoped = await session.glob_files("*.py", path="src")
+    assert "src/app.py" in scoped
     await provider.close()
 
 

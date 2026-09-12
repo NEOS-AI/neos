@@ -19,6 +19,7 @@ from neos.coding.domain.approvals import (
     ApprovalMode,
     ApprovalPolicyOutcome,
     ApprovalStatus,
+    approval_remember_key,
     denial_envelope,
     evaluate_approval,
 )
@@ -52,6 +53,7 @@ from neos.coding.phases import (
     parse_phase,
     parse_plan_critical_files,
     parse_verify_verdict,
+    plan_text_has_body,
     persist_plan_critical_files,
     persist_verify_verdict,
     restore_plan_critical_files,
@@ -60,6 +62,12 @@ from neos.coding.phases import (
     write_risk_blocked,
 )
 from neos.coding.hooks import CodingHookPort, NullCodingHooks, post_tool_prevented
+from neos.coding.loop.hooks import (
+    invoke_post_compact,
+    invoke_post_generate,
+    invoke_pre_compact,
+    invoke_pre_generate,
+)
 from neos.coding.redact import redact_sensitive
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
@@ -113,6 +121,17 @@ def _usage_tokens(completion: ModelCompleted) -> tuple[int, int]:
     if usage is None:
         return 0, 0
     return usage.input_tokens, usage.output_tokens
+
+
+def _usage_window(completion: ModelCompleted) -> tuple[int, int, int]:
+    usage = completion.usage
+    if usage is None:
+        return 0, 0, 0
+    return (
+        _nonneg_int(getattr(usage, "cache_read_tokens", 0)),
+        _nonneg_int(getattr(usage, "cache_write_tokens", 0)),
+        _nonneg_int(getattr(usage, "reasoning_tokens", 0)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +249,9 @@ class AgentLoopState:
     prompt_compact_retries: int = 0
     output_token_escalations: int = 0
     llm_compact_attempts: int = 0
+    summary: str = ""
     revealed_tools: frozenset[str] = frozenset()
+    allowed_tools: frozenset[str] = frozenset()
     approved_always: frozenset[str] = frozenset()
     hook_retry_count: int = 0
     compacted_bodies: Mapping[str, str] = field(default_factory=dict)
@@ -248,6 +269,9 @@ class AgentLoopState:
     active_child_checkpoint_id: str | None = None
     active_child_tool_call_id: str | None = None
     active_children: tuple[ActiveChildRef, ...] = ()
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
     @property
     def has_pending_tool(self) -> bool:
@@ -359,8 +383,21 @@ class DurableCodingLoop:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
         if not state.instructions_loaded:
             state = await self._load_workspace_instructions(state, bound)
+        note = await invoke_pre_generate(self._hooks, state.transcript)
+        append = str(note.get("append") or "")
+        if append:
+            transcript = self._append_user_meta(state.transcript, append)
+            state = replace(
+                state,
+                transcript=transcript,
+                transcript_digest=self._digest(transcript),
+            )
+        system = await coding_turn_system(self._config.system, input.owner_id)
+        system_note = str(note.get("system") or "")
+        if system_note:
+            system = f"{system}\n\n{system_note}" if system else system_note
         request = ModelRequest(
-            system=await coding_turn_system(self._config.system, input.owner_id),
+            system=system,
             messages=state.transcript,
             tools=self._tool_definitions(state),
             model=self._config.model,
@@ -447,11 +484,13 @@ class DurableCodingLoop:
         except CodingModelError as error:
             for task in prefetch_tasks.values():
                 task.cancel()
-            if (
-                error.code == "prompt_too_long"
-                and state.prompt_compact_retries < 1
-            ):
-                compacted = await self._compact_after_prompt_too_long(state)
+            if error.code == "prompt_too_long":
+                if state.prompt_compact_retries < 1:
+                    compacted = await self._compact_after_prompt_too_long(state)
+                elif state.prompt_compact_retries < 4:
+                    compacted = self._head_drop_after_prompt_too_long(state)
+                else:
+                    raise CodingLoopFailure("prompt_too_long", retryable=False) from error
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
                     event_type="model.completed",
@@ -488,18 +527,25 @@ class DurableCodingLoop:
             self._metrics.coding_model_turn_total.labels(
                 provider=self._config.provider, outcome=outcome
             ).inc()
+        await invoke_post_generate(
+            self._hooks, "".join(text_parts), state.transcript
+        )
         if (
             not calls
             and completion.stop_reason == "max_tokens"
             and state.output_token_escalations < 1
         ):
             in_tokens, out_tokens = _usage_tokens(completion)
+            cache_read, cache_write, reasoning = _usage_window(completion)
             retry_state = replace(
                 state,
                 instructions_loaded=True,
                 output_token_escalations=state.output_token_escalations + 1,
                 input_tokens=state.input_tokens + in_tokens,
                 output_tokens=state.output_tokens + out_tokens,
+                cache_read_tokens=state.cache_read_tokens + cache_read,
+                cache_write_tokens=state.cache_write_tokens + cache_write,
+                reasoning_tokens=state.reasoning_tokens + reasoning,
             )
             self._check_usage_budgets(retry_state)
             committed = await deps.repository.commit_model_checkpoint(
@@ -650,6 +696,12 @@ class DurableCodingLoop:
             )
             yield event, denied_state
             return
+        if not self._tool_allowed_by_skills(call.name, state):
+            event, denied_state = await self._commit_denied_tool(
+                input, state, bound, deps, call, "policy_skill_denied"
+            )
+            yield event, denied_state
+            return
         try:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError as error:
@@ -783,13 +835,14 @@ class DurableCodingLoop:
                 yield committed.event, denied_state
                 return
             validated = self._with_approval_answers(validated, approval)
-            if (
-                bool(approval.display_summary.get("remember"))
-                and validated.risk is ToolRisk.WORKSPACE_WRITE
-            ):
+            if bool(approval.display_summary.get("remember")) and validated.risk in {
+                ToolRisk.WORKSPACE_WRITE,
+                ToolRisk.COMMAND,
+            }:
                 state = replace(
                     state,
-                    approved_always=state.approved_always | {validated.name},
+                    approved_always=state.approved_always
+                    | {approval_remember_key(validated)},
                 )
         claim_ttl = self._config.tool_claim_ttl_sec
         if call.name == "spawn_agent.v1" and self._config.subagent_enabled:
@@ -1107,6 +1160,8 @@ class DurableCodingLoop:
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
+            if not self._tool_allowed_by_skills(call.name, state):
+                break
             try:
                 validated = self._tools.validate(call.name, call.input)
             except ToolValidationError:
@@ -1314,13 +1369,12 @@ class DurableCodingLoop:
                 "Verify is incomplete. End with `VERDICT: PASS`, "
                 "`VERDICT: FAIL`, or `VERDICT: PARTIAL`. Stay in verify."
             )
-        elif (
-            phase is CodingAgentPhase.PLAN
-            and parse_plan_critical_files(text) is None
+        elif phase is CodingAgentPhase.PLAN and (
+            parse_plan_critical_files(text) is None or not plan_text_has_body(text)
         ):
             note = (
-                "Plan is incomplete. Include a `Critical Files:` heading. "
-                "Stay in plan."
+                "Plan is incomplete. Include a plan body and a `Critical Files:` "
+                "heading. Stay in plan."
             )
         else:
             return None
@@ -1692,6 +1746,7 @@ class DurableCodingLoop:
             transcript, preserve_tools=bool(calls), bodies=bodies
         )
         in_tokens, out_tokens = _usage_tokens(completion)
+        cache_read, cache_write, reasoning = _usage_window(completion)
         cost = (
             state.cost_micros
             + (
@@ -1710,6 +1765,9 @@ class DurableCodingLoop:
             transcript_digest=self._digest(transcript),
             input_tokens=state.input_tokens + in_tokens,
             output_tokens=state.output_tokens + out_tokens,
+            cache_read_tokens=state.cache_read_tokens + cache_read,
+            cache_write_tokens=state.cache_write_tokens + cache_write,
+            reasoning_tokens=state.reasoning_tokens + reasoning,
             cost_micros=cost,
             terminal_pending=False,
             compacted_bodies=bodies,
@@ -1819,6 +1877,9 @@ class DurableCodingLoop:
                 if isinstance(item, Mapping) and item.get("name")
             }
             revealed = revealed | names
+        allowed = state.allowed_tools
+        if tool_name == "load_skill.v1" and result.status == "ok":
+            allowed = self._union_skill_allowed_tools(allowed, result.content)
         return replace(
             state,
             transcript=transcript,
@@ -1832,6 +1893,7 @@ class DurableCodingLoop:
             todos=todos,
             phase=phase,
             revealed_tools=revealed,
+            allowed_tools=allowed,
             hook_retry_count=0,
             compacted_bodies=bodies,
             last_error_signature=last_error_signature,
@@ -1921,13 +1983,63 @@ class DurableCodingLoop:
         else:
             hidden = hidden_tools_for_phase(state.phase)
             definitions = tuple(item for item in method() if item.name not in hidden)
-        if self._config.subagent_enabled:
-            return definitions
-        return tuple(
-            item
-            for item in definitions
-            if getattr(item, "name", item) not in _CONTROL_PLANE_TOOLS
-        )
+        if not self._config.subagent_enabled:
+            definitions = tuple(
+                item
+                for item in definitions
+                if getattr(item, "name", item) not in _CONTROL_PLANE_TOOLS
+            )
+        if state.allowed_tools:
+            definitions = tuple(
+                item
+                for item in definitions
+                if self._tool_allowed_by_skills(getattr(item, "name", item), state)
+            )
+        return definitions
+
+    def _registry_tool_names(self) -> frozenset[str]:
+        specs = getattr(self._tools, "_tools", None)
+        if isinstance(specs, Mapping):
+            return frozenset(str(name) for name in specs)
+        method = getattr(self._tools, "definitions", None)
+        if not callable(method):
+            return frozenset()
+        try:
+            return frozenset(str(item.name) for item in method())
+        except TypeError:
+            return frozenset()
+
+    def _union_skill_allowed_tools(
+        self, current: frozenset[str], content: Mapping[str, object]
+    ) -> frozenset[str]:
+        incoming: set[str] = set()
+        entries = content.get("entries") if isinstance(content, Mapping) else None
+        if isinstance(entries, (list, tuple)):
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                raw = entry.get("allowed_tools")
+                if isinstance(raw, str) and raw.strip():
+                    incoming.add(raw.strip())
+                elif isinstance(raw, (list, tuple)):
+                    incoming.update(
+                        str(item).strip() for item in raw if str(item).strip()
+                    )
+        if not incoming:
+            return current
+        registry = self._registry_tool_names()
+        merged = incoming if not current else set(current) | incoming
+        if registry:
+            merged &= set(registry)
+        return frozenset(merged)
+
+    @staticmethod
+    def _tool_allowed_by_skills(name: str, state: AgentLoopState) -> bool:
+        if not state.allowed_tools:
+            return True
+        if name == "load_skill.v1":
+            return True
+        return name in state.allowed_tools
 
     def _model_limits(self, state: AgentLoopState) -> ModelLimits:
         max_output_tokens = self._config.max_output_tokens
@@ -1937,11 +2049,20 @@ class DurableCodingLoop:
 
     async def _compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
         before = state.transcript
+        pre = await invoke_pre_compact(self._hooks, before)
+        if pre:
+            before = self._append_user_meta(before, pre)
         bodies = dict(state.compacted_bodies)
         after = self._compact(before, force=True, bodies=bodies)
-        after, attempts = await self._maybe_llm_compact(state, after)
+        after, attempts, summary = await self._maybe_llm_compact(state, after)
         if after != before:
             await self._hooks.compact(before, after)
+        post = await invoke_post_compact(self._hooks, before, after)
+        if post:
+            after = self._append_user_meta(after, post)
+        preview = self._recent_read_preview(state)
+        if preview:
+            after = self._append_user_meta(after, preview)
         return replace(
             state,
             transcript=after,
@@ -1949,6 +2070,52 @@ class DurableCodingLoop:
             prompt_compact_retries=state.prompt_compact_retries + 1,
             llm_compact_attempts=attempts,
             compacted_bodies=bodies,
+            instructions_loaded=False,
+            summary=summary,
+        )
+
+    def _recent_read_preview(self, state: AgentLoopState) -> str:
+        paths = self._recent_read_paths(state, limit=5)
+        if not paths:
+            return ""
+        listed = "\n".join(f"- {path}" for path in paths)
+        return f"Recently read files (re-read if needed):\n{listed}"
+
+    @staticmethod
+    def _recent_read_paths(state: AgentLoopState, *, limit: int) -> tuple[str, ...]:
+        pending: dict[str, str] = {}
+        ordered: list[str] = []
+        for message in state.transcript:
+            for item in message.content:
+                if isinstance(item, ToolUseContent) and item.name == "read_file.v1":
+                    raw_path = item.input.get("path")
+                    if raw_path:
+                        pending[item.tool_call_id] = str(
+                            normalize_workspace_path(str(raw_path))
+                        )
+                elif isinstance(item, ToolResultContent) and item.status == "ok":
+                    path = pending.get(item.tool_call_id)
+                    if not path:
+                        continue
+                    if path in ordered:
+                        ordered.remove(path)
+                    ordered.append(path)
+        if not ordered:
+            ordered = sorted(str(path) for path in state.read_paths if path)
+        return tuple(ordered[-limit:])
+
+    def _head_drop_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
+        remaining = list(state.transcript)
+        head: tuple[CanonicalMessage, ...] = ()
+        if remaining and remaining[0].role == "user":
+            head = (remaining.pop(0),)
+        remaining = self._drop_oldest_prefix_turn(remaining)
+        after = head + tuple(remaining)
+        return replace(
+            state,
+            transcript=after,
+            transcript_digest=self._digest(after),
+            prompt_compact_retries=state.prompt_compact_retries + 1,
         )
 
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
@@ -1957,6 +2124,8 @@ class DurableCodingLoop:
         if _is_stall_denied(state, call.name, call.input):
             return None
         if not tool_allowed_in_phase(call.name, state.phase):
+            return None
+        if not self._tool_allowed_by_skills(call.name, state):
             return None
         try:
             validated = self._tools.validate(call.name, call.input)
@@ -2632,10 +2801,11 @@ class DurableCodingLoop:
 
     async def _maybe_llm_compact(
         self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
-    ) -> tuple[tuple[CanonicalMessage, ...], int]:
+    ) -> tuple[tuple[CanonicalMessage, ...], int, str]:
         attempts = state.llm_compact_attempts
+        previous = (state.summary or "").strip()
         if attempts >= 1 or len(transcript) < 3:
-            return transcript, attempts
+            return transcript, attempts, previous
         head = transcript[0]
         tail_start = next(
             (
@@ -2651,17 +2821,20 @@ class DurableCodingLoop:
         )
         prefix = transcript[1:tail_start]
         if not prefix:
-            return transcript, attempts
+            return transcript, attempts, previous
         blob = json.dumps(
             [_message_to_mapping(item) for item in prefix],
             ensure_ascii=False,
         )[:12_000]
+        prompt = f"Summarize this transcript prefix:\n{blob}"
+        if previous:
+            prompt = f"Previous summary:\n{previous}\n\n{prompt}"
         request = ModelRequest(
             system="Summarize prior coding context as facts only. <= 200 words.",
             messages=(
                 CanonicalMessage(
                     "user",
-                    (TextContent(f"Summarize this transcript prefix:\n{blob}"),),
+                    (TextContent(prompt),),
                 ),
             ),
             tools=(),
@@ -2677,17 +2850,17 @@ class DurableCodingLoop:
                 if isinstance(event, TextDelta):
                     parts.append(event.text)
         except Exception:
-            return transcript, attempts + 1
+            return transcript, attempts + 1, previous
         summary = "".join(parts).strip()
         if not summary:
-            return transcript, attempts + 1
+            return transcript, attempts + 1, previous
         compacted = (head,) + (
             CanonicalMessage(
                 "user",
                 (TextContent(f"Prior context summary:\n{summary}"),),
             ),
         ) + transcript[tail_start:]
-        return compacted, attempts + 1
+        return compacted, attempts + 1, summary
 
     def _restore(self, input, checkpoint):
         if checkpoint is None:
@@ -2771,6 +2944,9 @@ class DurableCodingLoop:
             transcript_digest=digest,
             input_tokens=int(raw.get("input_tokens", 0)),
             output_tokens=int(raw.get("output_tokens", 0)),
+            cache_read_tokens=_nonneg_int(raw.get("cache_read_tokens")),
+            cache_write_tokens=_nonneg_int(raw.get("cache_write_tokens")),
+            reasoning_tokens=_nonneg_int(raw.get("reasoning_tokens")),
             cost_micros=int(raw.get("cost_micros", 0)),
             terminal_pending=terminal_pending,
             read_paths=read_paths,
@@ -2781,7 +2957,9 @@ class DurableCodingLoop:
             prompt_compact_retries=int(raw.get("prompt_compact_retries", 0)),
             output_token_escalations=int(raw.get("output_token_escalations", 0)),
             llm_compact_attempts=int(raw.get("llm_compact_attempts", 0)),
+            summary=str(raw.get("summary") or ""),
             revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ()),
+            allowed_tools=frozenset(str(name) for name in raw.get("allowed_tools") or ()),
             approved_always=frozenset(
                 str(name) for name in raw.get("approved_always") or ()
             ),
@@ -2963,6 +3141,9 @@ class DurableCodingLoop:
             "transcript_digest": state.transcript_digest,
             "input_tokens": state.input_tokens,
             "output_tokens": state.output_tokens,
+            "cache_read_tokens": state.cache_read_tokens,
+            "cache_write_tokens": state.cache_write_tokens,
+            "reasoning_tokens": state.reasoning_tokens,
             "cost_micros": state.cost_micros,
             "terminal_pending": state.terminal_pending,
             "read_paths": sorted(state.read_paths),
@@ -2971,7 +3152,9 @@ class DurableCodingLoop:
             "prompt_compact_retries": state.prompt_compact_retries,
             "output_token_escalations": state.output_token_escalations,
             "llm_compact_attempts": state.llm_compact_attempts,
+            "summary": state.summary,
             "revealed_tools": sorted(state.revealed_tools),
+            "allowed_tools": sorted(state.allowed_tools),
             "approved_always": sorted(state.approved_always),
             "hook_retry_count": state.hook_retry_count,
             "compacted_bodies": dict(state.compacted_bodies),
@@ -3013,9 +3196,16 @@ class DurableCodingLoop:
         self, transcript, *, preserve_tools: bool = False, bodies=None
     ):
         before = tuple(transcript)
+        pre = await invoke_pre_compact(self._hooks, before)
+        open_pair = preserve_tools or _has_open_tool_pair(before)
+        if pre and not open_pair:
+            before = self._append_user_meta(before, pre)
         after = self._compact(before, preserve_tools=preserve_tools, bodies=bodies)
         if after != before:
             await self._hooks.compact(before, after)
+        post = await invoke_post_compact(self._hooks, before, after)
+        if post and not (open_pair or _has_open_tool_pair(after)):
+            after = self._append_user_meta(after, post)
         return after
 
     def _over_budget(self, transcript) -> bool:
@@ -3332,6 +3522,17 @@ def _next_success_signature(
     ):
         return signature, result_hash, state.last_success_count + 1
     return signature, result_hash, 1
+
+
+def _has_open_tool_pair(transcript: Sequence[CanonicalMessage]) -> bool:
+    for message in reversed(transcript):
+        if message.role == "tool":
+            return False
+        if message.role == "assistant":
+            return any(isinstance(item, ToolUseContent) for item in message.content)
+        if message.role == "user":
+            return False
+    return False
 
 
 def _uniquify_tool_calls(

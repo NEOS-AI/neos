@@ -17,6 +17,7 @@
 #   picker       채팅 피커 노출. 없으면 selectable 이어도 피커에 안 오른다
 #   wire_id      프로바이더에 보내는 id. 기본은 카탈로그 키
 #   id_forms     추가로 받는 철자. 날짜 접미사를 지어내지 않는다
+#   aux          헬퍼 슬롯(fast|title|artifact) → 카탈로그 핀
 #
 # 선언 순서가 list_models() 순서다. 최신 → 레거시 순을 유지할 것.
 
@@ -386,3 +387,9 @@ remaps:
   "google/gemini-3-pro-preview": claude-sonnet-5
   "xai/grok-4.1-fast-non-reasoning": claude-sonnet-5
   "xai/grok-code-fast-1-thinking": claude-sonnet-5
+
+# FE title/artifact/fast helpers. Values are catalog pins, not gateway ids.
+aux:
+  fast: claude-haiku-4-5-20251001
+  title: claude-haiku-4-5-20251001
+  artifact: claude-haiku-4-5-20251001

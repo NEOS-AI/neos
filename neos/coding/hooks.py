@@ -39,6 +39,14 @@ class CodingHookPort(Protocol):
         after: Sequence[CanonicalMessage],
     ) -> None: ...
 
+    async def pre_generate(
+        self, transcript: Sequence[CanonicalMessage]
+    ) -> Mapping[str, str] | None: ...
+
+    async def post_generate(
+        self, text: str, transcript: Sequence[CanonicalMessage]
+    ) -> None: ...
+
 
 class NullCodingHooks:
     async def pre_tool(self, call: ValidatedToolCall) -> HookDecision | None:
@@ -56,5 +64,15 @@ class NullCodingHooks:
         self,
         before: Sequence[CanonicalMessage],
         after: Sequence[CanonicalMessage],
+    ) -> None:
+        return None
+
+    async def pre_generate(
+        self, transcript: Sequence[CanonicalMessage]
+    ) -> Mapping[str, str] | None:
+        return None
+
+    async def post_generate(
+        self, text: str, transcript: Sequence[CanonicalMessage]
     ) -> None:
         return None
