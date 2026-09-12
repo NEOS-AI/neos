@@ -644,7 +644,8 @@ class CodingRunService:
                     lease=lease,
                     tool_call_id=tool_call_id,
                     now=now,
-                    claim_expires_at=now + timedelta(seconds=30),
+                    claim_expires_at=now
+                    + timedelta(seconds=self._child_lease_horizon()),
                 )
             except Exception:
                 continue

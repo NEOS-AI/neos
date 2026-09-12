@@ -639,6 +639,106 @@ async def test_fail_active_run_completes_reclaimed_spawn_claims() -> None:
     assert completed["reason_code"] == "aborted"
 
 
+async def _plant_two_live_delegated_children(repository) -> None:
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {
+                "current_instruction": "Fix it",
+                "transcript": [],
+                "active_children": [
+                    {
+                        "run_id": "sa_1",
+                        "checkpoint_id": "sc_1",
+                        "tool_call_id": "s1",
+                    },
+                    {
+                        "run_id": "sa_2",
+                        "checkpoint_id": "sc_2",
+                        "tool_call_id": "s2",
+                    },
+                ],
+            },
+            "1",
+            NOW,
+        )
+    )
+    stale_lease = await repository.acquire_execution_lease(
+        task_id="ct_1",
+        run_id="cr_1",
+        worker_id="worker-old",
+        now=NOW,
+        expires_at=NOW + timedelta(seconds=30),
+    )
+    assert stale_lease is not None
+    live_expires = NOW + timedelta(minutes=1)
+    for tool_call_id, child_run_id, child_checkpoint_id in (
+        ("s1", "sa_1", "sc_1"),
+        ("s2", "sa_2", "sc_2"),
+    ):
+        planted = await repository.claim_tool_execution(
+            lease=stale_lease,
+            tool_call_id=tool_call_id,
+            now=NOW,
+            claim_expires_at=live_expires,
+        )
+        await repository.mark_tool_delegated(
+            planted,
+            child_run_id=child_run_id,
+            child_checkpoint_id=child_checkpoint_id,
+            claim_expires_at=live_expires,
+            now=NOW,
+        )
+    await repository.release_execution_lease(stale_lease, now=NOW)
+
+
+@pytest.mark.no_db
+async def test_stop_cancels_all_live_claims() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await _plant_two_live_delegated_children(repository)
+
+    service = await make_run_service(repository)
+    await service.stop(task_id="ct_1", owner_id="u1")
+
+    for tool_call_id in ("s1", "s2"):
+        completed = repository.completed_tools[("ct_1", tool_call_id)]
+        assert completed["status"] == "error"
+        assert completed["reason_code"] == "aborted"
+
+
+async def test_fail_active_run_completes_two_live_spawn_claims() -> None:
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run,
+        task_prompts={"ct_1": "Fix it"},
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await _plant_two_live_delegated_children(repository)
+
+    service = await make_run_service(repository)
+    event = await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="supervisor_retry_exhausted",
+    )
+
+    assert event.type == "run.failed"
+    for tool_call_id in ("s1", "s2"):
+        completed = repository.completed_tools[("ct_1", tool_call_id)]
+        assert completed["status"] == "error"
+        assert completed["reason_code"] == "aborted"
+
+
 async def test_fail_open_skips_busy_spawn_claim() -> None:
     run = run_fixture("cr_1")
     repository = InMemoryCodingRunRepository(
