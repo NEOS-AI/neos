@@ -28,9 +28,8 @@ import {
   ModelSelectorTrigger,
 } from "@/components/elements/model-selector";
 import {
-  chatModels,
-  DEFAULT_CHAT_MODEL,
-  modelsByProvider,
+  groupModelsByProvider,
+  type CatalogPayload,
 } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -68,6 +67,7 @@ function PureMultimodalInput({
   selectedVisibilityType,
   selectedModelId,
   onModelChange,
+  catalog,
 }: {
   chatId: string;
   input: string;
@@ -83,6 +83,7 @@ function PureMultimodalInput({
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
+  catalog: CatalogPayload;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -375,6 +376,7 @@ function PureMultimodalInput({
               status={status}
             />
             <ModelSelectorCompact
+              catalog={catalog}
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
             />
@@ -416,6 +418,9 @@ export const MultimodalInput = memo(
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
+    if (!equal(prevProps.catalog, nextProps.catalog)) {
+      return false;
+    }
 
     return true;
   }
@@ -454,19 +459,22 @@ const AttachmentsButton = memo(PureAttachmentsButton);
 function PureModelSelectorCompact({
   selectedModelId,
   onModelChange,
+  catalog,
 }: {
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
+  catalog: CatalogPayload;
 }) {
   const [open, setOpen] = useState(false);
+  const chatModels = catalog.models;
+  const modelsByProvider = groupModelsByProvider(chatModels);
 
   const selectedModel =
     chatModels.find((m) => m.id === selectedModelId) ??
-    chatModels.find((m) => m.id === DEFAULT_CHAT_MODEL) ??
+    chatModels.find((m) => m.id === catalog.default_id) ??
     chatModels[0];
-  const [provider] = selectedModel.id.split("/");
+  const [provider] = selectedModel?.id.split("/") ?? [];
 
-  // Provider display names
   const providerNames: Record<string, string> = {
     anthropic: "Anthropic",
     openai: "OpenAI",
@@ -484,7 +492,7 @@ function PureModelSelectorCompact({
           variant="ghost"
         >
           {provider && <ModelSelectorLogo provider={provider} />}
-          <ModelSelectorName>{selectedModel.name}</ModelSelectorName>
+          <ModelSelectorName>{selectedModel?.name ?? catalog.default_id}</ModelSelectorName>
         </Button>
       </ModelSelectorTrigger>
       <ModelSelectorContent>
@@ -510,7 +518,7 @@ function PureModelSelectorCompact({
                     >
                       <ModelSelectorLogo provider={logoProvider} />
                       <ModelSelectorName>{model.name}</ModelSelectorName>
-                      {model.id === selectedModel.id && (
+                      {model.id === selectedModel?.id && (
                         <CheckIcon className="ml-auto size-4" />
                       )}
                     </ModelSelectorItem>

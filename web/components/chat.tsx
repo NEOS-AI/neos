@@ -22,6 +22,7 @@ import { useChatStream } from "@/hooks/use-chat-stream";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import { getChatHistoryPaginationKey } from "@/lib/chat-history-pagination";
 import type { Vote } from "@/lib/db/schema";
+import type { CatalogPayload } from "@/lib/ai/models";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { fetcher } from "@/lib/utils";
@@ -39,6 +40,7 @@ export function Chat({
   initialVisibilityType,
   isReadonly,
   autoResume,
+  catalog,
 }: {
   id: string;
   initialMessages: ChatMessage[];
@@ -46,6 +48,7 @@ export function Chat({
   initialVisibilityType: VisibilityType;
   isReadonly: boolean;
   autoResume: boolean;
+  catalog: CatalogPayload;
 }) {
   const router = useRouter();
 
@@ -182,6 +185,7 @@ export function Chat({
           {!isReadonly && (
             <MultimodalInput
               attachments={attachments}
+              catalog={catalog}
               chatId={id}
               input={input}
               messages={messages}
@@ -201,6 +205,7 @@ export function Chat({
 
       <Artifact
         attachments={attachments}
+        catalog={catalog}
         chatId={id}
         input={input}
         isReadonly={isReadonly}

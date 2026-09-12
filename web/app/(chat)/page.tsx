@@ -3,9 +3,10 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { loadPageCatalog } from "@/lib/ai/catalog";
 import { generateUUID } from "@/lib/utils";
 import { auth } from "../(auth)/auth";
+import { saveChatModelAsCookie } from "./actions";
 
 
 export default function Page() {
@@ -26,31 +27,20 @@ async function NewChatPage() {
   const id = generateUUID();
 
   const cookieStore = await cookies();
-  const modelIdFromCookie = cookieStore.get("chat-model");
-
-  if (!modelIdFromCookie) {
-    return (
-      <>
-        <Chat
-          autoResume={false}
-          id={id}
-          initialChatModel={DEFAULT_CHAT_MODEL}
-          initialMessages={[]}
-          initialVisibilityType="private"
-          isReadonly={false}
-          key={id}
-        />
-        <DataStreamHandler />
-      </>
-    );
+  const { catalog, modelId, rewriteTo } = await loadPageCatalog(
+    cookieStore.get("chat-model")?.value
+  );
+  if (rewriteTo) {
+    await saveChatModelAsCookie(rewriteTo);
   }
 
   return (
     <>
       <Chat
         autoResume={false}
+        catalog={catalog}
         id={id}
-        initialChatModel={modelIdFromCookie.value}
+        initialChatModel={modelId}
         initialMessages={[]}
         initialVisibilityType="private"
         isReadonly={false}

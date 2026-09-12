@@ -27,6 +27,9 @@ const BACKEND_USER_ID = "backend-user-1";
 const CONVERSATION_ID = "11111111-1111-4111-8111-111111111111";
 
 const stubCallBackendAPI: CallBackendAPIStub = async (endpoint, options) => {
+  if (endpoint === "/api/v1/models") {
+    return new Response(null, { status: 404 });
+  }
   if (endpoint.includes("/message-count")) {
     return new Response(null, { status: 503 });
   }
@@ -63,6 +66,9 @@ async function importRoute() {
   const ModuleAny = Module as any;
   const originalLoad = ModuleAny._load;
   ModuleAny._load = (request: string, ...rest: any[]) => {
+    if (request === "server-only") {
+      return {};
+    }
     if (request === "@/lib/backend-api") {
       return { callBackendAPI: stubCallBackendAPI };
     }
@@ -81,6 +87,7 @@ async function importRoute() {
 let route: any;
 
 before(async () => {
+  delete process.env.CATALOG_API;
   route = await importRoute();
 });
 
@@ -120,7 +127,7 @@ describe("POST /api/chat — 매 메시지 metadata.model", () => {
     );
   });
 
-  test("은퇴한 게이트웨이 id도 RETIRED_MODEL_MAP을 거쳐 나간다 (쿠키에 남은 옛 선택)", async () => {
+  test("은퇴한 게이트웨이 id도 카탈로그 remaps를 거쳐 나간다 (쿠키에 남은 옛 선택)", async () => {
     const response = await route.POST(buildRequest("anthropic/claude-opus-4.5"));
 
     assert.equal(response.status, 200);

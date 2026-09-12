@@ -42,6 +42,12 @@ jobs:
       # 주체가 없고 addopts 의 --strict-markers 가 거부한 것이다. --locked 는
       # 같은 상황을 원인의 이름 그대로, 테스트를 돌리기도 전에 실패시킨다.
       - run: uv sync --locked --group dev
+      # YAML 과 커밋된 FE 폴백이 어긋나면 피커가 두 시계를 갖는다.
+      # 스크립트가 to_picker_payload() 로 다시 쓰고, 커밋 파일이 같아야 한다.
+      - name: Check catalog.generated.ts is not stale
+        run: |
+          uv run --frozen python scripts/generate_catalog_fallback.py
+          git diff --exit-code -- web/lib/ai/catalog.generated.ts
       # 파일 나열이 아니라 디렉터리다. 예전 판은 네 파일만 검사했고, 그래서
       # 2026-08-13 에 `tests/config/test_test_environment_policy.py` 를 고치며
       # 남긴 미사용 임포트가 **린트 대상 안에 있었는데도** 그 파일만 통과시켜

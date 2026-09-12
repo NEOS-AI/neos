@@ -194,6 +194,33 @@ def _frontend_run_steps() -> list[str]:
     return steps
 
 
+def test_backend_ci_checks_catalog_fallback_is_fresh():
+    """YAML 과 커밋된 FE 폴백이 어긋나면 피커가 두 시계를 갖는다.
+
+    프론트 CI 는 Neos Python 환경이 없으므로 이 가드는 백엔드 워크플로의
+    quality 잡에 둔다. 주석에 스크립트 이름을 적는 것만으로는 부족하다 —
+    실제 `run:` 이 생성 후 `git diff --exit-code` 를 돌려야 한다.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    quality_runs = [
+        step.get("run") or ""
+        for step in ((workflow.get("jobs") or {}).get("quality") or {}).get("steps") or []
+    ]
+    matching = [
+        run
+        for run in quality_runs
+        if "generate_catalog_fallback.py" in run
+        and "git diff --exit-code" in run
+        and "web/lib/ai/catalog.generated.ts" in run
+    ]
+    assert matching, (
+        f"{_WORKFLOW} quality 잡이 catalog.generated.ts 신선도 검사를 "
+        "돌리지 않는다. YAML 만 바꾸고 생성된 폴백을 안 고치면 산다."
+    )
+
+
 def test_frontend_ci_runs_the_source_suite_and_typecheck():
     commands = _frontend_run_steps()
     assert commands, f"{_FRONTEND_WORKFLOW} 에서 `run:` 스텝을 못 찾았다"
