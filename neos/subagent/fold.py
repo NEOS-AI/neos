@@ -90,13 +90,13 @@ def _optional_int(value: object) -> int | None:
 
 
 def _exit_reason(record: RunRecord) -> str:
+    if record.error_code == "turns_exhausted":
+        return "turns_exhausted"
     if record.status is SubagentStatus.COMPLETED:
         return "completed"
     if record.status is SubagentStatus.KILLED:
         return "cancelled"
     if record.status is SubagentStatus.FAILED:
-        if record.error_code == "turns_exhausted":
-            return "turns_exhausted"
         if record.error_code == "stalled":
             return "stalled"
         return "failed"

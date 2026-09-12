@@ -135,9 +135,8 @@ class FoldedResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_micros: int = 0
-    # completed | turns_exhausted | cancelled | failed | stalled | dropped
     exit_reason: str = ""
-    full_summary: str = ""  # original text when truncated; empty otherwise
+    full_summary: str = ""
 
 
 class ToolPort(Protocol):

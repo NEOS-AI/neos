@@ -131,7 +131,7 @@ def test_fold_maps_exit_reason_from_status_and_error_code() -> None:
         {"last_assistant_text": "ok"},
     )
     exhausted = fold_run(
-        _record(status=SubagentStatus.FAILED, error_code="turns_exhausted"),
+        _record(status=SubagentStatus.COMPLETED, error_code="turns_exhausted"),
         {"last_assistant_text": "ok"},
     )
     failed = fold_run(
