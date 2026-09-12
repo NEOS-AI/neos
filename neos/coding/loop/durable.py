@@ -1014,12 +1014,12 @@ class DurableCodingLoop:
             # Production returns on first phase.completed; a post-yield check never runs.
             try:
                 self._check_usage_budgets(after)
-            except CodingLoopFailure:
+            except CodingLoopFailure as error:
                 await self.fail_all_live_spawn_claims(
                     after,
                     deps,
                     bound,
-                    reason="cost_budget_exceeded",
+                    reason=error.code,
                     task_id=input.task_id,
                 )
                 raise
