@@ -397,7 +397,16 @@ INSERT INTO llm_model_pricing (
     ('anthropic', 'claude-opus-4-5-20251101', 15.00, 75.00, 18.75, 1.50, 200000, 4096, TRUE, TRUE),
 
     -- Anthropic Claude 4.5 Haiku
-    ('anthropic', 'claude-haiku-4-5-20251001', 0.25, 1.25, 0.30, 0.03, 200000, 4096, TRUE, TRUE)
+    ('anthropic', 'claude-haiku-4-5-20251001', 0.25, 1.25, 0.30, 0.03, 200000, 4096, TRUE, TRUE),
+
+    -- Anthropic Claude Sonnet 5
+    ('anthropic', 'claude-sonnet-5', 3.00, 15.00, 3.75, 0.30, 200000, 8192, TRUE, TRUE),
+
+    -- Anthropic Claude Opus 5
+    ('anthropic', 'claude-opus-5', 5.00, 25.00, 6.25, 0.50, 200000, 8192, TRUE, TRUE),
+
+    -- Anthropic Claude Opus 4.8 (deep-analysis judge)
+    ('anthropic', 'claude-opus-4-8', 5.00, 25.00, 6.25, 0.50, 200000, 8192, TRUE, TRUE)
 ON CONFLICT (provider, model_name, effective_from) DO NOTHING;
 
 -- ============================================================================
