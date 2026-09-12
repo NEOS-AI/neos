@@ -148,3 +148,27 @@ def test_public_dataclasses_are_frozen() -> None:
             summary="done",
             truncated=False,
         ).summary = "nope"  # type: ignore[misc]
+
+
+def test_folded_result_defaults_exit_reason_and_full_summary() -> None:
+    result = FoldedResult(
+        run_id="sa_1",
+        status=SubagentStatus.COMPLETED,
+        summary="done",
+        truncated=False,
+    )
+    assert result.exit_reason == ""
+    assert result.full_summary == ""
+
+
+def test_folded_result_accepts_exit_reason_and_full_summary() -> None:
+    result = FoldedResult(
+        run_id="sa_1",
+        status=SubagentStatus.FAILED,
+        summary="head",
+        truncated=True,
+        exit_reason="failed",
+        full_summary="head and tail",
+    )
+    assert result.exit_reason == "failed"
+    assert result.full_summary == "head and tail"

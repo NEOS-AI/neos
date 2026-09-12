@@ -60,8 +60,9 @@ def test_fold_truncates_last_assistant_text_to_budget() -> None:
     text = "a" * 300
     first = fold_run(_record(), {"last_assistant_text": text, "citations": ["README.md"]})
     again = fold_run(_record(), {"last_assistant_text": text, "citations": ["README.md"]})
-    assert first.summary == "a" * 256
+    assert len(first.summary) == 256
     assert first.truncated is True
+    assert first.full_summary == text
     assert first.citations == ("README.md",)
     assert first.turn_count == 2
     assert first == again
@@ -118,3 +119,78 @@ def test_fold_invalid_budget_and_none_loop_state_does_not_raise() -> None:
         None,
     )
     assert result.summary == "completed"
+
+
+def test_fold_maps_exit_reason_from_status_and_error_code() -> None:
+    completed = fold_run(
+        _record(status=SubagentStatus.COMPLETED),
+        {"last_assistant_text": "ok"},
+    )
+    killed = fold_run(
+        _record(status=SubagentStatus.KILLED),
+        {"last_assistant_text": "ok"},
+    )
+    exhausted = fold_run(
+        _record(status=SubagentStatus.COMPLETED, error_code="turns_exhausted"),
+        {"last_assistant_text": "ok"},
+    )
+    failed = fold_run(
+        _record(status=SubagentStatus.FAILED, error_code="model_provider_failed"),
+        {"last_assistant_text": "ok"},
+    )
+    stalled = fold_run(
+        _record(status=SubagentStatus.FAILED, error_code="stalled"),
+        {"last_assistant_text": "ok"},
+    )
+    assert completed.exit_reason == "completed"
+    assert killed.exit_reason == "cancelled"
+    assert exhausted.exit_reason == "turns_exhausted"
+    assert failed.exit_reason == "failed"
+    assert stalled.exit_reason == "stalled"
+
+
+def test_fold_default_budget_without_headroom_is_4000() -> None:
+    text = "x" * 4000
+    result = fold_run(
+        _record(briefing={"goal": "inspect"}),
+        {"last_assistant_text": text},
+    )
+    assert result.truncated is False
+    assert result.summary == text
+    assert result.full_summary == ""
+    over = fold_run(
+        _record(briefing={"goal": "inspect"}),
+        {"last_assistant_text": text + "y"},
+    )
+    assert over.truncated is True
+    assert len(over.summary) == 4000
+    assert over.full_summary == text + "y"
+
+
+def test_fold_headroom_and_siblings_shrink_budget() -> None:
+    text = "x" * 500
+    result = fold_run(
+        _record(briefing={"goal": "inspect"}),
+        {"last_assistant_text": text},
+        parent_headroom_chars=800,
+        sibling_count=2,
+    )
+    assert result.truncated is True
+    assert len(result.summary) == 400
+
+
+def test_fold_truncation_keeps_head_tail_and_full_summary() -> None:
+    text = ("H" * 300) + ("T" * 200)
+    result = fold_run(
+        _record(briefing={"goal": "inspect"}),
+        {"last_assistant_text": text},
+        parent_headroom_chars=800,
+        sibling_count=2,
+    )
+    assert result.truncated is True
+    assert result.full_summary == text
+    assert "\n…\n" in result.summary
+    head, tail = result.summary.split("\n…\n")
+    assert head == text[:297]
+    assert tail == text[-100:]
+    assert len(result.summary) == 400
