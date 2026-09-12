@@ -849,6 +849,22 @@ class Ledger:
         for dead_end in result.dead_ends:
             await self.log("dead_end", question_id, {"text": dead_end})
 
+        # Write-only fold note. Not a claim and not a dead_end — graders
+        # never see it, and unverified_and_deadends still reads only
+        # kind=="dead_end" plus unverified claim rows.
+        brief = (result.unverified_brief or "").strip()
+        if brief:
+            await self.log(
+                "explore_brief",
+                question_id,
+                {
+                    "text": brief[:16_384],
+                    "run_id": result.subagent_run_id or "",
+                    "truncated": len(brief) > 16_384,
+                    "child_status": result.subagent_step_kind or result.status,
+                },
+            )
+
         # C3-m1: `result.tokens_spent` 는 워커 자신의 지출(검색·entailment·
         # repair 호출)일 뿐, 워커가 낸 클레임을 심사하는 판정자의 지출은
         # 들어 있지 않았다. `judge_tokens_spent` 는 호출부가 누적해 넘긴
