@@ -1635,3 +1635,172 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
     assert h.repository.completed_tools[("ct_1", "s1")] == original_s1
     assert h.repository.completed_tools[("ct_1", "s2")]["reason_code"] == "aborted"
     assert after.active_children == ()
+
+
+def _parent_tokens_before_child(h) -> dict:
+    return next(
+        checkpoint.loop_state
+        for checkpoint in h.repository.checkpoints
+        if checkpoint.loop_state.get("pending_tool_calls")
+        and not checkpoint.loop_state.get("active_children")
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuing_park_increments_parent_usage_fold_does_not_double_count() -> None:
+    runtime, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=2, output_tokens=3),
+            _usage_turn("found login.py", 4, 5),
+        ]
+    )
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    before = _parent_tokens_before_child(h)
+    assert parked.loop_state["input_tokens"] == before["input_tokens"] + 2
+    assert parked.loop_state["output_tokens"] == before["output_tokens"] + 3
+    assert parked.loop_state["cost_micros"] == before["cost_micros"] + 5
+    child = _child_by_id(parked.loop_state, "s1")
+    assert child is not None
+    assert child["rolled_input_tokens"] == 2
+    assert child["rolled_output_tokens"] == 3
+    clock.tick()
+    folded = await _collect_until_folded(h, clock, parked, "s1")
+    after = folded.loop_state
+    assert after["input_tokens"] == before["input_tokens"] + 6
+    assert after["output_tokens"] == before["output_tokens"] + 8
+    assert after["cost_micros"] == before["cost_micros"] + 14
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_token_budget_exceed_on_continuing_cancels_siblings() -> None:
+    inner, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=2, output_tokens=3),
+            _child_tool(),
+        ]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_priced(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    parent_tokens = int(parked.loop_state["input_tokens"]) + int(
+        parked.loop_state["output_tokens"]
+    )
+    h.loop._config = replace(
+        h.loop._config,
+        max_total_tokens=max(1, parent_tokens),
+        max_cost_micros=10**12,
+    )
+    service = await _run_service(h, clock)
+    with pytest.raises(CodingLoopFailure) as caught:
+        for _ in range(8):
+            await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+            clock.tick()
+    assert caught.value.code == "token_budget_exceeded"
+    sibling = h.repository.completed_tools[("ct_1", "s2")]
+    assert sibling["reason_code"] == "token_budget_exceeded"
+    last_s1 = max(
+        index
+        for index, ticket in enumerate(runtime.advance_tickets)
+        if ticket.parent_tool_call_id == "s1"
+    )
+    last_sibling = max(
+        (
+            index
+            for index, ticket in enumerate(runtime.advance_tickets)
+            if ticket.parent_tool_call_id == "s2"
+        ),
+        default=-1,
+    )
+    assert last_sibling < last_s1
+    assert ("ct_1", "s1") not in h.repository.completed_tools
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ("TODO", "TBD", "todo", "  TBD  ", "<feature_name>", "implement <feature_name>"),
+)
+@pytest.mark.asyncio
+async def test_placeholder_prompt_is_policy_schema_invalid(prompt: str) -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    h = harness(_spawn_turns(prompt), config=_flag_on(), subagents=runtime)
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_schema_invalid"
+    state = h.repository.checkpoints[-1].loop_state
+    assert state.get("active_children") in (None, [], ())
+    assert state["active_child_run_id"] is None
+    assert len(_subagent_store(runtime)._runs) == 0
+
+
+def test_spawn_briefing_rejects_placeholder_and_empty_goals() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    for prompt in ("", "   ", "TODO", "TBD", "<feature_name>"):
+        call = tool_call("s1", "spawn_agent.v1", {"prompt": prompt, "max_turns": 4})
+        with pytest.raises(ValueError):
+            h.loop._spawn_briefing(call)
+
+
+@pytest.mark.asyncio
+async def test_adopt_and_complete_claim_errors_are_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._metrics = metrics
+
+    async def boom_claim(**kwargs):
+        raise RuntimeError("claim exploded")
+
+    h.repository.claim_tool_execution = boom_claim
+    with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
+        claim = await h.loop._adopt_spawn_claim(h.deps, "s1")
+    assert claim is None
+    assert any("adopt spawn claim failed" in record.getMessage() for record in caplog.records)
+    assert (
+        metrics.subagent_adopt_error_total.labels(
+            parent_kind="coding", op="adopt"
+        )._value.get()
+        == 1
+    )
+
+    caplog.clear()
+    fake = ToolExecutionClaim(
+        disposition=ToolExecutionDisposition.CLAIMED,
+        tool_call_id="s1",
+        lease=h.deps.lease,
+    )
+
+    async def boom_complete(claim, result, now):
+        raise RuntimeError("complete exploded")
+
+    h.repository.complete_tool_execution = boom_complete
+    bound = await h.loop._bindings.resolve(h.deps.lease)
+    with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
+        await h.loop._complete_spawn_claim(h.deps, fake, bound, "aborted")
+    assert any(
+        "complete spawn claim failed" in record.getMessage() for record in caplog.records
+    )
+    assert (
+        metrics.subagent_adopt_error_total.labels(
+            parent_kind="coding", op="complete"
+        )._value.get()
+        == 1
+    )
