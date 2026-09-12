@@ -65,6 +65,9 @@ def test_schema_defaults_match_current_runtime_policy():
     assert config.model_routing.anthropic.powerful == "opus-5"
     assert config.model_routing.openai.everyday == "gpt-5.6-terra"
     assert config.model_routing.openai.powerful == "gpt-5.6-sol"
+    assert config.model_catalog.picker_api is False
+    assert config.model_catalog.default_unknown_claude_adaptive is False
+    assert config.model_catalog.live_anthropic is False
 
 
 def test_thinking_engine_config_defaults_are_conservative():

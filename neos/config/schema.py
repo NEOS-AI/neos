@@ -159,6 +159,14 @@ class ModelRoutingConfig(StrictConfigModel):
     )
 
 
+class ModelCatalogConfig(StrictConfigModel):
+    """Runtime catalog flags. All default off."""
+
+    picker_api: bool = False
+    default_unknown_claude_adaptive: bool = False
+    live_anthropic: bool = False
+
+
 class EmbeddingDatasetConfig(StrictConfigModel):
     enabled: bool = False
     sample_rate: float = 0.1
@@ -1769,6 +1777,7 @@ class AppConfig(StrictConfigModel):
     smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
+    model_catalog: ModelCatalogConfig = Field(default_factory=ModelCatalogConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
