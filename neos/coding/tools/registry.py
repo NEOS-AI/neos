@@ -322,6 +322,15 @@ class _SpawnAgentInput(_ToolInput):
     report_budget: int = Field(default=4000, ge=256, le=16384)
 
 
+class _SubagentListInput(_ToolInput):
+    pass
+
+
+class _SubagentSteerInput(_ToolInput):
+    run_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class _EmptyInput(_ToolInput):
     pass
 
@@ -603,6 +612,26 @@ class CodingToolRegistry:
             ),
             ToolRisk.READ_ONLY,
             _SpawnAgentInput,
+        ),
+        _RegisteredTool(
+            "subagent_list.v1",
+            (
+                "List live explore children of this parent. "
+                "Returns run_id, spec, status, and turn_count only. "
+                "On policy_* denial, do not retry."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentListInput,
+        ),
+        _RegisteredTool(
+            "subagent_steer.v1",
+            (
+                "Append text to the next user message of a parent-owned child. "
+                "Does not interrupt the current child step. "
+                "On policy_* denial, do not retry the same run."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentSteerInput,
         ),
     )
 

@@ -286,6 +286,38 @@ async def test_child_transcript_too_large_fails() -> None:
     assert second.error_code == "child_transcript_too_large"
 
 
+def test_compact_keeps_size_ref_pointer() -> None:
+    from neos.subagent.stepper import _compact
+
+    body = "x" * 40_000
+    state = {
+        "turn_count": 2,
+        "messages": [
+            {"role": "user", "text": "look"},
+            {"role": "tool", "name": "read_file.v1", "content": {"body": body}},
+        ],
+    }
+    _compact(state)
+    content = state["messages"][1]["content"]
+    assert content["_ref"]
+    assert content["bytes"] >= len(body)
+    assert body not in str(content)
+
+
+def test_compact_skips_large_body_before_turn_or_char_threshold() -> None:
+    from neos.subagent.stepper import _compact
+
+    body = "y" * 40_000
+    state = {
+        "turn_count": 1,
+        "messages": [
+            {"role": "tool", "content": {"body": body}},
+        ],
+    }
+    _compact(state)
+    assert state["messages"][0]["content"] == {"body": body}
+
+
 def test_runtime_has_no_run_until_done_or_inner_loop() -> None:
     assert not hasattr(SubagentRuntime, "run_until_done")
     for path in Path("neos/subagent").glob("*.py"):

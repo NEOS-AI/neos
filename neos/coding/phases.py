@@ -29,6 +29,8 @@ _HIDDEN_WRITES = frozenset(
         "write_file.v1",
         "execute.v1",
         "spawn_agent.v1",
+        "subagent_list.v1",
+        "subagent_steer.v1",
     }
 )
 
@@ -36,7 +38,13 @@ _HIDDEN: dict[CodingAgentPhase, frozenset[str]] = {
     CodingAgentPhase.EXPLORE: _HIDDEN_WRITES,
     CodingAgentPhase.PLAN: _HIDDEN_WRITES,
     CodingAgentPhase.VERIFY: frozenset(
-        {"edit_file.v1", "write_file.v1", "spawn_agent.v1"}
+        {
+            "edit_file.v1",
+            "write_file.v1",
+            "spawn_agent.v1",
+            "subagent_list.v1",
+            "subagent_steer.v1",
+        }
     ),
     CodingAgentPhase.IMPLEMENT: frozenset(),
 }

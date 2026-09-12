@@ -37,6 +37,8 @@ _CODING_TOOLS = {
     "load_skill.v1",
     "search_tools.v1",
     "spawn_agent.v1",
+    "subagent_list.v1",
+    "subagent_steer.v1",
 }
 _CODING_OPERATIONS = {"validate", "claim", "execute", "checkpoint"}
 _CODING_OUTCOMES = {"allowed", "denied", "ok", "error", "reused"}

@@ -2016,3 +2016,61 @@ async def test_adopt_and_complete_claim_errors_are_logged_not_raised(
         )._value.get()
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_subagent_list_flag_off_returns_empty() -> None:
+    h = harness(
+        [
+            [
+                ToolCallCompleted("l1", "subagent_list.v1", {}),
+                completed(),
+            ]
+        ]
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result.get("children") == []
+    assert result.get("entries") in ((), [], None) or list(result.get("entries") or ()) == []
+
+
+@pytest.mark.asyncio
+async def test_subagent_steer_refuses_unowned_run() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text()])
+    foreign = await inner.advance(
+        SubagentTicket(
+            parent_kind=ParentKind.CODING,
+            parent_id="ct_other",
+            parent_run_id="cr_other",
+            parent_tool_call_id="fx",
+            spec="explore",
+            briefing=ParentBriefing(goal="foreign look"),
+            model=ModelPin(provider="anthropic", model="claude-test"),
+            max_turns=4,
+            sandbox_mode=SandboxMode.PARENT_RO,
+        )
+    )
+    h = harness(
+        [
+            [
+                tool_call(
+                    "st1",
+                    "subagent_steer.v1",
+                    {"run_id": foreign.run_id, "text": "do not steer this"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=inner,
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_not_owner"
+    state = await inner._store.get_loop_state(foreign.run_id)
+    assert "do not steer this" not in str(state)
