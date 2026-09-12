@@ -9,7 +9,6 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, TypeVar
 
 from neos.providers.anthropic import normalize_anthropic_request
-from neos.config.settings import settings
 from neos.workflow.deep_analysis.prompt_loader import (
     UnfilledPlaceholder,
     unfilled_placeholders,

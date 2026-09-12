@@ -15,6 +15,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     CodingApproval,
     approval_display_summary,
+    approval_event_display_summary,
     canonical_approval_hash,
     requires_approval_answers,
 )
@@ -2454,7 +2455,9 @@ class PostgresCodingRunRepository:
             "status": approval.status.value,
             "requested_at": approval.requested_at.isoformat(),
             "expires_at": approval.expires_at.isoformat(),
-            "display_summary": dict(approval.display_summary),
+            "display_summary": approval_event_display_summary(
+                approval.display_summary
+            ),
         }
 
     @staticmethod

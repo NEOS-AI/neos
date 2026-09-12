@@ -385,6 +385,17 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
     return redact_sensitive({"operation": call.name})
 
 
+def approval_event_display_summary(
+    summary: Mapping[str, object],
+) -> dict[str, object]:
+    excerpt = dict(summary)
+    excerpt.pop("preview", None)
+    excerpt.pop("patch", None)
+    excerpt.pop("content", None)
+    excerpt.pop("truncated", None)
+    return excerpt
+
+
 def denial_envelope(call, reason_code: str) -> dict[str, object]:
     if reason_code.startswith("policy_hook_"):
         denied_by = "hook"

@@ -982,7 +982,7 @@ class DurableCodingLoop:
             == call.tool_call_id
         )
         if call.tool_call_id in _tool_result_ids(state.transcript):
-            after = state
+            after = self._drain_completed_prefix(state)
         else:
             after = await self._after_result(
                 state,
