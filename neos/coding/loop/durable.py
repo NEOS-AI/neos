@@ -968,6 +968,12 @@ class DurableCodingLoop:
         yield tool_event, state
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
+        reused = claim.disposition is ToolExecutionDisposition.COMPLETED
+        child_fold = call.name == "spawn_agent.v1" and "child_status" in result
+        if child_fold and (
+            not reused or self._child_ref(state, call.tool_call_id) is not None
+        ):
+            state = self._apply_child_fold_usage(state, result)
         advance_index = (
             state.has_pending_tool
             and state.pending_tool_calls[state.pending_tool_index].tool_call_id
@@ -982,7 +988,7 @@ class DurableCodingLoop:
         )
         if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
-        if ran_spawn:
+        if ran_spawn or child_fold:
             after = self._sync_active_children(
                 after,
                 tuple(
@@ -1004,6 +1010,19 @@ class DurableCodingLoop:
             workspace_revision=revision,
             now=self._clock(),
         )
+        if child_fold:
+            # Production returns on first phase.completed; a post-yield check never runs.
+            try:
+                self._check_usage_budgets(after)
+            except CodingLoopFailure:
+                await self.fail_all_live_spawn_claims(
+                    after,
+                    deps,
+                    bound,
+                    reason="cost_budget_exceeded",
+                    task_id=input.task_id,
+                )
+                raise
         yield committed.event, after
         if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
@@ -2134,6 +2153,28 @@ class DurableCodingLoop:
             report_budget_chars=max(256, min(16_384, budget)),
         )
 
+    def _price_child_usage(self, folded) -> tuple[int, int, int]:
+        if isinstance(folded, Mapping):
+            in_tokens = int(folded.get("input_tokens") or 0)
+            out_tokens = int(folded.get("output_tokens") or 0)
+        else:
+            in_tokens = int(folded.input_tokens or 0)
+            out_tokens = int(folded.output_tokens or 0)
+        priced = (
+            in_tokens * self._config.input_cost_micros_per_million
+            + out_tokens * self._config.output_cost_micros_per_million
+        ) // 1_000_000
+        return in_tokens, out_tokens, priced
+
+    def _apply_child_fold_usage(self, state, folded) -> AgentLoopState:
+        in_tokens, out_tokens, child_cost = self._price_child_usage(folded)
+        return replace(
+            state,
+            input_tokens=state.input_tokens + in_tokens,
+            output_tokens=state.output_tokens + out_tokens,
+            cost_micros=state.cost_micros + child_cost,
+        )
+
     def _folded_spawn_result(self, bound, folded) -> dict[str, Any]:
         from neos.subagent.types import SubagentStatus
 
@@ -2163,6 +2204,8 @@ class DurableCodingLoop:
         result["citations"] = list(folded.citations)
         result["child_status"] = folded.status.value
         result["turn_count"] = folded.turn_count
+        result["input_tokens"] = int(folded.input_tokens or 0)
+        result["output_tokens"] = int(folded.output_tokens or 0)
         return result
 
     async def _run_spawn_agent(

@@ -11,7 +11,19 @@ from neos.coding.domain.durability import (
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
-from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
+from neos.coding.application.run_service import (
+    CodingRunService,
+    InProcessRunInterrupter,
+)
+from neos.coding.application.task_service import InMemoryCodingTaskRepository
+from neos.coding.domain.models import CodingTask, CodingTaskStatus
+from neos.coding.domain.phases import (
+    CodingCheckpoint,
+    CodingRunStatus,
+    SteeringMode,
+    SteeringRequest,
+)
+from neos.coding.events.store import InMemoryCodingEventStore
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
@@ -93,11 +105,11 @@ def _text(text: str = "found login.py"):
     return (TextDelta(text), ModelCompleted("end_turn", ModelUsage(1, 1)))
 
 
-def _child_tool(path: str = "a.py"):
+def _child_tool(path: str = "a.py", input_tokens: int = 1, output_tokens: int = 1):
     return (
         TextDelta("looking"),
         ToolCallCompleted("c1", "read_file.v1", {"path": path}),
-        ModelCompleted("tool_use", ModelUsage(1, 1)),
+        ModelCompleted("tool_use", ModelUsage(input_tokens, output_tokens)),
     )
 
 
@@ -971,3 +983,167 @@ async def test_adopt_all_remarks_expired_sibling_delegated() -> None:
     assert s2 is not None
     s2_record = await store.get(s2["run_id"])
     assert s2_record.latest_seq >= 2
+
+
+def _usage_turn(text: str, input_tokens: int, output_tokens: int):
+    return (
+        TextDelta(text),
+        ModelCompleted("end_turn", ModelUsage(input_tokens, output_tokens)),
+    )
+
+
+def _priced(**kwargs):
+    return _flag_on(
+        input_cost_micros_per_million=1_000_000,
+        output_cost_micros_per_million=1_000_000,
+        **kwargs,
+    )
+
+
+async def _run_service(h, clock):
+    tasks = InMemoryCodingTaskRepository()
+    await tasks.create(
+        CodingTask(
+            task_id="ct_1",
+            owner_id="u1",
+            prompt="Fix it",
+            status=CodingTaskStatus.RUNNING,
+            version=1,
+            last_seq=0,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    await h.repository.release_execution_lease(h.deps.lease, now=clock.now)
+    return CodingRunService(
+        tasks=tasks,
+        runs=h.repository,
+        events=InMemoryCodingEventStore(),
+        interrupter=InProcessRunInterrupter(),
+        loop=h.loop,
+        clock=clock,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cost_rollup_increments_parent_tokens() -> None:
+    inner, _child = _make_runtime([_usage_turn("found login.py", 2, 3)])
+    runtime = RecordingSubagents(inner)
+    original_fold = runtime.fold
+
+    async def inflated(run_id):
+        folded = await original_fold(run_id)
+        assert folded.input_tokens == 2
+        assert folded.output_tokens == 3
+        return replace(folded, cost_micros=999_999)
+
+    runtime.fold = inflated
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    await collect(h)
+    after = h.repository.checkpoints[-1].loop_state
+    before = next(
+        checkpoint.loop_state
+        for checkpoint in h.repository.checkpoints
+        if checkpoint.loop_state.get("pending_tool_calls")
+        and not checkpoint.loop_state.get("active_children")
+    )
+    assert after["input_tokens"] == before["input_tokens"] + 2
+    assert after["output_tokens"] == before["output_tokens"] + 3
+    assert after["cost_micros"] == before["cost_micros"] + 5
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_cost_rollup_completed_reuse_counts_once() -> None:
+    runtime, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=0, output_tokens=0),
+            _usage_turn("found login.py", 2, 3),
+        ]
+    )
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    await collect(h, parked)
+    parked = h.repository.checkpoints[-1]
+    before = parked.loop_state
+    original = h.repository.commit_phase_checkpoint
+
+    async def kill(**kwargs):
+        raise RuntimeError("killed before checkpoint")
+
+    h.repository.commit_phase_checkpoint = kill
+    with pytest.raises(RuntimeError, match="killed before checkpoint"):
+        await collect(h, parked)
+    assert ("ct_1", "s1") in h.repository.completed_tools
+    assert h.repository.checkpoints[-1].checkpoint_id == parked.checkpoint_id
+    h.repository.commit_phase_checkpoint = original
+    await collect(h, parked)
+    after = h.repository.checkpoints[-1].loop_state
+    assert after["input_tokens"] == before["input_tokens"] + 2
+    assert after["output_tokens"] == before["output_tokens"] + 3
+    assert after["cost_micros"] == before["cost_micros"] + 5
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_budget_exceed_keeps_folded_result_and_cancels_siblings() -> None:
+    inner, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=0, output_tokens=0),
+            _usage_turn("s1 report", 2, 3),
+            _child_tool(),
+        ]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_priced(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    parent_cost = int(parked.loop_state["cost_micros"])
+    h.loop._config = replace(h.loop._config, max_cost_micros=max(1, parent_cost))
+    service = await _run_service(h, clock)
+    with pytest.raises(CodingLoopFailure) as caught:
+        for _ in range(8):
+            await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+            clock.tick()
+    assert caught.value.code == "cost_budget_exceeded"
+    state = h.repository.checkpoints[-1].loop_state
+    folded = [
+        item
+        for item in _tool_results(state)
+        if item["tool_call_id"] in {"s1", "s2"} and item["status"] == "ok"
+    ]
+    assert len(folded) == 1
+    folded_id = folded[0]["tool_call_id"]
+    sibling_id = "s2" if folded_id == "s1" else "s1"
+    assert ("ct_1", folded_id) in h.repository.completed_tools
+    sibling = h.repository.completed_tools[("ct_1", sibling_id)]
+    assert sibling["reason_code"] == "cost_budget_exceeded"
+    last_fold = max(
+        index
+        for index, ticket in enumerate(runtime.advance_tickets)
+        if ticket.parent_tool_call_id == folded_id
+    )
+    last_sibling = max(
+        (
+            index
+            for index, ticket in enumerate(runtime.advance_tickets)
+            if ticket.parent_tool_call_id == sibling_id
+        ),
+        default=-1,
+    )
+    assert last_sibling < last_fold
+    await service.fail_active_run(
+        task_id="ct_1",
+        worker_id="worker-a",
+        error_code="cost_budget_exceeded",
+    )
+    assert h.repository.active_run.status is CodingRunStatus.FAILED
