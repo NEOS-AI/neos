@@ -178,6 +178,24 @@ class CodingProjectionSnapshotResponse(BaseModel):
     connection_basis: Literal["checkpoint"]
 
 
+class CodingCommandRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=100_000)
+
+
+class CodingCommandResponse(BaseModel):
+    name: str
+    status: Literal[
+        "ok", "queued", "denied", "unknown", "unavailable", "channel", "chat"
+    ]
+    message: str
+    args: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class CodingCommandCatalogResponse(BaseModel):
+    commands: list[dict[str, Any]]
+
+
 class CodingSteerRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=100_000)
     mode: Literal["safe_point", "interrupt_now"] = "safe_point"

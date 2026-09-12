@@ -171,6 +171,14 @@ class CodingLoopConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class _AppliedPendingCommand:
+    transcript: tuple[CanonicalMessage, ...]
+    bodies: dict[str, str]
+    todos: tuple
+    instructions_loaded: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AgentLoopState:
     transcript: tuple[CanonicalMessage, ...]
     turn_count: int
@@ -1803,21 +1811,35 @@ class DurableCodingLoop:
         pending_index = int(raw.get("pending_tool_index", 0))
         has_open_tool_pair = bool(pending) and pending_index < len(pending)
         empty_retry_count = int(raw.get("empty_retry_count", 0))
+        bodies = dict(_string_mapping(raw.get("compacted_bodies")))
+        instructions_loaded = bool(raw.get("instructions_loaded", False))
+        raw_todos = raw.get("todos") or ()
+        todos = tuple(
+            dict(item) for item in raw_todos if isinstance(item, Mapping)
+        )
         if isinstance(pending_instruction, str) and pending_instruction:
             if not has_open_tool_pair:
-                transcript = transcript + (
-                    CanonicalMessage("user", (TextContent(pending_instruction),)),
+                applied = self._apply_pending_command(
+                    input,
+                    transcript,
+                    pending_instruction,
+                    bodies=bodies,
+                    todos=todos,
+                    instructions_loaded=instructions_loaded,
+                    cost_micros=int(raw.get("cost_micros", 0)),
+                    input_tokens=int(raw.get("input_tokens", 0)),
+                    output_tokens=int(raw.get("output_tokens", 0)),
                 )
+                transcript = applied.transcript
+                bodies = applied.bodies
+                todos = applied.todos
+                instructions_loaded = applied.instructions_loaded
                 pending_instruction = None
                 terminal_pending = False
                 digest = self._digest(transcript)
                 empty_retry_count = 0
         else:
             pending_instruction = None
-        raw_todos = raw.get("todos") or ()
-        todos = tuple(
-            dict(item) for item in raw_todos if isinstance(item, Mapping)
-        )
         return AgentLoopState(
             transcript,
             int(raw.get("turn_count", 0)),
@@ -1834,14 +1856,14 @@ class DurableCodingLoop:
             pending_instruction,
             todos,
             parse_phase(raw.get("phase")).value,
-            bool(raw.get("instructions_loaded", False)),
+            instructions_loaded,
             int(raw.get("prompt_compact_retries", 0)),
             int(raw.get("output_token_escalations", 0)),
             int(raw.get("llm_compact_attempts", 0)),
             frozenset(str(name) for name in raw.get("revealed_tools") or ()),
             frozenset(str(name) for name in raw.get("approved_always") or ()),
             int(raw.get("hook_retry_count", 0)),
-            _string_mapping(raw.get("compacted_bodies")),
+            bodies,
             int(raw.get("stop_retry_count", 0)),
             _read_stamps_mapping(raw.get("read_stamps")),
             empty_retry_count,
@@ -1852,6 +1874,120 @@ class DurableCodingLoop:
             int(raw.get("last_success_count", 0)),
             restore_verify_verdict(raw.get("verdict")),
             restore_plan_critical_files(raw.get("critical_files")),
+        )
+
+    def _apply_pending_command(
+        self,
+        input: LoopInput,
+        transcript,
+        text: str,
+        *,
+        bodies: dict[str, str],
+        todos: tuple,
+        instructions_loaded: bool,
+        cost_micros: int,
+        input_tokens: int,
+        output_tokens: int,
+    ):
+        from neos.coding.commands.interpret import interpret_coding_command
+        from neos.coding.commands.parse import sanitize_command_args
+        from neos.coding.commands.types import CommandDisposition
+
+        decision = interpret_coding_command(text)
+        if decision.disposition is CommandDisposition.CHAT:
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, text),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        if decision.disposition is CommandDisposition.INJECT:
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, decision.inject_text),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        spec_name = decision.spec.name if decision.spec is not None else ""
+        if spec_name == "compact":
+            after = self._compact(transcript, force=True, bodies=bodies)
+            hint = sanitize_command_args(decision.parsed.args, max_len=240)
+            notice = (
+                f"Transcript compacted by /compact. Keep: {hint}"
+                if hint
+                else "Transcript compacted by /compact."
+            )
+            return _AppliedPendingCommand(
+                self._append_user_meta(after, notice),
+                bodies,
+                todos,
+                False,
+            )
+        if spec_name == "clear":
+            return _AppliedPendingCommand(
+                self._cleared_transcript(input, transcript),
+                {},
+                (),
+                False,
+            )
+        if spec_name == "cost":
+            notice = (
+                f"cost_micros={cost_micros} "
+                f"tokens={input_tokens}+{output_tokens}"
+            )
+            return _AppliedPendingCommand(
+                self._append_user_meta(transcript, notice),
+                bodies,
+                todos,
+                instructions_loaded,
+            )
+        notice = decision.message or "Command was not applied as user work."
+        return _AppliedPendingCommand(
+            self._append_user_meta(transcript, notice),
+            bodies,
+            todos,
+            instructions_loaded,
+        )
+
+    def _cleared_transcript(self, input: LoopInput, transcript=()):
+        seed = self._task_seed_text(transcript, input)
+        messages: list[CanonicalMessage] = []
+        if seed:
+            messages.append(CanonicalMessage("user", (TextContent(seed),)))
+        messages.append(
+            CanonicalMessage(
+                "user",
+                (TextContent("Conversation context was cleared."),),
+            )
+        )
+        return tuple(messages)
+
+    @staticmethod
+    def _task_seed_text(transcript, input: LoopInput) -> str:
+        for message in transcript or ():
+            if getattr(message, "role", None) != "user":
+                continue
+            for item in getattr(message, "content", ()):
+                text = getattr(item, "text", None)
+                if not isinstance(text, str):
+                    continue
+                candidate = text.strip()
+                if DurableCodingLoop._is_task_seed(candidate):
+                    return candidate
+        fallback = (input.instruction or "").strip()
+        if DurableCodingLoop._is_task_seed(fallback):
+            return fallback
+        return ""
+
+    @staticmethod
+    def _is_task_seed(text: str) -> bool:
+        from neos.coding.commands.interpret import interpret_coding_command
+        from neos.coding.commands.types import CommandDisposition
+
+        if not text or text == "Conversation context was cleared.":
+            return False
+        return (
+            interpret_coding_command(text).disposition is CommandDisposition.CHAT
         )
 
     @staticmethod
@@ -1877,9 +2013,12 @@ class DurableCodingLoop:
         )
 
     def _dump_state(self, input, state):
+        current = (input.instruction or "").strip()
+        if not self._is_task_seed(current):
+            current = self._task_seed_text(state.transcript, input) or current
         return {
             "phase_index": state.tool_count - 1,
-            "current_instruction": input.instruction,
+            "current_instruction": current,
             "pending_instruction": state.pending_instruction,
             "transcript": [_message_to_mapping(item) for item in state.transcript],
             "todos": [dict(item) for item in state.todos],

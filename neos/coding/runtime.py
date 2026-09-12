@@ -10,6 +10,7 @@ from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
 )
+from neos.coding.commands import CodingCommandService
 from neos.coding.application.approval_service import CodingApprovalService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
@@ -704,6 +705,10 @@ coding_snapshot_service = coding_runtime.snapshots
 coding_approval_service = coding_runtime.approvals
 coding_workspace_service = coding_runtime.workspace
 coding_workspace_stream_service = coding_runtime.workspace_streams
+coding_command_service = CodingCommandService(
+    runs=coding_run_service,
+    snapshots=coding_snapshot_service,
+)
 
 
 def initialize_coding_transport(

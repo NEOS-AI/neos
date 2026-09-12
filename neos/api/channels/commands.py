@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 
-_LEADING_MENTION = re.compile(
-    r"^(?:<@!?[A-Za-z0-9_]+(?:\|[^>]+)?>|@[\w]+)\s+",
-    re.UNICODE,
+from neos.coding.commands.interpret import interpret_coding_command
+from neos.coding.commands.parse import sanitize_command_args, strip_leading_mentions
+from neos.coding.commands.types import CommandDisposition
+
+__all__ = (
+    "ChannelCommand",
+    "ChannelCommandKind",
+    "display_name_from_metadata",
+    "neutralize_untrusted_inline",
+    "parse_channel_command",
+    "sender_prefix",
+    "strip_leading_mentions",
 )
-_NEWLINES = frozenset("\n\r\v\f\u0085\u2028\u2029")
+
 _DISPLAY_NAME_KEYS = (
     "slack_user_name",
     "discord_user_name",
@@ -35,27 +42,18 @@ class ChannelCommandKind(StrEnum):
     CLEAR = "clear"
     COST = "cost"
     EXPORT = "export"
+    HELP = "help"
+    LOOP = "loop"
+    PROMPT = "prompt"
+    UNKNOWN = "unknown"
 
 
 def neutralize_untrusted_inline(text: str, max_len: int = 240) -> str:
     """Strip controls/bidi, flatten newlines to spaces, then cap length."""
     if text is None:
         return ""
-    chars: list[str] = []
-    for ch in str(text):
-        if ch in _NEWLINES:
-            chars.append(" ")
-            continue
-        if unicodedata.category(ch) in {"Cc", "Cf"}:
-            continue
-        if ch in "[]":
-            chars.append(" ")
-            continue
-        chars.append(ch)
-    cleaned = " ".join("".join(chars).split())
-    if max_len <= 0:
-        return ""
-    return cleaned[:max_len]
+    flattened = str(text).replace("[", " ").replace("]", " ")
+    return sanitize_command_args(flattened, max_len=max_len)
 
 
 def display_name_from_metadata(
@@ -97,51 +95,38 @@ class ChannelCommand:
     rest: str
 
 
-def strip_leading_mentions(text: str) -> str:
-    remaining = text.lstrip()
-    while True:
-        updated = _LEADING_MENTION.sub("", remaining, count=1)
-        if updated == remaining:
-            return remaining.strip()
-        remaining = updated
+_KIND_BY_NAME = {
+    "code": ChannelCommandKind.CODE,
+    "stop": ChannelCommandKind.STOP,
+    "status": ChannelCommandKind.STATUS,
+    "approve": ChannelCommandKind.APPROVE,
+    "deny": ChannelCommandKind.DENY,
+    "learn": ChannelCommandKind.LEARN,
+    "new": ChannelCommandKind.NEW,
+    "reset": ChannelCommandKind.NEW,
+    "compact": ChannelCommandKind.COMPACT,
+    "clear": ChannelCommandKind.CLEAR,
+    "cost": ChannelCommandKind.COST,
+    "export": ChannelCommandKind.EXPORT,
+    "help": ChannelCommandKind.HELP,
+    "loop": ChannelCommandKind.LOOP,
+}
 
 
 def parse_channel_command(text: str) -> ChannelCommand:
-    stripped = strip_leading_mentions(text)
-    if not stripped:
-        return ChannelCommand(ChannelCommandKind.CHAT, "")
-    head, _, tail = stripped.partition(" ")
-    token = head.lower()
-    if token.startswith("/") and "@" in token:
-        token = token.split("@", 1)[0]
-    rest = tail.strip()
-    mapping = {
-        "/code": ChannelCommandKind.CODE,
-        "!code": ChannelCommandKind.CODE,
-        "/stop": ChannelCommandKind.STOP,
-        "!stop": ChannelCommandKind.STOP,
-        "/status": ChannelCommandKind.STATUS,
-        "!status": ChannelCommandKind.STATUS,
-        "/approve": ChannelCommandKind.APPROVE,
-        "!approve": ChannelCommandKind.APPROVE,
-        "/deny": ChannelCommandKind.DENY,
-        "!deny": ChannelCommandKind.DENY,
-        "/learn": ChannelCommandKind.LEARN,
-        "!learn": ChannelCommandKind.LEARN,
-        "/new": ChannelCommandKind.NEW,
-        "/reset": ChannelCommandKind.NEW,
-        "!new": ChannelCommandKind.NEW,
-        "!reset": ChannelCommandKind.NEW,
-        "/compact": ChannelCommandKind.COMPACT,
-        "!compact": ChannelCommandKind.COMPACT,
-        "/clear": ChannelCommandKind.CLEAR,
-        "!clear": ChannelCommandKind.CLEAR,
-        "/cost": ChannelCommandKind.COST,
-        "!cost": ChannelCommandKind.COST,
-        "/export": ChannelCommandKind.EXPORT,
-        "!export": ChannelCommandKind.EXPORT,
-    }
-    kind = mapping.get(token)
+    decision = interpret_coding_command(text)
+    parsed = decision.parsed
+    if decision.disposition is CommandDisposition.CHAT:
+        return ChannelCommand(ChannelCommandKind.CHAT, parsed.raw.strip())
+    if decision.disposition is CommandDisposition.UNKNOWN:
+        return ChannelCommand(ChannelCommandKind.UNKNOWN, parsed.args)
+    if decision.disposition is CommandDisposition.INJECT:
+        return ChannelCommand(ChannelCommandKind.PROMPT, parsed.args)
+    spec = decision.spec
+    name = spec.name if spec is not None else parsed.name
+    kind = _KIND_BY_NAME.get(name)
+    if kind is None and spec is not None and not spec.enabled:
+        return ChannelCommand(ChannelCommandKind.LOOP, parsed.args)
     if kind is None:
-        return ChannelCommand(ChannelCommandKind.CHAT, stripped)
-    return ChannelCommand(kind, rest)
+        return ChannelCommand(ChannelCommandKind.UNKNOWN, parsed.args)
+    return ChannelCommand(kind, parsed.args)

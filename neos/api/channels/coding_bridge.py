@@ -18,6 +18,10 @@ class ChannelCodingPort(Protocol):
 
     async def steer(self, *, task_id: str, owner_id: str, instruction: str) -> str: ...
 
+    async def invoke_command(
+        self, *, task_id: str, owner_id: str, text: str
+    ) -> str: ...
+
 
 class RuntimeChannelCoding:
     async def start_task(self, *, owner_id: str, prompt: str) -> str:
@@ -117,3 +121,35 @@ class RuntimeChannelCoding:
         except CodingTaskNotFound:
             return "No coding task in this thread."
         return f"Steered {task_id}"
+
+    async def invoke_command(
+        self, *, task_id: str, owner_id: str, text: str
+    ) -> str:
+        from neos.coding.domain.errors import CodingTaskNotFound
+        from neos.coding.runtime import coding_command_service
+
+        try:
+            result = await coding_command_service.invoke(
+                text=text, task_id=task_id, owner_id=owner_id
+            )
+        except CodingTaskNotFound:
+            return "No coding task in this thread."
+        return result.message
+
+    async def compact(
+        self, *, task_id: str, owner_id: str, instruction: str = ""
+    ) -> str:
+        text = f"/compact {instruction}".strip()
+        return await self.invoke_command(
+            task_id=task_id, owner_id=owner_id, text=text
+        )
+
+    async def cost(self, *, task_id: str, owner_id: str) -> str:
+        return await self.invoke_command(
+            task_id=task_id, owner_id=owner_id, text="/cost"
+        )
+
+    async def export(self, *, task_id: str, owner_id: str) -> str:
+        return await self.invoke_command(
+            task_id=task_id, owner_id=owner_id, text="/export"
+        )

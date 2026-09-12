@@ -1082,3 +1082,43 @@ async def test_export_does_not_dump_transcript(monkeypatch):
     assert "loop_state" not in reply
     assert workflow.calls == []
     assert coding.started == [("u_owner", "[U_alice] do it")]
+
+
+async def test_loop_is_denied_and_does_not_steer(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-loop"))
+    reply = await gateway.dispatch(_message("/loop 5m check deploy", "sess-loop"))
+
+    assert "disabled" in reply.lower()
+    assert coding.steered == []
+    assert workflow.calls == []
+
+
+async def test_unknown_slash_does_not_start_workflow(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    reply = await gateway.dispatch(_message("/not-a-command", "sess-unknown"))
+
+    assert "unknown command" in reply.lower()
+    assert workflow.calls == []
+    assert coding.started == []
+
+
+async def test_help_lists_commands_without_task(monkeypatch):
+    gateway, workflow, _coding = _gateway(monkeypatch)
+    reply = await gateway.dispatch(_message("/help", "sess-help"))
+
+    assert "/compact" in reply
+    assert "/loop" in reply
+    assert workflow.calls == []
+
+
+async def test_plan_steers_expanded_prompt(monkeypatch):
+    gateway, workflow, coding = _gateway(monkeypatch)
+    await gateway.dispatch(_message("/code do it", "sess-plan"))
+    reply = await gateway.dispatch(_message("/plan auth", "sess-plan"))
+
+    assert "Steered" in reply
+    assert coding.steered
+    assert coding.steered[-1][1].startswith("[U_alice] Switch to plan")
+    assert "auth" in coding.steered[-1][1]
+    assert workflow.calls == []
