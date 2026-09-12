@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 import logging
 from neos.database.models import Vote
 from neos.api.models.vote_models import VoteResponse, FeedbackResponse, FeedbackAggregation
+from neos.learn.policy import is_imperative
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,19 @@ class VoteService:
             self.db.add(existing_vote)
             await self.db.commit()
             await self.db.refresh(existing_vote)
+
+        if user_id and feedback_text and not is_imperative(feedback_text):
+            try:
+                from neos.learn.memory_gate import maybe_learn_ltm
+
+                await maybe_learn_ltm(
+                    user_id,
+                    key=f"feedback:{chat_id}:{message_id}",
+                    knowledge=feedback_text,
+                    metadata={"category": feedback_category},
+                )
+            except Exception as e:
+                logger.debug(f"Feedback learn skipped: {e}")
 
         return FeedbackResponse(
             chat_id=str(existing_vote.chat_id),

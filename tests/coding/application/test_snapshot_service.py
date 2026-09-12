@@ -60,7 +60,13 @@ class ProjectionFixtureRepository:
             phases=phases,
             tools=(
                 CodingToolExecutionRow(
-                    "tool_1", "cr_1", "completed", {"ok": True}
+                    "tool_1",
+                    "cr_1",
+                    "completed",
+                    {
+                        "preview": "app.py:12",
+                        "env": {"TOKEN": "secret-token"},
+                    },
                 ),
             ),
             approvals=({
@@ -92,7 +98,23 @@ class ProjectionFixtureRepository:
                 "cc_12",
                 "cr_2",
                 12,
-                {"phase_index": 0, "changed_files": ["app.py"]},
+                {
+                    "phase_index": 0,
+                    "changed_files": ["app.py"],
+                    "transcript": (
+                        {
+                            "role": "assistant",
+                            "content": (
+                                {
+                                    "type": "tool_use",
+                                    "tool_call_id": "tool_1",
+                                    "name": "read_file.v1",
+                                    "input": {"path": "app.py"},
+                                },
+                            ),
+                        },
+                    ),
+                },
                 "rev_12",
                 NOW,
             ),
@@ -127,6 +149,15 @@ async def test_snapshot_is_one_consistent_head_projection() -> None:
     ]
     assert snapshot.workspace.user_edits[0].status == "agent_synced"
     assert snapshot.workspace.user_edits[0].applied_checkpoint_id == "cc_12"
+    assert snapshot.tools[0].tool_call_id == "tool_1"
+    assert snapshot.tools[0].status == "completed"
+    assert snapshot.tools[0].result == {
+        "preview": "app.py:12",
+        "env": {"TOKEN": "secret-token"},
+    }
+    assert snapshot.tools[0].name == "read_file.v1"
+    assert snapshot.tools[0].preview == "app.py:12"
+    assert "secret-token" not in (snapshot.tools[0].preview or "")
 
 
 async def test_snapshot_is_owner_scoped() -> None:

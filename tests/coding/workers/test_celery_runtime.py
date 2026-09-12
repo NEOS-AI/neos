@@ -4,6 +4,8 @@ from neos.coding.workers import celery_runtime
 from neos.coding.workers.execution import CodingTaskOutcome, CodingTaskRunner
 from neos.config.schema import AppConfig
 
+pytestmark = pytest.mark.no_db
+
 
 class RecordingDatabaseManager:
     def __init__(self) -> None:
@@ -73,6 +75,34 @@ async def test_expiry_reconciliation_owns_database_manager(monkeypatch) -> None:
     assert manager.calls == ["initialize", "close"]
 
 
+async def test_delivery_binds_lesson_store_to_worker_database(
+    monkeypatch,
+) -> None:
+    from neos.learn.lessons import reset_lesson_store, resolve_lesson_session_factory
+
+    reset_lesson_store()
+    manager = RecordingDatabaseManager()
+    bound: list[object] = []
+
+    class BindingRunner(RecordingRunner):
+        async def run(self, **kwargs):
+            bound.append(resolve_lesson_session_factory())
+            return await super().run(**kwargs)
+
+    runner = BindingRunner(CodingTaskOutcome.COMPLETED)
+    monkeypatch.setattr(celery_runtime, "_build_runner", lambda manager: runner)
+
+    await celery_runtime.run_coding_delivery(
+        task_id="ct_1",
+        worker_id="celery-1",
+        expected_checkpoint_id=None,
+        database_manager=manager,
+    )
+
+    assert bound == [manager.get_session]
+    assert resolve_lesson_session_factory() is None
+
+
 async def test_delivery_initializes_and_closes_its_database_manager(
     monkeypatch,
 ) -> None:
@@ -96,6 +126,108 @@ def test_build_runner_returns_shared_execution_runner() -> None:
     runner = celery_runtime._build_runner(RecordingDatabaseManager())
 
     assert isinstance(runner, CodingTaskRunner)
+    assert runner._on_lifecycle is not None
+
+
+async def test_lifecycle_callback_calls_push_bound_lifecycle(monkeypatch) -> None:
+    seen: list[dict] = []
+
+    async def fake_push(**kwargs):
+        seen.append(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(celery_runtime, "push_bound_lifecycle", fake_push)
+
+    async def get_binding(task_id: str):
+        del task_id
+        return None
+
+    sink = object()
+    callback = celery_runtime._lifecycle_callback(get_binding=get_binding, sink=sink)
+    await callback(
+        "ct_1",
+        "waiting_approval",
+        {"approval_id": "ca_9", "tool_name": "write_file.v1"},
+    )
+
+    assert len(seen) == 1
+    assert seen[0]["get_binding"] is get_binding
+    assert seen[0]["sink"] is sink
+    assert seen[0]["task_id"] == "ct_1"
+    assert seen[0]["status"] == "waiting_approval"
+    assert seen[0]["approval_id"] == "ca_9"
+    assert seen[0]["tool_name"] == "write_file.v1"
+
+
+async def test_lifecycle_callback_pushes_bound_card_and_skips_housekeeping() -> None:
+    from neos.api.channels.session_bind import InMemoryChannelCodingBindStore
+
+    store = InMemoryChannelCodingBindStore()
+    await store.bind("v2:slack:T:C:1", "ct_1", "u_owner")
+    published: list[tuple[str, str]] = []
+
+    class Sink:
+        async def publish(self, binding, text) -> None:
+            published.append((binding.session_id, text))
+
+    callback = celery_runtime._lifecycle_callback(
+        get_binding=store.get_by_task, sink=Sink()
+    )
+    await callback("ct_1", "completed", {})
+    await callback(
+        "ct_1",
+        "waiting_approval",
+        {"approval_id": "ca_9", "tool_name": "write_file.v1"},
+    )
+    await callback(
+        "ct_1",
+        "waiting_approval",
+        {"approval_id": "ca_1", "tool_name": "todo_write.v1"},
+    )
+    await callback("ct_missing", "completed", {})
+
+    assert published == [
+        ("v2:slack:T:C:1", "ct_1 completed"),
+        ("v2:slack:T:C:1", "ct_1 waiting_approval ca_9 write_file.v1"),
+    ]
+
+
+def test_worker_lifecycle_uses_manager_session_factory(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeStore:
+        def __init__(self, session_factory) -> None:
+            captured["session_factory"] = session_factory
+
+        async def get_by_task(self, task_id: str):
+            del task_id
+            return None
+
+    monkeypatch.setattr(celery_runtime, "PostgresChannelCodingBindStore", FakeStore)
+    manager = RecordingDatabaseManager()
+    celery_runtime._worker_lifecycle_callback(manager)
+    factory = captured["session_factory"]
+    assert factory.__self__ is manager
+    assert factory.__func__ is type(manager).get_session
+
+
+async def test_logging_lifecycle_sink_logs_card_text(caplog) -> None:
+    import logging
+    from datetime import UTC, datetime
+
+    from neos.api.channels.session_bind import ChannelCodingBinding
+
+    sink = celery_runtime.LoggingChannelLifecycleSink()
+    binding = ChannelCodingBinding(
+        session_id="v2:slack:T:C:1",
+        task_id="ct_1",
+        owner_id="u_owner",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    with caplog.at_level(logging.INFO, logger=celery_runtime.logger.name):
+        await sink.publish(binding, "ct_1 completed")
+    assert "ct_1 completed" in caplog.text
 
 
 async def test_discovery_returns_bounded_ids_and_closes_manager(

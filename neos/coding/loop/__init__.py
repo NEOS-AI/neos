@@ -5,15 +5,21 @@ from neos.coding.loop.base import (
     LoopInput,
 )
 from neos.coding.loop.fake import FakeDurableCodingLoop
+from neos.coding.loop.durable import (
+    CodingLoopConfig,
+    CodingLoopFailure,
+    DurableCodingLoop,
+)
 from neos.coding.loop.anthropic import (
     AnthropicCodingLoop,
     AnthropicLoopConfig,
-    CodingLoopFailure,
 )
 
 __all__ = [
     "CodingLoop",
+    "CodingLoopConfig",
     "CodingLoopFailure",
+    "DurableCodingLoop",
     "AnthropicCodingLoop",
     "AnthropicLoopConfig",
     "FakeDurableCodingLoop",

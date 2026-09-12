@@ -17,6 +17,14 @@ class CodingTaskResponse(BaseModel):
     updated_at: datetime
 
 
+class CodingTaskListItem(CodingTaskResponse):
+    prompt: str
+
+
+class CodingTaskListResponse(BaseModel):
+    tasks: list[CodingTaskListItem]
+
+
 class CodingEventResponse(BaseModel):
     v: int
     task_id: str
@@ -58,16 +66,20 @@ class CodingToolSnapshot(BaseModel):
     run_id: str
     status: str
     result: dict[str, Any] | None
+    name: str | None = None
+    preview: str | None = None
 
 
 class CodingApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "deny"]
+    answers: list[str] = Field(default_factory=list)
+    remember: bool = False
 
 
 class CodingApprovalSnapshot(BaseModel):
     approval_id: str
     tool_name: str
-    risk: Literal["workspace_write", "command"]
+    risk: Literal["workspace_write", "command", "user_question"]
     status: Literal["pending", "approved", "denied", "expired", "invalidated"]
     requested_at: datetime
     expires_at: datetime
@@ -174,6 +186,11 @@ class CodingSteerRequest(BaseModel):
 class CodingSteerResponse(BaseModel):
     steering_id: str
     mode: Literal["safe_point", "interrupt_now"]
+
+
+class CodingStopResponse(BaseModel):
+    task_id: str
+    status: Literal["cancelled"]
 
 
 class CodingSandboxStatusResponse(BaseModel):

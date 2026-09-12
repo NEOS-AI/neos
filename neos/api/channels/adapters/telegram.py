@@ -14,7 +14,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Optional
+
+from neos.api.channels.authz import (
+    GateContext,
+    evaluate_channel_gate,
+    policy_from_settings,
+    telegram_text_mentions_bot,
+)
+from neos.api.channels.session_key import build_session_key
 
 from ..base import ChannelAdapterBase, ChannelMessage
 
@@ -25,6 +34,45 @@ logger = logging.getLogger(__name__)
 
 # Telegram 단일 메시지 최대 길이 (HTML/Markdown 포함 시 4096)
 _TELEGRAM_MAX_CHARS = 4096
+
+
+def _telegram_session_id(raw: Any) -> str:
+    chat = getattr(raw, "effective_chat", None)
+    message = getattr(raw, "effective_message", None)
+    chat_id = str(getattr(chat, "id", "") or "")
+    is_private = getattr(chat, "type", None) == "private"
+    message_thread_id = getattr(message, "message_thread_id", None)
+    return build_session_key(
+        "telegram",
+        "dm" if is_private else chat_id,
+        chat_id,
+        str(message_thread_id) if message_thread_id else "-",
+    )
+
+
+def _telegram_update_mentions_bot(update: Any, text: str, bot: Any) -> bool:
+    bot_username = getattr(bot, "username", None) or "" if bot is not None else ""
+    if telegram_text_mentions_bot(text, bot_username):
+        return True
+    if bot is None:
+        return False
+    message = getattr(update, "effective_message", None)
+    entities = getattr(message, "entities", None) or ()
+    bot_id = getattr(bot, "id", None)
+    username = bot_username.lstrip("@").lower()
+    for entity in entities:
+        etype = getattr(entity, "type", None)
+        if etype == "text_mention":
+            user = getattr(entity, "user", None)
+            if bot_id is not None and user is not None and getattr(user, "id", None) == bot_id:
+                return True
+        elif etype == "mention" and username:
+            offset = getattr(entity, "offset", 0)
+            length = getattr(entity, "length", 0)
+            token = text[offset : offset + length]
+            if token.lstrip("@").lower() == username:
+                return True
+    return False
 
 
 class TelegramAdapter(ChannelAdapterBase):
@@ -41,8 +89,8 @@ class TelegramAdapter(ChannelAdapterBase):
         별도 스레드나 asyncio.run() 중첩이 불필요하다.
 
     채널 사용자 → NEOS user_id 매핑:
-        현재는 settings.CHANNEL_BOT_USER_ID(서비스 계정)를 공유한다.
-        향후 Telegram user_id → NEOS user_id 조회 테이블을 추가할 수 있다.
+        channels.principals가 있으면 platform user → NEOS user.
+        맵이 비면 CHANNEL_BOT_USER_ID로 폴백한다.
     """
 
     channel_type = "telegram"
@@ -56,7 +104,12 @@ class TelegramAdapter(ChannelAdapterBase):
     async def start(self) -> None:
         """Telegram 봇 폴링을 시작한다."""
         try:
-            from telegram.ext import Application, MessageHandler, filters
+            from telegram.ext import (
+                Application,
+                CallbackQueryHandler,
+                MessageHandler,
+                filters,
+            )
         except ImportError:
             logger.error(
                 "[TelegramAdapter] python-telegram-bot 미설치. "
@@ -75,10 +128,12 @@ class TelegramAdapter(ChannelAdapterBase):
                 .build()
             )
 
-            # 텍스트 메시지 핸들러 등록
-            self._app.add_handler(
-                MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
-            )
+            inbound = filters.TEXT | filters.PHOTO | filters.Document.ALL
+            caption = getattr(filters, "CAPTION", None)
+            if caption is not None:
+                inbound = inbound | caption
+            self._app.add_handler(MessageHandler(inbound, self._handle_message))
+            self._app.add_handler(CallbackQueryHandler(self._handle_callback))
 
             # 봇 초기화
             await self._app.initialize()
@@ -134,25 +189,58 @@ class TelegramAdapter(ChannelAdapterBase):
         """
         from neos.config.settings import settings
 
-        chat_id = str(raw.effective_chat.id)
-        text = (raw.effective_message.text or "").strip()
+        chat = raw.effective_chat
+        message = raw.effective_message
+        chat_id = str(chat.id)
+        text = ((message.text or message.caption) or "").strip()
+        message_id = getattr(message, "message_id", None)
 
+        from neos.api.channels.principals import resolve_message_user_id
+
+        platform_user_id = (
+            str(raw.effective_user.id) if raw.effective_user else ""
+        )
+        user_id = resolve_message_user_id(
+            platform="telegram",
+            platform_user_id=platform_user_id,
+            channels=settings.config.channels,
+            bot_user_id=settings.CHANNEL_BOT_USER_ID,
+        )
+        metadata: dict[str, Any] = {
+            "telegram_user_id": raw.effective_user.id if raw.effective_user else None,
+            "telegram_username": (
+                raw.effective_user.username if raw.effective_user else None
+            ),
+            "thread_id": str(message_id) if message_id is not None else None,
+            "idempotency_key": str(
+                getattr(raw, "update_id", None) or message_id or ""
+            ),
+        }
+        if settings.config.channels.inbound_media:
+            from neos.api.channels.media import collect_telegram_attachments
+
+            bot = getattr(self._app, "bot", None) if self._app is not None else None
+            attachments = await collect_telegram_attachments(
+                message,
+                bot=bot,
+                fetch=getattr(self, "_media_fetch", None),
+                resolve_host=getattr(self, "_media_resolve", None),
+            )
+            if attachments:
+                metadata["attachments"] = attachments
         return ChannelMessage(
-            user_id=settings.CHANNEL_BOT_USER_ID,
-            session_id=f"telegram_{chat_id}",  # chat_id 기반 세션 — 대화 지속성 보장
+            user_id=user_id,
+            session_id=_telegram_session_id(raw),
             text=text,
             channel_type=self.channel_type,
             channel_id=chat_id,
             raw_data=raw,
-            metadata={
-                "telegram_user_id": raw.effective_user.id if raw.effective_user else None,
-                "telegram_username": (
-                    raw.effective_user.username if raw.effective_user else None
-                ),
-            },
+            metadata=metadata,
         )
 
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """
         Telegram chat_id로 응답 텍스트를 전송한다.
 
@@ -162,6 +250,7 @@ class TelegramAdapter(ChannelAdapterBase):
         Args:
             channel_id: Telegram chat_id
             content: 전송할 텍스트
+            thread_id: 원본 message_id — 설정 시 해당 메시지에 reply
         """
         if not self._app:
             logger.warning("[TelegramAdapter] send_response called before start()")
@@ -176,19 +265,105 @@ class TelegramAdapter(ChannelAdapterBase):
             content[i : i + _TELEGRAM_MAX_CHARS]
             for i in range(0, len(content), _TELEGRAM_MAX_CHARS)
         ]
+        send_kwargs: dict[str, Any] = {}
+        if thread_id:
+            send_kwargs["reply_to_message_id"] = int(thread_id)
+        from neos.api.channels.cards import telegram_inline_keyboard
+
+        markup = telegram_inline_keyboard(content) if len(chunks) == 1 else None
+        if markup is not None:
+            send_kwargs["reply_markup"] = markup
 
         for chunk in chunks:
             try:
-                await bot.send_message(chat_id=channel_id, text=chunk)
+                await bot.send_message(chat_id=channel_id, text=chunk, **send_kwargs)
             except Exception as e:
                 logger.error(f"[TelegramAdapter] send_message failed to {channel_id}: {e}")
+
+    async def send_draft(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.draft_streaming:
+            return
+        if not self._app or not content:
+            return
+        bot = self._app.bot
+        try:
+            if thread_id:
+                await bot.edit_message_text(
+                    chat_id=channel_id,
+                    message_id=int(thread_id),
+                    text=content,
+                )
+            else:
+                await bot.send_message(chat_id=channel_id, text=content)
+        except Exception as e:
+            logger.warning("[TelegramAdapter] send_draft failed to %s: %s", channel_id, e)
+
+    async def send_file(
+        self,
+        channel_id: str,
+        path: str,
+        *,
+        allow_dirs: list[str] | None = None,
+        thread_id: str | None = None,
+    ) -> None:
+        from neos.api.channels.outbound import resolve_outbound_file
+
+        if resolve_outbound_file(path, allow_dirs) is None:
+            return
 
     async def _handle_message(self, update: Any, context: Any) -> None:
         """
         python-telegram-bot MessageHandler 콜백.
         메시지를 ChannelMessage로 변환 후 ChannelGateway에 위임하고 응답을 전송한다.
         """
-        if not update.effective_message or not update.effective_message.text:
+        if not update.effective_message:
+            return
+
+        from neos.config.settings import settings
+        from neos.api.channels.session_bind import session_wakes_without_mention
+
+        effective_user = update.effective_user
+        effective_chat = update.effective_chat
+        effective_message = update.effective_message
+        text = effective_message.text or effective_message.caption or ""
+        has_media = bool(
+            getattr(effective_message, "photo", None)
+            or getattr(effective_message, "document", None)
+        )
+        has_attachment = bool(settings.config.channels.inbound_media and has_media)
+        if not text.strip() and not has_attachment:
+            return
+        bot = getattr(self._app, "bot", None) if self._app is not None else None
+        bot_id = getattr(bot, "id", None) if bot is not None else None
+        bound = await session_wakes_without_mention(self._gateway, _telegram_session_id(update))
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(effective_user.id) if effective_user is not None else "",
+            channel_id=str(effective_chat.id) if effective_chat is not None else "",
+            text=text,
+            is_dm=bool(effective_chat is not None and effective_chat.type == "private"),
+            is_bot=bool(getattr(effective_user, "is_bot", False)),
+            is_self=bool(
+                bot_id is not None
+                and effective_user is not None
+                and effective_user.id == bot_id
+            ),
+            mentioned=_telegram_update_mentions_bot(update, text, bot),
+            bound_session=bound,
+            has_attachment=has_attachment,
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[TelegramAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
             return
 
         try:
@@ -202,7 +377,11 @@ class TelegramAdapter(ChannelAdapterBase):
             await update.effective_chat.send_action(action="typing")
 
             response = await self._gateway.dispatch(channel_message)
-            await self.send_response(channel_message.channel_id, response)
+            await self.send_response(
+                channel_message.channel_id,
+                response,
+                thread_id=channel_message.metadata.get("thread_id"),
+            )
 
         except Exception as e:
             logger.error(f"[TelegramAdapter] _handle_message error: {e}")
@@ -212,3 +391,114 @@ class TelegramAdapter(ChannelAdapterBase):
                 )
             except Exception:
                 pass
+
+    async def _handle_callback(self, update: Any, context: Any) -> None:
+        query = getattr(update, "callback_query", None)
+        if query is None:
+            return
+        try:
+            answer = getattr(query, "answer", None)
+            if answer is not None:
+                await answer()
+        except Exception:
+            pass
+
+        from neos.api.channels.cards import command_for_action, parse_action_payload
+        from neos.api.channels.session_bind import session_wakes_without_mention
+
+        parsed = parse_action_payload(str(getattr(query, "data", "") or ""))
+        if parsed is None:
+            return
+        text = command_for_action(parsed[0], parsed[1])
+        if not text:
+            return
+
+        effective_user = (
+            getattr(query, "from_user", None)
+            or update.effective_user
+        )
+        effective_chat = update.effective_chat
+        source = getattr(query, "message", None) or update.effective_message
+        bot = getattr(self._app, "bot", None) if self._app is not None else None
+        bot_id = getattr(bot, "id", None) if bot is not None else None
+        bound = await session_wakes_without_mention(
+            self._gateway,
+            _telegram_session_id(
+                SimpleNamespace(
+                    effective_chat=effective_chat,
+                    effective_message=source,
+                    effective_user=effective_user,
+                )
+            ),
+        )
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(effective_user.id) if effective_user is not None else "",
+            channel_id=str(effective_chat.id) if effective_chat is not None else "",
+            text=text,
+            is_dm=bool(effective_chat is not None and effective_chat.type == "private"),
+            is_bot=bool(getattr(effective_user, "is_bot", False)),
+            is_self=bool(
+                bot_id is not None
+                and effective_user is not None
+                and effective_user.id == bot_id
+            ),
+            mentioned=True,
+            bound_session=bound,
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[TelegramAdapter] drop callback reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
+            return
+        from neos.api.channels.principals import coding_action_actor_allowed
+        from neos.config.settings import settings
+
+        callback_session = _telegram_session_id(
+            SimpleNamespace(
+                effective_chat=effective_chat,
+                effective_message=source,
+                effective_user=effective_user,
+            )
+        )
+        if not await coding_action_actor_allowed(
+            gateway=self._gateway,
+            session_id=callback_session,
+            platform="telegram",
+            platform_user_id=str(effective_user.id) if effective_user else "",
+            channels=settings.config.channels,
+        ):
+            logger.info(
+                "[TelegramAdapter] drop callback: not task owner channel=%s user=%s",
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
+            return
+
+        command_update = SimpleNamespace(
+            effective_chat=effective_chat,
+            effective_user=effective_user,
+            effective_message=SimpleNamespace(
+                text=text,
+                caption=None,
+                photo=None,
+                document=None,
+                message_id=getattr(source, "message_id", None),
+                message_thread_id=getattr(source, "message_thread_id", None),
+            ),
+            update_id=getattr(update, "update_id", None),
+        )
+        try:
+            channel_message = await self.receive_message(command_update)
+            response = await self._gateway.dispatch(channel_message)
+            await self.send_response(
+                channel_message.channel_id,
+                response,
+                thread_id=channel_message.metadata.get("thread_id"),
+            )
+        except Exception as e:
+            logger.error("[TelegramAdapter] _handle_callback error: %s", e)

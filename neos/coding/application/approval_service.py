@@ -6,6 +6,7 @@ from neos.coding.domain.approvals import (
     ApprovalConflict,
     ApprovalDecision,
     ApprovalResolutionCommit,
+    ask_user_answers_complete,
 )
 from neos.coding.sandbox.observability import (
     CodingApprovalAuditEvent,
@@ -22,6 +23,8 @@ class ApprovalRepository(Protocol):
         owner_id: str,
         decision: ApprovalDecision,
         now: datetime,
+        answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit: ...
 
     async def expire_pending_approvals(
@@ -75,13 +78,20 @@ class CodingApprovalService:
         approval_id: str,
         owner_id: str,
         decision: ApprovalDecision,
+        answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit:
+        if decision is ApprovalDecision.APPROVE and answers:
+            if not ask_user_answers_complete(answers, answers):
+                raise ApprovalConflict("answers_required")
         commit = await self._repository.resolve_tool_approval(
             task_id=task_id,
             approval_id=approval_id,
             owner_id=owner_id,
             decision=decision,
             now=self._clock(),
+            answers=answers,
+            remember=remember,
         )
         await self._record(commit)
         await self._wake(commit.approval.task_id, commit.approval.checkpoint_id)

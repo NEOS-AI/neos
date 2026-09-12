@@ -112,6 +112,7 @@ class TestCostCalculator:
             ("anthropic", "claude-opus-5"),
             ("openai", "gpt-5.6-terra"),
             ("openai", "gpt-5.6-sol"),
+            ("openai", "gpt-6-astra"),
         ):
             catalog_pricing = pricing_for(provider, model)
             assert catalog_pricing is not None

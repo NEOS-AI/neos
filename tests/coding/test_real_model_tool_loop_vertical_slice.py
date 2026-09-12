@@ -59,3 +59,32 @@ async def test_model_reads_edits_tests_and_finishes_across_safe_points(
         and event["outcome"] == "ok"
         for event in audit.events
     )
+
+
+@pytest.mark.asyncio
+async def test_checkpointed_read_allows_write_on_a_new_executor(
+    real_loop_harness,
+) -> None:
+    from neos.coding.tools.executor import SandboxToolExecutor
+
+    harness = await real_loop_harness(
+        script=[
+            tool_turn("read_file.v1", {"path": "calc.py"}, tool_call_id="tool_1"),
+            tool_turn(
+                "write_file.v1",
+                {"path": "calc.py", "content": "def add(a, b): return a + b\n"},
+                tool_call_id="tool_2",
+            ),
+            text_turn("done"),
+        ]
+    )
+
+    await harness.advance()
+    harness.executor.delegate = SandboxToolExecutor(
+        max_preview_bytes=64_000, max_entries=100
+    )
+    await harness.advance_until_complete()
+
+    assert await harness.session.read_file("calc.py") == (
+        b"def add(a, b): return a + b\n"
+    )

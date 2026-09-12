@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..base import ChannelAdapterBase, ChannelMessage
+from ..cards import ACTION_PREFIX, coding_blocks, command_for_action
+from ..session_key import build_session_key
 
 if TYPE_CHECKING:
     from ..gateway import ChannelGateway
@@ -26,6 +29,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SLACK_MAX_CHARS = 3000  # Slack 단일 메시지 안전 길이 (공식 4000자 제한)
+
+
+def _parse_slack_display_name(payload: Any) -> str:
+    user = payload.get("user") if isinstance(payload, dict) else None
+    if not isinstance(user, dict):
+        user = payload if isinstance(payload, dict) else {}
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    for candidate in (
+        profile.get("display_name"),
+        profile.get("real_name"),
+        user.get("real_name"),
+        user.get("name"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return ""
 
 
 class SlackAdapter(ChannelAdapterBase):
@@ -43,6 +62,10 @@ class SlackAdapter(ChannelAdapterBase):
         self._app: Optional[Any] = None  # AsyncApp
         self._handler: Optional[Any] = None  # AsyncSocketModeHandler
         self._handler_task: Optional[asyncio.Task] = None
+        self._bot_user_id: Optional[str] = None
+        self._team_id: Optional[str] = None
+        self._user_names: dict[tuple[str, str], str] = {}
+        self._seen_file_shares: set[str] = set()
 
     async def start(self) -> None:
         """Slack Socket Mode 핸들러를 시작한다."""
@@ -77,11 +100,16 @@ class SlackAdapter(ChannelAdapterBase):
 
         try:
             self._app = AsyncApp(token=self._bot_token)
+            try:
+                auth = await self._app.client.auth_test()
+                self._bot_user_id = auth.get("user_id")
+                team_id = auth.get("team_id")
+                if team_id:
+                    self._team_id = str(team_id)
+            except Exception as e:
+                logger.warning("[SlackAdapter] auth_test failed (non-critical): %s", e)
 
-            # 메시지 핸들러 등록 (bot 메시지 자동 제외)
-            @self._app.message()
-            async def handle_message(message: dict, say: Any, client: Any) -> None:
-                await self._handle_message(message, say, client)
+            self._register_handlers()
 
             self._handler = AsyncSocketModeHandler(self._app, app_token)
             self._handler_task = asyncio.create_task(
@@ -126,21 +154,51 @@ class SlackAdapter(ChannelAdapterBase):
         channel_id = str(raw.get("channel", ""))
         text = (raw.get("text") or "").strip()
         slack_user_id = str(raw.get("user", ""))
+        raw_ts = raw.get("ts")
+        thread_id = self._thread_id(raw)
+        session_id = self._session_id(raw)
 
+        from neos.api.channels.principals import resolve_message_user_id
+
+        user_id = resolve_message_user_id(
+            platform="slack",
+            platform_user_id=slack_user_id,
+            channels=settings.config.channels,
+            bot_user_id=settings.CHANNEL_BOT_USER_ID,
+        )
+        metadata: dict[str, Any] = {
+            "slack_user_id": slack_user_id,
+            "slack_message_ts": raw_ts or "",
+            "thread_id": thread_id,
+            "idempotency_key": str(raw_ts or ""),
+        }
+        display = await self._resolve_user_name(slack_user_id, self._team_scope(raw))
+        if display:
+            metadata["slack_user_name"] = display
+        if settings.config.channels.inbound_media:
+            from neos.api.channels.media import collect_slack_attachments
+
+            attachments = await collect_slack_attachments(
+                list(raw.get("files") or []),
+                token=self._bot_token,
+                fetch=getattr(self, "_media_fetch", None),
+                resolve_host=getattr(self, "_media_resolve", None),
+            )
+            if attachments:
+                metadata["attachments"] = attachments
         return ChannelMessage(
-            user_id=settings.CHANNEL_BOT_USER_ID,
-            session_id=f"slack_{channel_id}",
+            user_id=user_id,
+            session_id=session_id,
             text=text,
             channel_type=self.channel_type,
             channel_id=channel_id,
             raw_data=raw,
-            metadata={
-                "slack_user_id": slack_user_id,
-                "slack_message_ts": raw.get("ts", ""),
-            },
+            metadata=metadata,
         )
 
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """Slack channel_id로 응답을 전송한다. 3000자 제한 준수."""
         if not self._app:
             logger.warning("[SlackAdapter] send_response called before start()")
@@ -152,23 +210,374 @@ class SlackAdapter(ChannelAdapterBase):
             content[i : i + _SLACK_MAX_CHARS]
             for i in range(0, len(content), _SLACK_MAX_CHARS)
         ]
+        post_kwargs: dict[str, Any] = {}
+        if thread_id:
+            post_kwargs["thread_ts"] = thread_id
+        blocks = coding_blocks(content) if len(chunks) == 1 else None
         for chunk in chunks:
-            try:
+            posted = False
+            if blocks:
+                try:
+                    await self._app.client.chat_postMessage(
+                        channel=channel_id,
+                        text=chunk,
+                        blocks=blocks,
+                        **post_kwargs,
+                    )
+                    posted = True
+                except Exception as e:
+                    logger.warning(
+                        "[SlackAdapter] Block Kit post failed to %s: %s",
+                        channel_id,
+                        e,
+                    )
+            if not posted:
+                try:
+                    await self._app.client.chat_postMessage(
+                        channel=channel_id,
+                        text=chunk,
+                        **post_kwargs,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[SlackAdapter] chat_postMessage failed to %s: %s",
+                        channel_id,
+                        e,
+                    )
+
+    async def send_draft(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.draft_streaming:
+            return
+        if not self._app or not content:
+            return
+        try:
+            if thread_id:
+                await self._app.client.chat_update(
+                    channel=channel_id, ts=thread_id, text=content
+                )
+            else:
                 await self._app.client.chat_postMessage(
-                    channel=channel_id,
-                    text=chunk,
+                    channel=channel_id, text=content
                 )
-            except Exception as e:
-                logger.error(
-                    "[SlackAdapter] chat_postMessage failed to %s: %s", channel_id, e
-                )
+        except Exception as e:
+            logger.warning("[SlackAdapter] send_draft failed to %s: %s", channel_id, e)
+
+    async def send_file(
+        self,
+        channel_id: str,
+        path: str,
+        *,
+        allow_dirs: list[str] | None = None,
+        thread_id: str | None = None,
+    ) -> None:
+        from neos.api.channels.outbound import resolve_outbound_file
+
+        if resolve_outbound_file(path, allow_dirs) is None:
+            return
+
+    def _register_handlers(self) -> None:
+        if self._app is None:
+            return
+
+        @self._app.message()
+        async def handle_message(
+            message: dict, say: Any, client: Any, context: Any = None
+        ) -> None:
+            team_id = _context_team_id(context)
+            if team_id and not message.get("team") and not message.get("team_id"):
+                message = {**message, "team": team_id}
+            await self._handle_message(message, say, client)
+
+        @self._app.action(re.compile(rf"^{re.escape(ACTION_PREFIX)}"))
+        async def handle_code_action(ack: Any, body: dict) -> None:
+            await ack()
+            await self._handle_block_action(body)
+
+        @self._app.event("file_shared")
+        async def handle_file_shared(event: dict, context: Any = None) -> None:
+            team_id = _context_team_id(context)
+            if team_id and not event.get("team") and not event.get("team_id"):
+                event = {**event, "team": team_id}
+            await self._handle_file_shared(event, context=context)
+
+    async def _handle_block_action(self, body: dict) -> None:
+        actions = body.get("actions") or []
+        if not actions:
+            return
+        action = actions[0]
+        text = command_for_action(
+            str(action.get("action_id") or ""),
+            str(action.get("value") or ""),
+        )
+        if not text:
+            return
+
+        from neos.api.channels.authz import (
+            GateContext,
+            evaluate_channel_gate,
+            policy_from_settings,
+        )
+
+        user = body.get("user") or {}
+        channel = body.get("channel") or {}
+        team = body.get("team") or {}
+        message = body.get("message") or {}
+        user_id = str(user.get("id") or "")
+        channel_id = str(channel.get("id") or "")
+        thread_ts = str(message.get("thread_ts") or message.get("ts") or "")
+        raw = {
+            "user": user_id,
+            "channel": channel_id,
+            "text": text,
+            "team": team.get("id") or self._team_id,
+            "thread_ts": thread_ts or None,
+            "ts": message.get("ts") or thread_ts,
+        }
+        from neos.api.channels.session_bind import session_wakes_without_mention
+
+        bound = await session_wakes_without_mention(
+            self._gateway, self._session_id(raw)
+        )
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=user_id,
+            channel_id=channel_id,
+            text=text,
+            is_dm=channel_id.startswith("D"),
+            is_bot=False,
+            is_self=bool(self._bot_user_id) and user_id == self._bot_user_id,
+            mentioned=True,
+            bound_session=bound,
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[SlackAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
+            return
+        from neos.api.channels.principals import coding_action_actor_allowed
+        from neos.config.settings import settings
+
+        if not await coding_action_actor_allowed(
+            gateway=self._gateway,
+            session_id=self._session_id(raw),
+            platform="slack",
+            platform_user_id=user_id,
+            channels=settings.config.channels,
+        ):
+            logger.info(
+                "[SlackAdapter] drop action: not task owner channel=%s user=%s",
+                ctx.channel_id,
+                user_id,
+            )
+            return
+
+        card_ts = str(message.get("ts") or thread_ts or "")
+        action_id = str(action.get("action_id") or "")
+        channel_message = await self.receive_message(
+            {
+                "user": user_id,
+                "channel": channel_id,
+                "text": text,
+                "team": team.get("id") or self._team_id,
+                "thread_ts": thread_ts or None,
+                "ts": card_ts,
+            }
+        )
+        if card_ts and action_id:
+            channel_message.metadata["idempotency_key"] = f"{card_ts}:{action_id}"
+        response = await self._gateway.dispatch(channel_message)
+        await self.send_response(
+            channel_message.channel_id,
+            response,
+            thread_id=channel_message.metadata.get("thread_id"),
+        )
+
+    async def _add_reaction(
+        self, client: Any, channel_id: str, timestamp: str, name: str
+    ) -> None:
+        if client is None or not timestamp:
+            return
+        try:
+            await client.reactions_add(
+                channel=channel_id,
+                timestamp=timestamp,
+                name=name,
+            )
+        except Exception:
+            pass
+
+    def _thread_id(self, raw: Any) -> str:
+        if not isinstance(raw, dict):
+            return ""
+        return str(raw.get("thread_ts") or raw.get("ts") or "")
+
+    def _session_id(self, raw: Any) -> str:
+        channel_id = ""
+        if isinstance(raw, dict):
+            channel_id = str(raw.get("channel") or "")
+        thread_id = self._thread_id(raw)
+        return build_session_key(
+            "slack",
+            self._team_scope(raw),
+            channel_id,
+            thread_id or "-",
+        )
+
+    async def _resolve_user_name(self, user_id: str, team_id: str) -> str:
+        if not user_id:
+            return ""
+        key = (team_id or "", user_id)
+        if key in self._user_names:
+            return self._user_names[key]
+        payload: Any = None
+        lookup = getattr(self, "_users_info", None)
+        try:
+            if lookup is not None:
+                payload = await lookup(user_id)
+            elif self._app is not None:
+                payload = await self._app.client.users_info(user=user_id)
+        except Exception:
+            payload = None
+        name = _parse_slack_display_name(payload)
+        self._user_names[key] = name
+        return name
+
+    async def _handle_file_shared(
+        self, event: dict, say: Any = None, context: Any = None
+    ) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.inbound_media:
+            return
+        team_id = _context_team_id(context)
+        if team_id and not event.get("team") and not event.get("team_id"):
+            event = {**event, "team": team_id}
+        file_id = str(event.get("file_id") or "")
+        if not file_id or file_id in self._seen_file_shares:
+            return
+        channel_id = str(
+            event.get("channel_id") or event.get("channel") or ""
+        )
+        if not channel_id:
+            return
+        info = await self._lookup_slack_file(file_id)
+        if info is None:
+            return
+        mime = str(info.get("mimetype") or "")
+        if not mime.startswith("video/"):
+            return
+        share = _file_share_entry(info, channel_id)
+        # files.info timestamp is created time; the share message ts is in shares.
+        ts = str(
+            share.get("ts")
+            or info.get("timestamp")
+            or event.get("event_ts")
+            or file_id
+        )
+        thread_ts = share.get("thread_ts") or event.get("thread_ts") or None
+        if ts in self._seen_file_shares:
+            return
+        self._seen_file_shares.add(file_id)
+        self._seen_file_shares.add(ts)
+        synthesized = {
+            "user": event.get("user_id") or event.get("user") or "",
+            "channel": channel_id,
+            "text": "",
+            "channel_type": "im" if channel_id.startswith("D") else "channel",
+            "team": event.get("team_id") or event.get("team"),
+            "ts": ts,
+            "thread_ts": thread_ts,
+            "files": [info],
+        }
+        await self._handle_message(synthesized, say, client=None)
+
+    async def _lookup_slack_file(self, file_id: str) -> dict[str, Any] | None:
+        lookup = getattr(self, "_files_info", None)
+        try:
+            if lookup is not None:
+                payload = await lookup(file_id)
+            elif self._app is not None:
+                payload = await self._app.client.files_info(file=file_id)
+            else:
+                return None
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        file_obj = payload.get("file")
+        if isinstance(file_obj, dict):
+            return file_obj
+        return payload if payload.get("mimetype") else None
+
+    def _team_scope(self, raw: Any) -> str:
+        team = None
+        if isinstance(raw, dict):
+            team = raw.get("team")
+            if team is None:
+                team = raw.get("team_id")
+        if isinstance(team, dict):
+            team = team.get("id")
+        team_id = str(team or "").strip()
+        if team_id:
+            return team_id
+        if self._team_id:
+            return self._team_id
+        return "dm"
 
     async def _handle_message(self, message: dict, say: Any, client: Any) -> None:
         """@app.message() 핸들러."""
         # bot_id가 있는 메시지 = 봇이 보낸 메시지 — 무시
         if message.get("bot_id"):
             return
-        if not message.get("text"):
+
+        from neos.config.settings import settings
+        from neos.api.channels.authz import (
+            GateContext,
+            evaluate_channel_gate,
+            policy_from_settings,
+            slack_event_mentions_bot,
+        )
+
+        text = message.get("text") or ""
+        files = list(message.get("files") or [])
+        has_attachment = bool(settings.config.channels.inbound_media and files)
+        if not text.strip() and not has_attachment:
+            return
+        from neos.api.channels.session_bind import session_wakes_without_mention
+
+        bound = await session_wakes_without_mention(
+            self._gateway, self._session_id(message)
+        )
+        channel_id = str(message.get("channel") or "")
+        ctx = GateContext(
+            channel_type=self.channel_type,
+            platform_user_id=str(message.get("user") or ""),
+            channel_id=channel_id,
+            text=text,
+            is_dm=message.get("channel_type") == "im" or channel_id.startswith("D"),
+            is_bot=bool(message.get("bot_id")) or message.get("subtype") == "bot_message",
+            is_self=bool(self._bot_user_id)
+            and str(message.get("user")) == self._bot_user_id,
+            mentioned=slack_event_mentions_bot(message, self._bot_user_id or ""),
+            bound_session=bound,
+            has_attachment=has_attachment,
+        )
+        decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
+        if not decision.allowed:
+            logger.info(
+                "[SlackAdapter] drop reason=%s channel=%s user=%s",
+                decision.reason,
+                ctx.channel_id,
+                ctx.platform_user_id,
+            )
             return
 
         try:
@@ -178,11 +587,51 @@ class SlackAdapter(ChannelAdapterBase):
                 channel_message.channel_id,
                 channel_message.text[:50],
             )
+            ts = str(message.get("ts") or "")
+            await self._add_reaction(client, channel_message.channel_id, ts, "eyes")
             response = await self._gateway.dispatch(channel_message)
-            await self.send_response(channel_message.channel_id, response)
+            await self.send_response(
+                channel_message.channel_id,
+                response,
+                thread_id=channel_message.metadata.get("thread_id"),
+            )
+            await self._add_reaction(
+                client, channel_message.channel_id, ts, "white_check_mark"
+            )
         except Exception as e:
             logger.error("[SlackAdapter] _handle_message error: %s", e)
+            await self._add_reaction(
+                client,
+                str(message.get("channel") or ""),
+                str(message.get("ts") or ""),
+                "x",
+            )
             try:
                 await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             except Exception:
                 pass
+
+
+def _context_team_id(context: Any) -> str:
+    if context is None:
+        return ""
+    team_id = getattr(context, "team_id", None)
+    if not team_id and isinstance(context, dict):
+        team_id = context.get("team_id")
+    return str(team_id or "").strip()
+
+
+def _file_share_entry(info: dict[str, Any], channel_id: str) -> dict[str, Any]:
+    shares = info.get("shares")
+    if not isinstance(shares, dict):
+        return {}
+    for bucket in ("public", "private"):
+        by_channel = shares.get(bucket)
+        if not isinstance(by_channel, dict):
+            continue
+        entries = by_channel.get(channel_id)
+        if isinstance(entries, list) and entries:
+            first = entries[0]
+            if isinstance(first, dict):
+                return first
+    return {}

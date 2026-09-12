@@ -184,6 +184,35 @@ def test_real_loop_wraps_the_production_model_for_collection(monkeypatch) -> Non
     assert isinstance(loop._model, TrackedCodingModel)
     assert isinstance(loop._model._inner, AnthropicCodingModel)
     assert loop._model._workflow_step == "coding_loop"
+    assert loop._config.provider == "anthropic"
+
+
+def test_real_loop_wires_openai_coding_model(monkeypatch) -> None:
+    from neos.coding.model.openai import OpenAICodingModel
+
+    config = AppConfig.model_validate(
+        {
+            "coding_model": {
+                "enabled": True,
+                "provider": "openai",
+                "model": "gpt-6-astra",
+                "input_cost_micros_per_million": 1,
+                "output_cost_micros_per_million": 1,
+            },
+            "sandbox": {"enabled": True},
+            "secrets": {"openai_api_key": "sk-test"},
+        }
+    )
+    monkeypatch.setattr(
+        "neos.utils.openai_client.AsyncOpenAI", lambda **kwargs: object()
+    )
+
+    finish = runtime_module._prepare_real_coding_loop(config=config)
+    loop = finish(object())
+
+    assert loop._config.model == "gpt-6-astra"
+    assert loop._config.provider == "openai"
+    assert isinstance(loop._model._inner, OpenAICodingModel)
 
 
 def test_managed_registry_is_empty_when_managed_is_disabled(monkeypatch) -> None:

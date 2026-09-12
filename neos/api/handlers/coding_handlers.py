@@ -7,6 +7,8 @@ from neos.api.models.coding_models import (
     CodingEventListResponse,
     CodingSteerRequest,
     CodingSteerResponse,
+    CodingStopResponse,
+    CodingTaskListResponse,
     CodingTaskResponse,
     CodingProjectionSnapshotResponse,
     CodingSandboxStatusResponse,
@@ -26,7 +28,10 @@ from neos.coding.domain.approvals import (
 from neos.coding.application.run_service import CodingRunService
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.application.workspace_service import CodingWorkspaceService
-from neos.coding.application.task_service import CodingTaskService
+from neos.coding.application.task_service import (
+    CodingTaskService,
+    clamp_task_list_limit,
+)
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
@@ -115,6 +120,9 @@ def _approval_response(approval) -> dict:
     }
 
 
+_LIST_PROMPT_MAX = 160
+
+
 def _task_response(task: CodingTask) -> dict:
     return {
         "task_id": task.task_id,
@@ -124,6 +132,13 @@ def _task_response(task: CodingTask) -> dict:
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     }
+
+
+def _list_item(task: CodingTask) -> dict:
+    prompt = task.prompt
+    if len(prompt) > _LIST_PROMPT_MAX:
+        prompt = prompt[:_LIST_PROMPT_MAX]
+    return {**_task_response(task), "prompt": prompt}
 
 
 def event_response(event: CodingEvent) -> dict:
@@ -155,6 +170,18 @@ async def create_coding_task(
     )
 
 
+@router.get("/tasks", response_model=CodingTaskListResponse)
+async def list_coding_tasks(
+    limit: int = Query(20),
+    current_user: User = Depends(get_current_user),
+    service: CodingTaskService = Depends(get_coding_service),
+):
+    tasks = await service.list_owned(
+        current_user.user_id, limit=clamp_task_list_limit(limit)
+    )
+    return {"tasks": [_list_item(task) for task in tasks]}
+
+
 @router.post(
     "/tasks/{task_id}/steer",
     response_model=CodingSteerResponse,
@@ -181,6 +208,25 @@ async def steer_coding_task(
 
 
 @router.post(
+    "/tasks/{task_id}/stop",
+    response_model=CodingStopResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def stop_coding_task(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    runs: CodingRunService = Depends(get_coding_run_service),
+):
+    try:
+        await runs.stop(task_id=task_id, owner_id=current_user.user_id)
+    except CodingTaskNotFound as error:
+        raise HTTPException(
+            status_code=404, detail="Coding task not found"
+        ) from error
+    return {"task_id": task_id, "status": "cancelled"}
+
+
+@router.post(
     "/tasks/{task_id}/approvals/{approval_id}",
     response_model=CodingApprovalSnapshot,
 )
@@ -197,6 +243,8 @@ async def resolve_coding_approval(
             approval_id=approval_id,
             owner_id=current_user.user_id,
             decision=ApprovalDecision(body.decision),
+            answers=tuple(body.answers),
+            remember=body.remember,
         )
     except ApprovalNotFound as error:
         raise HTTPException(status_code=404, detail="Coding approval not found") from error

@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from neos.config.coding_selection import resolve_coding_selection
 from neos.config.model_routing import resolve_model
 from neos.config.schema import AppConfig, CodingModelConfig, ModelRoutingConfig
 
@@ -116,6 +117,68 @@ def test_coding_model_uses_everyday_role_when_feature_override_is_omitted() -> N
         ).model
         == "claude-sonnet-5"
     )
+
+
+def test_catalog_model_selects_vendor_even_when_provider_field_disagrees() -> None:
+    coding = CodingModelConfig(provider="anthropic", model="gpt-6-astra")
+
+    selected = resolve_coding_selection(
+        coding=coding, routing=ModelRoutingConfig()
+    )
+
+    assert selected.provider == "openai"
+    assert selected.model == "gpt-6-astra"
+    assert selected.source == "catalog"
+
+
+def test_openai_coding_loop_requires_openai_credential() -> None:
+    with pytest.raises(ValidationError, match="openai credential"):
+        AppConfig.model_validate(
+            priced_real_config(
+                coding_model={
+                    "enabled": True,
+                    "provider": "openai",
+                    "model": "gpt-6-astra",
+                    "input_cost_micros_per_million": 10_000_000,
+                    "output_cost_micros_per_million": 50_000_000,
+                },
+                secrets={"anthropic_api_key": "secret-value"},
+            )
+        )
+
+
+def test_ollama_coding_loop_requires_a_base_url() -> None:
+    with pytest.raises(ValidationError, match="ollama credential"):
+        AppConfig.model_validate(
+            priced_real_config(
+                coding_model={
+                    "enabled": True,
+                    "provider": "ollama",
+                    "input_cost_micros_per_million": 1,
+                    "output_cost_micros_per_million": 1,
+                },
+                sandbox={"enabled": True},
+                model_providers={"ollama": {"base_url": ""}},
+            )
+        )
+
+
+def test_openai_coding_loop_accepts_openai_credential() -> None:
+    config = AppConfig.model_validate(
+        priced_real_config(
+            coding_model={
+                "enabled": True,
+                "provider": "openai",
+                "model": "gpt-6-astra",
+                "input_cost_micros_per_million": 10_000_000,
+                "output_cost_micros_per_million": 50_000_000,
+            },
+            secrets={"openai_api_key": "sk-test"},
+        )
+    )
+
+    assert config.coding_model.provider == "openai"
+    assert config.coding_model.model == "gpt-6-astra"
 
 
 def test_explicit_coding_model_wins_over_everyday_role() -> None:

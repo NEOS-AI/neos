@@ -45,6 +45,7 @@ class LoopInput:
     run_id: str
     instruction: str
     workspace_edits: tuple[WorkspaceEditContext, ...] = ()
+    owner_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +77,12 @@ class CodingRunRepository(Protocol):
         error_code: str,
         now: datetime,
     ) -> RunLifecycleCommit: ...
+
+    async def cancel_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit: ...
+
+    async def mark_task_cancelled(self, *, task_id: str, now: datetime) -> None: ...
 
     async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
 
@@ -147,6 +154,8 @@ class CodingRunRepository(Protocol):
         owner_id: str,
         decision: ApprovalDecision,
         now: datetime,
+        answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit: ...
 
     async def expire_pending_approvals(
@@ -213,6 +222,8 @@ class CodingRunRepository(Protocol):
         turn_id: str,
         now: datetime,
     ) -> ModelTextPartCommit: ...
+
+    async def has_pending_interrupt(self, task_id: str) -> bool: ...
 
     async def apply_steering_at_safe_point(
         self,

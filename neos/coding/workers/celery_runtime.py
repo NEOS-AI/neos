@@ -1,8 +1,16 @@
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
+from neos.api.channels.lifecycle import push_bound_lifecycle
+from neos.api.channels.session_bind import (
+    ChannelCodingBinding,
+    PostgresChannelCodingBindStore,
+)
 from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
@@ -25,7 +33,63 @@ from neos.coding.workers.execution import (
 )
 from neos.database.connection import DatabaseManager
 from neos.config.settings import settings
+from neos.learn.lessons import set_lesson_session_factory
 from neos.observability.metrics import metrics
+
+
+logger = logging.getLogger(__name__)
+
+
+class LoggingChannelLifecycleSink:
+    async def publish(self, binding: ChannelCodingBinding, text: str) -> None:
+        logger.info("coding lifecycle card %s", text)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
+def _lifecycle_callback(
+    *,
+    get_binding: Callable[[str], Awaitable[ChannelCodingBinding | None]],
+    sink: Any,
+):
+    async def on_lifecycle(
+        task_id: str, status: str, payload: dict[str, Any]
+    ) -> None:
+        await push_bound_lifecycle(
+            get_binding=get_binding,
+            sink=sink,
+            task_id=task_id,
+            status=status,
+            approval_id=_optional_str(payload.get("approval_id")),
+            tool_name=_optional_str(payload.get("tool_name")),
+        )
+
+    return on_lifecycle
+
+
+def _worker_lifecycle_callback(manager: DatabaseManager):
+    store = PostgresChannelCodingBindStore(manager.get_session)
+    return _lifecycle_callback(
+        get_binding=store.get_by_task,
+        sink=LoggingChannelLifecycleSink(),
+    )
+
+
+def _make_task_runner(manager: DatabaseManager, runs: Any) -> CodingTaskRunner:
+    return CodingTaskRunner(
+        runs=runs,
+        propagate_exceptions=(
+            ConnectionError,
+            OSError,
+            SQLAlchemyError,
+            SoftTimeLimitExceeded,
+        ),
+        on_lifecycle=_worker_lifecycle_callback(manager),
+    )
 
 
 def _build_run_repository(manager: DatabaseManager):
@@ -43,15 +107,7 @@ def _build_runner(manager: DatabaseManager) -> CodingTaskRunner:
         interrupter=InProcessRunInterrupter(),
         execution_lease=timedelta(seconds=settings.CODING_EXECUTION_LEASE_SECONDS),
     )
-    return CodingTaskRunner(
-        runs=runs,
-        propagate_exceptions=(
-            ConnectionError,
-            OSError,
-            SQLAlchemyError,
-            SoftTimeLimitExceeded,
-        ),
-    )
+    return _make_task_runner(manager, runs)
 
 
 def _build_approval_service(manager: DatabaseManager) -> CodingApprovalService:
@@ -121,8 +177,11 @@ async def run_coding_delivery(
 ) -> CodingTaskOutcome:
     manager = database_manager or DatabaseManager()
     runtime = None
+    bound_lessons = False
     try:
         await manager.initialize()
+        set_lesson_session_factory(manager.get_session)
+        bound_lessons = True
         if settings.config.coding_model.enabled:
             # The real loop's provider is owned by a CodingRuntime so there is
             # exactly one shutdown path for sandbox resources.
@@ -146,15 +205,7 @@ async def run_coding_delivery(
             except BaseException:
                 await provider.close()
                 raise
-            runner = CodingTaskRunner(
-                runs=runtime.runs,
-                propagate_exceptions=(
-                    ConnectionError,
-                    OSError,
-                    SQLAlchemyError,
-                    SoftTimeLimitExceeded,
-                ),
-            )
+            runner = _make_task_runner(manager, runtime.runs)
         else:
             runner = _build_runner(manager)
         return await runner.run(
@@ -166,6 +217,8 @@ async def run_coding_delivery(
     finally:
         if runtime is not None:
             await runtime.close()
+        if bound_lessons:
+            set_lesson_session_factory(None)
         await manager.close()
 
 

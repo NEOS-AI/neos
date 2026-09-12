@@ -8,6 +8,15 @@ from pathlib import Path
 
 from neos.coding.sandbox.base import CommandRequest, CommandResult
 
+TERMINATE_GRACE_SEC = 0.5
+
+
+def _signal_process_group(pid: int, sig: int) -> None:
+    try:
+        os.killpg(pid, sig)
+    except ProcessLookupError:
+        pass
+
 
 class BoundedProcessRunner:
     """Execute argv directly with timeout and bounded captured output."""
@@ -32,11 +41,15 @@ class BoundedProcessRunner:
             async with asyncio.timeout(request.timeout_sec):
                 stdout, stderr = await process.communicate(request.stdin)
         except TimeoutError:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            await process.wait()
+            _signal_process_group(process.pid, signal.SIGTERM)
+            if process.returncode is None:
+                try:
+                    async with asyncio.timeout(TERMINATE_GRACE_SEC):
+                        await process.wait()
+                except TimeoutError:
+                    if process.returncode is None:
+                        _signal_process_group(process.pid, signal.SIGKILL)
+                        await process.wait()
             return CommandResult(
                 exit_code=None,
                 stdout=b"",

@@ -32,8 +32,8 @@ class CountingCrashExecutor:
         self.crash_after = crash_after
         self.write_count = 0
 
-    async def execute(self, session, call):
-        result = await self.delegate.execute(session, call)
+    async def execute(self, session, call, **kwargs):
+        result = await self.delegate.execute(session, call, **kwargs)
         if call.name == "write_file.v1":
             self.write_count += 1
             if self.crash_after == "write_file":

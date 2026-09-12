@@ -8,8 +8,10 @@ from uuid import uuid4
 from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
+    SteeringApplication,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
+from neos.coding.domain.models import CodingTaskStatus, TERMINAL_TASK_STATUSES
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingRun,
@@ -17,6 +19,7 @@ from neos.coding.domain.phases import (
     SteeringMode,
     SteeringRequest,
 )
+from neos.coding.learn_lessons import stage_coding_lesson
 from neos.coding.loop.base import (
     CodingLoop,
     LoopDependencies,
@@ -39,7 +42,19 @@ class RunInterrupter(Protocol):
 
 
 class InProcessRunInterrupter:
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    def bind(self, run_id: str, task: asyncio.Task) -> None:
+        self._tasks[run_id] = task
+
+    def unbind(self, run_id: str) -> None:
+        self._tasks.pop(run_id, None)
+
     async def interrupt(self, run_id: str) -> InterruptionResult:
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
         return InterruptionResult(
             workspace_revision=f"fake-interrupt:{run_id}",
             process_stopped=True,
@@ -115,6 +130,24 @@ class CodingRunService:
             await self._release_lease(lease)
             raise
         await self._release_lease(lease)
+        try:
+            task = await self._tasks.get(task_id)
+            payload = dict(committed.event.payload)
+            await stage_coding_lesson(
+                owner_id=task.owner_id if task is not None else None,
+                task_id=task_id,
+                outcome="failed",
+                events=(
+                    {
+                        "type": committed.event.type,
+                        "event_type": committed.event.type,
+                        "error_code": payload.get("error_code") or error_code,
+                        "reason_code": payload.get("reason_code"),
+                    },
+                ),
+            )
+        except Exception:
+            pass
         return committed.event
 
     async def start(self, *, task_id: str, instruction: str) -> CodingRun:
@@ -173,6 +206,18 @@ class CodingRunService:
             raise RunAlreadyLeased(task_id)
         if self._metrics is not None:
             self._metrics.coding_lease_contention_total.labels(outcome="acquired").inc()
+        task = await self._tasks.get(task_id)
+        if task is not None and task.status is CodingTaskStatus.CANCELLED:
+            committed = await self._cancel_active_run(lease, now)
+            await self._release_lease(lease)
+            if committed is not None:
+                return committed.event
+            return await self._append(
+                task_id=task_id,
+                event_type="run.cancelled",
+                payload={"status": "cancelled"},
+                run_id=run.run_id,
+            )
         checkpoint = await self._runs.latest_checkpoint(task_id)
         if checkpoint is not None:
             applied = await self.on_safe_point(
@@ -183,6 +228,12 @@ class CodingRunService:
                 worker_id=worker_id,
             )
             if applied:
+                if getattr(applied, "request", None) is not None and (
+                    applied.request.mode is SteeringMode.INTERRUPT_NOW
+                    or applied.request.mode is SteeringMode.CANCEL
+                ):
+                    await self._release_lease(applied.lease)
+                    return applied.event
                 checkpoint = applied.checkpoint
                 run = applied.run
                 lease = applied.lease
@@ -200,7 +251,6 @@ class CodingRunService:
         if checkpoint is not None:
             instruction = str(checkpoint.loop_state["current_instruction"])
         else:
-            task = await self._tasks.get(task_id)
             if task is None:
                 raise CodingTaskNotFound(task_id)
             instruction = task.prompt
@@ -210,6 +260,7 @@ class CodingRunService:
                 run_id=run.run_id,
                 instruction=instruction,
                 workspace_edits=self._workspace_edit_contexts(checkpoint),
+                owner_id=task.owner_id if task is not None else None,
             ),
             checkpoint,
             LoopDependencies(
@@ -219,6 +270,11 @@ class CodingRunService:
             ),
         )
         phase_started: dict[str, datetime] = {}
+        bind = getattr(self._interrupter, "bind", None)
+        unbind = getattr(self._interrupter, "unbind", None)
+        current = asyncio.current_task()
+        if bind is not None and current is not None:
+            bind(run.run_id, current)
         try:
             async for event in stream:
                 if event.type == "phase.started":
@@ -257,6 +313,17 @@ class CodingRunService:
             await self._release_lease(lease)
             return committed.event
         except asyncio.CancelledError:
+            try:
+                pending = getattr(self._runs, "has_pending_interrupt", None)
+                should_cancel = task is not None and (
+                    task.status is CodingTaskStatus.CANCELLED
+                )
+                if not should_cancel and pending is not None:
+                    should_cancel = bool(await pending(task_id))
+                if should_cancel:
+                    await self._cancel_active_run(lease, self._clock())
+            finally:
+                await self._release_lease(lease)
             raise
         except Exception:
             if self._metrics is not None and lease.recovered:
@@ -265,6 +332,9 @@ class CodingRunService:
                 ).inc()
             await self._release_lease(lease)
             raise
+        finally:
+            if unbind is not None:
+                unbind(run.run_id)
         return None
 
     @staticmethod
@@ -332,7 +402,7 @@ class CodingRunService:
                         self._metrics.coding_lease_contention_total.labels(
                             outcome="busy"
                         ).inc()
-                    raise RunAlreadyLeased(task_id)
+                    return request
                 await self._interrupt_active_run(task_id, request, lease)
         return request
 
@@ -349,6 +419,15 @@ class CodingRunService:
             if checkpoint is None:
                 raise ValueError("checkpoint is required for atomic steering")
             now = self._clock()
+            interrupted = await self._apply_interrupt_now_at_safe_point(
+                task_id=task_id,
+                lease=lease,
+                checkpoint=checkpoint,
+                worker_id=worker_id or lease.worker_id,
+                now=now,
+            )
+            if interrupted is not None:
+                return interrupted
             applied = await self._runs.apply_steering_at_safe_point(
                 lease=lease,
                 checkpoint=checkpoint,
@@ -368,7 +447,32 @@ class CodingRunService:
                 ).observe(latency)
             return applied
         request = await self._runs.claim_pending_steering(task_id)
-        if request is None or request.mode is not SteeringMode.SAFE_POINT:
+        if request is None:
+            return False
+        if request.mode is SteeringMode.INTERRUPT_NOW:
+            run = await self._runs.latest_run(task_id)
+            if run is not None:
+                await self._runs.update_run(
+                    replace(
+                        run,
+                        status=CodingRunStatus.CANCELLED,
+                        completed_at=self._clock(),
+                    )
+                )
+            applied = replace(request, applied_checkpoint_id=checkpoint_id)
+            await self._runs.apply_steering(applied)
+            await self._append(
+                task_id=task_id,
+                event_type="steer.applied",
+                payload={
+                    "steering_id": request.steering_id,
+                    "mode": request.mode.value,
+                    "instruction": request.instruction,
+                },
+                checkpoint_id=checkpoint_id,
+            )
+            return True
+        if request.mode is not SteeringMode.SAFE_POINT:
             return False
         run = await self._runs.latest_run(task_id)
         if run is None:
@@ -436,13 +540,170 @@ class CodingRunService:
         )
         return True
 
-    async def stop(self, *, task_id: str) -> None:
+    async def stop(self, *, task_id: str, owner_id: str) -> None:
+        task = await self._tasks.get_owned(task_id, owner_id)
+        if task is None:
+            raise CodingTaskNotFound(task_id)
+        if task.status in TERMINAL_TASK_STATUSES:
+            return
+        now = self._clock()
+        request = SteeringRequest(
+            steering_id=f"cs_{uuid4().hex}",
+            task_id=task_id,
+            mode=SteeringMode.CANCEL,
+            instruction="stop",
+            requested_at=now,
+        )
+        await self._runs.queue_steering(request)
+        await self._append(
+            task_id=task_id,
+            event_type="steer.queued",
+            payload={"steering_id": request.steering_id, "mode": request.mode.value},
+        )
+        await self._mark_task_cancelled(task_id, now)
+        run = await self._runs.latest_run(task_id)
+        if run is None or run.status is not CodingRunStatus.RUNNING:
+            await self._apply_queued_cancel(request)
+            return
+        lease = await self._runs.acquire_execution_lease(
+            task_id=task_id,
+            run_id=run.run_id,
+            worker_id=f"stop:{request.steering_id}",
+            now=now,
+            expires_at=now + self._execution_lease,
+        )
+        if lease is None:
+            return
+        try:
+            await self._cancel_active_run(lease, now)
+            await self._apply_queued_cancel(request)
+        finally:
+            await self._release_lease(lease)
+
+    async def _mark_task_cancelled(self, task_id: str, now: datetime) -> None:
+        marker = getattr(self._runs, "mark_task_cancelled", None)
+        if marker is not None:
+            await marker(task_id=task_id, now=now)
+        saver = getattr(self._tasks, "save", None)
+        task = await self._tasks.get(task_id)
+        if saver is None or task is None:
+            return
+        if task.status in TERMINAL_TASK_STATUSES:
+            return
+        await saver(replace(task, status=CodingTaskStatus.CANCELLED, updated_at=now))
+
+    async def _cancel_active_run(self, lease, now: datetime):
+        cancel = getattr(self._runs, "cancel_run", None)
+        if cancel is not None:
+            return await cancel(lease=lease, now=now)
+        run = await self._runs.latest_run(lease.task_id)
+        if run is None:
+            return None
+        await self._runs.update_run(
+            replace(run, status=CodingRunStatus.CANCELLED, completed_at=now)
+        )
+        return None
+
+    async def _apply_queued_cancel(self, request: SteeringRequest) -> None:
+        claim = getattr(self._runs, "claim_pending_interrupt", None)
+        claimed = request
+        if claim is not None:
+            found = await claim(request.task_id)
+            if found is not None:
+                claimed = found
+        await self._runs.apply_steering(claimed)
+
+    async def _apply_interrupt_now_at_safe_point(
+        self,
+        *,
+        task_id: str,
+        lease,
+        checkpoint: CodingCheckpoint,
+        worker_id: str,
+        now: datetime,
+    ) -> SteeringApplication | None:
+        claim = getattr(self._runs, "claim_pending_interrupt", None)
+        if claim is not None:
+            request = await claim(task_id)
+        else:
+            checker = getattr(self._runs, "has_pending_interrupt", None)
+            if checker is None or not await checker(task_id):
+                return None
+            request = await self._runs.claim_pending_steering(task_id)
+            if request is None or request.mode is not SteeringMode.INTERRUPT_NOW:
+                return None
+        if request is None:
+            return None
+        if request.mode is SteeringMode.CANCEL:
+            committed = await self._cancel_active_run(lease, now)
+            await self._mark_task_cancelled(task_id, now)
+            run = await self._runs.latest_run(task_id)
+            applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
+            await self._runs.apply_steering(applied)
+            event = (
+                committed.event
+                if committed is not None
+                else await self._append(
+                    task_id=task_id,
+                    event_type="run.cancelled",
+                    payload={"status": "cancelled"},
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+            )
+            cancelled = run or replace(
+                CodingRun(
+                    run_id=lease.run_id,
+                    task_id=task_id,
+                    attempt=1,
+                    status=CodingRunStatus.CANCELLED,
+                    resume_from_checkpoint_id=None,
+                    started_at=now,
+                    completed_at=now,
+                )
+            )
+            return SteeringApplication(
+                request=applied,
+                checkpoint=checkpoint,
+                previous_run=cancelled,
+                run=cancelled,
+                lease=lease,
+                event=event,
+            )
         run = await self._runs.latest_run(task_id)
         if run is None:
-            return
-        await self._interrupter.interrupt(run.run_id)
-        await self._runs.update_run(
-            replace(run, status=CodingRunStatus.CANCELLED, completed_at=self._clock())
+            applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
+            await self._runs.apply_steering(applied)
+            return None
+        cancelled = replace(
+            run,
+            status=CodingRunStatus.CANCELLED,
+            completed_at=now,
+        )
+        await self._runs.update_run(cancelled)
+        applied = replace(request, applied_checkpoint_id=checkpoint.checkpoint_id)
+        await self._runs.apply_steering(applied)
+        event = await self._append(
+            task_id=task_id,
+            event_type="steer.applied",
+            payload={
+                "steering_id": request.steering_id,
+                "mode": request.mode.value,
+                "instruction": request.instruction,
+            },
+            checkpoint_id=checkpoint.checkpoint_id,
+        )
+        if self._metrics is not None:
+            latency = max(0.0, (now - request.requested_at).total_seconds())
+            self._metrics.coding_steering_latency_seconds.labels(
+                outcome="applied"
+            ).observe(latency)
+        return SteeringApplication(
+            request=applied,
+            checkpoint=checkpoint,
+            previous_run=cancelled,
+            run=cancelled,
+            lease=lease,
+            event=event,
         )
 
     async def _interrupt_active_run(self, task_id, request, lease) -> None:

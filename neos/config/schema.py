@@ -616,6 +616,18 @@ class MemoryConfig(StrictConfigModel):
     max_context_items: int = 10
 
 
+class LearnConfig(StrictConfigModel):
+    write_approval: bool = True
+    coding_lessons: bool = False
+    channel_learn: bool = False
+    research_procedures: bool = False
+    session_search_tool: bool = False
+    curator: bool = True
+    stale_days: int = 30
+    archive_days: int = 90
+    max_knowledge_chars: int = 400
+
+
 class QueryClassifierConfig(StrictConfigModel):
     use_llm: bool = False
     llm_model: str = "claude-haiku-4-5-20251001"
@@ -1404,6 +1416,18 @@ class SandboxDockerConfig(StrictConfigModel):
     network_mode: str = "none"
     user: str = "10001:10001"
     allow_unpinned_image: bool = False
+    image_allowlist: list[str] = Field(default_factory=list)
+    custom_images: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_custom_image_keys(self) -> "SandboxDockerConfig":
+        reserved = {"default", "python", "node"}
+        for key in self.custom_images:
+            if key in reserved or (self.image and key == self.image):
+                raise ValueError(
+                    "custom sandbox image key shadows a reserved preset"
+                )
+        return self
 
 
 class SandboxMemoryConfig(StrictConfigModel):
@@ -1562,7 +1586,7 @@ class SandboxConfig(StrictConfigModel):
 
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
-    provider: Literal["anthropic"] = "anthropic"
+    provider: Literal["anthropic", "openai", "gemini", "ollama"] = "anthropic"
     model: str | None = None
     model_timeout_sec: float = Field(default=120, gt=0, le=600)
     tool_timeout_sec: float = Field(default=30, gt=0, le=300)
@@ -1583,6 +1607,12 @@ class CodingModelConfig(StrictConfigModel):
     mutation_snapshot_interval: int = Field(default=5, gt=0)
     approval_ttl_seconds: int = Field(default=900, gt=0)
     approval_reconciliation_batch_size: int = Field(default=100, gt=0, le=1000)
+    approval_mode: Literal["manual", "auto"] = "manual"
+    approval_deny_tools: list[str] = Field(default_factory=list)
+    approval_allow_tools: list[str] = Field(default_factory=list)
+    approval_always_allow: list[str] = Field(default_factory=list)
+    web_fetch_hosts: list[str] = Field(default_factory=list)
+    deferred_tools_threshold: int = Field(default=20, ge=1, le=100)
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":
@@ -1627,16 +1657,39 @@ class ExecutionApprovalConfig(StrictConfigModel):
         return _split_csv(value)
 
 
-class TelegramChannelConfig(StrictConfigModel):
+class ChannelPlatformConfig(StrictConfigModel):
+    """Per-platform channel flags. None/empty inherit from ChannelConfig."""
+
     enabled: bool = False
+    require_mention: bool | None = None
+    allowed_users: list[str] = Field(default_factory=list)
+    allowed_channels: list[str] = Field(default_factory=list)
+    ignored_channels: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "allowed_users", "allowed_channels", "ignored_channels", mode="before"
+    )
+    @classmethod
+    def parse_channel_csv(cls, value: Any) -> Any:
+        return _split_csv(value)
 
 
-class DiscordChannelConfig(StrictConfigModel):
-    enabled: bool = False
+class TelegramChannelConfig(ChannelPlatformConfig):
+    pass
 
 
-class SlackChannelConfig(StrictConfigModel):
-    enabled: bool = False
+class DiscordChannelConfig(ChannelPlatformConfig):
+    pass
+
+
+class SlackChannelConfig(ChannelPlatformConfig):
+    pass
+
+
+class ChannelPrincipal(StrictConfigModel):
+    platform: str
+    platform_user_id: str
+    user_id: str
 
 
 class ChannelConfig(StrictConfigModel):
@@ -1644,6 +1697,23 @@ class ChannelConfig(StrictConfigModel):
     discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
     slack: SlackChannelConfig = Field(default_factory=SlackChannelConfig)
     bot_user_id: str = ""
+    require_mention: bool = True
+    allowed_users: list[str] = Field(default_factory=list)
+    allowed_channels: list[str] = Field(default_factory=list)
+    ignored_channels: list[str] = Field(default_factory=list)
+    coding_invoke: bool = False
+    coding_owner_user_id: str = ""
+    inbound_media: bool = False
+    outbound_files: bool = False
+    draft_streaming: bool = False
+    principals: list[ChannelPrincipal] = Field(default_factory=list)
+
+    @field_validator(
+        "allowed_users", "allowed_channels", "ignored_channels", mode="before"
+    )
+    @classmethod
+    def parse_channel_csv(cls, value: Any) -> Any:
+        return _split_csv(value)
 
 
 class ContextAssemblyConfig(StrictConfigModel):
@@ -1725,6 +1795,7 @@ class AppConfig(StrictConfigModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    learn: LearnConfig = Field(default_factory=LearnConfig)
     query_classifier: QueryClassifierConfig = Field(default_factory=QueryClassifierConfig)
     executive_summary: ExecutiveSummaryConfig = Field(default_factory=ExecutiveSummaryConfig)
     query_expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)
@@ -1821,9 +1892,17 @@ class AppConfig(StrictConfigModel):
     def validate_coding_model_policy(self) -> "AppConfig":
         if not self.coding_model.enabled:
             return self
-        if not self.sandbox.enabled or not self.secrets.anthropic_api_key:
+        from neos.config.coding_selection import (
+            coding_credential_for,
+            resolve_coding_selection_from_app,
+        )
+
+        selection = resolve_coding_selection_from_app(self)
+        credential = coding_credential_for(self, selection.provider)
+        if not self.sandbox.enabled or not credential:
             raise ValueError(
-                "coding real loop requires an enabled sandbox and Anthropic credential"
+                "coding real loop requires an enabled sandbox and "
+                f"{selection.provider} credential"
             )
         if (
             self.coding_model.input_cost_micros_per_million <= 0

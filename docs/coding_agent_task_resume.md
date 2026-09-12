@@ -18,8 +18,10 @@
 > 실제 진행 상황은 git 커밋 메시지와 `.superpowers/sdd/<plan>/progress.md`에만 있다.
 
 > 📌 **이 트랙은 이제 로드맵의 트랙 E다.**
-> [DEEP_ANALYSIS_HARNESS_ROADMAP.md §12](DEEP_ANALYSIS_HARNESS_ROADMAP.md)가 요약·출하
-> 기준(E-S1~E-S4)·미해결 인벤토리(CA1~CA7)를 갖고, 이 문서는 **상세 원장**으로 남는다.
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md §8-E](DEEP_ANALYSIS_HARNESS_ROADMAP.md)가 요약·출하
+> 기준(E-S1~E-S4)을 갖고, 이 문서는 **상세 원장**으로 남는다.
+> ⚠️ **CA1~CA12 인벤토리는 전부 종결되어 로드맵에서 지워졌다** — 각 항목이 *왜* 그렇게
+> 닫혔는지는 `git show c071585a:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12.7 에 있다.
 > 충돌하면 실측 근거가 더 최신인 쪽이 이긴다.
 
 ---
@@ -429,8 +431,9 @@ merge 이후 갱신되지 않았으므로 재개 시 위 1)로 다시 실측할 
 
 ## 7. 참조
 
-- **로드맵 트랙 E:** [DEEP_ANALYSIS_HARNESS_ROADMAP.md](DEEP_ANALYSIS_HARNESS_ROADMAP.md) §12
-  — 출하 기준 E-S1~E-S4, 미해결 인벤토리 CA1~CA7, 트랙 D와의 접점
+- **로드맵 트랙 E:** [DEEP_ANALYSIS_HARNESS_ROADMAP.md](DEEP_ANALYSIS_HARNESS_ROADMAP.md) §8-E
+  — 출하 기준 E-S1~E-S4. ⚠️ 병합 위험 실측·CA 인벤토리 상세는 로드맵 압축(2026-09-11)
+  으로 빠졌다 → `git show c071585a:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12.3·§12.7
 - 코딩 에이전트 설계: [NEOS_CODING.md](NEOS_CODING.md)
 - 최종 수용 게이트: 플랜 `:1201`
 - 관련 문서: [deep_analysis_task_task_resume.md](archive/deep_analysis_task_task_resume.md),

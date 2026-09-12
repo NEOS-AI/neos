@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
+import pytest
+
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingRun,
@@ -93,6 +95,20 @@ async def test_checkpoint_and_tool_result_are_idempotent() -> None:
     sql = "\n".join(session.sql)
     assert "ON CONFLICT (task_id, tool_call_id) DO NOTHING" in sql
     assert "INSERT INTO coding_checkpoints" in sql
+
+
+@pytest.mark.no_db
+async def test_has_pending_interrupt_only_reads_interrupt_now_rows() -> None:
+    session = FakeSession(rows=[(1,)])
+    repository = repository_for(session)
+
+    found = await repository.has_pending_interrupt("ct_1")
+
+    sql = "\n".join(session.sql)
+    assert "interrupt_now" in sql
+    assert "cancel" in sql
+    assert "status = 'pending'" in sql
+    assert found is True
 
 
 async def test_claim_pending_steering_uses_skip_locked_and_maps_request() -> None:

@@ -43,6 +43,8 @@ class CodingTaskRunner:
         on_retry: Callable[[str], None] | None = None,
         propagate_exceptions: tuple[type[BaseException], ...] = (),
         advance_until_complete: bool = False,
+        on_lifecycle: Callable[[str, str, dict[str, Any]], Awaitable[None]]
+        | None = None,
     ) -> None:
         self._runs = runs
         self._policy = policy or CodingTaskExecutionPolicy()
@@ -50,6 +52,7 @@ class CodingTaskRunner:
         self._on_retry = on_retry
         self._propagate_exceptions = propagate_exceptions
         self._advance_until_complete = advance_until_complete
+        self._on_lifecycle = on_lifecycle
 
     async def run(
         self,
@@ -119,9 +122,23 @@ class CodingTaskRunner:
                 continue
             failures = 0
             if event is None or event.type == "run.completed":
+                await self._emit_lifecycle(task_id, "completed", event)
                 return CodingTaskOutcome.COMPLETED
+            if event.type == "run.cancelled":
+                await self._emit_lifecycle(task_id, "cancelled", event)
+                return CodingTaskOutcome.FAILED
             if event.type == "approval.requested":
+                await self._emit_lifecycle(task_id, "waiting_approval", event)
                 return CodingTaskOutcome.WAITING_APPROVAL
             if not self._advance_until_complete:
                 return CodingTaskOutcome.CONTINUING
         raise asyncio.CancelledError
+
+    async def _emit_lifecycle(self, task_id: str, status: str, event: Any) -> None:
+        if self._on_lifecycle is None:
+            return
+        payload = dict(getattr(event, "payload", None) or {})
+        try:
+            await self._on_lifecycle(task_id, status, payload)
+        except Exception:
+            return

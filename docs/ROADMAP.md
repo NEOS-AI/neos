@@ -53,14 +53,26 @@
 - **Excel** — openpyxl (`excel_parser.py`, 226줄)
 - **PPT** — python-pptx (`ppt_parser.py`, 337줄)
 - 이미지 / 텍스트 / CSV / 통합 컨텍스트 파이프라인 (`pipelines/`)
+  — ⚠️ 이미지 갈래(`ImagePipeline` → `pipelines/vision/`)와 `multimodal_workflow` 는
+  HTTP 진입점이 사라져 **현재 아무도 부르지 않는다**(§N8). 의도적으로 남긴 것이고
+  모듈 상단에 그 사실이 적혀 있다
+- **챗 첨부가 모델에 도달한다** (§N8, 2026-09-11 종결) — 이미지 4종·PDF 는 원본,
+  TXT·MD 는 텍스트 블록, DOC/DOCX 는 `word_parser` 추출 텍스트로 간다. 못 받는
+  모델이면 이유와 함께 거부하고, 상한으로 제외된 첨부는 사유가 화면에 남는다
 - 지식 그래프 추출·적재·검색 (아래 "최근 완료" 참조)
 
-### API 표면 (`neos/api/handlers/` — 25개 핸들러)
+### API 표면 (`neos/api/handlers/` — 28개 핸들러, 2026-09-11 실측)
 
-chat / query / unified / rag_chat / similarity_chat / deep_research / async_research /
-deep_analysis / deep_analysis_analytics / research_session / multimodal / document /
-artifact / export / template / refinement / vote / analytics / skills /
-**approval** / **autonomy** / **ui_submit(A2UI)** / **scheduled_tasks** / workflow_stream / auth
+analytics / approval / artifact / async_research / auth / autonomy / chat /
+**coding** / **coding_admin** / **coding_workspace_ws** / **coding_ws** /
+deep_analysis / deep_analysis_analytics / deep_research / document / export /
+query / rag_chat / refinement / research_session / scheduled_tasks /
+similarity_chat / skills / template / ui_submit(A2UI) / unified / vote / workflow_stream
+
+> 이 목록은 두 방향으로 낡아 있었다. **코딩 에이전트 핸들러 넷이 통째로 빠져
+> 있었고**(§12 를 가진 다른 문서가 70여 파일을 추적하는 동안 이 목록은 그것을
+> 몰랐다 — CA7 이 자산 표에 남긴 것과 같은 누락이다), 없어진 `multimodal` 이
+> 남아 있었다(§N8 에서 삭제). 개수도 25 로 적혀 있었으나 실제는 24 개 이름이었다.
 
 ### 운영 기반
 
@@ -150,10 +162,10 @@ PDF/Word/Excel/PPT 파서 4종 모두 실제 라이브러리를 사용하는 구
 | **시맨틱 캐시** | `neos/utils/semantic_cache.py`, `smart_cache_manager.py`, `cache_invalidation.py` | |
 | **리포트 익스포트** | `neos/api/handlers/export_handlers.py` — markdown/html/pdf/canvas | |
 | **Open Responses 호환** | `neos/api/models/open_responses.py`, `docs/OPEN_RESPONSES_SPEC.md` | |
-| **코딩 에이전트** | `neos/coding/` (loop·model·sandbox·tools·workers·transport·outbox·persistence·repositories) + `neos/coding/managed/`(관리형 샌드박스 컨트롤 플레인), `db/migrations/038..046`, `docs/NEOS_CODING.md` | 플랜 14개 전부 완료. **기본 꺼짐** — `sandbox.enabled`·`coding_model.enabled` 둘 다 `False`. 출하 기준은 `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12.6의 E-S1~E-S4 |
+| **코딩 에이전트** | `neos/coding/` (loop·model·sandbox·tools·workers·transport·outbox·persistence·repositories) + `neos/coding/managed/`(관리형 샌드박스 컨트롤 플레인), `db/migrations/038..046`, `docs/NEOS_CODING.md` | 플랜 14개 전부 완료. **기본 꺼짐** — `sandbox.enabled`·`coding_model.enabled` 둘 다 `False`. 출하 기준은 `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §8-E의 E-S1~E-S4 |
 
 > 📌 **코딩 에이전트 행은 2026-08-25에 추가됐다 (CA7).** 트랙 하나가 이 문서에
-> 통째로 빠져 있었다 — `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §12가 70여 파일과
+> 통째로 빠져 있었다 — `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` §8-E가 70여 파일과
 > 마이그레이션 아홉 개를 추적하는 동안 마스터 로드맵은 그것을 몰랐다. 이 표의
 > 취지("로드맵 밖에서 일어난 작업")에 가장 정확히 해당하는 항목이면서 가장 늦게
 > 실렸다.
@@ -283,9 +295,22 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 **막힌 곳은 함수 하나다:** `_speech_to_text()`가 `"Speech-to-text not yet implemented"`를 반환
 (`audio_pipeline.py:183`).
 
-- **왜 지금:** 잔여 작업이 국소적(함수 1개). 이미 `neos/providers/ollama.py`가 있어 로컬 Whisper 옵션도 열림
-- **의존:** 없음
-- **규모:** 소~중 (Whisper API 연결) — 로드맵의 "오디오 요약"·"다국어"는 STT가 붙는 순간 대부분 따라온다
+> 🔴 **N8 이 이 항목의 전제를 바꿨다 (2026-09-11).** `AudioPipeline` 이 매달려 있는
+> `multimodal_workflow` 는 HTTP 진입점(`/api/v1/multimodal/*`)이 삭제되면서 **어디에서도
+> 호출되지 않는다.** 즉 `_speech_to_text()` 를 지금 구현해도 **사용자가 닿을 경로가 없다** —
+> "함수 하나만 채우면 된다" 는 여전히 참이지만, 그것만으로는 아무 기능도 생기지 않는다.
+>
+> 그러므로 N3 은 착수 전에 **진입점을 먼저 정해야 한다**: (a) 챗 첨부 경로에 오디오
+> MIME 을 더해 `attachment_blocks` 가 STT 를 거쳐 텍스트로 싣게 할지, (b) 오디오 전용
+> 엔드포인트를 새로 낼지, (c) `multimodal_workflow` 를 되살릴지. (a) 가 가장 작다 —
+> FE 허용 MIME 목록에 오디오를 더하고, EXTRACT 갈래가 `word_parser` 대신 STT 를
+> 부르게 하면 나머지 배선(상한·거부·notices·소유권)은 이미 서 있다.
+
+- **왜 지금:** 잔여 작업이 국소적(함수 1개) — **단, 위 진입점 결정이 선행한다**
+- **의존:** 없음(기능적으로 독립). 진입점을 (a)로 정하면 `attachment_blocks` 를 건드리므로
+  첨부 경로를 만지는 다른 작업과 같은 시기는 피한다
+- **규모:** 소~중 (Whisper API 연결) + 진입점 배선 — 로드맵의 "오디오 요약"·"다국어"는
+  STT 가 붙는 순간 대부분 따라온다
 
 ### N4. 감사 로그 — 이벤트 로그 패턴 재사용
 
@@ -330,7 +355,7 @@ HTTP 200 → `E_SOURCE_DEAD` **미발동** → 바이너리가 mojibake로 디�
 - **의존:** 단계 1 (cassette `"skill"` + golden 재녹화)
 - **규모:** 소
 
-### N8. 첨부 → LLM 멀티모달 입력 (FE↔BE 감사 #4b) — ✅ **종결 (2026-09-06)**
+### N8. 첨부 → LLM 멀티모달 입력 (FE↔BE 감사 #4b) — ✅ **종결 (2026-09-11)**
 
 **무엇이 닫혔나.** 첨부가 실제로 모델에 도달한다. 정책은 `neos/services/attachment_blocks.py`
 하나에 있고(분류·거부 게이트·해석·상한·렌더), `chat_llm_service` 의 **세 메시지 조립 사본이
@@ -442,7 +467,7 @@ image·vision·base64·media 처리가 **한 줄도 없다**(2026-09-04 확인).
   없다는 서술은 그대로 맞지만 **저장소에 없다는 뜻은 아니다.** 다만 이들은 SDK 직호출이고
   챗 경로는 LangChain 메시지 계약이라 그대로는 못 쓴다 → **첫 갈림길은 "공통화를 어디까지"가
   아니라 "두 층을 합칠까, 나란히 둘까"다.** 나란히 두면 프로바이더별 블록 조립 사본이
-  둘이 된다 — `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §7 WORKSPACE1이 아홉 사본을 하나로 모은
+  둘이 된다 — `DEEP_ANALYSIS_HARNESS_ROADMAP.md` §3 WORKSPACE1이 아홉 사본을 하나로 모은
   것과 같은 범주의 부채를 새로 만드는 선택이다
 - **(b) 그 층은 라이브인데 아무도 부르지 않는다.** `/api/v1/multimodal/query`·`/image/analyze`·
   `/supported-types`가 `main.py:576`으로 마운트돼 있고 셋 다 `get_current_active_user`를
@@ -482,7 +507,7 @@ image·vision·base64·media 처리가 **한 줄도 없다**(2026-09-04 확인).
 | 4 | **N7** L5 → golden 연결 | 소 | 단계 1 |
 | 5 | **단계 2** 엔진 재배치 | 중 | 없음 (단계 1과 병렬 가능) |
 | 6 | **N3** 오디오 STT | 소~중 | 없음 (독립) |
-| ~~7~~ | ~~**N8** 첨부 → LLM 멀티모달 입력~~ | — | ✅ **2026-09-06 종결** (10 커밋 + 최종 수정 웨이브) |
+| ~~7~~ | ~~**N8** 첨부 → LLM 멀티모달 입력~~ | — | ✅ **2026-09-11 종결** (구현 10 + 리뷰 수정 9 + 후속 6 커밋) |
 | 8 | **단계 3** 분리 (Job 서비스) | 대 | 단계 1·2 + **FE 조율** |
 | 9 | **N4+N5** 감사 로그 + 테넌시 강제 | 대 | 단계 3 |
 | 10 | **N6** 플러그인(외부 스킬) | 중 | 단계 1 + N1 |

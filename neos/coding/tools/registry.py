@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -16,11 +16,129 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 
+_DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
+_DEDICATED_EXECUTE_DENY = frozenset(
+    {
+        "cat",
+        "tac",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "nl",
+        "rg",
+        "grep",
+        "egrep",
+        "fgrep",
+        "ag",
+        "ack",
+        "find",
+        "fd",
+        "fdfind",
+        "sed",
+        "awk",
+    }
+)
+_EXECUTE_WRAPPERS = frozenset({"env", "busybox", "xargs"})
+_INLINE_INTERPRETERS = frozenset(
+    {"python", "python3", "node", "nodejs", "perl", "ruby", "php", "lua"}
+)
+_REMOVAL_EXECUTABLES = frozenset({"rm", "rmdir"})
+_DANGEROUS_REMOVAL_OPERANDS = frozenset({"/", "/*", "*", "~"})
+
+
+def is_path_like_operand(value: object) -> bool:
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        return False
+    if value.startswith("."):
+        return True
+    return "/" in value.replace("\\", "/")
+
+
+def path_operands_from_argv(argv: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    operands: list[str] = []
+    for part in tuple(argv)[1:]:
+        if part == "--":
+            continue
+        if part.startswith("-") and "=" in part:
+            value = part.split("=", 1)[1]
+            if is_path_like_operand(value):
+                operands.append(value)
+            continue
+        if is_path_like_operand(part):
+            operands.append(part)
+    return tuple(operands)
+
+
+def _command_name(value: str) -> str:
+    return PurePosixPath(value).name
+
+
+def _unwrapped_command_names(argv: tuple[str, ...]) -> tuple[str, ...]:
+    names = [_command_name(argv[0])]
+    if names[0] not in _EXECUTE_WRAPPERS:
+        return tuple(names)
+    for part in argv[1:]:
+        if part.startswith("-"):
+            continue
+        if names[0] == "env" and "=" in part:
+            continue
+        names.append(_command_name(part))
+    return tuple(names)
+
+
+def _command_operands(argv: tuple[str, ...]) -> tuple[str, ...]:
+    operands: list[str] = []
+    for part in argv[1:]:
+        if part == "--":
+            continue
+        if part.startswith("-") and "=" in part:
+            operands.append(part.split("=", 1)[1])
+            continue
+        if part.startswith("-"):
+            continue
+        operands.append(part)
+    return tuple(operands)
+
+
+def _subcommand_after(argv: tuple[str, ...], executable: str) -> str | None:
+    seen = False
+    for part in argv:
+        if not seen:
+            if _command_name(part) == executable:
+                seen = True
+            continue
+        if part.startswith("-"):
+            continue
+        return _command_name(part)
+    return None
+
+
+def _operand_escapes_workspace(value: str) -> bool:
+    if value.startswith("/") or value.startswith("~"):
+        return True
+    parts = [
+        part
+        for part in value.replace("\\", "/").split("/")
+        if part not in {"", "."}
+    ]
+    return ".." in parts
+
+
+def _deferred_tools_threshold() -> int:
+    try:
+        from neos.config.settings import settings
+
+        return int(settings.config.coding_model.deferred_tools_threshold)
+    except Exception:
+        return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
+
 
 class ToolRisk(StrEnum):
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
     COMMAND = "command"
+    USER_QUESTION = "user_question"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +176,32 @@ class _SearchTextInput(_ToolInput):
     query: str = Field(min_length=1)
     paths: list[str] = Field(default_factory=lambda: ["**/*"], min_length=1)
     regex: bool = False
-    limit: int = Field(default=100, ge=1, le=100)
+    limit: int = Field(default=100, ge=1, le=250)
+    before: int = Field(default=0, ge=0, le=20)
+    after: int = Field(default=0, ge=0, le=20)
+    ignore_case: bool = False
+    multiline: bool = False
+    context: int = Field(default=0, ge=0, le=20)
+    path: str | None = None
+    output_mode: Literal["files", "content", "count"] = "content"
+
+
+class _GlobFilesInput(_ToolInput):
+    pattern: str = Field(min_length=1)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class _WebFetchInput(_ToolInput):
+    url: str = Field(min_length=1)
+
+
+class _SearchToolsInput(_ToolInput):
+    query: str = Field(min_length=1)
+
+
+class _SpawnAgentInput(_ToolInput):
+    prompt: str = Field(min_length=1)
+    max_turns: int = Field(default=4, ge=1, le=8)
 
 
 class _EmptyInput(_ToolInput):
@@ -73,8 +216,30 @@ class _GitLogInput(_ToolInput):
     limit: int = Field(default=20, ge=1, le=100)
 
 
+class _ReadFileInput(_PathInput):
+    offset: int = Field(default=1, ge=1)
+    limit: int | None = Field(default=None, ge=1, le=5000)
+
+
+class _EditFileInput(_PathInput):
+    old_string: str
+    new_string: str
+    replace_all: bool = False
+
+
 class _WriteFileInput(_PathInput):
     content: str
+    parents: bool = False
+
+
+class _TodoItem(_ToolInput):
+    id: str | None = None
+    content: str = Field(min_length=1)
+    status: Literal["pending", "in_progress", "completed"]
+
+
+class _TodoWriteInput(_ToolInput):
+    todos: list[_TodoItem] = Field(min_length=1)
 
 
 class _ExecuteInput(_ToolInput):
@@ -84,6 +249,29 @@ class _ExecuteInput(_ToolInput):
     stdin: str = ""
     timeout_sec: float = Field(default=30, gt=0)
     max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+
+
+class _SetPhaseInput(_ToolInput):
+    phase: Literal["explore", "plan", "implement", "verify"]
+
+
+class _AskUserOption(_ToolInput):
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=240)
+
+
+class _AskUserQuestion(_ToolInput):
+    prompt: str = Field(min_length=1, max_length=500)
+    options: list[_AskUserOption] = Field(min_length=2, max_length=4)
+    multi_select: bool = False
+
+
+class _AskUserInput(_ToolInput):
+    questions: list[str | _AskUserQuestion] = Field(min_length=1, max_length=4)
+
+
+class _LoadSkillInput(_ToolInput):
+    name: str = Field(min_length=1, max_length=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,20 +292,216 @@ class _RegisteredTool:
 class CodingToolRegistry:
     _TOOL_SPECS: ClassVar[tuple[_RegisteredTool, ...]] = (
         _RegisteredTool(
-            "list_tree.v1", "List workspace entries.", ToolRisk.READ_ONLY, _ListTreeInput
+            "list_tree.v1",
+            (
+                "List a workspace directory. Use this to inspect entries before choosing a path. "
+                "Do not use this to read file contents (`read_file.v1`). "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ListTreeInput,
         ),
-        _RegisteredTool("stat.v1", "Inspect a workspace path.", ToolRisk.READ_ONLY, _PathInput),
-        _RegisteredTool("read_file.v1", "Read a workspace file.", ToolRisk.READ_ONLY, _PathInput),
         _RegisteredTool(
-            "search_text.v1", "Search workspace text.", ToolRisk.READ_ONLY, _SearchTextInput
+            "stat.v1",
+            (
+                "Inspect workspace path metadata only. "
+                "Prefer this over reading a whole file just to see size. "
+                "Do not use this to read file contents. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _PathInput,
         ),
-        _RegisteredTool("git_status.v1", "Read Git status.", ToolRisk.READ_ONLY, _EmptyInput),
-        _RegisteredTool("git_diff.v1", "Read Git diff.", ToolRisk.READ_ONLY, _GitDiffInput),
-        _RegisteredTool("git_log.v1", "Read Git history.", ToolRisk.READ_ONLY, _GitLogInput),
         _RegisteredTool(
-            "write_file.v1", "Write a workspace file.", ToolRisk.WORKSPACE_WRITE, _WriteFileInput
+            "read_file.v1",
+            (
+                "Read a workspace file. Use offset/limit for large files. "
+                "Existing files must be read before edit_file.v1 or write_file.v1. "
+                "Do not use execute.v1 to print file contents. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ReadFileInput,
         ),
-        _RegisteredTool("execute.v1", "Run an allowed command.", ToolRisk.COMMAND, _ExecuteInput),
+        _RegisteredTool(
+            "search_text.v1",
+            (
+                "Search workspace text. Use this instead of a shell search. "
+                "output_mode files returns unique paths; count returns path + match count. "
+                "Do not use execute.v1 with rg/grep/find. "
+                "On policy_* denial, do not retry the same query."
+            ),
+            ToolRisk.READ_ONLY,
+            _SearchTextInput,
+        ),
+        _RegisteredTool(
+            "glob_files.v1",
+            (
+                "Find workspace paths by glob pattern. Use this instead of find. "
+                "Do not use execute.v1 with find. "
+                "On policy_* denial, do not retry the same pattern."
+            ),
+            ToolRisk.READ_ONLY,
+            _GlobFilesInput,
+        ),
+        _RegisteredTool(
+            "git_status.v1",
+            (
+                "Read Git status. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for status. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _EmptyInput,
+        ),
+        _RegisteredTool(
+            "git_diff.v1",
+            (
+                "Read Git diff. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for diff. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _GitDiffInput,
+        ),
+        _RegisteredTool(
+            "git_log.v1",
+            (
+                "Read Git history. Prefer this over execute.v1 git. "
+                "Do not use execute.v1 for log. "
+                "On policy_* denial, do not retry the same call."
+            ),
+            ToolRisk.READ_ONLY,
+            _GitLogInput,
+        ),
+        _RegisteredTool(
+            "web_fetch.v1",
+            (
+                "Fetch an allowlisted http(s) URL as text. "
+                "Only allowlisted hosts; do not use execute.v1 curl. "
+                "On policy_* denial, do not retry the same url."
+            ),
+            ToolRisk.READ_ONLY,
+            _WebFetchInput,
+        ),
+        _RegisteredTool(
+            "edit_file.v1",
+            (
+                "Exact string replace in a workspace file. "
+                "old_string must be unique unless replace_all. Read first. "
+                "Prefer edit over write for existing files. "
+                "On policy_* denial, do not retry the same old_string."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _EditFileInput,
+        ),
+        _RegisteredTool(
+            "write_file.v1",
+            (
+                "Create or replace an entire workspace file. "
+                "Existing files require a prior read_file.v1 in this sandbox. "
+                "Prefer edit_file.v1 for partial edits. "
+                "Do not add unrequested README/docs. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _WriteFileInput,
+        ),
+        _RegisteredTool(
+            "todo_write.v1",
+            (
+                "Replace the coding-task checklist. "
+                "Use this for 3+ step work. "
+                "Do not use this for a one-line edit. "
+                "On policy_* denial, do not retry the same todos."
+            ),
+            ToolRisk.READ_ONLY,
+            _TodoWriteInput,
+        ),
+        _RegisteredTool(
+            "execute.v1",
+            (
+                "Run an allowlisted argv command. argv only. "
+                "No sh|bash|zsh -c. No network clients. No package install. "
+                "git via execute is status/diff/log only. Prefer dedicated tools. "
+                "On policy_* denial, do not retry the same argv."
+            ),
+            ToolRisk.COMMAND,
+            _ExecuteInput,
+        ),
+        _RegisteredTool(
+            "set_phase.v1",
+            (
+                "Set the coding-agent phase to explore, plan, implement, or verify. "
+                "explore and plan hide write and execute tools. verify hides writes. "
+                "Moving to implement from explore, plan, or verify needs approval. "
+                "Do not use this to bypass a policy_* denial. "
+                "On policy_* denial, do not retry the same phase."
+            ),
+            ToolRisk.READ_ONLY,
+            _SetPhaseInput,
+        ),
+        _RegisteredTool(
+            "ask_user.v1",
+            (
+                "Ask the user 1-4 preference questions and wait for answers. "
+                "Each question may be a string or {prompt, options[2-4], multi_select}. "
+                "Requires approval. Do not assume the answer. "
+                "Do not use execute.v1 to pose questions. "
+                "On policy_* denial, do not retry the same questions."
+            ),
+            ToolRisk.USER_QUESTION,
+            _AskUserInput,
+        ),
+        _RegisteredTool(
+            "load_skill.v1",
+            (
+                "Load a catalog skill by name (verify, commit, or any indexed "
+                "markdown skill). Returns the skill markdown. Do not skip hooks. "
+                "Do not invent skill names. "
+                "On policy_* denial, do not retry the same name."
+            ),
+            ToolRisk.READ_ONLY,
+            _LoadSkillInput,
+        ),
+        _RegisteredTool(
+            "search_tools.v1",
+            (
+                "Search registered coding tools by name or description. "
+                "Use this to discover deferred tools before calling them. "
+                "On policy_* denial, do not retry the same query."
+            ),
+            ToolRisk.READ_ONLY,
+            _SearchToolsInput,
+        ),
+        _RegisteredTool(
+            "spawn_agent.v1",
+            (
+                "Spawn a nested explore-only coding agent. "
+                "The parent loop intercepts this call. Do not use this to write files. "
+                "On policy_* denial, do not retry the same prompt."
+            ),
+            ToolRisk.READ_ONLY,
+            _SpawnAgentInput,
+        ),
+    )
+
+    _CORE_TOOL_NAMES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+            "glob_files.v1",
+            "list_tree.v1",
+            "stat.v1",
+            "edit_file.v1",
+            "write_file.v1",
+            "execute.v1",
+            "todo_write.v1",
+            "set_phase.v1",
+            "ask_user.v1",
+            "load_skill.v1",
+            "search_tools.v1",
+        }
     )
 
     def __init__(
@@ -160,8 +544,49 @@ class CodingToolRegistry:
             allowed_env_names=allowed_env_names,
         )
 
-    def definitions(self) -> tuple[ToolDefinition, ...]:
-        return tuple(tool.definition() for tool in self._TOOL_SPECS)
+    def definitions(
+        self,
+        *,
+        phase: str = "implement",
+        revealed: frozenset[str] | None = None,
+    ) -> tuple[ToolDefinition, ...]:
+        from neos.coding.phases import hidden_tools_for_phase
+
+        hidden = hidden_tools_for_phase(phase)
+        revealed_names = revealed or frozenset()
+        return tuple(
+            tool.definition()
+            for tool in self._TOOL_SPECS
+            if tool.name not in hidden
+            and (
+                tool.name in self._CORE_TOOL_NAMES
+                or tool.name in revealed_names
+            )
+        )
+
+    @classmethod
+    def search_definitions(
+        cls, query: str, *, limit: int = 8
+    ) -> tuple[Mapping[str, object], ...]:
+        needle = query.casefold()
+        matches: list[Mapping[str, object]] = []
+        for tool in cls._TOOL_SPECS:
+            if (
+                needle not in tool.name.casefold()
+                and needle not in tool.description.casefold()
+            ):
+                continue
+            definition = tool.definition()
+            matches.append(
+                {
+                    "name": definition.name,
+                    "description": definition.description,
+                    "input_schema": definition.input_schema,
+                }
+            )
+            if len(matches) >= limit:
+                break
+        return tuple(matches)
 
     def decide(
         self, name: str, input: Mapping[str, object]
@@ -203,13 +628,16 @@ class CodingToolRegistry:
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:
-            if "path" in data:
+            raw_path = data.get("path")
+            if isinstance(raw_path, str):
                 normalizer = (
                     ensure_mutable_workspace_path
-                    if name == "write_file.v1"
+                    if name in {"write_file.v1", "edit_file.v1"}
                     else normalize_workspace_path
                 )
-                data["path"] = str(normalizer(data["path"]))
+                data["path"] = str(normalizer(raw_path))
+            if "pattern" in data:
+                data["pattern"] = str(normalize_workspace_path(data["pattern"]))
             if "paths" in data:
                 data["paths"] = [
                     str(normalize_workspace_path(path)) for path in data["paths"]
@@ -223,28 +651,43 @@ class CodingToolRegistry:
             raise ToolValidationError(f"policy_{code}") from error
 
     def _validate_command(self, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
         argv = tuple(data["argv"])
         if any("\0" in value for value in argv):
             raise ToolValidationError("policy_schema_invalid")
         if PurePosixPath(argv[0]).name != argv[0]:
             raise ToolValidationError("policy_executable_path_denied")
         executable = PurePosixPath(argv[0]).name
-        if executable in {"sh", "bash", "zsh"} and len(argv) > 1 and argv[1] == "-c":
+        names = _unwrapped_command_names(argv)
+        if any(name in _DEDICATED_EXECUTE_DENY for name in names):
+            raise ToolValidationError("policy_dedicated_tool_required")
+        if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
             raise ToolValidationError("policy_shell_command_denied")
-        if executable in {
-            "curl",
-            "ftp",
-            "nc",
-            "ncat",
-            "rsync",
-            "scp",
-            "sftp",
-            "ssh",
-            "telnet",
-            "wget",
-        }:
+        if any(name in _INLINE_INTERPRETERS for name in names):
+            later = argv[1:]
+            if "-c" in later or "-e" in later:
+                raise ToolValidationError("policy_inline_interpreter_denied")
+            if "php" in names and "-r" in later:
+                raise ToolValidationError("policy_inline_interpreter_denied")
+        if any(
+            name
+            in {
+                "curl",
+                "ftp",
+                "nc",
+                "ncat",
+                "rsync",
+                "scp",
+                "sftp",
+                "ssh",
+                "telnet",
+                "wget",
+            }
+            for name in names
+        ):
             raise ToolValidationError("policy_network_client_denied")
-        if executable in {"npm", "pnpm", "yarn", "pip", "pip3"} and any(
+        if any(name in {"npm", "pnpm", "yarn", "pip", "pip3"} for name in names) and any(
             value
             in {
                 "add",
@@ -257,13 +700,25 @@ class CodingToolRegistry:
             for value in argv[1:]
         ):
             raise ToolValidationError("policy_network_operation_denied")
+        if any(name in _REMOVAL_EXECUTABLES for name in names):
+            for operand in _command_operands(argv):
+                if (
+                    operand in _DANGEROUS_REMOVAL_OPERANDS
+                    or _operand_escapes_workspace(operand)
+                ):
+                    raise ToolValidationError("policy_dangerous_removal")
+        for operand in _command_operands(argv):
+            if is_denied_secret_path(operand):
+                raise ToolValidationError("policy_secret_path_denied")
+            if _operand_escapes_workspace(operand):
+                raise ToolValidationError("policy_command_path_denied")
         if executable not in self._command_allowlist:
             raise ToolValidationError("policy_executable_not_allowed")
-        if executable == "git" and (
-            len(argv) < 2 or argv[1] not in {"status", "diff", "log"}
-        ):
-            raise ToolValidationError("policy_git_operation_denied")
-        if executable in {"npm", "pnpm", "yarn"} and any(
+        if "git" in names:
+            subcommand = _subcommand_after(argv, "git")
+            if subcommand not in {"status", "diff", "log"}:
+                raise ToolValidationError("policy_git_operation_denied")
+        if any(name in {"npm", "pnpm", "yarn"} for name in names) and any(
             value in {"publish", "release"} for value in argv[1:]
         ):
             raise ToolValidationError("policy_publish_denied")

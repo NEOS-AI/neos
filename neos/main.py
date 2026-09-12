@@ -269,7 +269,17 @@ async def lifespan(app: FastAPI):
         ]):
             logger.info("📲 Initializing Channel Adapters...")
             from neos.api.channels.gateway import ChannelGateway
-            _channel_gateway = ChannelGateway(multi_agent_workflow)
+            from neos.api.channels.inbound_idempotency import (
+                PostgresChannelInboundIdempotencyStore,
+            )
+            from neos.api.channels.session_bind import PostgresChannelCodingBindStore
+            from neos.api.channels.workflow_approvals import RuntimeWorkflowApprovals
+            _channel_gateway = ChannelGateway(
+                multi_agent_workflow,
+                binds=PostgresChannelCodingBindStore(db_manager.get_session),
+                inbound=PostgresChannelInboundIdempotencyStore(db_manager.get_session),
+                workflow_approvals=RuntimeWorkflowApprovals(multi_agent_workflow),
+            )
 
             if settings.CHANNEL_TELEGRAM_ENABLED:
                 try:

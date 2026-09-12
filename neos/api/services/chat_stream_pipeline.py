@@ -288,6 +288,7 @@ class ChatStreamPipeline:
                 .with_workflow_result(wf_ctx.result)
                 .with_artifacts()
                 .with_inline_vis()
+                .with_session_search()
                 .build()
             )
 
@@ -315,6 +316,7 @@ class ChatStreamPipeline:
                 temperature=conversation.get("temperature", 0.7),
                 max_tokens=conversation.get("max_tokens"),
                 tools=tools,
+                user_id=current_user.user_id,
             )
             async for chunk in llm_stream:
                 async for sse_event in dispatcher.dispatch(chunk):

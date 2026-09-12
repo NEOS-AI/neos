@@ -6,8 +6,6 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from neos.utils.anthropic_client import build_async_anthropic
-
 from neos.coding.application.run_service import (
     CodingRunService,
     InProcessRunInterrupter,
@@ -20,9 +18,14 @@ from neos.coding.application.workspace_stream_service import (
 )
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
-from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
-from neos.coding.model.anthropic import AnthropicCodingModel
+from neos.coding.loop.durable import CodingLoopConfig, DurableCodingLoop
+from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
 from neos.dataset.adapters import TrackedCodingModel
+from neos.config.coding_selection import (
+    coding_credential_for,
+    resolve_coding_selection_from_app,
+)
+from neos.utils.llm_factory import create_coding_model
 from neos.coding.managed.adapters import (
     DockerShadowManagedAdapter,
     ManagedNetworkPolicy,
@@ -88,7 +91,6 @@ from neos.coding.workers.celery_runtime import (
 from neos.coding.sandbox.factory import create_sandbox_provider
 from neos.coding.sandbox.observability import LoggingCodingAuditSink
 from neos.database.connection import db_manager
-from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.config.schema import AppConfig
 from neos.observability.metrics import metrics
@@ -466,14 +468,16 @@ def create_managed_sandbox_allocation_service(
     )
 
 
+def _coding_api_key(config: AppConfig, provider: str) -> str | None:
+    if provider == "ollama":
+        return None
+    return coding_credential_for(config, provider)
+
+
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
-    coding_model = resolve_model(
-        config=config.model_routing,
-        provider=coding.provider,
-        role="everyday",
-        feature_override=coding.model,
-    ).model
+    selection = resolve_coding_selection_from_app(config)
+    coding_model = selection.model
     sandbox = config.sandbox
     resources = sandbox.resources
     execution = sandbox.execution
@@ -502,18 +506,26 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     # 코딩 루프는 Celery 워커에서 도는데, D1b 이후 레코드가 그 프로세스에서
     # 바로 디스크에 남으므로 flush 지점을 지나갈 필요가 없다.
     model = TrackedCodingModel(
-        AnthropicCodingModel(
-            build_async_anthropic(api_key=config.secrets.anthropic_api_key)
+        create_coding_model(
+            provider=selection.provider,
+            api_key=_coding_api_key(config, selection.provider),
         ),
+        provider=selection.provider,
         workflow_step="coding_loop",
     )
     executor = SandboxToolExecutor(
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
     )
-    loop_config = AnthropicLoopConfig(
+    loop_config = CodingLoopConfig(
         model=coding_model,
-        system="Work safely in the provided sandbox and complete the coding task.",
+        provider=selection.provider,
+        system=build_coding_system_prompt(
+            tools.definitions(),
+            env=CodingPromptEnv(
+                command_allowlist=tuple(sorted(allowlist)),
+            ),
+        ),
         max_output_tokens=coding.max_output_tokens,
         timeout_sec=coding.model_timeout_sec,
         tool_claim_ttl_sec=coding.tool_timeout_sec,
@@ -527,16 +539,20 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_text_delta_bytes=coding.max_text_delta_bytes,
         max_public_text_bytes=coding.max_public_text_bytes,
         approval_ttl_sec=coding.approval_ttl_seconds,
+        approval_mode=coding.approval_mode,
+        approval_deny_tools=frozenset(coding.approval_deny_tools),
+        approval_allow_tools=frozenset(coding.approval_allow_tools),
+        approval_always_allow=frozenset(coding.approval_always_allow),
     )
 
-    def finish(sandboxes) -> AnthropicCodingLoop:
+    def finish(sandboxes) -> DurableCodingLoop:
         bindings = SandboxBindingService(
             repository=repository,
             provider=sandboxes,
             limits=limits,
             snapshot_cadence=coding.mutation_snapshot_interval,
         )
-        loop = AnthropicCodingLoop(
+        loop = DurableCodingLoop(
             model=model,
             tools=tools,
             executor=executor,
@@ -561,7 +577,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
 
 def _create_real_coding_loop(
     *, config: AppConfig, sandboxes, session_factory=None
-) -> AnthropicCodingLoop:
+) -> DurableCodingLoop:
     return _prepare_real_coding_loop(config=config, session_factory=session_factory)(
         sandboxes
     )

@@ -72,6 +72,15 @@ _ALLOWED_TRANSITIONS: dict[CodingTaskStatus, frozenset[CodingTaskStatus]] = {
     CodingTaskStatus.ARCHIVED: frozenset(),
 }
 
+TERMINAL_TASK_STATUSES = frozenset(
+    {
+        CodingTaskStatus.COMPLETED,
+        CodingTaskStatus.FAILED,
+        CodingTaskStatus.CANCELLED,
+        CodingTaskStatus.ARCHIVED,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CodingTask:

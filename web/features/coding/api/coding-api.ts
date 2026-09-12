@@ -7,6 +7,14 @@ export type CodingTask = {
   updated_at: string;
 };
 
+export type CodingTaskListItem = CodingTask & {
+  prompt: string;
+};
+
+export type CodingTaskList = {
+  tasks: CodingTaskListItem[];
+};
+
 export type CodingWsTicket = {
   ticket: string;
   expires_in: number;
@@ -57,6 +65,17 @@ export async function createCodingTask(prompt: string): Promise<CodingTask> {
   return response.json();
 }
 
+export async function listCodingTasks(
+  limit = 20
+): Promise<CodingTaskList> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(`/api/coding/tasks?${query}`);
+  if (!response.ok) {
+    throw await responseError(response, "Could not load coding tasks");
+  }
+  return response.json();
+}
+
 export async function getCodingWsTicket(
   taskId: string
 ): Promise<CodingWsTicket> {
@@ -96,6 +115,19 @@ export async function getCodingSandboxStatus(
   return response.json();
 }
 
+export async function stopCodingTask(
+  taskId: string
+): Promise<{ task_id: string; status: "cancelled" }> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/stop`,
+    { method: "POST" }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not stop coding task");
+  }
+  return response.json();
+}
+
 export async function steerCodingTask(
   taskId: string,
   instruction: string,
@@ -118,14 +150,16 @@ export async function steerCodingTask(
 export async function decideCodingApproval(
   taskId: string,
   approvalId: string,
-  decision: "approve" | "deny"
+  decision: "approve" | "deny",
+  answers: string[] = [],
+  remember = false
 ): Promise<CodingApprovalView> {
   const response = await fetch(
     `/api/coding/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, answers, remember }),
     }
   );
   if (!response.ok) {

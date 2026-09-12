@@ -29,6 +29,7 @@ ANTHROPIC_SELECTABLE = [
 OPENAI_SELECTABLE = [
     "gpt-5.6-terra",
     "gpt-5.6-sol",
+    "gpt-6-astra",
 ]
 
 # 은퇴한 모델. 가격을 모르는 채로 선택 가능해서 비용이 0으로 집계됐다.
@@ -69,6 +70,7 @@ EXPECTED_TIERS = {
 EXPECTED_PRICING = {
     ("openai", "gpt-5.6-terra"): (2.50, 15.00, 0.0, 0.0),
     ("openai", "gpt-5.6-sol"): (5.00, 30.00, 0.0, 0.0),
+    ("openai", "gpt-6-astra"): (10.00, 50.00, 12.50, 1.00),
     ("openai", "gpt-4o"): (2.50, 10.00, 0.0, 0.0),
     ("openai", "gpt-4o-mini"): (0.15, 0.60, 0.0, 0.0),
     ("openai", "gpt-4-turbo"): (10.00, 30.00, 0.0, 0.0),

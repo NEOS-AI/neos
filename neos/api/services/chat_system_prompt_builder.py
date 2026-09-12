@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from neos.config.settings import settings as app_settings
+from neos.learn.session_search_tool import list_chat_research_tools
 from neos.tools.artifact_tools import get_artifact_tools
 from neos.tools.inline_vis_tools import get_inline_vis_tools
 from neos.utils.logger import get_logger
@@ -76,6 +77,14 @@ class SystemPromptBuilder:
             self._parts.append(app_settings.INLINE_VIS_SYSTEM_PROMPT)
             self._tools.extend(get_inline_vis_tools())
             logger.debug("[SystemPromptBuilder] Inline-vis tools added")
+        return self
+
+    def with_session_search(self) -> "SystemPromptBuilder":
+        """Add prior-session search when learn.session_search_tool is on."""
+        tools = list_chat_research_tools()
+        if tools:
+            self._tools.extend(tools)
+            logger.debug("[SystemPromptBuilder] Session-search tool added")
         return self
 
     # ------------------------------------------------------------------ #

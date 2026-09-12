@@ -7,7 +7,10 @@ from uuid import uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from neos.coding.application.task_service import CodingTaskSnapshot
+from neos.coding.application.task_service import (
+    CodingTaskSnapshot,
+    clamp_task_list_limit,
+)
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask, CodingTaskStatus
 
@@ -273,6 +276,37 @@ class PostgresCodingService:
             created_at=row[6], updated_at=row[7],
         )
         return CodingTaskSnapshot(task=task, head_seq=task.last_seq)
+
+    async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
+        bound = clamp_task_list_limit(limit)
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT task_id, owner_id, prompt, status, version, last_seq,
+                           created_at, updated_at
+                    FROM coding_tasks
+                    WHERE owner_id = :owner AND deleted_at IS NULL
+                    ORDER BY last_activity_at DESC, task_id DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"owner": owner_id, "limit": bound},
+            )
+            rows = result.all()
+        return [
+            CodingTask(
+                task_id=row[0],
+                owner_id=row[1],
+                prompt=row[2],
+                status=CodingTaskStatus(row[3]),
+                version=row[4],
+                last_seq=row[5],
+                created_at=row[6],
+                updated_at=row[7],
+            )
+            for row in rows
+        ]
 
     async def list_after(
         self, task_id: str, *, after_seq: int = 0, limit: int = 500

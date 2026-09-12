@@ -10,6 +10,8 @@ from neos.workflow.celery_app import (
     configure_managed_sandbox_beat_schedule,
 )
 
+pytestmark = pytest.mark.no_db
+
 
 class RecordingMetric:
     def __init__(self, records, name, labels=None) -> None:

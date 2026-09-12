@@ -245,6 +245,11 @@ app.conf.beat_schedule = {
         'task': 'neos.tasks.compute_deep_analysis_report',
         'schedule': 86400.0,  # 24시간
     },
+    # Phase 4 learn: prune/archive staged lessons — daily. No LLM consolidate.
+    'curate-learned-skills': {
+        'task': 'neos.tasks.curate_learned_skills',
+        'schedule': 86400.0,  # 24시간
+    },
 }
 
 configure_coding_beat_schedule(

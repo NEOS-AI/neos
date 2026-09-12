@@ -34,6 +34,7 @@ class LLMStreamStrategy(ABC):
         temperature: float,
         max_tokens: Optional[int],
         tools: List[Dict[str, Any]],
+        user_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """LLM 청크 딕셔너리를 생성하는 비동기 제너레이터를 반환한다."""
         ...
@@ -55,7 +56,8 @@ class ToolSearchStreamStrategy(LLMStreamStrategy):
         self._max_rounds = max_rounds
 
     def create_stream(self, conversation_id, message_id, messages,
-                      model_name, system_prompt, temperature, max_tokens, tools):
+                      model_name, system_prompt, temperature, max_tokens, tools,
+                      user_id=None):
         # tools 인자는 이 전략에서 무시 — core_tools를 대신 사용한다
         return self._svc.generate_response_stream_with_tool_search(
             conversation_id=conversation_id,
@@ -68,6 +70,7 @@ class ToolSearchStreamStrategy(LLMStreamStrategy):
             temperature=temperature,
             max_tokens=max_tokens,
             max_tool_rounds=self._max_rounds,
+            user_id=user_id,
         )
 
 
@@ -78,7 +81,8 @@ class StandardStreamStrategy(LLMStreamStrategy):
         self._svc = chat_llm_service
 
     def create_stream(self, conversation_id, message_id, messages,
-                      model_name, system_prompt, temperature, max_tokens, tools):
+                      model_name, system_prompt, temperature, max_tokens, tools,
+                      user_id=None):
         return self._svc.generate_response_stream_with_tools(
             conversation_id=conversation_id,
             message_id=message_id,

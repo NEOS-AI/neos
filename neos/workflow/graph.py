@@ -3104,6 +3104,7 @@ class MultiAgentWorkflow:
             channel_source=user_input.get("channel_source", "api"),
             channel_type=user_input.get("channel_type"),
             channel_id=user_input.get("channel_id"),
+            channel_attachments=user_input.get("channel_attachments"),
             # Agent Autonomy Control
             autonomy_level=(
                 _resolve_autonomy_level(user_input.get("autonomy_level"))
@@ -3248,6 +3249,16 @@ class MultiAgentWorkflow:
         if not result.get("success"):
             return
         try:
+            from neos.learn.research_lessons import stage_research_procedure_from_run
+
+            await stage_research_procedure_from_run(
+                user_input=user_input,
+                result=result,
+                final_state=final_state,
+            )
+        except Exception as e:
+            logger.debug(f"[Workflow] Research procedure staging skipped: {e}")
+        try:
             from neos.memory.manager import memory_manager
             sources = []
             for sr in (final_state.get("search_results") or []):
@@ -3255,7 +3266,7 @@ class MultiAgentWorkflow:
 
             key_findings = result.get("response", "")[:500]  # 핵심 발견 요약 (앞 500자)
 
-            await memory_manager.save_episode(
+            saved = await memory_manager.save_episode(
                 user_id=user_input.get("user_id", ""),
                 session_id=user_input.get("session_id", ""),
                 query=user_input.get("query", ""),
@@ -3267,6 +3278,23 @@ class MultiAgentWorkflow:
                     "intent": final_state.get("query_intent"),
                 },
             )
+            if saved:
+                from neos.learn.policy import is_imperative
+
+                query = user_input.get("query", "")
+                knowledge = f"Query about {query[:80]}: {key_findings[:200]}"
+                if user_input.get("user_id") and not is_imperative(knowledge):
+                    from neos.learn.memory_gate import maybe_learn_ltm
+
+                    await maybe_learn_ltm(
+                        user_input.get("user_id", ""),
+                        key=f"episode:{user_input.get('session_id', '')}",
+                        knowledge=knowledge,
+                        metadata={
+                            "category": "episode",
+                            "intent": final_state.get("query_intent"),
+                        },
+                    )
         except Exception as e:
             logger.debug(f"[Workflow] Episode memory save skipped: {e}")
 

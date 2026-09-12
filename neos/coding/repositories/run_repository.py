@@ -16,6 +16,7 @@ from neos.coding.domain.approvals import (
     CodingApproval,
     approval_display_summary,
     canonical_approval_hash,
+    requires_approval_answers,
 )
 from neos.coding.domain.durability import (
     ExecutionLease,
@@ -213,6 +214,34 @@ class PostgresCodingRunRepository:
             payload={"status": "failed", "error_code": error_code},
             now=now,
         )
+
+    async def cancel_run(
+        self, *, lease: ExecutionLease, now: datetime
+    ) -> RunLifecycleCommit:
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.CANCELLED,
+            payload={"status": "cancelled"},
+            now=now,
+        )
+
+    async def mark_task_cancelled(self, *, task_id: str, now: datetime) -> None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'cancelled', updated_at = :now
+                        WHERE task_id = :task_id
+                          AND deleted_at IS NULL
+                          AND status NOT IN (
+                              'completed', 'failed', 'cancelled', 'archived'
+                          )
+                        """
+                    ),
+                    {"task_id": task_id, "now": now},
+                )
 
     async def _commit_terminal_run(
         self,
@@ -799,7 +828,17 @@ class PostgresCodingRunRepository:
                         workspace_revision=workspace_revision,
                     )
                 )
-                summary = approval_display_summary(validated)
+                summary = dict(approval_display_summary(validated))
+                if (
+                    validated.name == "set_phase.v1"
+                    and str(validated.input.get("phase") or "") == "implement"
+                ):
+                    dumped = loop_state if isinstance(loop_state, Mapping) else {}
+                    files = dumped.get("critical_files")
+                    if isinstance(files, (list, tuple)) and files:
+                        summary["critical_files"] = [
+                            str(item) for item in files if item
+                        ]
                 approval = CodingApproval(
                     approval_id=f"ca_{uuid4().hex}",
                     task_id=lease.task_id,
@@ -928,6 +967,8 @@ class PostgresCodingRunRepository:
         owner_id: str,
         decision: ApprovalDecision,
         now: datetime,
+        answers: tuple[str, ...] = (),
+        remember: bool = False,
     ) -> ApprovalResolutionCommit:
         async with await self._session_factory() as session:
             async with session.begin():
@@ -980,6 +1021,12 @@ class PostgresCodingRunRepository:
                 approval = self._approval_from_row(row)
                 if approval.status is not ApprovalStatus.PENDING:
                     raise ApprovalConflict("approval_already_resolved")
+                if (
+                    decision is ApprovalDecision.APPROVE
+                    and requires_approval_answers(approval.tool_name)
+                    and not answers
+                ):
+                    raise ApprovalConflict("answers_required")
                 status, conflict_code = self._resolution_status(
                     approval=approval,
                     loop_state=dict(row[17]),
@@ -988,19 +1035,26 @@ class PostgresCodingRunRepository:
                     decision=decision,
                     now=now,
                 )
+                display_summary = dict(approval.display_summary)
+                if answers:
+                    display_summary["answers"] = list(answers)
+                if remember:
+                    display_summary["remember"] = True
                 resolved = self._resolved_approval(
                     approval=approval,
                     status=status,
                     decision=decision,
                     owner_id=owner_id,
                     now=now,
+                    display_summary=display_summary,
                 )
                 await session.execute(
                     text(
                         """
                         UPDATE coding_approvals
                         SET status = :status, decision = :decision,
-                            decided_by = :decided_by, decided_at = :decided_at
+                            decided_by = :decided_by, decided_at = :decided_at,
+                            display_summary = CAST(:display_summary AS jsonb)
                         WHERE approval_id = :approval_id
                           AND task_id = :task_id AND status = 'pending'
                         """
@@ -1016,6 +1070,7 @@ class PostgresCodingRunRepository:
                         ),
                         "decided_by": resolved.decided_by,
                         "decided_at": now,
+                        "display_summary": json.dumps(display_summary),
                     },
                 )
                 updated = await session.execute(
@@ -1745,7 +1800,7 @@ class PostgresCodingRunRepository:
                 loop_state = dict(checkpoint.loop_state)
                 loop_state["phase_index"] = -1
                 loop_state["current_instruction"] = request.instruction
-                loop_state["pending_instruction"] = None
+                loop_state["pending_instruction"] = request.instruction
                 steering_checkpoint = CodingCheckpoint(
                     checkpoint_id=f"cc_steer_{uuid4().hex}",
                     task_id=lease.task_id,
@@ -2388,7 +2443,9 @@ class PostgresCodingRunRepository:
         decision: ApprovalDecision,
         owner_id: str,
         now: datetime,
+        display_summary: Mapping[str, object] | None = None,
     ) -> CodingApproval:
+        summary = approval.display_summary if display_summary is None else display_summary
         if status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED}:
             return replace(
                 approval,
@@ -2396,8 +2453,11 @@ class PostgresCodingRunRepository:
                 decision=decision,
                 decided_by=owner_id,
                 decided_at=now,
+                display_summary=summary,
             )
-        return replace(approval, status=status, decided_at=now)
+        return replace(
+            approval, status=status, decided_at=now, display_summary=summary
+        )
 
     @staticmethod
     def _lease_params(lease: ExecutionLease, **extra) -> dict[str, Any]:
@@ -2843,6 +2903,62 @@ class PostgresCodingRunRepository:
                         "completed_at": completed_at,
                     },
                 )
+
+    async def has_pending_interrupt(self, task_id: str) -> bool:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM coding_steering_requests
+                        WHERE task_id = :task_id
+                          AND mode IN ('interrupt_now', 'cancel')
+                          AND status = 'pending'
+                        LIMIT 1
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                return result.first() is not None
+
+    async def claim_pending_interrupt(self, task_id: str) -> SteeringRequest | None:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        WITH pending AS (
+                            SELECT steering_id
+                            FROM coding_steering_requests
+                            WHERE task_id = :task_id
+                              AND mode IN ('interrupt_now', 'cancel')
+                              AND status = 'pending'
+                            ORDER BY requested_at, steering_id
+                            LIMIT 1
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE coding_steering_requests request
+                        SET status = 'claimed'
+                        FROM pending
+                        WHERE request.steering_id = pending.steering_id
+                        RETURNING request.steering_id, request.task_id,
+                                  request.mode, request.instruction,
+                                  request.requested_at
+                        """
+                    ),
+                    {"task_id": task_id},
+                )
+                row = result.first()
+        if row is None:
+            return None
+        return SteeringRequest(
+            steering_id=row[0],
+            task_id=row[1],
+            mode=SteeringMode(row[2]),
+            instruction=row[3],
+            requested_at=row[4],
+        )
 
     async def queue_steering(self, request: SteeringRequest) -> None:
         async with await self._session_factory() as session:

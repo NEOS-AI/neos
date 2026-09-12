@@ -149,7 +149,7 @@ class ToolCallCompleted:
 @dataclass(frozen=True, slots=True)
 class ModelCompleted:
     stop_reason: str
-    usage: ModelUsage
+    usage: ModelUsage | None = None
 
     def __post_init__(self) -> None:
         if not self.stop_reason:

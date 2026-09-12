@@ -16,16 +16,24 @@ class TaskRepository(Protocol):
     async def get(self, task_id: str) -> CodingTask | None: ...
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None: ...
     async def save(self, task: CodingTask) -> CodingTask: ...
+    async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]: ...
+
+
+def clamp_task_list_limit(limit: int) -> int:
+    return max(1, min(int(limit), 50))
 
 
 class InMemoryCodingTaskRepository:
     def __init__(self) -> None:
         self._tasks: dict[str, CodingTask] = {}
+        self._last_activity_at: dict[str, datetime] = {}
+        self._deleted_at: dict[str, datetime] = {}
 
     async def create(self, task: CodingTask) -> CodingTask:
         if task.task_id in self._tasks:
             raise ValueError(f"coding task already exists: {task.task_id}")
         self._tasks[task.task_id] = task
+        self._last_activity_at[task.task_id] = task.updated_at
         return task
 
     async def get(self, task_id: str) -> CodingTask | None:
@@ -37,7 +45,31 @@ class InMemoryCodingTaskRepository:
 
     async def save(self, task: CodingTask) -> CodingTask:
         self._tasks[task.task_id] = task
+        current = self._last_activity_at.get(task.task_id)
+        if current is None or task.updated_at >= current:
+            self._last_activity_at[task.task_id] = task.updated_at
         return task
+
+    def record_activity(self, task_id: str, when: datetime) -> None:
+        self._last_activity_at[task_id] = when
+
+    def mark_deleted(self, task_id: str, when: datetime | None = None) -> None:
+        self._deleted_at[task_id] = when or datetime.now(UTC)
+
+    async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
+        owned = [
+            task
+            for task in self._tasks.values()
+            if task.owner_id == owner_id and task.task_id not in self._deleted_at
+        ]
+        owned.sort(
+            key=lambda task: (
+                self._last_activity_at.get(task.task_id, task.updated_at),
+                task.task_id,
+            ),
+            reverse=True,
+        )
+        return owned[: clamp_task_list_limit(limit)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,4 +141,9 @@ class CodingTaskService:
             return None
         return CodingTaskSnapshot(
             task=task, head_seq=await self.events.head_seq(task_id)
+        )
+
+    async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
+        return await self.tasks.list_owned(
+            owner_id, limit=clamp_task_list_limit(limit)
         )

@@ -16,6 +16,9 @@ from neos.coding.sandbox.command import DockerCommandResult
 from neos.coding.sandbox.docker import (
     DockerSandboxConfig,
     DockerSandboxProvider,
+    _GLOB_FILES_HELPER,
+    _READ_FILE_HELPER,
+    _SEARCH_TEXT_HELPER,
 )
 
 
@@ -188,7 +191,121 @@ async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
     assert [(match.path, match.line) for match in matches] == [
         ("src/app.py", 1)
     ]
+    assert matches[0].before == ()
+    assert matches[0].after == ()
     assert status.stdout == b"?? src/app.py\n"
+
+
+async def test_session_search_context_and_glob_use_fixed_helpers() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.extend(
+        [
+            DockerCommandResult(
+                exit_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "path": "src/app.py",
+                            "line": 2,
+                            "column": 6,
+                            "text": "beta needle",
+                            "before": ["alpha"],
+                            "after": ["gamma", "delta"],
+                        }
+                    ]
+                ).encode(),
+                stderr=b"",
+            ),
+            DockerCommandResult(
+                exit_code=0,
+                stdout=json.dumps(["src/app.py", "src/util.py"]).encode(),
+                stderr=b"",
+            ),
+        ]
+    )
+
+    matches = await session.search_text(
+        "needle",
+        paths=("src/**",),
+        limit=10,
+        before=1,
+        after=2,
+    )
+    found = await session.glob_files("src/*.py", limit=1000)
+    calls_after_glob = len(runner.calls)
+
+    assert matches[0].before == ("alpha",)
+    assert matches[0].after == ("gamma", "delta")
+    assert found == ("src/app.py", "src/util.py")
+    assert runner.calls[-2][-11:] == (
+        "needle",
+        "0",
+        "10",
+        "1",
+        "2",
+        "content",
+        "0",
+        "0",
+        "500",
+        "",
+        "src/**",
+    )
+    assert runner.calls[-1][-2:] == ("src/*.py", "500")
+    with pytest.raises(SandboxPolicyViolation, match="workspace_path_escape"):
+        await session.glob_files("../secret.py")
+    with pytest.raises(SandboxPolicyViolation, match="invalid_glob_request"):
+        await session.glob_files("", limit=10)
+    assert len(runner.calls) == calls_after_glob
+
+
+def test_docker_helpers_do_not_follow_dir_symlinks_and_cap_reads() -> None:
+    assert "followlinks=False" in _SEARCH_TEXT_HELPER
+    assert "followlinks=False" in _GLOB_FILES_HELPER
+    assert "is_file()" in _GLOB_FILES_HELPER
+    assert "max_bytes" in _READ_FILE_HELPER
+    assert ".jj" in _SEARCH_TEXT_HELPER
+    assert ".sl" in _GLOB_FILES_HELPER
+
+
+async def test_docker_git_commands_disable_external_diff_and_pager() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.extend(
+        [
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"", b""),
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"", b""),
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"", b""),
+            DockerCommandResult(0, b"{}", b""),
+        ]
+    )
+
+    await session.git_status()
+    await session.git_diff()
+    await session.git_log(limit=5)
+
+    git_calls = [call for call in runner.calls if "git" in call]
+    assert len(git_calls) == 3
+    for call in git_calls:
+        assert "--no-pager" in call
+        assert "core.pager=cat" in call
+    assert "--no-ext-diff" in git_calls[1]
+    assert "--no-ext-diff" in git_calls[2]
 
 
 async def test_conditional_write_rejects_stale_revision_before_docker_exec() -> None:

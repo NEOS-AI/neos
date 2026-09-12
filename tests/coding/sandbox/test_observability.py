@@ -52,6 +52,19 @@ def test_command_audit_normalizes_hostile_error_code() -> None:
     assert event.error_code == "other"
 
 
+def test_tool_audit_keeps_new_coding_tools_and_web_fetch_denial() -> None:
+    event = CodingToolAuditEvent.from_result(
+        provider="memory",
+        tool="web_fetch.v1",
+        operation="execute",
+        outcome="denied",
+        error_code="policy_web_fetch_host_denied",
+    )
+
+    assert event.tool == "web_fetch.v1"
+    assert event.error_code == "policy_web_fetch_host_denied"
+
+
 def test_tool_audit_event_normalizes_unbounded_outcome_without_content() -> None:
     event = CodingToolAuditEvent.from_result(
         provider="memory",

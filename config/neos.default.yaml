@@ -2,6 +2,8 @@ environment: development
 
 coding_model:
   enabled: false
+  # anthropic | openai | gemini | ollama. 모델이 카탈로그에 있으면 벤더는
+  # 카탈로그가 이긴다 (`gpt-6-astra` 를 적으면 openai 로 간다).
   provider: anthropic
   model_timeout_sec: 120
   tool_timeout_sec: 30
@@ -388,6 +390,17 @@ memory:
   episodic_enabled: true
   max_context_items: 10
 
+learn:
+  write_approval: true
+  coding_lessons: false
+  channel_learn: false
+  research_procedures: false
+  session_search_tool: false
+  curator: true
+  stale_days: 30
+  archive_days: 90
+  max_knowledge_chars: 400
+
 query_classifier:
   use_llm: false
   llm_model: claude-haiku-4-5-20251001
@@ -537,6 +550,8 @@ sandbox:
     network_mode: none
     user: "10001:10001"
     allow_unpinned_image: false
+    image_allowlist: []
+    custom_images: {}
   managed:
     enabled: false
     shadow_admission: true
@@ -584,6 +599,15 @@ channels:
   slack:
     enabled: false
   bot_user_id: ""
+  require_mention: true
+  allowed_users: []
+  allowed_channels: []
+  ignored_channels: []
+  coding_invoke: false
+  coding_owner_user_id: ""
+  inbound_media: false
+  outbound_files: false
+  draft_streaming: false
 
 context_assembly:
   max_tokens: 8000

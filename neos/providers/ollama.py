@@ -17,7 +17,7 @@ from typing import Any, List
 from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.settings import settings
-from .base import ModelProviderBase
+from .base import CodingCapabilities, ModelProviderBase
 
 logger = logging.getLogger(__name__)
 
@@ -102,3 +102,29 @@ class OllamaProvider(ModelProviderBase):
             params["base_url"],
         )
         return ChatOllama(**params)
+
+    def coding_capabilities(self) -> CodingCapabilities:
+        return CodingCapabilities(supported=True, streaming_tools=True)
+
+    def create_coding_model(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        max_tool_input_bytes: int = 65_536,
+        max_tool_input_depth: int = 16,
+        **kwargs: Any,
+    ):
+        import httpx
+
+        from neos.coding.model.ollama import OllamaCodingModel
+
+        del api_key
+        resolved = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+        timeout = kwargs.pop("timeout", settings.LLM_TIMEOUT)
+        return OllamaCodingModel(
+            httpx.AsyncClient(timeout=timeout, **kwargs),
+            base_url=resolved,
+            max_tool_input_bytes=max_tool_input_bytes,
+            max_tool_input_depth=max_tool_input_depth,
+        )

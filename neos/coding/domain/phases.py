@@ -32,6 +32,7 @@ class CodingRunStatus(StrEnum):
 class SteeringMode(StrEnum):
     SAFE_POINT = "safe_point"
     INTERRUPT_NOW = "interrupt_now"
+    CANCEL = "cancel"
 
 
 @dataclass(frozen=True, slots=True)

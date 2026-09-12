@@ -22,12 +22,16 @@ export type CodingToolView = {
   run_id: string;
   status: string;
   result: Record<string, unknown> | null;
+  name?: string | null;
+  preview?: string | null;
+  denied_by?: string | null;
+  reason_code?: string | null;
 };
 
 export type CodingApprovalView = {
   approval_id: string;
   tool_name: string;
-  risk: "workspace_write" | "command";
+  risk: "workspace_write" | "command" | "user_question";
   status: "pending" | "approved" | "denied" | "expired" | "invalidated";
   requested_at: string;
   expires_at: string;
@@ -78,6 +82,10 @@ export type CodingProjectionState = {
   orderedTextPartIds: string[];
   todos: Record<string, unknown>[];
   workspace: CodingWorkspaceView;
+  costMicros: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  maxCostMicros: number | null;
   gap: { expected: number; received: number } | null;
   projectionIssue: { code: "unknown_text_part"; eventSeq: number } | null;
 };

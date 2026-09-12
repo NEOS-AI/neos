@@ -48,50 +48,249 @@ from neos.coding.sandbox.events import (
     WorkspaceChange,
     WorkspaceChangeKind,
 )
+from neos.coding.sandbox.ignore import IGNORE_RUNTIME
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
 )
 from neos.coding.sandbox.streams import BoundedReplayStream
 
+_GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
+
 
 _READ_FILE_HELPER = """\
 from pathlib import Path
 import sys
-p = Path('/workspace') / sys.argv[1]
+rel, offset_s, limit_s, max_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+p = Path('/workspace') / rel
 if not p.is_file() or p.is_symlink(): raise SystemExit(2)
-sys.stdout.buffer.write(p.read_bytes())
+offset = int(offset_s)
+max_bytes = int(max_s)
+if limit_s == '':
+    if p.stat().st_size > max_bytes:
+        raise SystemExit(3)
+    sys.stdout.buffer.write(p.read_bytes())
+else:
+    limit = int(limit_s)
+    start = max(1, offset)
+    end = start + limit - 1
+    remaining = max_bytes
+    with p.open('rb') as handle:
+        for index, line in enumerate(handle, 1):
+            if index < start: continue
+            if index > end: break
+            if len(line) >= remaining:
+                sys.stdout.buffer.write(line[:remaining])
+                break
+            sys.stdout.buffer.write(line)
+            remaining -= len(line)
 """
 _WRITE_FILE_HELPER = """\
+import os, sys, tempfile
 from pathlib import Path
-import sys
-p = Path('/workspace') / sys.argv[1]
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_bytes(sys.stdin.buffer.read())
+rel, make_parents = sys.argv[1], sys.argv[2] == '1'
+root = Path('/workspace')
+parts = Path(rel).parts
+p = root.joinpath(*parts)
+cur = root
+for part in parts[:-1]:
+    cur = cur / part
+    if cur.is_symlink():
+        raise SystemExit(3)
+    if cur.exists():
+        if not cur.is_dir():
+            raise SystemExit(2)
+        continue
+    if not make_parents:
+        raise SystemExit(2)
+    cur.mkdir(exist_ok=True)
+    if cur.is_symlink() or not cur.is_dir():
+        raise SystemExit(3 if cur.is_symlink() else 2)
+if p.is_symlink():
+    raise SystemExit(4)
+fd, tmp = tempfile.mkstemp(prefix='.neos-write-', dir=str(p.parent))
+try:
+    with os.fdopen(fd, 'wb') as handle:
+        handle.write(sys.stdin.buffer.read())
+    os.replace(tmp, p)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 """
-_SEARCH_TEXT_HELPER = """\
+_SEARCH_TEXT_HELPER = (
+    IGNORE_RUNTIME
+    + """
 import fnmatch, json, re, sys
 from pathlib import Path
-query, regex, limit, *patterns = sys.argv[1:]
-expression = re.compile(query if regex == '1' else re.escape(query))
+query, regex, limit, before, after, output_mode, ignore_case, multiline, max_columns, search_path, *patterns = sys.argv[1:]
+flags = 0
+if ignore_case == '1':
+    flags |= re.IGNORECASE
+if multiline == '1':
+    flags |= re.DOTALL
+expression = re.compile(query if regex == '1' else re.escape(query), flags)
+before = max(0, min(int(before), 20))
+after = max(0, min(int(after), 20))
+max_columns = int(max_columns)
+if output_mode not in {'files', 'content', 'count'}:
+    output_mode = 'content'
+root = Path('/workspace')
+start = root / search_path if search_path else root
+rules = load_ignore_rules('/workspace')
 matches = []
-for p in sorted(Path('/workspace').rglob('*')):
-    if not p.is_file() or p.is_symlink(): continue
-    relative = p.relative_to('/workspace').as_posix()
+
+def is_binary(item):
+    try:
+        with item.open('rb') as handle:
+            return b'\\x00' in handle.read(8192)
+    except OSError:
+        return True
+
+def emit_content(relative, number, column, line, lines):
+    text = line if max_columns <= 0 else line[:max_columns]
+    ctx = max(0, number - 1 - before)
+    matches.append({'path': relative, 'line': number, 'column': column,
+                    'text': text, 'before': lines[ctx:number - 1],
+                    'after': lines[number:number + after]})
+
+def consider_file(item, relative):
     if not any(fnmatch.fnmatch(relative, pattern) or
                (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
-               for pattern in patterns): continue
-    for number, line in enumerate(p.read_text(errors='replace').splitlines(), 1):
-        match = expression.search(line)
-        if match:
-            matches.append({'path': relative, 'line': number,
-                            'column': match.start() + 1, 'text': line})
-            if len(matches) >= int(limit): break
-    if len(matches) >= int(limit): break
+               for pattern in patterns):
+        return False
+    if is_binary(item):
+        return False
+    try:
+        text = item.read_text(errors='replace')
+    except OSError:
+        return False
+    lines = text.splitlines()
+    if multiline == '1':
+        file_hits = 0
+        for match in expression.finditer(text):
+            file_hits += 1
+            if output_mode != 'content':
+                continue
+            number = text.count('\\n', 0, match.start()) + 1
+            line_start = text.rfind('\\n', 0, match.start()) + 1
+            line_end = text.find('\\n', match.start())
+            if line_end < 0:
+                line_end = len(text)
+            line = text[line_start:line_end].rstrip('\\r')
+            emit_content(relative, number, match.start() - line_start + 1, line, lines)
+            if len(matches) >= int(limit):
+                return True
+        if output_mode == 'content' or file_hits == 0:
+            return False
+    else:
+        file_hits = 0
+        for number, line in enumerate(lines, 1):
+            match = expression.search(line)
+            if not match:
+                continue
+            file_hits += 1
+            if output_mode != 'content':
+                continue
+            emit_content(relative, number, match.start() + 1, line, lines)
+            if len(matches) >= int(limit):
+                return True
+        if output_mode == 'content' or file_hits == 0:
+            return False
+    if output_mode == 'files':
+        matches.append({'path': relative, 'line': 0, 'column': 0, 'text': ''})
+    else:
+        matches.append({'path': relative, 'line': 0, 'column': 0, 'text': '',
+                        'count': file_hits})
+    return len(matches) >= int(limit)
+
+done = False
+if start.is_symlink():
+    pass
+elif start.is_file():
+    relative = start.relative_to(root).as_posix()
+    if not should_skip(relative, rules, is_dir=False):
+        consider_file(start, relative)
+elif start.is_dir():
+    for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
+        current = Path(dirpath)
+        dirnames.sort(); filenames.sort()
+        kept = []
+        for name in dirnames:
+            item = current / name
+            if item.is_symlink():
+                continue
+            relative = item.relative_to(root).as_posix()
+            if should_skip(relative, rules, is_dir=True):
+                continue
+            kept.append(name)
+        dirnames[:] = kept
+        for name in filenames:
+            item = current / name
+            if item.is_symlink() or not item.is_file():
+                continue
+            relative = item.relative_to(root).as_posix()
+            if should_skip(relative, rules, is_dir=False):
+                continue
+            if consider_file(item, relative):
+                done = True
+                break
+        if done:
+            break
 sys.stdout.write(json.dumps(matches))
 """
-_FILE_METADATA_HELPER = """\
-import json, sys
+)
+_GLOB_FILES_HELPER = (
+    IGNORE_RUNTIME
+    + """
+import fnmatch, json, sys
+from pathlib import Path
+pattern, limit = sys.argv[1], int(sys.argv[2])
+if '..' in Path(pattern).parts:
+    raise SystemExit(2)
+limit = max(1, min(limit, 500))
+root = Path('/workspace')
+rules = load_ignore_rules('/workspace')
+found = []
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    current = Path(dirpath)
+    dirnames.sort(); filenames.sort()
+    kept = []
+    for name in dirnames:
+        item = current / name
+        if item.is_symlink():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if should_skip(relative, rules, is_dir=True):
+            continue
+        kept.append(name)
+    dirnames[:] = kept
+    stop = False
+    for name in filenames:
+        item = current / name
+        if item.is_symlink() or not item.is_file():
+            continue
+        relative = item.relative_to(root).as_posix()
+        if should_skip(relative, rules, is_dir=False):
+            continue
+        if fnmatch.fnmatch(relative, pattern) or (
+            pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:])
+        ):
+            found.append(relative)
+            if len(found) >= limit:
+                stop = True
+                break
+    if stop:
+        break
+sys.stdout.write(json.dumps(found))
+"""
+)
+_FILE_METADATA_HELPER = (
+    IGNORE_RUNTIME
+    + """
+import json, os, sys
 from datetime import UTC, datetime
 from pathlib import Path
 root = Path('/workspace')
@@ -102,9 +301,35 @@ def encode(item):
     return {'path': item.relative_to(root).as_posix(), 'kind': kind,
             'size': value.st_size,
             'modified_at': datetime.fromtimestamp(value.st_mtime, UTC).isoformat()}
-result = [encode(item) for item in sorted(p.rglob('*'))] if sys.argv[2] == 'tree' else encode(p)
+if sys.argv[2] == 'tree':
+    rules = load_ignore_rules('/workspace')
+    result = []
+    if p.is_dir() and not p.is_symlink():
+        for dirpath, dirnames, filenames in os.walk(p, followlinks=False):
+            current = Path(dirpath)
+            kept = []
+            for name in dirnames:
+                item = current / name
+                relative = item.relative_to(root).as_posix()
+                if should_skip(relative, rules, is_dir=True):
+                    continue
+                kept.append(name)
+                result.append(encode(item))
+            dirnames[:] = kept
+            for name in filenames:
+                item = current / name
+                relative = item.relative_to(root).as_posix()
+                if should_skip(relative, rules, is_dir=False):
+                    continue
+                result.append(encode(item))
+    result.sort(key=lambda row: row['path'])
+else:
+    if not p.exists() and not p.is_symlink():
+        raise SystemExit(2)
+    result = encode(p)
 sys.stdout.write(json.dumps(result))
 """
+)
 _SNAPSHOT_HELPER = """\
 import sys, tarfile
 from pathlib import Path
@@ -787,30 +1012,67 @@ class DockerSandboxSession:
         return terminal
 
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
+        from neos.coding.sandbox.ignore import should_skip_walk
+
         relative = normalize_workspace_path(path)
         result = await self._run_helper(
             _FILE_METADATA_HELPER,
             relative.as_posix(),
             "tree",
         )
-        return tuple(self._file_entry(value) for value in self._load_json(result.stdout))
+        return tuple(
+            entry
+            for entry in (
+                self._file_entry(value) for value in self._load_json(result.stdout)
+            )
+            if not should_skip_walk(entry.path)
+        )
 
     async def stat(self, path: str) -> FileEntry:
         relative = normalize_workspace_path(path)
-        result = await self._run_helper(
-            _FILE_METADATA_HELPER,
-            relative.as_posix(),
-            "stat",
-        )
+        try:
+            result = await self._run_helper(
+                _FILE_METADATA_HELPER,
+                relative.as_posix(),
+                "stat",
+            )
+        except SandboxUnavailable as error:
+            if str(error) == "docker_command_failed:2":
+                raise SandboxNotFound(relative.as_posix()) from error
+            raise
         return self._file_entry(self._load_json(result.stdout))
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 1,
+        limit: int | None = None,
+    ) -> bytes:
         relative = normalize_workspace_path(path)
-        result = await self._run_helper(_READ_FILE_HELPER, relative.as_posix())
-        return result.stdout
+        if offset < 1 or (limit is not None and limit < 1):
+            raise SandboxPolicyViolation("invalid_read_request")
+        max_bytes = self._record.sandbox.limits.max_output_bytes
+        try:
+            result = await self._run_helper(
+                _READ_FILE_HELPER,
+                relative.as_posix(),
+                str(offset),
+                "" if limit is None else str(limit),
+                str(max_bytes),
+            )
+        except SandboxUnavailable as error:
+            if str(error) == "docker_command_failed:3":
+                raise SandboxPolicyViolation("file_read_limit_exceeded") from error
+            raise
+        return result.stdout[:max_bytes]
 
-    async def write_file(self, path: str, content: bytes) -> int:
-        return await self._write_file(path, content, expected_revision=None)
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = True
+    ) -> int:
+        return await self._write_file(
+            path, content, expected_revision=None, parents=parents
+        )
 
     async def write_file_if_revision(
         self,
@@ -831,6 +1093,7 @@ class DockerSandboxSession:
         content: bytes,
         *,
         expected_revision: int | None,
+        parents: bool = True,
     ) -> int:
         relative = ensure_mutable_workspace_path(path)
         limits = self._record.sandbox.limits
@@ -844,11 +1107,26 @@ class DockerSandboxSession:
                 != expected_revision
             ):
                 raise SandboxStateConflict("workspace_revision_conflict")
-            await self._run_helper(
-                _WRITE_FILE_HELPER,
-                relative.as_posix(),
-                input=content,
-            )
+            try:
+                await self._run_helper(
+                    _WRITE_FILE_HELPER,
+                    relative.as_posix(),
+                    "1" if parents else "0",
+                    input=content,
+                )
+            except SandboxUnavailable as error:
+                code = str(error)
+                if code == "docker_command_failed:2":
+                    raise FileNotFoundError(relative.as_posix()) from error
+                if code == "docker_command_failed:3":
+                    raise SandboxPolicyViolation(
+                        "workspace_symlink_parent"
+                    ) from error
+                if code == "docker_command_failed:4":
+                    raise SandboxPolicyViolation(
+                        "workspace_symlink_leaf"
+                    ) from error
+                raise
             existed = relative.as_posix() in self._record.known_paths
             self._record.known_paths.add(relative.as_posix())
             self._record.sandbox = replace(
@@ -881,33 +1159,100 @@ class DockerSandboxSession:
         paths: tuple[str, ...] = ("**/*",),
         regex: bool = False,
         limit: int = 100,
+        before: int = 0,
+        after: int = 0,
+        output_mode: str = "content",
+        ignore_case: bool = False,
+        multiline: bool = False,
+        context: int = 0,
+        path: str | None = None,
+        max_columns: int = 500,
     ) -> tuple[SearchMatch, ...]:
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
-        for path in paths:
-            normalize_workspace_path(path)
+        if output_mode not in {"files", "content", "count"}:
+            output_mode = "content"
+        if context > 0:
+            before = after = context
+        before = max(0, min(int(before), 20))
+        after = max(0, min(int(after), 20))
+        for candidate in paths:
+            normalize_workspace_path(candidate)
+        search_path = ""
+        if path is not None:
+            normalized = normalize_workspace_path(path)
+            search_path = "" if normalized.as_posix() == "." else normalized.as_posix()
         result = await self._run_helper(
             _SEARCH_TEXT_HELPER,
             query,
             "1" if regex else "0",
             str(limit),
+            str(before),
+            str(after),
+            output_mode,
+            "1" if ignore_case else "0",
+            "1" if multiline else "0",
+            str(max_columns),
+            search_path,
             *paths,
         )
         try:
             values = json.loads(result.stdout)
-            return tuple(SearchMatch(**value) for value in values)
+            return tuple(
+                SearchMatch(
+                    path=value["path"],
+                    line=value["line"],
+                    column=value["column"],
+                    text=value["text"],
+                    before=tuple(value.get("before") or ()),
+                    after=tuple(value.get("after") or ()),
+                    count=value.get("count"),
+                )
+                for value in values
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            KeyError,
+        ) as error:
+            raise SandboxUnavailable("docker_helper_output_invalid") from error
+
+    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+        if not pattern or limit < 1:
+            raise SandboxPolicyViolation("invalid_glob_request")
+        normalize_workspace_path(
+            pattern.replace("*", "x").replace("?", "x") or "x"
+        )
+        result = await self._run_helper(
+            _GLOB_FILES_HELPER,
+            pattern,
+            str(min(int(limit), 500)),
+        )
+        try:
+            values = json.loads(result.stdout)
+            return tuple(values)
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
             raise SandboxUnavailable("docker_helper_output_invalid") from error
 
     async def git_status(self) -> CommandResult:
         return await self.execute(
             CommandRequest(
-                argv=("git", "status", "--short", "--untracked-files=all")
+                argv=(
+                    *_GIT_SAFE,
+                    "status",
+                    "--short",
+                    "--untracked-files=all",
+                )
             )
         )
 
     async def git_diff(self, *, staged: bool = False) -> CommandResult:
-        argv = ("git", "diff", "--cached") if staged else ("git", "diff")
+        argv = (
+            (*_GIT_SAFE, "diff", "--cached", "--no-ext-diff")
+            if staged
+            else (*_GIT_SAFE, "diff", "--no-ext-diff")
+        )
         return await self.execute(CommandRequest(argv=argv))
 
     async def git_log(self, *, limit: int = 20) -> CommandResult:
@@ -915,7 +1260,13 @@ class DockerSandboxSession:
             raise SandboxPolicyViolation("git_log_limit_invalid")
         return await self.execute(
             CommandRequest(
-                argv=("git", "log", f"--max-count={limit}", "--oneline")
+                argv=(
+                    *_GIT_SAFE,
+                    "log",
+                    "--no-ext-diff",
+                    f"--max-count={limit}",
+                    "--oneline",
+                )
             )
         )
 

@@ -64,7 +64,9 @@ class ChannelAdapterBase(ABC):
         ...
 
     @abstractmethod
-    async def send_response(self, channel_id: str, content: str) -> None:
+    async def send_response(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
         """
         채널에 응답 텍스트를 전송한다.
 
@@ -73,3 +75,12 @@ class ChannelAdapterBase(ABC):
             content: 전송할 텍스트 (채널별 길이 제한 처리는 구현체 책임)
         """
         ...
+
+    async def send_draft(
+        self, channel_id: str, content: str, *, thread_id: str | None = None
+    ) -> None:
+        """Optional streaming edit. No-op unless channels.draft_streaming is on.
+
+        Draft failures must not skip the final send_response.
+        """
+        return

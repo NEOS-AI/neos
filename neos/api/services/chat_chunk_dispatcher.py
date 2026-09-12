@@ -38,6 +38,10 @@ from neos.api.models.open_responses import (
 )
 from neos.config.settings import settings as app_settings
 from neos.database.connection import db_manager
+from neos.learn.session_search_tool import (
+    handle_search_user_sessions,
+    is_session_search_tool,
+)
 from neos.tools.artifact_tool_handler import execute_artifact_tool
 from neos.tools.inline_vis_tool_handler import execute_inline_vis_tool as execute_inline_vis_tool_fn
 from neos.tools.inline_vis_tools import is_inline_vis_tool
@@ -172,9 +176,48 @@ class ChunkEventDispatcher:
                 f"[InlineVis] {tool_name} called but INLINE_VIS_ENABLED=false. "
                 "Skipping to prevent artifact handler misbehavior."
             )
+        elif is_session_search_tool(tool_name):
+            async for event in self._handle_session_search(tool_input):
+                yield event
         else:
             async for event in self._handle_artifact(tool_name, tool_input):
                 yield event
+
+    async def _handle_session_search(
+        self, tool_input: Dict
+    ) -> AsyncGenerator[str, None]:
+        if not app_settings.config.learn.session_search_tool:
+            logger.warning(
+                "[SessionSearch] search_user_sessions called but "
+                "learn.session_search_tool is false. Skipping."
+            )
+            return
+        try:
+            result = await handle_search_user_sessions(
+                tool_input,
+                user_id=self._user_id,
+                exclude_conversation_id=getattr(self, "_conversation_id", None),
+            )
+        except ValueError as exc:
+            logger.warning("[SessionSearch] %s", exc)
+            return
+        snippets = result.get("snippets") or []
+        if not snippets:
+            text = "\n\nNo matching prior sessions."
+        else:
+            lines = []
+            for item in snippets:
+                title = (
+                    item.get("conversation_title")
+                    or item.get("conversation_id")
+                    or ""
+                )
+                snippet = item.get("snippet") or ""
+                prefix = f"{title}: " if title else ""
+                lines.append(f"- {prefix}{snippet}")
+            text = "\n\nPrior sessions:\n" + "\n".join(lines)
+        self._acc.full_content += text
+        yield format_sse_event(create_text_delta_event(self._state, text))
 
     async def _handle_inline_vis(
         self, tool_name: str, tool_input: Dict

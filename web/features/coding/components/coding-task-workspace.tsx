@@ -1,7 +1,8 @@
 "use client";
 
-import { Radio, TerminalSquare } from "lucide-react";
+import { Radio, Square, TerminalSquare } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
 import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
 import { CodingOutputLedger } from "@/features/coding/components/coding-output-ledger";
@@ -9,8 +10,18 @@ import { CodingSandboxStatus } from "@/features/coding/components/coding-sandbox
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
 import { CodingWorkspaceDock } from "@/features/coding/components/workspace/coding-workspace-dock";
+import { stopCodingTask } from "@/features/coding/api/coding-api";
 import { useSandboxStatus } from "@/features/coding/sandbox/use-sandbox-status";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
+import type { CodingProjectionState } from "@/features/coding/types/projection";
+
+const TERMINAL_TASK_STATUSES = new Set([
+  "cancelled",
+  "completed",
+  "failed",
+  "expired",
+  "archived",
+]);
 
 const connectionMessages = {
   unauthorized: "Authorization expired. Reopen this task.",
@@ -22,6 +33,30 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
   const { projection, connection } = useCodingStream(taskId);
   const sandbox = useSandboxStatus(taskId);
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  const canStop =
+    !TERMINAL_TASK_STATUSES.has(projection.taskStatus) &&
+    connection !== "unauthorized" &&
+    connection !== "not_found";
+
+  async function cancelRun() {
+    if (!canStop || stopping) {
+      return;
+    }
+    setStopping(true);
+    setStopError(null);
+    try {
+      await stopCodingTask(taskId);
+    } catch (cause) {
+      setStopError(
+        cause instanceof Error ? cause.message : "Could not stop coding task"
+      );
+    } finally {
+      setStopping(false);
+    }
+  }
+
   useEffect(() => {
     const active = projection.phases.find((phase) => phase.status === "active");
     if (active) {
@@ -36,6 +71,10 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
     (approval) => approval.status === "pending"
   );
   const waitingApproval = projection.taskStatus === "waiting_approval";
+  const todos = projection.todos.filter(
+    (todo) =>
+      typeof todo.content === "string" || typeof todo.status === "string"
+  );
 
   return (
     <main className="flex min-h-dvh flex-1 flex-col bg-background">
@@ -53,6 +92,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
               waiting_approval
             </span>
           ) : null}
+          <UsageBadge projection={projection} />
         </div>
         <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground uppercase tracking-[0.14em]">
           <Radio
@@ -66,6 +106,25 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
             ? "Live"
             : "Checkpoint restored"}
           <CodingSandboxStatus status={sandbox} />
+          <Button
+            data-testid="coding-stop-button"
+            disabled={!canStop || stopping}
+            onClick={() => {
+              cancelRun().catch((cause) => {
+                setStopError(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Could not stop coding task"
+                );
+              });
+            }}
+            size="sm"
+            type="button"
+            variant="destructive"
+          >
+            <Square className="mr-1 size-3.5" />
+            Cancel
+          </Button>
         </div>
       </header>
 
@@ -83,6 +142,38 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 SEQ {projection.appliedSeq}
               </span>
             </div>
+            {todos.length > 0 ? (
+              <section aria-label="Todos" className="mb-5 space-y-1">
+                <p className="font-mono text-[10px] text-amber-400 uppercase tracking-[0.22em]">
+                  Todos
+                </p>
+                <ul className="space-y-1">
+                  {todos.map((todo, index) => {
+                    const content =
+                      typeof todo.content === "string" ? todo.content : "";
+                    const status =
+                      typeof todo.status === "string" ? todo.status : "";
+                    const key =
+                      typeof todo.id === "string"
+                        ? todo.id
+                        : `${content}:${index}`;
+                    return (
+                      <li
+                        className="flex items-center justify-between gap-3 border border-border/70 px-3 py-2"
+                        key={key}
+                      >
+                        <span className="min-w-0 truncate text-sm">
+                          {content}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground uppercase tracking-[0.14em]">
+                          {status}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ) : null}
             <CodingOutputLedger
               parts={projection.orderedTextPartIds.map(
                 (partId) => projection.textPartsById[partId]
@@ -133,6 +224,11 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 taskId={taskId}
               />
             </div>
+            {stopError ? (
+              <p className="mt-3 border-red-400/30 border-l-2 bg-red-400/5 px-3 py-2 text-destructive text-xs">
+                {stopError}
+              </p>
+            ) : null}
             {connectionMessage ? (
               <p className="mt-3 border-red-400/30 border-l-2 bg-red-400/5 px-3 py-2 text-destructive text-xs">
                 {connectionMessage}
@@ -152,5 +248,35 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
         />
       </div>
     </main>
+  );
+}
+
+function formatMicros(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+function UsageBadge({ projection }: { projection: CodingProjectionState }) {
+  const parts: string[] = [];
+  if (typeof projection.costMicros === "number") {
+    const cost = formatMicros(projection.costMicros);
+    parts.push(
+      typeof projection.maxCostMicros === "number"
+        ? `${cost} / ${formatMicros(projection.maxCostMicros)}`
+        : cost
+    );
+  }
+  if (
+    typeof projection.inputTokens === "number" ||
+    typeof projection.outputTokens === "number"
+  ) {
+    parts.push(
+      `${projection.inputTokens ?? 0}+${projection.outputTokens ?? 0} tok`
+    );
+  }
+  if (parts.length === 0) return null;
+  return (
+    <span className="hidden border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
+      {parts.join(" · ")}
+    </span>
   );
 }

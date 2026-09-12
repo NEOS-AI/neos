@@ -10,7 +10,7 @@ from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.model_config import models_for_provider
 from neos.config.settings import settings
-from .base import ModelProviderBase
+from .base import CodingCapabilities, ModelProviderBase
 
 
 class OpenAIProvider(ModelProviderBase):
@@ -47,3 +47,24 @@ class OpenAIProvider(ModelProviderBase):
             params["max_tokens"] = max_tokens
         params.update(kwargs)
         return ChatOpenAI(**params)
+
+    def coding_capabilities(self) -> CodingCapabilities:
+        return CodingCapabilities(supported=True, streaming_tools=True)
+
+    def create_coding_model(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        max_tool_input_bytes: int = 65_536,
+        max_tool_input_depth: int = 16,
+        **kwargs: Any,
+    ):
+        from neos.coding.model.openai import OpenAICodingModel
+        from neos.utils.openai_client import build_async_openai
+
+        return OpenAICodingModel(
+            build_async_openai(api_key=api_key, base_url=base_url, **kwargs),
+            max_tool_input_bytes=max_tool_input_bytes,
+            max_tool_input_depth=max_tool_input_depth,
+        )

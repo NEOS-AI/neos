@@ -1,7 +1,7 @@
 # Role-Based Model Routing — 남은 이슈
 
 > 📦 **보관 문서 (2026-08-04 archive 이동).** 현재 진입점은
-> [DEEP_ANALYSIS_HARNESS_ROADMAP.md](../DEEP_ANALYSIS_HARNESS_ROADMAP.md) §4다.
+> [DEEP_ANALYSIS_HARNESS_ROADMAP.md](../DEEP_ANALYSIS_HARNESS_ROADMAP.md) §8-B다.
 > 제목의 "남은 이슈"는 낡았다 — **I1~I6 전부 종결됐다.** 이 문서는 로드맵이
 > 압축한 진단 기록(I1~I6 원인 분석, fixture 재설계 상세, 스킬 이름 규칙 근거)을
 > 위해 남긴다. 지켜야 할 불변식은 §7이며 로드맵 §4.2에 요약돼 있다.

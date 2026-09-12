@@ -120,13 +120,11 @@ def parse_json(raw: str) -> dict[str, Any]:
 
 
 def _is_anthropic_model(model: str) -> bool:
-    """Anthropic 모델인가 — 클라이언트와 페이로드 형태를 함께 결정한다.
+    """Injected SDK 페이로드 형태만 결정한다.
 
-    모델 카탈로그가 우선이다. 이름 접두사만 보던 예전 방식은 `claude`로
-    시작하지 않는 모델을 전부 OpenAI로 보냈다.
-
-    두 호출처(`_default_client`, `_call_provider`)가 반드시 같은 판단을 써야
-    한다. 어긋나면 Anthropic 클라이언트에 OpenAI 페이로드를 보내게 된다.
+    Live 클라이언트는 `da_provider_for_model` + `create_coding_model` 이다.
+    이 함수는 `_call_provider` 가 FakeAnthropic / FakeOpenAI 를 가를 때만
+    쓴다. 카탈로그가 우선이고, 모르는 이름은 `claude` 접두사로 판단한다.
     """
     from neos.config.model_config import provider_for_model
 
@@ -138,14 +136,11 @@ def _is_anthropic_model(model: str) -> bool:
 
 
 def _default_client(model: str):
-    if _is_anthropic_model(model):
-        from neos.utils.anthropic_client import build_async_anthropic
+    """Live client. Tests patch this as the pre-dispatch construction gate."""
+    from neos.workflow.deep_analysis.harness_bridge import da_provider_for_model
+    from neos.utils.llm_factory import create_coding_model
 
-        return build_async_anthropic()
-
-    from openai import AsyncOpenAI
-
-    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    return create_coding_model(provider=da_provider_for_model(model))
 
 
 def _blocks_to_dicts(content) -> list[dict[str, Any]]:
@@ -175,8 +170,7 @@ async def _call_provider(
     client,
     tools: list[dict[str, Any]] | None = None,
 ) -> LLMResponse:
-    # `_default_client`와 같은 판단을 써야 한다 — 어긋나면 클라이언트와
-    # 페이로드 형태가 짝이 맞지 않는다.
+    # Injected SDK only. Live 경로는 하네스가 벤더를 고른다.
     if _is_anthropic_model(model):
         kwargs: dict[str, Any] = {
             "model": model,
@@ -225,13 +219,23 @@ async def _call_provider(
     )
 
 
-async def _call_live_provider(*args, **kwargs) -> LLMResponse:
+async def _as_live_result(awaitable: Awaitable[LLMResponse]) -> LLMResponse:
+    """Provider/harness 예외를 `LLMProviderError` 로 통일한다 (C3).
+
+    `call_json` 은 이 타입만 `_charge` 하고, 워커도 이것만 잡아 fail-open
+    한다. 하네스 `CodingModelError` 를 그대로 올리면 이전 시도의
+    `tokens_spent` 가 빠진다.
+    """
     try:
-        return await _call_provider(*args, **kwargs)
+        return await awaitable
     except LLMProviderError:
         raise
     except Exception as exc:
         raise LLMProviderError(str(exc)) from exc
+
+
+async def _call_live_provider(*args, **kwargs) -> LLMResponse:
+    return await _as_live_result(_call_provider(*args, **kwargs))
 
 
 def prompt_input_bound(model: str, prompt: str) -> int:
@@ -252,6 +256,20 @@ def prompt_input_bound(model: str, prompt: str) -> int:
     )
 
 
+def _should_use_harness(client: object | None) -> bool:
+    if client is None:
+        return True
+    from neos.workflow.deep_analysis.harness_bridge import looks_like_coding_model
+
+    return looks_like_coding_model(client)
+
+
+def _resolve_live_client(model: str, client: object | None):
+    if client is not None:
+        return client
+    return _default_client(model)
+
+
 def _record_dataset_call(
     model: str,
     request: dict[str, Any],
@@ -268,9 +286,10 @@ def _record_dataset_call(
     `record_llm_call` 이 절대 던지지 않으므로 여기서도 감싸지 않는다.
     """
     from neos.dataset.adapters import record_llm_call
+    from neos.workflow.deep_analysis.harness_bridge import da_provider_for_model
 
     record_llm_call(
-        provider="anthropic",
+        provider=da_provider_for_model(model),
         model=model,
         workflow_step=stage,
         input_messages=list(request.get("messages") or []),
@@ -342,14 +361,30 @@ async def call_messages(
 ) -> LLMResponse:
     async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:
         async def produce() -> dict[str, Any]:
-            resolved_client = client or _default_client(model)
+            resolved = _resolve_live_client(model, client)
             dispatch.started = True
+            if _should_use_harness(resolved):
+                from neos.workflow.deep_analysis.harness_bridge import (
+                    call_via_harness,
+                )
+
+                response = await _as_live_result(
+                    call_via_harness(
+                        model,
+                        messages,
+                        max_tokens=limit,
+                        client=resolved,
+                        tools=tools,
+                        stage=stage,
+                    )
+                )
+                return asdict(response)
             response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,
                 temperature=temperature,
-                client=resolved_client,
+                client=resolved,
                 tools=tools,
             )
             return asdict(response)
@@ -405,14 +440,29 @@ async def call_llm(
 
     async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:
         async def produce() -> dict[str, Any]:
-            resolved_client = client or _default_client(model)
+            resolved = _resolve_live_client(model, client)
             dispatch.started = True
+            if _should_use_harness(resolved):
+                from neos.workflow.deep_analysis.harness_bridge import (
+                    call_via_harness,
+                )
+
+                response = await _as_live_result(
+                    call_via_harness(
+                        model,
+                        messages,
+                        max_tokens=limit,
+                        client=resolved,
+                        stage=stage,
+                    )
+                )
+                return asdict(response)
             response = await _call_live_provider(
                 model,
                 messages,
                 max_tokens=limit,
                 temperature=temperature,
-                client=resolved_client,
+                client=resolved,
             )
             return asdict(response)
 

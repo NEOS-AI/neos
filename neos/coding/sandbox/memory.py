@@ -9,6 +9,7 @@ import re
 import signal
 import shutil
 import struct
+import tempfile
 import termios
 import uuid
 from dataclasses import dataclass, replace
@@ -40,6 +41,7 @@ from neos.coding.sandbox.archive import (
 from neos.coding.sandbox.paths import (
     ensure_mutable_workspace_path,
     normalize_workspace_path,
+    resolve_mutable_workspace_path,
     resolve_workspace_path,
 )
 from neos.coding.sandbox.process import BoundedProcessRunner
@@ -53,6 +55,13 @@ from neos.coding.sandbox.events import (
     WorkspaceChange,
     WorkspaceChangeKind,
 )
+from neos.coding.sandbox.ignore import (
+    iter_workspace_files,
+    load_ignore_rules,
+    should_skip_walk,
+)
+
+_GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
 
 
 class MemoryPty:
@@ -431,6 +440,23 @@ class MemorySandboxProvider:
         record.ptys.clear()
 
 
+def _write_atomic_bytes(path: Path, content: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(
+        prefix=".neos-write-",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 class MemorySandboxSession:
     def __init__(
         self,
@@ -451,27 +477,44 @@ class MemorySandboxSession:
     async def list_tree(self, path: str = ".") -> tuple[FileEntry, ...]:
         await self._require_running()
         root = resolve_workspace_path(self._record.workspace, path)
-        entries = []
-        for item in sorted(root.rglob("*")):
-            if item.is_symlink():
-                kind = "symlink"
-            elif item.is_dir():
-                kind = "directory"
-            else:
-                kind = "file"
-            stat = item.lstat()
-            entries.append(
-                FileEntry(
-                    path=item.relative_to(self._record.workspace).as_posix(),
-                    kind=kind,
-                    size=stat.st_size,
-                    modified_at=datetime.fromtimestamp(
-                        stat.st_mtime,
-                        tz=UTC,
-                    ),
-                )
-            )
+        if not root.is_dir() or root.is_symlink():
+            return ()
+        rules = load_ignore_rules(self._record.workspace)
+        entries: list[FileEntry] = []
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            current = Path(dirpath)
+            kept: list[str] = []
+            for name in dirnames:
+                item = current / name
+                relative = item.relative_to(self._record.workspace).as_posix()
+                if should_skip_walk(relative, rules=rules, is_dir=True):
+                    continue
+                kept.append(name)
+                entries.append(self._file_entry(item))
+            dirnames[:] = kept
+            for name in filenames:
+                item = current / name
+                relative = item.relative_to(self._record.workspace).as_posix()
+                if should_skip_walk(relative, rules=rules, is_dir=False):
+                    continue
+                entries.append(self._file_entry(item))
+        entries.sort(key=lambda entry: entry.path)
         return tuple(entries)
+
+    def _file_entry(self, item: Path) -> FileEntry:
+        if item.is_symlink():
+            kind = "symlink"
+        elif item.is_dir():
+            kind = "directory"
+        else:
+            kind = "file"
+        stat = item.lstat()
+        return FileEntry(
+            path=item.relative_to(self._record.workspace).as_posix(),
+            kind=kind,
+            size=stat.st_size,
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
+        )
 
     async def stat(self, path: str) -> FileEntry:
         await self._require_running()
@@ -487,17 +530,34 @@ class MemorySandboxSession:
             modified_at=datetime.fromtimestamp(value.st_mtime, tz=UTC),
         )
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(
+        self,
+        path: str,
+        *,
+        offset: int = 1,
+        limit: int | None = None,
+    ) -> bytes:
         await self._require_running()
         item = resolve_workspace_path(self._record.workspace, path)
         if not item.is_file():
             raise SandboxPolicyViolation("workspace_path_is_not_file")
-        if item.stat().st_size > self._record.sandbox.limits.max_output_bytes:
-            raise SandboxPolicyViolation("file_read_limit_exceeded")
-        return await asyncio.to_thread(item.read_bytes)
+        if offset < 1 or (limit is not None and limit < 1):
+            raise SandboxPolicyViolation("invalid_read_request")
+        max_bytes = self._record.sandbox.limits.max_output_bytes
+        if limit is None:
+            if item.stat().st_size > max_bytes:
+                raise SandboxPolicyViolation("file_read_limit_exceeded")
+            return await asyncio.to_thread(item.read_bytes)
+        return await asyncio.to_thread(
+            _read_file_range, item, offset, limit, max_bytes
+        )
 
-    async def write_file(self, path: str, content: bytes) -> int:
-        return await self._write_file(path, content, expected_revision=None)
+    async def write_file(
+        self, path: str, content: bytes, *, parents: bool = True
+    ) -> int:
+        return await self._write_file(
+            path, content, expected_revision=None, parents=parents
+        )
 
     async def write_file_if_revision(
         self,
@@ -518,6 +578,7 @@ class MemorySandboxSession:
         content: bytes,
         *,
         expected_revision: int | None,
+        parents: bool = True,
     ) -> int:
         await self._require_running()
         if len(content) > self._record.sandbox.limits.workspace_bytes:
@@ -531,14 +592,14 @@ class MemorySandboxSession:
                 != expected_revision
             ):
                 raise SandboxStateConflict("workspace_revision_conflict")
-            self._create_safe_parents(relative.parent)
-            item = resolve_workspace_path(
+            if parents:
+                self._create_safe_parents(relative.parent)
+            item = resolve_mutable_workspace_path(
                 self._record.workspace,
                 relative.as_posix(),
-                allow_missing_leaf=True,
             )
             existed = item.exists()
-            await asyncio.to_thread(item.write_bytes, content)
+            await asyncio.to_thread(_write_atomic_bytes, item, content)
             revision = await self._provider._increment_revision(self._record)
             await self._record.watcher.record(
                 WorkspaceChange(
@@ -560,47 +621,158 @@ class MemorySandboxSession:
         paths: tuple[str, ...] = ("**/*",),
         regex: bool = False,
         limit: int = 100,
+        before: int = 0,
+        after: int = 0,
+        output_mode: str = "content",
+        ignore_case: bool = False,
+        multiline: bool = False,
+        context: int = 0,
+        path: str | None = None,
+        max_columns: int = 500,
     ) -> tuple[SearchMatch, ...]:
         await self._require_running()
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
-        expression = re.compile(query if regex else re.escape(query))
+        if output_mode not in {"files", "content", "count"}:
+            output_mode = "content"
+        if context > 0:
+            before = after = context
+        before = max(0, min(int(before), 20))
+        after = max(0, min(int(after), 20))
+        flags = 0
+        if ignore_case:
+            flags |= re.IGNORECASE
+        if multiline:
+            flags |= re.DOTALL
+        expression = re.compile(query if regex else re.escape(query), flags)
+        workspace = self._record.workspace
+        start = (
+            resolve_workspace_path(workspace, path)
+            if path is not None
+            else workspace
+        )
+        rules = load_ignore_rules(workspace)
         matches: list[SearchMatch] = []
-        for item in sorted(self._record.workspace.rglob("*")):
-            if not item.is_file() or item.is_symlink():
-                continue
-            relative = item.relative_to(self._record.workspace).as_posix()
+        for item, relative in iter_workspace_files(
+            workspace, root=start, rules=rules
+        ):
             if not any(self._matches_path(relative, pattern) for pattern in paths):
+                continue
+            if _file_is_binary(item):
                 continue
             try:
                 text = item.read_text(errors="replace")
             except OSError:
                 continue
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                match = expression.search(line)
-                if match is None:
+            lines = text.splitlines()
+            if multiline:
+                file_hits = 0
+                for match in expression.finditer(text):
+                    file_hits += 1
+                    if output_mode != "content":
+                        continue
+                    line_number = text.count("\n", 0, match.start()) + 1
+                    line_start = text.rfind("\n", 0, match.start()) + 1
+                    line_end = text.find("\n", match.start())
+                    if line_end < 0:
+                        line_end = len(text)
+                    line = text[line_start:line_end].rstrip("\r")
+                    matches.append(
+                        _search_match(
+                            relative,
+                            line_number,
+                            match.start() - line_start + 1,
+                            line,
+                            lines,
+                            before,
+                            after,
+                            max_columns,
+                        )
+                    )
+                    if len(matches) >= limit:
+                        return tuple(matches)
+                if file_hits == 0 or output_mode == "content":
                     continue
+            else:
+                file_hits = 0
+                for line_number, line in enumerate(lines, start=1):
+                    match = expression.search(line)
+                    if match is None:
+                        continue
+                    file_hits += 1
+                    if output_mode != "content":
+                        continue
+                    matches.append(
+                        _search_match(
+                            relative,
+                            line_number,
+                            match.start() + 1,
+                            line,
+                            lines,
+                            before,
+                            after,
+                            max_columns,
+                        )
+                    )
+                    if len(matches) >= limit:
+                        return tuple(matches)
+                if file_hits == 0 or output_mode == "content":
+                    continue
+            if output_mode == "files":
+                matches.append(
+                    SearchMatch(path=relative, line=0, column=0, text="")
+                )
+            else:
                 matches.append(
                     SearchMatch(
                         path=relative,
-                        line=line_number,
-                        column=match.start() + 1,
-                        text=line,
+                        line=0,
+                        column=0,
+                        text="",
+                        count=file_hits,
                     )
                 )
-                if len(matches) >= limit:
-                    return tuple(matches)
+            if len(matches) >= limit:
+                return tuple(matches)
         return tuple(matches)
+
+    async def glob_files(self, pattern: str, *, limit: int = 100) -> tuple[str, ...]:
+        await self._require_running()
+        from neos.coding.sandbox.paths import normalize_workspace_path
+
+        if not pattern or limit < 1:
+            raise SandboxPolicyViolation("invalid_glob_request")
+        normalize_workspace_path(pattern.replace("*", "x").replace("?", "x") or "x")
+        # Keep lex path order; mtime sort would break existing glob assertions.
+        found: list[str] = []
+        rules = load_ignore_rules(self._record.workspace)
+        for _item, relative in iter_workspace_files(
+            self._record.workspace, rules=rules
+        ):
+            if self._matches_path(relative, pattern):
+                found.append(relative)
+                if len(found) >= limit:
+                    break
+        return tuple(found)
 
     async def git_status(self) -> CommandResult:
         return await self.execute(
             CommandRequest(
-                argv=("git", "status", "--short", "--untracked-files=all")
+                argv=(
+                    *_GIT_SAFE,
+                    "status",
+                    "--short",
+                    "--untracked-files=all",
+                )
             )
         )
 
     async def git_diff(self, *, staged: bool = False) -> CommandResult:
-        argv = ("git", "diff", "--cached") if staged else ("git", "diff")
+        argv = (
+            (*_GIT_SAFE, "diff", "--cached", "--no-ext-diff")
+            if staged
+            else (*_GIT_SAFE, "diff", "--no-ext-diff")
+        )
         return await self.execute(CommandRequest(argv=argv))
 
     async def git_log(self, *, limit: int = 20) -> CommandResult:
@@ -608,7 +780,13 @@ class MemorySandboxSession:
             raise SandboxPolicyViolation("git_log_limit_invalid")
         return await self.execute(
             CommandRequest(
-                argv=("git", "log", f"--max-count={limit}", "--oneline")
+                argv=(
+                    *_GIT_SAFE,
+                    "log",
+                    "--no-ext-diff",
+                    f"--max-count={limit}",
+                    "--oneline",
+                )
             )
         )
 
@@ -736,13 +914,16 @@ class MemorySandboxSession:
     def _create_safe_parents(self, parent: PurePosixPath) -> None:
         current = PurePosixPath(".")
         for part in parent.parts:
+            if part == ".":
+                continue
             current /= part
-            candidate = resolve_workspace_path(
-                self._record.workspace,
-                current.as_posix(),
-                allow_missing_leaf=True,
-            )
-            candidate.mkdir(exist_ok=True)
+            candidate = self._record.workspace.joinpath(*current.parts)
+            if candidate.is_symlink():
+                raise SandboxPolicyViolation("workspace_symlink_parent")
+            if not candidate.exists():
+                candidate.mkdir(exist_ok=True)
+            if candidate.is_symlink():
+                raise SandboxPolicyViolation("workspace_symlink_parent")
 
     def _pty(self, pty_id: str) -> MemoryPty:
         terminal = self._record.ptys.get(pty_id)
@@ -783,6 +964,16 @@ class MemorySandboxSession:
         return tuple(changes)
 
     @staticmethod
+    def _is_git_path(path: str) -> bool:
+        return ".git" in PurePosixPath(path).parts
+
+    @staticmethod
+    def _is_secret_path(path: str) -> bool:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        return is_denied_secret_path(path)
+
+    @staticmethod
     def _ignore_watch_path(path: str) -> bool:
         name = PurePosixPath(path).name
         return (
@@ -801,3 +992,54 @@ class MemorySandboxSession:
             normalized.startswith("**/")
             and PurePosixPath(path).match(normalized[3:])
         )
+
+
+def _file_is_binary(item: Path) -> bool:
+    try:
+        with item.open("rb") as handle:
+            sample = handle.read(8192)
+    except OSError:
+        return True
+    return b"\0" in sample
+
+
+def _read_file_range(
+    item: Path, offset: int, limit: int, max_bytes: int
+) -> bytes:
+    end = offset + limit - 1
+    chunks: list[bytes] = []
+    remaining = max_bytes
+    with item.open("rb") as handle:
+        for index, line in enumerate(handle, start=1):
+            if index < offset:
+                continue
+            if index > end:
+                break
+            if len(line) >= remaining:
+                chunks.append(line[:remaining])
+                break
+            chunks.append(line)
+            remaining -= len(line)
+    return b"".join(chunks)
+
+
+def _search_match(
+    relative: str,
+    line_number: int,
+    column: int,
+    line: str,
+    lines: list[str],
+    before: int,
+    after: int,
+    max_columns: int,
+) -> SearchMatch:
+    start = max(0, line_number - 1 - before)
+    text = line if max_columns <= 0 else line[:max_columns]
+    return SearchMatch(
+        path=relative,
+        line=line_number,
+        column=column,
+        text=text,
+        before=tuple(lines[start : line_number - 1]),
+        after=tuple(lines[line_number : line_number + after]),
+    )

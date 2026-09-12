@@ -9,6 +9,7 @@ import {
   createCodingTask,
   type CodingTask,
 } from "@/features/coding/api/coding-api";
+import { CodingTaskList } from "@/features/coding/components/coding-task-list";
 
 
 export function CodingShell() {
@@ -38,7 +39,7 @@ export function CodingShell() {
   }
 
   return (
-    <main className="relative flex min-h-dvh flex-1 items-center justify-center overflow-hidden bg-background px-5 py-12">
+    <main className="relative flex min-h-dvh flex-1 justify-center overflow-y-auto bg-background px-5 py-12">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/70 to-transparent" />
       <section className="w-full max-w-3xl">
         <div className="mb-10 flex items-end justify-between gap-6 border-border/60 border-b pb-5">
@@ -84,6 +85,13 @@ export function CodingShell() {
           </div>
         ) : null}
         {error ? <p className="mt-3 text-destructive text-sm">{error}</p> : null}
+
+        <section className="mt-10">
+          <h2 className="mb-3 font-mono text-amber-400 text-xs uppercase tracking-[0.24em]">
+            Recent tasks
+          </h2>
+          <CodingTaskList />
+        </section>
 
         <div className="mt-5 grid gap-2 text-muted-foreground text-xs sm:grid-cols-3">
           <p>01 · Inspect the repository</p>

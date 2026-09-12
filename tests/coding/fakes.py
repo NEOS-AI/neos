@@ -25,6 +25,7 @@ from neos.coding.domain.approvals import (
     CodingApproval,
     approval_display_summary,
     canonical_approval_hash,
+    requires_approval_answers,
 )
 from neos.coding.domain.events import make_event
 from neos.coding.domain.text_parts import (
@@ -264,6 +265,23 @@ class InMemoryCodingRunRepository:
             payload={"status": "failed", "error_code": error_code},
             now=now,
         )
+
+    async def cancel_run(self, *, lease, now):
+        return await self._commit_terminal_run(
+            lease=lease,
+            status=CodingRunStatus.CANCELLED,
+            payload={"status": "cancelled"},
+            now=now,
+        )
+
+    async def mark_task_cancelled(self, *, task_id, now):
+        del now
+        if self.task_statuses.get(task_id) not in {
+            "completed",
+            "failed",
+            "cancelled",
+        }:
+            self.task_statuses[task_id] = "cancelled"
 
     async def _commit_terminal_run(self, *, lease, status, payload, now):
         async with self._durability_lock:
@@ -589,7 +607,7 @@ class InMemoryCodingRunRepository:
             return self.approvals.get((task_id, run_id, tool_call_id))
 
     async def resolve_tool_approval(
-        self, *, task_id, approval_id, owner_id, decision, now
+        self, *, task_id, approval_id, owner_id, decision, now, answers=(), remember=False
     ):
         async with self._durability_lock:
             item = next(
@@ -616,14 +634,26 @@ class InMemoryCodingRunRepository:
                     decided_at=now,
                 )
                 conflict_code = "approval_expired"
+            elif (
+                decision is ApprovalDecision.APPROVE
+                and requires_approval_answers(approval.tool_name)
+                and not answers
+            ):
+                raise ApprovalConflict("answers_required")
             elif decision is ApprovalDecision.APPROVE:
                 status = ApprovalStatus.APPROVED
+                summary = dict(approval.display_summary)
+                if answers:
+                    summary["answers"] = list(answers)
+                if remember:
+                    summary["remember"] = True
                 resolved = replace(
                     approval,
                     status=status,
                     decision=decision,
                     decided_by=owner_id,
                     decided_at=now,
+                    display_summary=summary,
                 )
             else:
                 status = ApprovalStatus.DENIED
@@ -646,7 +676,7 @@ class InMemoryCodingRunRepository:
                     "status": status.value,
                     "requested_at": approval.requested_at.isoformat(),
                     "expires_at": approval.expires_at.isoformat(),
-                    "display_summary": dict(approval.display_summary),
+                    "display_summary": dict(resolved.display_summary),
                 },
                 now=now,
                 run_id=approval.run_id,
@@ -1015,6 +1045,24 @@ class InMemoryCodingRunRepository:
     async def queue_steering(self, request) -> None:
         self.steering_requests.append(request)
 
+    async def has_pending_interrupt(self, task_id: str) -> bool:
+        return any(
+            item.task_id == task_id
+            and item.mode in {SteeringMode.INTERRUPT_NOW, SteeringMode.CANCEL}
+            and item not in self.applied_steering
+            for item in self.steering_requests
+        )
+
+    async def claim_pending_interrupt(self, task_id: str):
+        for request in self.steering_requests:
+            if (
+                request.task_id == task_id
+                and request.mode in {SteeringMode.INTERRUPT_NOW, SteeringMode.CANCEL}
+                and request not in self.applied_steering
+            ):
+                return request
+        return None
+
     async def claim_pending_steering(self, task_id: str):
         for request in self.steering_requests:
             if request.task_id == task_id and request not in self.applied_steering:
@@ -1059,7 +1107,7 @@ class InMemoryCodingRunRepository:
             loop_state = dict(checkpoint.loop_state)
             loop_state["phase_index"] = -1
             loop_state["current_instruction"] = request.instruction
-            loop_state["pending_instruction"] = None
+            loop_state["pending_instruction"] = request.instruction
             steering_checkpoint = CodingCheckpoint(
                 checkpoint_id=f"cc_steer_{request.steering_id}",
                 task_id=lease.task_id,
