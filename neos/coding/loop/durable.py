@@ -2041,22 +2041,6 @@ class DurableCodingLoop:
         except Exception:
             return
 
-    async def _fail_open_spawn_claim(self, deps, tool_call_id: str, bound) -> None:
-        if deps is None or deps.lease is None:
-            return
-        try:
-            claim = await deps.repository.claim_tool_execution(
-                lease=deps.lease,
-                tool_call_id=tool_call_id,
-                now=self._clock(),
-                claim_expires_at=self._clock()
-                + timedelta(seconds=self._config.timeout_sec + 30),
-            )
-        except Exception:
-            return
-        if claim.disposition is ToolExecutionDisposition.DELEGATED:
-            await self._fail_delegated_claim(deps, claim, bound)
-
     async def _adopt_spawn_claim(self, deps, tool_call_id: str):
         if deps is None or deps.lease is None:
             return None
