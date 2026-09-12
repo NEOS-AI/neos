@@ -156,6 +156,13 @@ class WorkerResult:
     # 페이지**와 구별되지 않는다. D2 가 "403 잔존·429 backoff 없음" 으로
     # 적어둔 두 질문은 이 수 없이는 답이 나오지 않는다.
     retrieval_outcomes: dict[str, int] = field(default_factory=dict)
+    # Folded explore-child text. Unverified — graders remain the only
+    # verified path. Empty on the Worker / call_json path.
+    unverified_brief: str = ""
+    # Child pointer for the orchestrator to log after gather (P2).
+    subagent_run_id: str = ""
+    subagent_checkpoint_id: str = ""
+    subagent_step_kind: str = ""
 
 
 @dataclass

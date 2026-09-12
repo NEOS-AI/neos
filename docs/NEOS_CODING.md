@@ -986,9 +986,9 @@ CI의 10k acceptance fixture는 wall-clock 시간 대신 scheduler 1회, notific
 
 **완료 조건:** tenant별 quota/감사/삭제 요구와 GitHub end-to-end flow가 검증된다.
 
-### Phase 7 — 후속: coordinator
+### Phase 7 — 읽기 전용 explore subagent
 
-단일 agent 지표가 안정된 뒤에만 읽기 전용 조사 subagent부터 시작한다. write worker는 worktree/branch 격리와 merge conflict protocol 없이는 허용하지 않는다.
+단일 agent 지표가 안정된 뒤에만 읽기 전용 조사 subagent를 켠다. 구현은 `neos/subagent/` (`SubagentRuntime.advance` / `status` / `cancel` / `fold`)이고, 코딩 부모는 `spawn_agent.v1`을 1-step으로 park/resume한다. 기본값은 `coding_model.subagent_enabled: false` 와 `deep_analysis.subagent_enabled: false`다. write worker는 worktree/branch 격리와 merge conflict protocol 없이는 허용하지 않는다. 상세: `docs/SUBAGENT_RUNTIME_DESIGN.md`. coordinator / nested `query()` / `while(true)` / ChannelGateway 루프는 넣지 않는다.
 
 ---
 

@@ -158,6 +158,44 @@ class EnterpriseMetricsCollector:
             ["tool", "outcome"],
             registry=self.registry,
         )
+        self.subagent_advance_total = Counter(
+            "subagent_advance_total",
+            "Subagent safe-point outcomes",
+            ["spec", "parent_kind", "outcome"],
+            registry=self.registry,
+        )
+        self.subagent_advance_seconds = Histogram(
+            "subagent_advance_seconds",
+            "Subagent advance duration in seconds",
+            ["spec", "parent_kind"],
+            buckets=(0.05, 0.2, 0.5, 1, 2, 5, 15, 30, 60, 120),
+            registry=self.registry,
+        )
+        self.subagent_tokens_total = Counter(
+            "subagent_tokens_total",
+            "Subagent token usage",
+            ["spec", "parent_kind", "direction"],
+            registry=self.registry,
+        )
+        self.subagent_cost_micros_total = Counter(
+            "subagent_cost_micros_total",
+            "Subagent cost in micros",
+            ["spec", "parent_kind", "provider"],
+            registry=self.registry,
+        )
+        self.subagent_fold_chars = Histogram(
+            "subagent_fold_chars",
+            "Folded subagent report size in characters",
+            ["spec"],
+            buckets=(256, 512, 1000, 2000, 4000, 8000, 16384),
+            registry=self.registry,
+        )
+        self.subagent_cas_mismatch_total = Counter(
+            "subagent_cas_mismatch_total",
+            "Subagent checkpoint CAS mismatches",
+            ["parent_kind"],
+            registry=self.registry,
+        )
         self.coding_sandbox_lifecycle_seconds = Histogram(
             "coding_sandbox_lifecycle_seconds",
             "Coding sandbox lifecycle operation duration",

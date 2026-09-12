@@ -74,6 +74,11 @@
     { "kind": "run_manifest", "labeled": true },
     { "kind": "split", "labeled": true },
     { "kind": "stall_terminated", "labeled": true },
+    {
+      "kind": "subagent_step",
+      "labeled": false,
+      "reason": "자식 1-step 재개 포인터(run_id/checkpoint_id)다. 질문 재개방과 pass_completed 가 이미 진행을 말하고, 라운드마다 찍히므로 활동 줄에 올리면 조사 로그가 된다."
+    },
     { "kind": "subq_adopted", "labeled": true },
     { "kind": "subq_proposed", "labeled": true },
     { "kind": "subq_review_failed", "labeled": true },

@@ -212,6 +212,21 @@ async def build_orchestrator(
     )
     await ledger.log(MANIFEST_KIND, None, manifest)
 
+    subagent_runtime = None
+    if config.subagent_enabled:
+        try:
+            from neos.database.connection import db_manager
+
+            from .subagent_adapter import build_da_subagent_runtime
+
+            subagent_runtime = build_da_subagent_runtime(
+                search_fn=search_fn,
+                fetch_fn=fetch_fn,
+                session_factory=db_manager.get_session,
+            )
+        except Exception:
+            subagent_runtime = None
+
     return Orchestrator(
         session,
         run_id,
@@ -232,4 +247,5 @@ async def build_orchestrator(
         parallel_workers=parallel_workers,
         max_depth=max_depth,
         synthesis_max_tokens=synthesis_max_tokens,
+        subagent_runtime=subagent_runtime,
     )

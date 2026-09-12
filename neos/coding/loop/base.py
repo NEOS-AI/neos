@@ -130,6 +130,16 @@ class CodingRunRepository(Protocol):
         now: datetime,
     ) -> CodingEvent: ...
 
+    async def mark_tool_delegated(
+        self,
+        claim: ToolExecutionClaim,
+        *,
+        child_run_id: str,
+        child_checkpoint_id: str,
+        claim_expires_at: datetime,
+        now: datetime,
+    ) -> None: ...
+
     async def request_tool_approval(
         self,
         *,

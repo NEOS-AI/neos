@@ -183,6 +183,10 @@ def test_importing_da_llm_does_not_import_durable_loop() -> None:
         "assert 'neos.coding.loop.durable' not in sys.modules\n"
         "from neos.workflow.deep_analysis import harness_bridge\n"
         "assert 'neos.coding.loop.durable' not in sys.modules\n"
+        "import neos.subagent\n"
+        "assert 'neos.coding.loop.durable' not in sys.modules\n"
+        "import neos.workflow.deep_analysis.orchestrator\n"
+        "assert 'neos.coding.loop.durable' not in sys.modules\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],

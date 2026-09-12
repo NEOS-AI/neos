@@ -18,6 +18,8 @@ coding_model:
   command_enabled: true
   command_allowlist: [pytest, ruff, mypy, pnpm, git]
   mutation_snapshot_interval: 5
+  subagent_enabled: false
+  subagent_report_budget_chars: 4000
 
 api:
   v1_prefix: /api/v1
@@ -478,6 +480,7 @@ hyper_deep_agent:
 #     브로커가 없으면 job 제출이 그대로 실패한다.
 deep_analysis:
   enabled: true
+  subagent_enabled: false
   models:
     # E3 해소 (2026-08-29). scout·dig·synth 는 `null` = 역할 기본값이고,
     # judge 만 명시한다.

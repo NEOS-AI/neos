@@ -314,6 +314,12 @@ class _SearchToolsInput(_ToolInput):
 class _SpawnAgentInput(_ToolInput):
     prompt: str = Field(min_length=1)
     max_turns: int = Field(default=4, ge=1, le=8)
+    spec: str = Field(default="explore")
+    why: str = Field(default="", max_length=2000)
+    already_tried: list[str] = Field(default_factory=list)
+    scope: str = Field(default="", max_length=2000)
+    success: str = Field(default="", max_length=2000)
+    report_budget: int = Field(default=4000, ge=256, le=16384)
 
 
 class _EmptyInput(_ToolInput):
@@ -591,8 +597,8 @@ class CodingToolRegistry:
         _RegisteredTool(
             "spawn_agent.v1",
             (
-                "Spawn a nested explore-only coding agent. "
-                "The parent loop intercepts this call. Do not use this to write files. "
+                "Spawn a read-only explore child. Wait for the folded report. "
+                "Do not use this to write files. "
                 "On policy_* denial, do not retry the same prompt."
             ),
             ToolRisk.READ_ONLY,
@@ -759,6 +765,18 @@ class CodingToolRegistry:
         except ValidationError as error:
             raise ToolValidationError("policy_schema_invalid") from error
         data: dict[str, Any] = parsed.model_dump()
+        if name == "spawn_agent.v1":
+            provided = set(candidate)
+            for key in (
+                "spec",
+                "why",
+                "already_tried",
+                "scope",
+                "success",
+                "report_budget",
+            ):
+                if key not in provided:
+                    data.pop(key, None)
         self._normalize_paths(name, data)
         if name == "search_text.v1" and data["regex"]:
             try:

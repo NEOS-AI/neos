@@ -9,6 +9,7 @@ from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
     SteeringApplication,
+    ToolExecutionDisposition,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.models import CodingTaskStatus, TERMINAL_TASK_STATUSES
@@ -254,6 +255,7 @@ class CodingRunService:
             if task is None:
                 raise CodingTaskNotFound(task_id)
             instruction = task.prompt
+        lease = await self._renew_lease_for_child(lease, checkpoint, self._clock())
         stream = self._loop.run(
             LoopInput(
                 task_id=task_id,
@@ -593,6 +595,7 @@ class CodingRunService:
         await saver(replace(task, status=CodingTaskStatus.CANCELLED, updated_at=now))
 
     async def _cancel_active_run(self, lease, now: datetime):
+        await self._cancel_parent_children(lease, now)
         cancel = getattr(self._runs, "cancel_run", None)
         if cancel is not None:
             return await cancel(lease=lease, now=now)
@@ -603,6 +606,65 @@ class CodingRunService:
             replace(run, status=CodingRunStatus.CANCELLED, completed_at=now)
         )
         return None
+
+    async def _cancel_parent_children(self, lease, now: datetime) -> None:
+        cancel = getattr(self._loop, "cancel_active_child_for_task", None)
+        if cancel is not None:
+            await cancel(lease.task_id)
+        await self._fail_open_delegated_spawn(lease, now)
+
+    async def _fail_open_delegated_spawn(self, lease, now: datetime) -> None:
+        latest = getattr(self._runs, "latest_checkpoint", None)
+        if not callable(latest):
+            return
+        try:
+            checkpoint = await latest(lease.task_id)
+        except Exception:
+            return
+        if checkpoint is None:
+            return
+        tool_call_id = (checkpoint.loop_state or {}).get("active_child_tool_call_id")
+        if not tool_call_id:
+            return
+        try:
+            claim = await self._runs.claim_tool_execution(
+                lease=lease,
+                tool_call_id=str(tool_call_id),
+                now=now,
+                claim_expires_at=now + timedelta(seconds=30),
+            )
+        except Exception:
+            return
+        if claim.disposition is not ToolExecutionDisposition.DELEGATED:
+            return
+        try:
+            await self._runs.complete_tool_execution(
+                claim,
+                result={"status": "error", "reason_code": "aborted"},
+                now=now,
+            )
+        except Exception:
+            return
+
+    def _child_lease_horizon(self) -> float:
+        timeout = 120.0
+        config = getattr(self._loop, "_config", None)
+        if config is not None:
+            timeout = float(getattr(config, "timeout_sec", 120.0) or 120.0)
+        return max(self._execution_lease.total_seconds(), timeout + 30.0)
+
+    async def _renew_lease_for_child(self, lease, checkpoint, now: datetime):
+        loop_state = getattr(checkpoint, "loop_state", None) if checkpoint else None
+        if not isinstance(loop_state, dict) or not loop_state.get("active_child_run_id"):
+            return lease
+        renew = getattr(self._runs, "renew_execution_lease", None)
+        if not callable(renew):
+            return lease
+        return await renew(
+            lease,
+            now=now,
+            expires_at=now + timedelta(seconds=self._child_lease_horizon()),
+        )
 
     async def _apply_queued_cancel(self, request: SteeringRequest) -> None:
         claim = getattr(self._runs, "claim_pending_interrupt", None)
@@ -634,6 +696,8 @@ class CodingRunService:
                 return None
         if request is None:
             return None
+        if request.mode is SteeringMode.INTERRUPT_NOW:
+            await self._cancel_parent_children(lease, now)
         if request.mode is SteeringMode.CANCEL:
             committed = await self._cancel_active_run(lease, now)
             await self._mark_task_cancelled(task_id, now)

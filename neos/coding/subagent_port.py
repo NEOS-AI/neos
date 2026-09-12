@@ -1,0 +1,70 @@
+"""Read-only ToolPort the coding parent injects into a child stepper."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from neos.coding.tools.registry import CodingToolRegistry, ToolRisk, ToolValidationError
+from neos.subagent.catalog import lookup_spec
+
+
+class CodingToolPortError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+class CodingToolPort:
+    def __init__(
+        self,
+        *,
+        registry: CodingToolRegistry,
+        executor,
+        spec: str = "explore",
+    ) -> None:
+        self._registry = registry
+        self._executor = executor
+        self._spec_name = spec
+        self._session = None
+        self._phase = "implement"
+        self._revealed: frozenset[str] = frozenset()
+
+    def bind(
+        self,
+        *,
+        session,
+        phase: str | None = None,
+        revealed: frozenset[str] | None = None,
+    ) -> None:
+        self._session = session
+        if phase is not None:
+            self._phase = phase
+        if revealed is not None:
+            self._revealed = revealed
+
+    def definitions(self) -> tuple[Any, ...]:
+        spec = lookup_spec(self._spec_name)
+        host = self._registry.definitions(
+            phase=self._phase, revealed=self._revealed
+        )
+        return tuple(item for item in host if item.name in spec.allowed_tools)
+
+    async def execute(self, name: str, input: Mapping[str, object]) -> Mapping[str, Any]:
+        spec = lookup_spec(self._spec_name)
+        if name not in spec.allowed_tools:
+            raise CodingToolPortError("tool_not_allowed")
+        try:
+            validated = self._registry.validate(name, dict(input))
+        except ToolValidationError as error:
+            raise CodingToolPortError(error.reason_code) from error
+        if validated.risk is not ToolRisk.READ_ONLY:
+            raise CodingToolPortError("tool_not_read_only")
+        if self._session is None:
+            raise CodingToolPortError("sandbox_session_missing")
+        result = await self._executor.execute(self._session, validated)
+        if hasattr(result, "to_mapping"):
+            return dict(result.to_mapping())
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"value": result}

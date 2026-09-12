@@ -31,6 +31,7 @@ class ToolExecutionDisposition(StrEnum):
     RECLAIMED = "reclaimed"
     COMPLETED = "completed"
     BUSY = "busy"
+    DELEGATED = "delegated"
 
 
 @dataclass(frozen=True, slots=True)

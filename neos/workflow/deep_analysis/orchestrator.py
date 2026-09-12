@@ -16,6 +16,11 @@ from .llm import call_json
 from .model_roles import resolve_harness_model
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
+from .subagent_adapter import (
+    investigate_via_subagent,
+    latest_subagent_pointers,
+    log_subagent_step,
+)
 from .synthesizer import Synthesizer
 from .token_budget import (
     TokenBudget,
@@ -344,6 +349,7 @@ class Orchestrator:
         max_depth: int | None = None,
         max_stall_rounds: int | None = None,
         synthesis_max_tokens: int | None = None,
+        subagent_runtime=None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -427,6 +433,7 @@ class Orchestrator:
             token_budget=self.token_budget,
         )
         self._split_decompose = self._default_split_decompose
+        self.subagent_runtime = subagent_runtime
 
     async def _emit(self, kind: str, payload: dict) -> None:
         if self.event_sink is not None:
@@ -692,7 +699,30 @@ class Orchestrator:
             verdict = await self._grade(proposed, value_est)
             await self.ledger.regrade_claim(question_id, claim.id, verdict)
 
-    async def _run_worker(self, assignment: Assignment) -> WorkerResult:
+    async def _run_worker(
+        self,
+        assignment: Assignment,
+        *,
+        child_run_id: str | None = None,
+        child_checkpoint_id: str | None = None,
+    ) -> WorkerResult:
+        if settings.config.deep_analysis.subagent_enabled:
+            if self.subagent_runtime is None:
+                return WorkerResult(
+                    question_id=assignment.question_id,
+                    status="failed",
+                    fail_reason="subagent_runtime_missing",
+                )
+            return await investigate_via_subagent(
+                runtime=self.subagent_runtime,
+                assignment=assignment,
+                parent_id=str(self.ledger.run_id),
+                run_id=child_run_id,
+                expected_checkpoint_id=child_checkpoint_id,
+            )
+        return await self._run_legacy_worker(assignment)
+
+    async def _run_legacy_worker(self, assignment: Assignment) -> WorkerResult:
         worker = self.worker_factory()  # A1: fresh instance per assignment
         try:
             return await asyncio.wait_for(
@@ -1167,6 +1197,17 @@ class Orchestrator:
             {"qid": question_id, "rounds": rounds},
         )
         self._stall_counts[question_id] = 0
+        if self.subagent_runtime is not None:
+            child_run_id, _checkpoint = await latest_subagent_pointers(
+                self.ledger, question_id
+            )
+            if child_run_id:
+                try:
+                    await self.subagent_runtime.cancel(
+                        child_run_id, "stall_terminated"
+                    )
+                except Exception:  # noqa: BLE001 — stall path must still split
+                    pass
         # SPLIT if depth allows, else abandon (both handled by _do_split).
         await self._do_split(question)
 
@@ -1223,8 +1264,23 @@ class Orchestrator:
                 assignment.question_id,
                 "investigating",
             )
+        child_ptrs: dict[str, tuple[str | None, str | None]] = {}
+        if settings.config.deep_analysis.subagent_enabled:
+            for assignment in assignments:
+                child_ptrs[assignment.question_id] = await latest_subagent_pointers(
+                    self.ledger, assignment.question_id
+                )
         results = await asyncio.gather(
-            *[self._run_worker(a) for a in assignments]
+            *[
+                self._run_worker(
+                    assignment,
+                    child_run_id=child_ptrs.get(assignment.question_id, (None, None))[0],
+                    child_checkpoint_id=child_ptrs.get(
+                        assignment.question_id, (None, None)
+                    )[1],
+                )
+                for assignment in assignments
+            ]
         )
         await self._register_round_outcome(results)
         # P2: 순차 커밋 (single-writer). gather는 순서를 보존하므로
@@ -1267,6 +1323,15 @@ class Orchestrator:
             feedback_before = await self._feedback_signal(
                 assignment.question_id
             )
+            if result.subagent_run_id:
+                await log_subagent_step(
+                    self.ledger,
+                    assignment.question_id,
+                    run_id=result.subagent_run_id,
+                    checkpoint_id=result.subagent_checkpoint_id or None,
+                    step_kind=result.subagent_step_kind,
+                    status=result.status,
+                )
             await self.ledger.commit_blobs(result.blobs)
             # P2: the worker has no ledger, so it flags the skip on its result
             # and the single writer records it here -- the same shape the
@@ -1343,6 +1408,8 @@ class Orchestrator:
                 verified_before,
                 feedback_before,
             )
+            if result.subagent_step_kind == "continuing":
+                made_progress = True
             await self._register_progress(
                 assignment.question_id, made_progress
             )

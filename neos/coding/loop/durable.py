@@ -135,6 +135,7 @@ class CodingLoopConfig:
     approval_deny_tools: frozenset[str] = frozenset()
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
+    subagent_enabled: bool = False
 
     def __post_init__(self) -> None:
         numeric = (
@@ -213,10 +214,20 @@ class AgentLoopState:
     last_success_count: int = 0
     verdict: str | None = None
     critical_files: tuple[str, ...] = ()
+    active_child_run_id: str | None = None
+    active_child_checkpoint_id: str | None = None
+    active_child_tool_call_id: str | None = None
 
     @property
     def has_pending_tool(self) -> bool:
         return self.pending_tool_index < len(self.pending_tool_calls)
+
+
+@dataclass(frozen=True, slots=True)
+class DelegatedSpawn:
+    run_id: str
+    checkpoint_id: str | None
+    step_kind: str
 
 
 class DurableCodingLoop:
@@ -233,6 +244,7 @@ class DurableCodingLoop:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         approval_evaluator: Callable[..., ApprovalPolicyOutcome] = evaluate_approval,
         hooks: CodingHookPort | None = None,
+        subagents=None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -244,6 +256,7 @@ class DurableCodingLoop:
         self._clock = clock
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
+        self._subagents = subagents
 
     def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
         try:
@@ -541,6 +554,9 @@ class DurableCodingLoop:
             ):
                 yield event
         except asyncio.CancelledError:
+            await self._cancel_active_child(
+                current, reason="aborted", task_id=input.task_id
+            )
             await self._persist_abort_after_cancel(input, current, bound, deps)
             raise
 
@@ -709,12 +725,14 @@ class DurableCodingLoop:
                     state,
                     approved_always=state.approved_always | {validated.name},
                 )
+        claim_ttl = self._config.tool_claim_ttl_sec
+        if call.name == "spawn_agent.v1" and self._config.subagent_enabled:
+            claim_ttl = self._config.timeout_sec + 30
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,
             now=self._clock(),
-            claim_expires_at=self._clock()
-            + timedelta(seconds=self._config.tool_claim_ttl_sec),
+            claim_expires_at=self._clock() + timedelta(seconds=claim_ttl),
         )
         if claim.disposition is ToolExecutionDisposition.BUSY:
             raise CodingLoopFailure("tool_execution_busy", retryable=True)
@@ -735,6 +753,9 @@ class DurableCodingLoop:
         if started.event is not None:
             yield started.event, state
         ran_spawn = False
+        spawn_enabled = (
+            call.name == "spawn_agent.v1" and self._config.subagent_enabled
+        )
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
             result = dict(claim.result or {})
             await self._audit.emit(
@@ -753,7 +774,12 @@ class DurableCodingLoop:
                 tool_call_id=call.tool_call_id,
             )
         else:
-            yield await self._emit_tool_started(input, deps, call), state
+            resume_spawn = spawn_enabled and claim.disposition in {
+                ToolExecutionDisposition.DELEGATED,
+                ToolExecutionDisposition.RECLAIMED,
+            }
+            if not resume_spawn:
+                yield await self._emit_tool_started(input, deps, call), state
             try:
                 if call.name == "spawn_agent.v1":
                     result = await self._run_spawn_agent(
@@ -769,6 +795,12 @@ class DurableCodingLoop:
                         known_stamps=state.read_stamps,
                         prefetched=prefetch.get(call.tool_call_id),
                     )
+            except asyncio.CancelledError:
+                await self._cancel_active_child(
+                    state, reason="aborted", task_id=input.task_id
+                )
+                await self._fail_delegated_claim(deps, claim, bound)
+                raise
             except CodingLoopFailure as error:
                 if error.code != "tool_outcome_unknown":
                     raise
@@ -776,6 +808,34 @@ class DurableCodingLoop:
                     input, state, bound, deps, call, claim=claim, started=started
                 ):
                     yield item
+                return
+            if isinstance(result, DelegatedSpawn):
+                if claim.disposition in {
+                    ToolExecutionDisposition.CLAIMED,
+                    ToolExecutionDisposition.RECLAIMED,
+                }:
+                    await self._mark_spawn_delegated(deps, claim, result)
+                parked = replace(
+                    state,
+                    active_child_run_id=result.run_id,
+                    active_child_checkpoint_id=result.checkpoint_id,
+                    active_child_tool_call_id=call.tool_call_id,
+                )
+                payload = {
+                    "child_run_id": result.run_id,
+                    "child_checkpoint_id": result.checkpoint_id,
+                    "step_kind": result.step_kind,
+                }
+                committed = await deps.repository.commit_phase_checkpoint(
+                    lease=deps.lease,
+                    phase=started.phase,
+                    tool_call_id=call.tool_call_id,
+                    result=payload,
+                    loop_state=self._dump_state(input, parked),
+                    workspace_revision=str(bound.binding.workspace_revision),
+                    now=self._clock(),
+                )
+                yield committed.event, parked
                 return
             if validated.risk is not ToolRisk.READ_ONLY:
                 try:
@@ -856,8 +916,15 @@ class DurableCodingLoop:
             tool_name=call.name,
             tool_input=call.input,
         )
-        if ran_spawn:
+        if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
+        if ran_spawn and state.active_child_tool_call_id in {None, call.tool_call_id}:
+            after = replace(
+                after,
+                active_child_run_id=None,
+                active_child_checkpoint_id=None,
+                active_child_tool_call_id=None,
+            )
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -1367,6 +1434,15 @@ class DurableCodingLoop:
                     current.cancel()
 
     async def _checkpoint_aborted(self, input, state, bound, deps) -> None:
+        await self._cancel_active_child(
+            state, reason="aborted", task_id=input.task_id
+        )
+        if state.has_pending_tool:
+            current = state.pending_tool_calls[state.pending_tool_index]
+            if current.name == "spawn_agent.v1":
+                await self._fail_open_spawn_claim(
+                    deps, current.tool_call_id, bound
+                )
         remaining = state.pending_tool_calls[state.pending_tool_index :]
         existing = {
             item.tool_call_id
@@ -1691,13 +1767,7 @@ class DurableCodingLoop:
             str(bound.binding.workspace_revision),
         ).to_mapping()
 
-    async def _run_spawn_agent(
-        self, call, bound, state, *, input=None, deps=None
-    ) -> dict[str, Any]:
-        del call, state
-        task_id = input.task_id if input is not None else ""
-        if deps is not None and await self._has_pending_interrupt(deps, task_id):
-            return self._spawn_tool_error(bound, "aborted")
+    def _legacy_explore_handoff(self, bound) -> dict[str, Any]:
         note = (
             "Do not nest an inner agent loop. "
             "Use set_phase.v1 to switch the parent to explore."
@@ -1718,6 +1788,242 @@ class DurableCodingLoop:
         result["use_phase"] = "explore"
         result["note"] = note
         return result
+
+    async def cancel_active_child_for_task(self, task_id: str) -> None:
+        if self._subagents is None:
+            return
+        from neos.subagent.types import ParentKind
+
+        await self._subagents.cancel_for_parent(ParentKind.CODING, task_id, "cancelled")
+
+    async def _cancel_active_child(
+        self, state, *, reason: str, task_id: str | None = None
+    ) -> None:
+        if self._subagents is None:
+            return
+        if state is not None and state.active_child_run_id:
+            await self._subagents.cancel(state.active_child_run_id, reason)
+        if task_id:
+            from neos.subagent.types import ParentKind
+
+            await self._subagents.cancel_for_parent(
+                ParentKind.CODING, task_id, reason
+            )
+
+    def _child_lease_horizon(self) -> float:
+        return max(self._config.tool_claim_ttl_sec, self._config.timeout_sec + 30)
+
+    async def _renew_parent_lease(self, deps) -> None:
+        if deps is None or deps.lease is None:
+            return
+        renew = getattr(deps.repository, "renew_execution_lease", None)
+        if not callable(renew):
+            return
+        now = self._clock()
+        await renew(
+            deps.lease,
+            now=now,
+            expires_at=now + timedelta(seconds=self._child_lease_horizon()),
+        )
+
+    async def _mark_spawn_delegated(self, deps, claim, result: DelegatedSpawn) -> None:
+        marker = getattr(deps.repository, "mark_tool_delegated", None)
+        if not callable(marker):
+            return
+        now = self._clock()
+        await marker(
+            claim,
+            child_run_id=result.run_id,
+            child_checkpoint_id=result.checkpoint_id or "",
+            claim_expires_at=now + timedelta(seconds=self._config.timeout_sec + 30),
+            now=now,
+        )
+
+    async def _fail_delegated_claim(self, deps, claim, bound) -> None:
+        if deps is None or claim is None:
+            return
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
+        }:
+            return
+        try:
+            await deps.repository.complete_tool_execution(
+                claim,
+                result=self._spawn_tool_error(bound, "aborted"),
+                now=self._clock(),
+            )
+        except Exception:
+            return
+
+    async def _fail_open_spawn_claim(self, deps, tool_call_id: str, bound) -> None:
+        if deps is None or deps.lease is None:
+            return
+        try:
+            claim = await deps.repository.claim_tool_execution(
+                lease=deps.lease,
+                tool_call_id=tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock()
+                + timedelta(seconds=self._config.timeout_sec + 30),
+            )
+        except Exception:
+            return
+        if claim.disposition is ToolExecutionDisposition.DELEGATED:
+            await self._fail_delegated_claim(deps, claim, bound)
+
+    def _bind_child_tools(self, bound, state) -> None:
+        if self._subagents is None:
+            return
+        stepper = getattr(self._subagents, "_stepper", None)
+        port = getattr(stepper, "_tools", None) if stepper is not None else None
+        bind = getattr(port, "bind", None)
+        if callable(bind):
+            bind(
+                session=bound.session,
+                phase=state.phase,
+                revealed=state.revealed_tools,
+            )
+
+    def _spawn_briefing(self, call):
+        from neos.subagent.types import ParentBriefing
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        already = raw.get("already_tried") or ()
+        if isinstance(already, str):
+            already = (already,)
+        budget = raw.get("report_budget", 4000)
+        try:
+            budget = int(budget)
+        except (TypeError, ValueError):
+            budget = 4000
+        return ParentBriefing(
+            goal=str(raw.get("prompt") or "").strip(),
+            why=str(raw.get("why") or ""),
+            already_tried=tuple(str(item) for item in already),
+            scope=str(raw.get("scope") or ""),
+            success=str(raw.get("success") or ""),
+            report_budget_chars=max(256, min(16_384, budget)),
+        )
+
+    def _folded_spawn_result(self, bound, folded) -> dict[str, Any]:
+        from neos.subagent.types import SubagentStatus
+
+        ok = folded.status is SubagentStatus.COMPLETED
+        status = "ok" if ok else "error"
+        reason = "ok" if ok else folded.status.value
+        result = dict(
+            ToolResult(
+                status,
+                reason,
+                None,
+                None,
+                bool(folded.truncated),
+                None,
+                str(bound.binding.workspace_revision),
+                entries=(
+                    {
+                        "summary": folded.summary,
+                        "run_id": folded.run_id,
+                    },
+                ),
+            ).to_mapping()
+        )
+        result["summary"] = folded.summary
+        result["run_id"] = folded.run_id
+        result["truncated"] = bool(folded.truncated)
+        result["citations"] = list(folded.citations)
+        result["child_status"] = folded.status.value
+        result["turn_count"] = folded.turn_count
+        return result
+
+    async def _run_spawn_agent(
+        self, call, bound, state, *, input=None, deps=None
+    ) -> dict[str, Any] | DelegatedSpawn:
+        task_id = input.task_id if input is not None else ""
+        if deps is not None and await self._has_pending_interrupt(deps, task_id):
+            await self._cancel_active_child(
+                state, reason="aborted", task_id=task_id or None
+            )
+            return self._spawn_tool_error(bound, "aborted")
+        if state.active_child_run_id and not self._config.subagent_enabled:
+            await self._cancel_active_child(
+                state, reason="subagent_disabled", task_id=task_id or None
+            )
+            return self._spawn_tool_error(bound, "subagent_disabled")
+        if not self._config.subagent_enabled:
+            return self._legacy_explore_handoff(bound)
+        if (
+            state.active_child_run_id
+            and state.active_child_tool_call_id not in {None, call.tool_call_id}
+        ):
+            return self._spawn_tool_error(bound, "policy_child_already_active")
+        if self._subagents is None:
+            raise CodingLoopFailure("subagent_runtime_missing", retryable=False)
+        if input is None:
+            raise CodingLoopFailure("subagent_runtime_missing", retryable=False)
+        from neos.subagent.catalog import UnknownSpec, lookup_spec
+        from neos.subagent.types import (
+            ModelPin,
+            ParentKind,
+            SandboxMode,
+            StepKind,
+            SubagentTicket,
+        )
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        spec_name = str(raw.get("spec") or "explore")
+        try:
+            lookup_spec(spec_name)
+        except UnknownSpec:
+            return self._spawn_tool_error(bound, "policy_unknown_spec")
+        provider = self._config.provider
+        if provider not in {"anthropic", "openai", "gemini", "ollama"}:
+            return self._spawn_tool_error(bound, "model_pin_mismatch")
+        try:
+            max_turns = int(raw.get("max_turns", 4))
+        except (TypeError, ValueError):
+            max_turns = 4
+        max_turns = max(1, min(8, max_turns))
+        try:
+            briefing = self._spawn_briefing(call)
+        except ValueError:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        same_child = state.active_child_tool_call_id in {None, call.tool_call_id}
+        ticket = SubagentTicket(
+            parent_kind=ParentKind.CODING,
+            parent_id=input.task_id,
+            parent_run_id=input.run_id,
+            parent_tool_call_id=call.tool_call_id,
+            spec=spec_name,
+            briefing=briefing,
+            model=ModelPin(provider=provider, model=self._config.model),
+            max_turns=max_turns,
+            sandbox_mode=SandboxMode.PARENT_RO,
+            expected_checkpoint_id=(
+                state.active_child_checkpoint_id if same_child else None
+            ),
+            run_id=state.active_child_run_id if same_child else None,
+        )
+        self._bind_child_tools(bound, state)
+        try:
+            await self._renew_parent_lease(deps)
+            outcome = await self._subagents.advance(ticket)
+            await self._renew_parent_lease(deps)
+        except asyncio.CancelledError:
+            await self._cancel_active_child(
+                state, reason="aborted", task_id=input.task_id
+            )
+            raise
+        if outcome.kind is StepKind.CONTINUING:
+            return DelegatedSpawn(
+                run_id=outcome.run_id,
+                checkpoint_id=outcome.checkpoint_id,
+                step_kind=outcome.kind.value,
+            )
+        folded = await self._subagents.fold(outcome.run_id)
+        return self._folded_spawn_result(bound, folded)
 
     async def _maybe_llm_compact(
         self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
@@ -1874,6 +2180,9 @@ class DurableCodingLoop:
             int(raw.get("last_success_count", 0)),
             restore_verify_verdict(raw.get("verdict")),
             restore_plan_critical_files(raw.get("critical_files")),
+            _optional_str(raw.get("active_child_run_id")),
+            _optional_str(raw.get("active_child_checkpoint_id")),
+            _optional_str(raw.get("active_child_tool_call_id")),
         )
 
     def _apply_pending_command(
@@ -2051,6 +2360,9 @@ class DurableCodingLoop:
             "last_success_count": state.last_success_count,
             "verdict": state.verdict,
             "critical_files": list(state.critical_files),
+            "active_child_run_id": state.active_child_run_id,
+            "active_child_checkpoint_id": state.active_child_checkpoint_id,
+            "active_child_tool_call_id": state.active_child_tool_call_id,
             "read_stamps": {
                 path: _dump_read_stamp(stamp)
                 for path, stamp in sorted(state.read_stamps.items())
@@ -2540,6 +2852,13 @@ def _tool_event_preview(name: str, tool_input: Mapping[str, object]) -> str:
     if not isinstance(redacted, str):
         redacted = name
     return redacted[:200]
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _tool_event_payload(call, **extra: Any) -> dict[str, Any]:
