@@ -1,3 +1,4 @@
+import inspect
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -12,7 +13,7 @@ from neos.coding.sandbox.base import (
     SandboxPolicyViolation,
     SandboxState,
 )
-from neos.coding.sandbox.memory import MemorySandboxProvider
+from neos.coding.sandbox.memory import MemorySandboxProvider, _write_atomic_bytes
 
 pytestmark = pytest.mark.no_db
 
@@ -676,7 +677,45 @@ async def test_execute_assembles_guest_env_without_host_path(
     assert lines[2] in {str(workspace / ".tmp"), "/tmp"}
     assert "/host/secret/bin" not in result.stdout.decode()
     assert "/host/home" not in result.stdout.decode()
-    assert overlaid.stdout.decode().strip() == "/custom/bin"
+    assert overlaid.stdout.decode().strip() == "/usr/bin:/bin"
+    await provider.close()
+
+
+async def test_execute_overlay_cannot_replace_guest_identity_keys(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(
+        root=tmp_path,
+        allowed_env_names=frozenset({"PATH", "HOME", "TMPDIR", "OK"}),
+    )
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+
+    result = await session.execute(
+        CommandRequest(
+            argv=(
+                sys.executable,
+                "-c",
+                "import os; print(os.environ.get('PATH','')); "
+                "print(os.environ.get('HOME','')); "
+                "print(os.environ.get('TMPDIR','')); "
+                "print(os.environ.get('OK',''))",
+            ),
+            env={"PATH": "/evil", "HOME": "/evil", "TMPDIR": "/evil", "OK": "1"},
+        )
+    )
+
+    lines = result.stdout.decode().splitlines()
+    assert result.exit_code == 0
+    assert lines[0] == "/usr/bin:/bin"
+    assert lines[1] == str(workspace)
+    assert lines[2] == str(workspace / ".tmp")
+    assert lines[3] == "1"
+    assert "/evil" not in result.stdout.decode()
     await provider.close()
 
 
@@ -703,4 +742,63 @@ async def test_fingerprint_does_not_follow_directory_symlink(
     )
 
     assert await session.workspace_revision() == 0
+    await provider.close()
+
+
+def test_write_atomic_bytes_fsyncs_before_replace() -> None:
+    source = inspect.getsource(_write_atomic_bytes)
+    write_at = source.index("handle.write")
+    replace_at = source.index("os.replace")
+    flush_at = source.index("flush")
+    fsync_at = source.index("fsync")
+    assert write_at < flush_at < fsync_at < replace_at
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env", ".ssh/id_rsa", ".git/config"],
+)
+async def test_memory_stat_denies_secret_paths(
+    tmp_path: Path, path: str
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    target = workspace / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"secret\n")
+
+    with pytest.raises(SandboxPolicyViolation):
+        await session.stat(path)
+    await provider.close()
+
+
+async def test_memory_stat_denies_leaf_symlink_to_secret(
+    tmp_path: Path,
+) -> None:
+    provider = MemorySandboxProvider(root=tmp_path)
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    workspace = provider.workspace_path(sandbox.sandbox_id)
+    (workspace / "src").mkdir()
+    (workspace / "src" / "app.py").write_bytes(b"print(1)\n")
+    (workspace / ".env").write_bytes(b"SECRET=1\n")
+    (workspace / "env-link").symlink_to(workspace / ".env")
+    (workspace / "app-link").symlink_to(workspace / "src" / "app.py")
+
+    with pytest.raises(
+        SandboxPolicyViolation,
+        match="workspace_symlink_leaf|workspace_secret_path",
+    ):
+        await session.stat("env-link")
+    with pytest.raises(SandboxPolicyViolation, match="workspace_symlink_leaf"):
+        await session.stat("app-link")
+    assert (await session.stat("src/app.py")).path == "src/app.py"
     await provider.close()

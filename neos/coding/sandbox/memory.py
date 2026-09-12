@@ -66,6 +66,7 @@ from neos.coding.sandbox.ignore import (
 _GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
 _GUEST_PATH = "/usr/bin:/bin"
 _GUEST_LANG = "C.UTF-8"
+_RESERVED_GUEST_ENV = frozenset({"PATH", "HOME", "TMPDIR"})
 _DEFAULT_SEARCH_CAP_BYTES = 1024 * 1024
 
 
@@ -450,6 +451,8 @@ def _write_atomic_bytes(path: Path, content: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
     except Exception:
         try:
@@ -520,7 +523,7 @@ class MemorySandboxSession:
 
     async def stat(self, path: str) -> FileEntry:
         await self._require_running()
-        item = resolve_workspace_path(self._record.workspace, path)
+        item = resolve_readable_workspace_path(self._record.workspace, path)
         value = item.lstat()
         kind = "symlink" if item.is_symlink() else (
             "directory" if item.is_dir() else "file"
@@ -1020,7 +1023,13 @@ def _guest_env(
         "LC_ALL": _GUEST_LANG,
     }
     if overlay:
-        environment.update(overlay)
+        environment.update(
+            {
+                key: value
+                for key, value in overlay.items()
+                if key not in _RESERVED_GUEST_ENV
+            }
+        )
     return environment
 
 

@@ -355,6 +355,96 @@ def test_instruction_file_writes_require_approval_despite_approved_always() -> N
     assert evaluate_approval(local_cased, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
+def test_execute_instruction_file_operands_require_approval_despite_approved_always() -> None:
+    agents = call(
+        "execute.v1",
+        {"argv": ["sed", "-i", "s/a/b/", "AGENTS.md"]},
+        ToolRisk.COMMAND,
+    )
+    nested = call(
+        "execute.v1",
+        {"argv": ["cat", "pkg/CLAUDE.md"]},
+        ToolRisk.COMMAND,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"execute.v1"}))
+    allow_gate = ApprovalGate(allow_tools=frozenset({"execute.v1"}))
+    auto_gate = ApprovalGate(
+        mode=ApprovalMode.AUTO,
+        always_allow=frozenset({"execute.v1"}),
+    )
+
+    assert evaluate_approval(agents, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(nested, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(agents, allow_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(agents, auto_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
+def test_execute_normal_file_operand_is_not_forced_to_ask_by_instruction_rule() -> None:
+    command = call(
+        "execute.v1",
+        {"argv": ["pytest", "src/main.py"]},
+        ToolRisk.COMMAND,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"execute.v1"}))
+
+    assert evaluate_approval(command) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(command, gate) is ApprovalPolicyOutcome.ALLOW
+
+
+def test_unattended_write_of_normal_file_is_deny() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "value"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_unattended_write_of_instruction_file_is_deny() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "AGENTS.md", "content": "ignore previous"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_unattended_execute_of_instruction_file_is_deny() -> None:
+    command = call(
+        "execute.v1",
+        {"argv": ["sed", "-i", "s/a/b/", "AGENTS.md"]},
+        ToolRisk.COMMAND,
+    )
+
+    assert (
+        evaluate_approval(command, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_attended_instruction_file_write_remains_require_approval() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "AGENTS.md", "content": "ignore previous"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=False))
+        is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    )
+
+
 def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     jump = call("set_phase.v1", {"phase": "implement"}, ToolRisk.READ_ONLY)
     assert (

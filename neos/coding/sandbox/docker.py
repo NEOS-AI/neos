@@ -112,6 +112,8 @@ fd, tmp = tempfile.mkstemp(prefix='.neos-write-', dir=str(p.parent))
 try:
     with os.fdopen(fd, 'wb') as handle:
         handle.write(sys.stdin.buffer.read())
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, p)
 except Exception:
     try:
@@ -472,6 +474,9 @@ class DockerSandboxConfig:
     allowed_env_names: frozenset[str] = frozenset(
         {"HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"}
     )
+
+
+_RESERVED_GUEST_ENV = frozenset({"PATH", "HOME", "TMPDIR"})
 
 
 @dataclass(slots=True)
@@ -1096,7 +1101,11 @@ class DockerSandboxSession:
         )
 
     async def stat(self, path: str) -> FileEntry:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
         relative = normalize_workspace_path(path)
+        if is_denied_secret_path(relative.as_posix()):
+            raise SandboxPolicyViolation("workspace_secret_path")
         try:
             result = await self._run_helper(
                 _FILE_METADATA_HELPER,
@@ -1391,6 +1400,8 @@ class DockerSandboxSession:
             args.append("-i")
         args.extend(("--workdir", workdir))
         for key, value in request.env.items():
+            if key in _RESERVED_GUEST_ENV:
+                continue
             args.extend(("--env", f"{key}={value}"))
         args.append(self._record.container_name)
         args.extend(request.argv)

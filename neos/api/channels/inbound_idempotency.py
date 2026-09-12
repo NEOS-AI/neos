@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Awaitable, Callable, Protocol
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+EMPTY_CLAIM_TTL = timedelta(minutes=5)
 
 
 SessionFactory = Callable[[], Awaitable[AsyncSession]]
@@ -39,6 +41,10 @@ class ChannelInboundIdempotencyStore(Protocol):
     async def clear_session(self, session_id: str) -> None: ...
 
 
+def _empty_claim_expired(record: ChannelInboundRecord, now: datetime) -> bool:
+    return not record.outcome and now - record.created_at > EMPTY_CLAIM_TTL
+
+
 class InMemoryChannelInboundIdempotencyStore:
     def __init__(
         self, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
@@ -46,10 +52,16 @@ class InMemoryChannelInboundIdempotencyStore:
         self._items: dict[tuple[str, str], ChannelInboundRecord] = {}
         self._clock = clock
 
+    def _drop_expired(self, key: tuple[str, str]) -> None:
+        existing = self._items.get(key)
+        if existing is not None and _empty_claim_expired(existing, self._clock()):
+            self._items.pop(key, None)
+
     async def claim(
         self, session_id: str, idempotency_key: str
     ) -> tuple[bool, ChannelInboundRecord | None]:
         key = (session_id, idempotency_key)
+        self._drop_expired(key)
         existing = self._items.get(key)
         if existing is not None:
             return False, existing
@@ -87,7 +99,9 @@ class InMemoryChannelInboundIdempotencyStore:
     async def get(
         self, session_id: str, idempotency_key: str
     ) -> ChannelInboundRecord | None:
-        return self._items.get((session_id, idempotency_key))
+        key = (session_id, idempotency_key)
+        self._drop_expired(key)
+        return self._items.get(key)
 
     async def clear_session(self, session_id: str) -> None:
         self._items = {
@@ -105,12 +119,33 @@ class PostgresChannelInboundIdempotencyStore:
         self._session_factory = session_factory
         self._clock = clock
 
+    async def _expire_empty_claim(
+        self, session: AsyncSession, session_id: str, idempotency_key: str
+    ) -> None:
+        await session.execute(
+            text(
+                """
+                DELETE FROM channel_inbound_idempotency
+                WHERE session_id = :session_id
+                  AND idempotency_key = :idempotency_key
+                  AND outcome = ''
+                  AND created_at < :cutoff
+                """
+            ),
+            {
+                "session_id": session_id,
+                "idempotency_key": idempotency_key,
+                "cutoff": self._clock() - EMPTY_CLAIM_TTL,
+            },
+        )
+
     async def claim(
         self, session_id: str, idempotency_key: str
     ) -> tuple[bool, ChannelInboundRecord | None]:
         now = self._clock()
         async with await self._session_factory() as session:
             async with session.begin():
+                await self._expire_empty_claim(session, session_id, idempotency_key)
                 result = await session.execute(
                     text(
                         """
@@ -252,6 +287,7 @@ class PostgresChannelInboundIdempotencyStore:
     ) -> ChannelInboundRecord | None:
         async with await self._session_factory() as session:
             async with session.begin():
+                await self._expire_empty_claim(session, session_id, idempotency_key)
                 result = await session.execute(
                     text(
                         """

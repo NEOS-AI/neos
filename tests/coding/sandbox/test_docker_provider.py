@@ -19,6 +19,7 @@ from neos.coding.sandbox.docker import (
     _GLOB_FILES_HELPER,
     _READ_FILE_HELPER,
     _SEARCH_TEXT_HELPER,
+    _WRITE_FILE_HELPER,
 )
 
 
@@ -136,6 +137,41 @@ async def test_execute_forwards_bounded_stdin_and_rejects_unknown_env() -> None:
         await session.execute(
             CommandRequest(argv=("env",), env={"TOKEN": "secret"})
         )
+
+
+async def test_execute_does_not_forward_reserved_guest_env() -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    runner.results.extend(
+        [
+            DockerCommandResult(0, b"{}", b""),
+            DockerCommandResult(0, b"", b""),
+            DockerCommandResult(0, b"{}", b""),
+        ]
+    )
+
+    await session.execute(
+        CommandRequest(
+            argv=("env",),
+            env={
+                "PATH": "/evil",
+                "HOME": "/evil",
+                "TMPDIR": "/evil",
+                "LANG": "C.UTF-8",
+            },
+        )
+    )
+
+    forwarded = " ".join(runner.calls[-2])
+    assert "--env PATH=/evil" not in forwarded
+    assert "--env HOME=/evil" not in forwarded
+    assert "--env TMPDIR=/evil" not in forwarded
+    assert "--env LANG=C.UTF-8" in forwarded
 
 
 async def test_session_file_tree_search_and_git_use_fixed_helpers() -> None:
@@ -273,6 +309,15 @@ def test_docker_helpers_do_not_follow_dir_symlinks_and_cap_reads() -> None:
     assert ".sl" in _GLOB_FILES_HELPER
 
 
+def test_write_file_helper_fsyncs_before_replace() -> None:
+    write_at = _WRITE_FILE_HELPER.index("handle.write")
+    replace_at = _WRITE_FILE_HELPER.index("os.replace")
+    flush_at = _WRITE_FILE_HELPER.index("flush")
+    fsync_at = _WRITE_FILE_HELPER.index("fsync")
+    assert write_at < flush_at < fsync_at < replace_at
+
+
+
 async def test_docker_git_commands_disable_external_diff_and_pager() -> None:
     runner = ScriptedDockerRunner()
     provider = DockerSandboxProvider(runner=runner, config=_config())
@@ -366,6 +411,26 @@ async def test_session_list_tree_and_stat_parse_fixed_helper_output() -> None:
     assert tree == (entry,)
     assert entry.path == "src/app.py"
     assert entry.modified_at == datetime(2026, 7, 19, 10, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".env", ".ssh/id_rsa", ".git/config"],
+)
+async def test_docker_stat_denies_secret_paths(path: str) -> None:
+    runner = ScriptedDockerRunner()
+    provider = DockerSandboxProvider(runner=runner, config=_config())
+    sandbox = await provider.create(
+        owner_id="u1",
+        limits=SandboxLimits.safe_defaults(),
+    )
+    session = await provider.open_session(sandbox.sandbox_id)
+    calls_before = len(runner.calls)
+
+    with pytest.raises(SandboxPolicyViolation):
+        await session.stat(path)
+
+    assert len(runner.calls) == calls_before
 
 
 async def test_snapshot_restore_transfers_validated_archive_and_revision(

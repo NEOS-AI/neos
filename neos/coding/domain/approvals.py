@@ -49,6 +49,7 @@ class ApprovalGate:
     always_allow: frozenset[str] = frozenset()
     approved_always: frozenset[str] = frozenset()
     current_phase: str | None = None
+    unattended: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +141,11 @@ def evaluate_approval(
     gate: ApprovalGate | None = None,
 ) -> ApprovalPolicyOutcome:
     try:
-        return _evaluate_approval(call, gate or ApprovalGate())
+        resolved = gate or ApprovalGate()
+        outcome = _evaluate_approval(call, resolved)
+        if resolved.unattended and outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
+            return ApprovalPolicyOutcome.DENY
+        return outcome
     except Exception:
         return ApprovalPolicyOutcome.DENY
 
@@ -231,13 +236,24 @@ _PREVIEW_MAX_LINES = 40
 _PREVIEW_MAX_CHARS = 2000
 
 
+def _has_protected_instruction_basename(path: str) -> bool:
+    parts = _posix_path_parts(path)
+    return bool(parts) and parts[-1].casefold() in _PROTECTED_INSTRUCTION_BASENAMES
+
+
 def _is_protected_instruction_write(call: ValidatedToolCall) -> bool:
-    if call.name not in _INSTRUCTION_WRITE_TOOLS:
+    if call.name not in _INSTRUCTION_WRITE_TOOLS and call.name != "execute.v1":
         return False
-    for path in _call_paths(call):
-        parts = _posix_path_parts(path)
-        if parts and parts[-1].casefold() in _PROTECTED_INSTRUCTION_BASENAMES:
-            return True
+    if any(_has_protected_instruction_basename(path) for path in _call_paths(call)):
+        return True
+    if call.name == "execute.v1":
+        argv = call.input.get("argv")
+        if isinstance(argv, (list, tuple)):
+            return any(
+                _has_protected_instruction_basename(str(item))
+                for item in argv
+                if item
+            )
     return False
 
 

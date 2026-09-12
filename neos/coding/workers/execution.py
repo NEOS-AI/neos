@@ -20,6 +20,7 @@ class CodingTaskOutcome(StrEnum):
     CONTINUING = "continuing"
     WAITING_APPROVAL = "waiting_approval"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     LEASE_BUSY = "lease_busy"
     STALE = "stale"
 
@@ -66,10 +67,9 @@ class CodingTaskRunner:
         run = await self._runs.ensure_started(task_id=task_id)
         if run is not None and run.status is CodingRunStatus.COMPLETED:
             return CodingTaskOutcome.COMPLETED
-        if run is not None and run.status in {
-            CodingRunStatus.FAILED,
-            CodingRunStatus.CANCELLED,
-        }:
+        if run is not None and run.status is CodingRunStatus.CANCELLED:
+            return CodingTaskOutcome.CANCELLED
+        if run is not None and run.status is CodingRunStatus.FAILED:
             return CodingTaskOutcome.FAILED
         failures = 0
         while keep_running():
@@ -126,7 +126,7 @@ class CodingTaskRunner:
                 return CodingTaskOutcome.COMPLETED
             if event.type == "run.cancelled":
                 await self._emit_lifecycle(task_id, "cancelled", event)
-                return CodingTaskOutcome.FAILED
+                return CodingTaskOutcome.CANCELLED
             if event.type == "approval.requested":
                 await self._emit_lifecycle(task_id, "waiting_approval", event)
                 return CodingTaskOutcome.WAITING_APPROVAL

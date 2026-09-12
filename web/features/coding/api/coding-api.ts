@@ -45,11 +45,34 @@ export class CodingAPIError extends Error {
   }
 }
 
+function extractErrorMessage(
+  body: { error?: unknown; detail?: unknown },
+  fallback: string
+): string {
+  if (typeof body.error === "string" && body.error) {
+    return body.error;
+  }
+  const detail = body.detail;
+  if (typeof detail === "string" && detail) {
+    return detail;
+  }
+  if (
+    detail &&
+    typeof detail === "object" &&
+    "message" in detail &&
+    typeof detail.message === "string" &&
+    detail.message
+  ) {
+    return detail.message;
+  }
+  return fallback;
+}
+
 async function responseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => ({}));
   return new CodingAPIError(
     response.status,
-    body.error ?? body.detail ?? fallback
+    extractErrorMessage(body, fallback)
   );
 }
 

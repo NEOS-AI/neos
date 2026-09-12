@@ -142,4 +142,7 @@ def test_post_cost_missing_task_is_404() -> None:
         "/api/v1/coding/tasks/ct_missing/commands", json={"text": "/cost"}
     )
     assert response.status_code == 404
-    assert response.json()["detail"] == "Coding task not found"
+    assert response.json()["detail"] == {
+        "code": "coding_task_not_found",
+        "message": "Coding task not found",
+    }

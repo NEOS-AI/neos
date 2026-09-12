@@ -113,9 +113,13 @@ class ConversationContextProcessor:
 
             # Phase 3: ContextAssemblyEngine으로 메모리 컨텍스트 조립
             # memory_context가 있으면 토큰 예산·채널 포맷팅을 적용한다.
+            # channel_attachments는 메모리 유무와 무관하게 조립한다 (없으면 드롭됨).
             assembled_context_dict: Optional[Dict[str, Any]] = None
             memory_context = state.get("memory_context")
-            if memory_context and memory_context.get("has_context"):
+            channel_attachments = state.get("channel_attachments")
+            has_memory = bool(memory_context and memory_context.get("has_context"))
+            has_attachments = bool(channel_attachments)
+            if has_memory or has_attachments:
                 try:
                     channel_type = state.get("channel_type") or "api"
                     recursive_results = None
@@ -129,10 +133,11 @@ class ConversationContextProcessor:
                     assembled = await self._context_engine.assemble(
                         user_id=state.get("user_id", ""),
                         query=state.get("original_query", ""),
-                        memory_context=memory_context,
+                        memory_context=memory_context or {},
                         channel_type=channel_type,
                         max_tokens=settings.CONTEXT_MAX_TOKENS,
                         recursive_results=recursive_results,
+                        channel_attachments=channel_attachments,
                     )
                     assembled_context_dict = assembled.trimmed
 

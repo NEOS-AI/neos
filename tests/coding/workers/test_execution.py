@@ -7,6 +7,7 @@ from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
 )
+from neos.coding.domain.phases import CodingRunStatus
 from neos.coding.loop.anthropic import CodingLoopFailure
 from neos.coding.workers.execution import (
     CodingTaskExecutionPolicy,
@@ -23,9 +24,11 @@ class RecordingRuns:
         self.ensure_calls: list[str] = []
         self.advance_calls: list[tuple[str, str]] = []
         self.fail_calls: list[tuple[str, str, str]] = []
+        self.started = None
 
-    async def ensure_started(self, *, task_id: str) -> None:
+    async def ensure_started(self, *, task_id: str):
         self.ensure_calls.append(task_id)
+        return self.started
 
     async def advance_one_safe_point(self, *, task_id: str, worker_id: str):
         self.advance_calls.append((task_id, worker_id))
@@ -170,6 +173,54 @@ async def test_runner_propagates_configured_infrastructure_exception() -> None:
         )
 
     assert runs.fail_calls == []
+
+
+async def test_runner_maps_cancelled_event_to_cancelled_not_failed() -> None:
+    seen: list[tuple[str, str]] = []
+
+    async def on_lifecycle(task_id: str, status: str, payload: dict) -> None:
+        del payload
+        seen.append((task_id, status))
+
+    runs = RecordingRuns([SimpleNamespace(type="run.cancelled", payload={})])
+    outcome = await CodingTaskRunner(runs=runs, on_lifecycle=on_lifecycle).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.CANCELLED
+    assert seen == [("ct_1", "cancelled")]
+    assert runs.fail_calls == []
+
+
+async def test_runner_maps_already_cancelled_run_to_cancelled_not_failed() -> None:
+    runs = RecordingRuns([])
+    runs.started = SimpleNamespace(status=CodingRunStatus.CANCELLED)
+
+    outcome = await CodingTaskRunner(runs=runs).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.CANCELLED
+    assert runs.advance_calls == []
+    assert runs.fail_calls == []
+
+
+async def test_runner_still_maps_already_failed_run_to_failed() -> None:
+    runs = RecordingRuns([])
+    runs.started = SimpleNamespace(status=CodingRunStatus.FAILED)
+
+    outcome = await CodingTaskRunner(runs=runs).run(
+        task_id="ct_1",
+        worker_id="worker-1",
+        failure_error_code="worker_retry_exhausted",
+    )
+
+    assert outcome is CodingTaskOutcome.FAILED
+    assert runs.advance_calls == []
 
 
 async def test_runner_does_not_retry_nonretryable_coding_failure() -> None:

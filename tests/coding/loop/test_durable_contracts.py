@@ -276,6 +276,21 @@ async def test_reclaimed_mutating_claim_synthesizes_unknown_without_execute() ->
     assert any(event.type == "tool.completed" for event in events)
 
 
+def test_approval_gate_forwards_unattended_from_loop_config() -> None:
+    attended = harness([[completed()]])
+    unattended = harness(
+        [[completed()]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            approval_unattended=True,
+        ),
+    )
+    state = attended.loop._restore(INPUT, None)
+    assert attended.loop._approval_gate(state).unattended is False
+    assert unattended.loop._approval_gate(state).unattended is True
+
+
 def _phase_checkpoint(h, phase: str) -> CodingCheckpoint:
     state = h.loop._restore(INPUT, None)
     dumped = h.loop._dump_state(INPUT, state)
@@ -1141,6 +1156,7 @@ async def test_latest_tool_result_over_threshold_is_persisted_as_ref() -> None:
 @pytest.mark.asyncio
 async def test_latest_huge_read_file_result_is_previewed() -> None:
     fat = _fat_payload(preview_prefix="     1|")
+    fat["path"] = "big.txt"
     assert (
         len(json.dumps(fat, sort_keys=True, separators=(",", ":")).encode())
         >= COMPACT_REF_THRESHOLD_BYTES
@@ -1153,11 +1169,16 @@ async def test_latest_huge_read_file_result_is_previewed() -> None:
         executor=_FatExecutor(fat, name="read_file.v1"),
     )
     await collect(h)
-    results = _transcript_tool_results(h.repository.checkpoints[-1].loop_state)
-    assert results[-1]["content"]["compacted"] is True
-    assert "entries" not in results[-1]["content"]
-    digest = results[-1]["content"]["sha256"]
-    assert digest in h.repository.checkpoints[-1].loop_state["compacted_bodies"]
+    state = h.repository.checkpoints[-1].loop_state
+    results = _transcript_tool_results(state)
+    content = results[-1]["content"]
+    assert content["compacted"] is True
+    assert content["preview"]
+    assert content["path"] == "big.txt"
+    assert "entries" not in content
+    digest = content["sha256"]
+    assert digest not in state["compacted_bodies"]
+    assert "x" * 200 not in json.dumps(state.get("compacted_bodies") or {})
 
     await collect(h, h.repository.checkpoints[-1])
     request_results = {
@@ -1167,6 +1188,8 @@ async def test_latest_huge_read_file_result_is_previewed() -> None:
         if isinstance(item, ToolResultContent)
     }
     assert request_results["r1"]["compacted"] is True
+    assert request_results["r1"]["preview"]
+    assert request_results["r1"]["path"] == "big.txt"
     assert "entries" not in request_results["r1"]
     assert "x" * 200 not in json.dumps(request_results["r1"])
 

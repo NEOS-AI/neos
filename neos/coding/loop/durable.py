@@ -140,6 +140,7 @@ class CodingLoopConfig:
     approval_deny_tools: frozenset[str] = frozenset()
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
+    approval_unattended: bool = False
     subagent_enabled: bool = False
     subagent_max_active: int = 1
 
@@ -309,6 +310,7 @@ class DurableCodingLoop:
             always_allow=frozenset(self._config.approval_always_allow),
             approved_always=state.approved_always,
             current_phase=state.phase,
+            unattended=self._config.approval_unattended,
         )
 
     def _evaluate_call(self, validated, state: AgentLoopState) -> ApprovalPolicyOutcome:
@@ -3197,7 +3199,7 @@ class DurableCodingLoop:
                 and not item.content.get("compacted")
                 and _tool_result_bytes(item.content) >= COMPACT_REF_THRESHOLD_BYTES
             ):
-                content.append(_ref_tool_result(item, bodies))
+                content.append(_ref_tool_result(item, bodies, tool_name=tool_name))
                 changed = True
             else:
                 content.append(item)
@@ -3446,7 +3448,10 @@ def _tool_result_bytes(content: Mapping[str, object]) -> int:
 
 
 def _ref_tool_result(
-    item: ToolResultContent, bodies: dict[str, str]
+    item: ToolResultContent,
+    bodies: dict[str, str],
+    *,
+    tool_name: str = "",
 ) -> ToolResultContent:
     payload = dict(item.content)
     payload_text = json.dumps(
@@ -3465,7 +3470,8 @@ def _ref_tool_result(
         "preview": preview_source[:200],
     }
     path = DurableCodingLoop._compact_ref_path(payload)
-    bodies[digest] = payload_text
+    if tool_name != "read_file.v1":
+        bodies[digest] = payload_text
     if path is None:
         path = f"artifact://{digest}"
     shrunk["path"] = path
