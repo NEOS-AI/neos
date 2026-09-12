@@ -122,6 +122,7 @@ class CodingRunService:
         if lease is None:
             raise RunAlreadyLeased(task_id)
         try:
+            await self._cancel_parent_children(lease, now)
             committed = await self._runs.fail_run(
                 lease=lease,
                 error_code=error_code,
@@ -623,28 +624,40 @@ class CodingRunService:
             return
         if checkpoint is None:
             return
-        tool_call_id = (checkpoint.loop_state or {}).get("active_child_tool_call_id")
-        if not tool_call_id:
-            return
-        try:
-            claim = await self._runs.claim_tool_execution(
-                lease=lease,
-                tool_call_id=str(tool_call_id),
-                now=now,
-                claim_expires_at=now + timedelta(seconds=30),
-            )
-        except Exception:
-            return
-        if claim.disposition is not ToolExecutionDisposition.DELEGATED:
-            return
-        try:
-            await self._runs.complete_tool_execution(
-                claim,
-                result={"status": "error", "reason_code": "aborted"},
-                now=now,
-            )
-        except Exception:
-            return
+        loop_state = checkpoint.loop_state or {}
+        tool_call_ids: list[str] = []
+        raw_children = loop_state.get("active_children")
+        if isinstance(raw_children, list):
+            for item in raw_children:
+                if not isinstance(item, dict):
+                    continue
+                tool_call_id = item.get("tool_call_id")
+                if tool_call_id:
+                    tool_call_ids.append(str(tool_call_id))
+        if not tool_call_ids:
+            scalar = loop_state.get("active_child_tool_call_id")
+            if scalar:
+                tool_call_ids.append(str(scalar))
+        for tool_call_id in tool_call_ids:
+            try:
+                claim = await self._runs.claim_tool_execution(
+                    lease=lease,
+                    tool_call_id=tool_call_id,
+                    now=now,
+                    claim_expires_at=now + timedelta(seconds=30),
+                )
+            except Exception:
+                continue
+            if claim.disposition is not ToolExecutionDisposition.DELEGATED:
+                continue
+            try:
+                await self._runs.complete_tool_execution(
+                    claim,
+                    result={"status": "error", "reason_code": "aborted"},
+                    now=now,
+                )
+            except Exception:
+                continue
 
     def _child_lease_horizon(self) -> float:
         timeout = 120.0
@@ -655,7 +668,9 @@ class CodingRunService:
 
     async def _renew_lease_for_child(self, lease, checkpoint, now: datetime):
         loop_state = getattr(checkpoint, "loop_state", None) if checkpoint else None
-        if not isinstance(loop_state, dict) or not loop_state.get("active_child_run_id"):
+        if not isinstance(loop_state, dict) or not (
+            loop_state.get("active_children") or loop_state.get("active_child_run_id")
+        ):
             return lease
         renew = getattr(self._runs, "renew_execution_lease", None)
         if not callable(renew):

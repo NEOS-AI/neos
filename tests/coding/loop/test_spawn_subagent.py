@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 
-from neos.coding.domain.phases import SteeringMode, SteeringRequest
+from neos.coding.domain.durability import ToolExecutionClaim, ToolExecutionDisposition
+from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
@@ -13,9 +15,17 @@ from neos.subagent.memory import InMemorySubagentStore
 from neos.subagent.ports import SystemClock
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
-from neos.subagent.types import ParentKind
+from neos.subagent.types import (
+    ModelPin,
+    ParentBriefing,
+    ParentKind,
+    SandboxMode,
+    SubagentStatus,
+    SubagentTicket,
+)
 from tests.coding.loop.test_anthropic_loop import (
     INPUT,
+    LEASE,
     NOW,
     collect,
     completed,
@@ -290,6 +300,202 @@ def test_restore_missing_active_child_keys_are_none() -> None:
     assert state.active_child_run_id is None
     assert state.active_child_checkpoint_id is None
     assert state.active_child_tool_call_id is None
+
+
+def _checkpoint(loop_state: dict) -> CodingCheckpoint:
+    return CodingCheckpoint(
+        checkpoint_id="ck_restore",
+        task_id="ct_1",
+        run_id="cr_1",
+        seq=1,
+        loop_state=loop_state,
+        workspace_revision="1",
+        created_at=NOW,
+    )
+
+
+def test_restore_missing_list_uses_scalars() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    state = h.loop._restore(
+        INPUT,
+        _checkpoint(
+            {
+                "transcript": [],
+                "pending_tool_calls": [],
+                "pending_tool_index": 0,
+                "active_child_run_id": "sa_legacy",
+                "active_child_checkpoint_id": "sc_legacy",
+                "active_child_tool_call_id": "s1",
+            }
+        ),
+    )
+    assert state.active_child_run_id == "sa_legacy"
+    assert state.active_child_checkpoint_id == "sc_legacy"
+    assert state.active_child_tool_call_id == "s1"
+    assert len(state.active_children) == 1
+    child = state.active_children[0]
+    assert child.run_id == "sa_legacy"
+    assert child.checkpoint_id == "sc_legacy"
+    assert child.tool_call_id == "s1"
+    assert child.last_advanced_at == "1970-01-01T00:00:00+00:00"
+
+
+def test_restore_list_mirrors_scalars() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    children = [
+        {
+            "run_id": "sa_1",
+            "checkpoint_id": "sc_1",
+            "tool_call_id": "s1",
+            "last_advanced_at": "2026-07-19T00:00:00+00:00",
+        },
+        {
+            "run_id": "sa_2",
+            "checkpoint_id": "sc_2",
+            "tool_call_id": "s2",
+            "last_advanced_at": "2026-07-19T00:00:01+00:00",
+        },
+    ]
+    state = h.loop._restore(
+        INPUT,
+        _checkpoint(
+            {
+                "transcript": [],
+                "pending_tool_calls": [],
+                "pending_tool_index": 0,
+                "active_child_run_id": "sa_stale",
+                "active_child_checkpoint_id": "sc_stale",
+                "active_child_tool_call_id": "s2",
+                "active_children": children,
+            }
+        ),
+    )
+    assert [child.tool_call_id for child in state.active_children] == ["s1", "s2"]
+    assert state.active_child_run_id == "sa_1"
+    assert state.active_child_checkpoint_id == "sc_1"
+    assert state.active_child_tool_call_id == "s1"
+    dumped = h.loop._dump_state(INPUT, state)
+    assert dumped["active_children"][0]["tool_call_id"] == "s1"
+    assert dumped["active_children"][1]["tool_call_id"] == "s2"
+    assert dumped["active_child_run_id"] == "sa_1"
+    assert dumped["active_child_tool_call_id"] == "s1"
+    again = h.loop._restore(INPUT, _checkpoint(dumped))
+    assert [child.tool_call_id for child in again.active_children] == ["s1", "s2"]
+    assert again.active_child_run_id == "sa_1"
+    assert again.active_child_tool_call_id == "s1"
+
+
+async def _plant_second_child(h, runtime, parked, *, tool_call_id: str = "s2"):
+    store = runtime.inner._store if hasattr(runtime, "inner") else runtime._store
+    record = await store.resolve_or_create(
+        SubagentTicket(
+            parent_kind=ParentKind.CODING,
+            parent_id="ct_1",
+            parent_run_id="cr_1",
+            parent_tool_call_id=tool_call_id,
+            spec="explore",
+            briefing=ParentBriefing(goal="sibling look"),
+            model=ModelPin(provider="anthropic", model="claude-test"),
+            max_turns=4,
+            sandbox_mode=SandboxMode.PARENT_RO,
+        )
+    )
+    state = dict(parked.loop_state)
+    existing = [dict(item) for item in state.get("active_children") or ()]
+    if not existing and state.get("active_child_run_id"):
+        existing = [
+            {
+                "run_id": state["active_child_run_id"],
+                "checkpoint_id": state.get("active_child_checkpoint_id"),
+                "tool_call_id": state.get("active_child_tool_call_id"),
+                "last_advanced_at": NOW.isoformat(),
+            }
+        ]
+    existing.append(
+        {
+            "run_id": record.run_id,
+            "checkpoint_id": record.latest_checkpoint_id,
+            "tool_call_id": tool_call_id,
+            "last_advanced_at": NOW.isoformat(),
+        }
+    )
+    state["active_children"] = existing
+    pending = [dict(item) for item in state.get("pending_tool_calls") or ()]
+    if not any(item.get("tool_call_id") == tool_call_id for item in pending):
+        pending.append(
+            {
+                "tool_call_id": tool_call_id,
+                "name": "spawn_agent.v1",
+                "input": {"prompt": "sibling look", "max_turns": 4},
+            }
+        )
+    state["pending_tool_calls"] = pending
+    h.repository.tool_claims[("ct_1", tool_call_id)] = (
+        ToolExecutionClaim(
+            ToolExecutionDisposition.DELEGATED,
+            tool_call_id,
+            LEASE,
+            {
+                "child_run_id": record.run_id,
+                "child_checkpoint_id": record.latest_checkpoint_id or "",
+            },
+        ),
+        NOW + timedelta(minutes=1),
+    )
+    return replace(parked, loop_state=state), record
+
+
+@pytest.mark.asyncio
+async def test_flag_off_with_two_live_children_completes_every_claim() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text()])
+    runtime = RecordingSubagents(inner)
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    planted, sibling = await _plant_second_child(h, runtime, parked)
+    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    events = await collect(h, planted)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    s1_completes = [
+        item for item in h.repository.tool_execution_calls if item["tool_call_id"] == "s1"
+    ]
+    s2_completes = [
+        item for item in h.repository.tool_execution_calls if item["tool_call_id"] == "s2"
+    ]
+    assert len(s1_completes) == 1
+    assert len(s2_completes) == 1
+    assert s1_completes[0]["result"]["reason_code"] == "subagent_disabled"
+    assert s2_completes[0]["result"]["reason_code"] == "subagent_disabled"
+    state = h.repository.checkpoints[-1].loop_state
+    results = _tool_results(state)
+    assert {item["tool_call_id"] for item in results} == {"s1", "s2"}
+    assert all(item["status"] == "error" for item in results)
+    assert not any("look around" in text for text in _user_texts(state))
+    assert not any("sibling look" in text for text in _user_texts(state))
+    assert state["active_child_run_id"] is None
+    assert state.get("active_children") in (None, [], ())
+    s1_run = planted.loop_state["active_child_run_id"]
+    assert (await inner._store.get(s1_run)).status is SubagentStatus.KILLED
+    assert (await inner._store.get(sibling.run_id)).status is SubagentStatus.KILLED
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_aborted_completes_every_live_spawn_claim() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text()])
+    runtime = RecordingSubagents(inner)
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    planted, sibling = await _plant_second_child(h, runtime, parked)
+    bound = await h.loop._bindings.resolve(h.deps.lease)
+    state = h.loop._restore(INPUT, planted)
+    await h.loop._checkpoint_aborted(INPUT, state, bound, h.deps)
+    assert h.repository.completed_tools[("ct_1", "s1")]["reason_code"] == "aborted"
+    assert h.repository.completed_tools[("ct_1", "s2")]["reason_code"] == "aborted"
+    s1_run = planted.loop_state["active_child_run_id"]
+    assert (await inner._store.get(s1_run)).status is SubagentStatus.KILLED
+    assert (await inner._store.get(sibling.run_id)).status is SubagentStatus.KILLED
 
 
 @pytest.mark.asyncio

@@ -177,12 +177,23 @@ class CodingLoopConfig:
             raise ValueError("coding model prices cannot be negative")
 
 
+_EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
+
+
 @dataclass(frozen=True, slots=True)
 class _AppliedPendingCommand:
     transcript: tuple[CanonicalMessage, ...]
     bodies: dict[str, str]
     todos: tuple
     instructions_loaded: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveChildRef:
+    run_id: str
+    checkpoint_id: str | None
+    tool_call_id: str
+    last_advanced_at: str  # UTC datetime.isoformat() from self._clock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +234,7 @@ class AgentLoopState:
     active_child_run_id: str | None = None
     active_child_checkpoint_id: str | None = None
     active_child_tool_call_id: str | None = None
+    active_children: tuple[ActiveChildRef, ...] = ()
 
     @property
     def has_pending_tool(self) -> bool:
@@ -560,8 +572,8 @@ class DurableCodingLoop:
             ):
                 yield event
         except asyncio.CancelledError:
-            await self._cancel_active_child(
-                current, reason="aborted", task_id=input.task_id
+            current = await self.fail_all_live_spawn_claims(
+                current, deps, bound, reason="aborted", task_id=input.task_id
             )
             await self._persist_abort_after_cancel(input, current, bound, deps)
             raise
@@ -792,6 +804,10 @@ class DurableCodingLoop:
                         call, bound, state, input=input, deps=deps
                     )
                     ran_spawn = True
+                    if isinstance(result, dict):
+                        updated = result.pop("_loop_state", None)
+                        if updated is not None:
+                            state = updated
                 else:
                     result = await self._execute_validated(
                         bound,
@@ -821,11 +837,14 @@ class DurableCodingLoop:
                     ToolExecutionDisposition.RECLAIMED,
                 }:
                     await self._mark_spawn_delegated(deps, claim, result)
-                parked = replace(
+                parked = self._upsert_active_child(
                     state,
-                    active_child_run_id=result.run_id,
-                    active_child_checkpoint_id=result.checkpoint_id,
-                    active_child_tool_call_id=call.tool_call_id,
+                    ActiveChildRef(
+                        run_id=result.run_id,
+                        checkpoint_id=result.checkpoint_id,
+                        tool_call_id=call.tool_call_id,
+                        last_advanced_at=self._utc_stamp(),
+                    ),
                 )
                 payload = {
                     "child_run_id": result.run_id,
@@ -916,21 +935,30 @@ class DurableCodingLoop:
         yield tool_event, state
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
+        advance_index = (
+            state.has_pending_tool
+            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
+            == call.tool_call_id
+        )
         after = await self._after_result(
             state,
             ToolResultContent(call.tool_call_id, canonical_status, result),
             tool_name=call.name,
             tool_input=call.input,
+            advance_index=advance_index,
         )
         if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
-        if ran_spawn and state.active_child_tool_call_id in {None, call.tool_call_id}:
-            after = replace(
+        if ran_spawn:
+            after = self._sync_active_children(
                 after,
-                active_child_run_id=None,
-                active_child_checkpoint_id=None,
-                active_child_tool_call_id=None,
+                tuple(
+                    child
+                    for child in after.active_children
+                    if child.tool_call_id != call.tool_call_id
+                ),
             )
+            after = self._drain_completed_prefix(after)
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -1440,22 +1468,11 @@ class DurableCodingLoop:
                     current.cancel()
 
     async def _checkpoint_aborted(self, input, state, bound, deps) -> None:
-        await self._cancel_active_child(
-            state, reason="aborted", task_id=input.task_id
+        state = await self.fail_all_live_spawn_claims(
+            state, deps, bound, reason="aborted", task_id=input.task_id
         )
-        if state.has_pending_tool:
-            current = state.pending_tool_calls[state.pending_tool_index]
-            if current.name == "spawn_agent.v1":
-                await self._fail_open_spawn_claim(
-                    deps, current.tool_call_id, bound
-                )
         remaining = state.pending_tool_calls[state.pending_tool_index :]
-        existing = {
-            item.tool_call_id
-            for message in state.transcript
-            for item in message.content
-            if isinstance(item, ToolResultContent)
-        }
+        existing = _tool_result_ids(state.transcript)
         pending = [
             call for call in remaining if call.tool_call_id not in existing
         ]
@@ -1471,6 +1488,7 @@ class DurableCodingLoop:
                 tool_name=call.name,
                 tool_input=call.input,
             )
+        after = self._drain_completed_prefix(after)
         await deps.repository.commit_model_checkpoint(
             lease=deps.lease,
             event_type="tool.completed" if pending else "model.completed",
@@ -1544,7 +1562,13 @@ class DurableCodingLoop:
         )
 
     async def _after_result(
-        self, state, result, *, tool_name: str, tool_input: Mapping[str, object]
+        self,
+        state,
+        result,
+        *,
+        tool_name: str,
+        tool_input: Mapping[str, object],
+        advance_index: bool = True,
     ):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
         bodies = dict(state.compacted_bodies)
@@ -1624,7 +1648,7 @@ class DurableCodingLoop:
             transcript=transcript,
             tool_count=state.tool_count + 1,
             consecutive_tool_errors=errors,
-            pending_tool_index=state.pending_tool_index + 1,
+            pending_tool_index=state.pending_tool_index + (1 if advance_index else 0),
             transcript_digest=self._digest(transcript),
             terminal_pending=False,
             read_paths=read_paths,
@@ -1762,6 +1786,48 @@ class DurableCodingLoop:
                 ready[call_id] = result
         return ready
 
+    def _utc_stamp(self) -> str:
+        return self._clock().astimezone(UTC).isoformat()
+
+    def _child_ref(self, state, tool_call_id: str) -> ActiveChildRef | None:
+        for child in state.active_children:
+            if child.tool_call_id == tool_call_id:
+                return child
+        return None
+
+    def _sync_active_children(
+        self, state, children: tuple[ActiveChildRef, ...]
+    ) -> AgentLoopState:
+        head = children[0] if children else None
+        return replace(
+            state,
+            active_children=children,
+            active_child_run_id=head.run_id if head else None,
+            active_child_checkpoint_id=head.checkpoint_id if head else None,
+            active_child_tool_call_id=head.tool_call_id if head else None,
+        )
+
+    def _upsert_active_child(self, state, child: ActiveChildRef) -> AgentLoopState:
+        children = list(state.active_children or _legacy_single(state))
+        for index, existing in enumerate(children):
+            if existing.tool_call_id == child.tool_call_id:
+                children[index] = child
+                break
+        else:
+            children.append(child)
+        return self._sync_active_children(state, tuple(children))
+
+    def _drain_completed_prefix(self, state: AgentLoopState) -> AgentLoopState:
+        done = _tool_result_ids(state.transcript)
+        index = state.pending_tool_index
+        while index < len(state.pending_tool_calls):
+            if state.pending_tool_calls[index].tool_call_id not in done:
+                break
+            index += 1
+        if index == state.pending_tool_index:
+            return state
+        return replace(state, pending_tool_index=index)
+
     def _spawn_tool_error(self, bound, reason_code: str) -> dict[str, Any]:
         return ToolResult(
             "error",
@@ -1807,8 +1873,11 @@ class DurableCodingLoop:
     ) -> None:
         if self._subagents is None:
             return
-        if state is not None and state.active_child_run_id:
-            await self._subagents.cancel(state.active_child_run_id, reason)
+        refs = ()
+        if state is not None:
+            refs = state.active_children or _legacy_single(state)
+        for ref in refs:
+            await self._subagents.cancel(ref.run_id, reason)
         if task_id:
             from neos.subagent.types import ParentKind
 
@@ -1879,6 +1948,91 @@ class DurableCodingLoop:
         if claim.disposition is ToolExecutionDisposition.DELEGATED:
             await self._fail_delegated_claim(deps, claim, bound)
 
+    async def _adopt_spawn_claim(self, deps, tool_call_id: str):
+        if deps is None or deps.lease is None:
+            return None
+        try:
+            return await deps.repository.claim_tool_execution(
+                lease=deps.lease,
+                tool_call_id=tool_call_id,
+                now=self._clock(),
+                claim_expires_at=self._clock()
+                + timedelta(seconds=self._config.timeout_sec + 30),
+            )
+        except Exception:
+            return None
+
+    async def _complete_spawn_claim(self, deps, claim, bound, reason: str) -> None:
+        if deps is None or claim is None:
+            return
+        if claim.disposition not in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+            ToolExecutionDisposition.DELEGATED,
+        }:
+            return
+        try:
+            await deps.repository.complete_tool_execution(
+                claim,
+                result=self._spawn_tool_error(bound, reason),
+                now=self._clock(),
+            )
+        except Exception:
+            return
+
+    async def fail_all_live_spawn_claims(
+        self,
+        state,
+        deps,
+        bound,
+        *,
+        reason: str,
+        task_id: str | None,
+        except_tool_call_id: str | None = None,
+    ) -> AgentLoopState:
+        """Adopt + complete live delegated claims except except_tool_call_id."""
+        refs = state.active_children or _legacy_single(state)
+        if self._subagents is not None and task_id:
+            from neos.subagent.types import ParentKind
+
+            await self._subagents.cancel_for_parent(
+                ParentKind.CODING, task_id, reason
+            )
+        done = _tool_result_ids(state.transcript)
+        kept: list[ActiveChildRef] = []
+        after = state
+        for ref in refs:
+            if (
+                except_tool_call_id is not None
+                and ref.tool_call_id == except_tool_call_id
+            ):
+                kept.append(ref)
+                continue
+            claim = await self._adopt_spawn_claim(deps, ref.tool_call_id)
+            if claim is None or claim.disposition is ToolExecutionDisposition.COMPLETED:
+                continue
+            await self._complete_spawn_claim(deps, claim, bound, reason)
+            if ref.tool_call_id not in done:
+                advance_index = (
+                    after.has_pending_tool
+                    and after.pending_tool_calls[after.pending_tool_index].tool_call_id
+                    == ref.tool_call_id
+                )
+                after = await self._after_result(
+                    after,
+                    ToolResultContent(
+                        ref.tool_call_id,
+                        "error",
+                        {"reason_code": reason},
+                    ),
+                    tool_name="spawn_agent.v1",
+                    tool_input={},
+                    advance_index=advance_index,
+                )
+                done.add(ref.tool_call_id)
+        after = self._sync_active_children(after, tuple(kept))
+        return self._drain_completed_prefix(after)
+
     def _bind_child_tools(self, bound, state) -> None:
         if self._subagents is None:
             return
@@ -1948,21 +2102,37 @@ class DurableCodingLoop:
         self, call, bound, state, *, input=None, deps=None
     ) -> dict[str, Any] | DelegatedSpawn:
         task_id = input.task_id if input is not None else ""
+        live = state.active_children or _legacy_single(state)
         if deps is not None and await self._has_pending_interrupt(deps, task_id):
-            await self._cancel_active_child(
-                state, reason="aborted", task_id=task_id or None
+            state = await self.fail_all_live_spawn_claims(
+                state,
+                deps,
+                bound,
+                reason="aborted",
+                task_id=task_id or None,
+                except_tool_call_id=call.tool_call_id,
             )
-            return self._spawn_tool_error(bound, "aborted")
-        if state.active_child_run_id and not self._config.subagent_enabled:
-            await self._cancel_active_child(
-                state, reason="subagent_disabled", task_id=task_id or None
+            error = self._spawn_tool_error(bound, "aborted")
+            error["_loop_state"] = state
+            return error
+        if live and not self._config.subagent_enabled:
+            state = await self.fail_all_live_spawn_claims(
+                state,
+                deps,
+                bound,
+                reason="subagent_disabled",
+                task_id=task_id or None,
+                except_tool_call_id=call.tool_call_id,
             )
-            return self._spawn_tool_error(bound, "subagent_disabled")
+            error = self._spawn_tool_error(bound, "subagent_disabled")
+            error["_loop_state"] = state
+            return error
         if not self._config.subagent_enabled:
             return self._legacy_explore_handoff(bound)
         if (
-            state.active_child_run_id
-            and state.active_child_tool_call_id not in {None, call.tool_call_id}
+            live
+            and call.tool_call_id not in {child.tool_call_id for child in live}
+            and len(live) >= self._config.subagent_max_active
         ):
             return self._spawn_tool_error(bound, "policy_child_already_active")
         if self._subagents is None:
@@ -1996,7 +2166,7 @@ class DurableCodingLoop:
             briefing = self._spawn_briefing(call)
         except ValueError:
             return self._spawn_tool_error(bound, "policy_schema_invalid")
-        same_child = state.active_child_tool_call_id in {None, call.tool_call_id}
+        ref = self._child_ref(state, call.tool_call_id)
         ticket = SubagentTicket(
             parent_kind=ParentKind.CODING,
             parent_id=input.task_id,
@@ -2007,10 +2177,8 @@ class DurableCodingLoop:
             model=ModelPin(provider=provider, model=self._config.model),
             max_turns=max_turns,
             sandbox_mode=SandboxMode.PARENT_RO,
-            expected_checkpoint_id=(
-                state.active_child_checkpoint_id if same_child else None
-            ),
-            run_id=state.active_child_run_id if same_child else None,
+            expected_checkpoint_id=ref.checkpoint_id if ref else None,
+            run_id=ref.run_id if ref else None,
         )
         self._bind_child_tools(bound, state)
         try:
@@ -2097,7 +2265,15 @@ class DurableCodingLoop:
                 transcript,
                 input.workspace_edits,
             )
-            return AgentLoopState(transcript, 0, 0, 0, (), 0, self._digest(transcript))
+            return AgentLoopState(
+                transcript=transcript,
+                turn_count=0,
+                tool_count=0,
+                consecutive_tool_errors=0,
+                pending_tool_calls=(),
+                pending_tool_index=0,
+                transcript_digest=self._digest(transcript),
+            )
         raw = checkpoint.loop_state
         transcript = tuple(
             _message_from_mapping(item) for item in raw.get("transcript", [])
@@ -2152,44 +2328,53 @@ class DurableCodingLoop:
                 empty_retry_count = 0
         else:
             pending_instruction = None
-        return AgentLoopState(
-            transcript,
-            int(raw.get("turn_count", 0)),
-            int(raw.get("tool_count", 0)),
-            int(raw.get("consecutive_tool_errors", 0)),
-            pending,
-            pending_index,
-            digest,
-            int(raw.get("input_tokens", 0)),
-            int(raw.get("output_tokens", 0)),
-            int(raw.get("cost_micros", 0)),
-            terminal_pending,
-            read_paths,
-            pending_instruction,
-            todos,
-            parse_phase(raw.get("phase")).value,
-            instructions_loaded,
-            int(raw.get("prompt_compact_retries", 0)),
-            int(raw.get("output_token_escalations", 0)),
-            int(raw.get("llm_compact_attempts", 0)),
-            frozenset(str(name) for name in raw.get("revealed_tools") or ()),
-            frozenset(str(name) for name in raw.get("approved_always") or ()),
-            int(raw.get("hook_retry_count", 0)),
-            bodies,
-            int(raw.get("stop_retry_count", 0)),
-            _read_stamps_mapping(raw.get("read_stamps")),
-            empty_retry_count,
-            str(raw.get("last_error_signature") or ""),
-            int(raw.get("last_error_count", 0)),
-            str(raw.get("last_success_signature") or ""),
-            str(raw.get("last_success_result_hash") or ""),
-            int(raw.get("last_success_count", 0)),
-            restore_verify_verdict(raw.get("verdict")),
-            restore_plan_critical_files(raw.get("critical_files")),
-            _optional_str(raw.get("active_child_run_id")),
-            _optional_str(raw.get("active_child_checkpoint_id")),
-            _optional_str(raw.get("active_child_tool_call_id")),
+        children = _restore_active_children(raw)
+        state = AgentLoopState(
+            transcript=transcript,
+            turn_count=int(raw.get("turn_count", 0)),
+            tool_count=int(raw.get("tool_count", 0)),
+            consecutive_tool_errors=int(raw.get("consecutive_tool_errors", 0)),
+            pending_tool_calls=pending,
+            pending_tool_index=pending_index,
+            transcript_digest=digest,
+            input_tokens=int(raw.get("input_tokens", 0)),
+            output_tokens=int(raw.get("output_tokens", 0)),
+            cost_micros=int(raw.get("cost_micros", 0)),
+            terminal_pending=terminal_pending,
+            read_paths=read_paths,
+            pending_instruction=pending_instruction,
+            todos=todos,
+            phase=parse_phase(raw.get("phase")).value,
+            instructions_loaded=instructions_loaded,
+            prompt_compact_retries=int(raw.get("prompt_compact_retries", 0)),
+            output_token_escalations=int(raw.get("output_token_escalations", 0)),
+            llm_compact_attempts=int(raw.get("llm_compact_attempts", 0)),
+            revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ()),
+            approved_always=frozenset(
+                str(name) for name in raw.get("approved_always") or ()
+            ),
+            hook_retry_count=int(raw.get("hook_retry_count", 0)),
+            compacted_bodies=bodies,
+            stop_retry_count=int(raw.get("stop_retry_count", 0)),
+            read_stamps=_read_stamps_mapping(raw.get("read_stamps")),
+            empty_retry_count=empty_retry_count,
+            last_error_signature=str(raw.get("last_error_signature") or ""),
+            last_error_count=int(raw.get("last_error_count", 0)),
+            last_success_signature=str(raw.get("last_success_signature") or ""),
+            last_success_result_hash=str(raw.get("last_success_result_hash") or ""),
+            last_success_count=int(raw.get("last_success_count", 0)),
+            verdict=restore_verify_verdict(raw.get("verdict")),
+            critical_files=restore_plan_critical_files(raw.get("critical_files")),
+            active_child_run_id=_optional_str(raw.get("active_child_run_id")),
+            active_child_checkpoint_id=_optional_str(
+                raw.get("active_child_checkpoint_id")
+            ),
+            active_child_tool_call_id=_optional_str(
+                raw.get("active_child_tool_call_id")
+            ),
+            active_children=children,
         )
+        return self._sync_active_children(state, children)
 
     def _apply_pending_command(
         self,
@@ -2369,6 +2554,15 @@ class DurableCodingLoop:
             "active_child_run_id": state.active_child_run_id,
             "active_child_checkpoint_id": state.active_child_checkpoint_id,
             "active_child_tool_call_id": state.active_child_tool_call_id,
+            "active_children": [
+                {
+                    "run_id": child.run_id,
+                    "checkpoint_id": child.checkpoint_id,
+                    "tool_call_id": child.tool_call_id,
+                    "last_advanced_at": child.last_advanced_at,
+                }
+                for child in state.active_children
+            ],
             "read_stamps": {
                 path: _dump_read_stamp(stamp)
                 for path, stamp in sorted(state.read_stamps.items())
@@ -2865,6 +3059,74 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _tool_result_ids(transcript) -> set[str]:
+    return {
+        item.tool_call_id
+        for message in transcript
+        for item in message.content
+        if isinstance(item, ToolResultContent)
+    }
+
+
+def _legacy_single(state) -> tuple[ActiveChildRef, ...]:
+    run_id = getattr(state, "active_child_run_id", None)
+    if not run_id:
+        return ()
+    tool_call_id = getattr(state, "active_child_tool_call_id", None) or ""
+    return (
+        ActiveChildRef(
+            run_id=run_id,
+            checkpoint_id=getattr(state, "active_child_checkpoint_id", None),
+            tool_call_id=tool_call_id,
+            last_advanced_at=_EPOCH_STAMP,
+        ),
+    )
+
+
+def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ...]:
+    if "active_children" in raw:
+        items = raw.get("active_children") or ()
+        children: list[ActiveChildRef] = []
+        if isinstance(items, Sequence) and not isinstance(items, (str, bytes)):
+            for item in items:
+                if not isinstance(item, Mapping):
+                    continue
+                run_id = _optional_str(item.get("run_id"))
+                tool_call_id = _optional_str(item.get("tool_call_id"))
+                if not run_id or not tool_call_id:
+                    continue
+                stamp = _optional_str(item.get("last_advanced_at")) or ""
+                children.append(
+                    ActiveChildRef(
+                        run_id=run_id,
+                        checkpoint_id=_optional_str(item.get("checkpoint_id")),
+                        tool_call_id=tool_call_id,
+                        last_advanced_at=stamp,
+                    )
+                )
+        if len(children) > 1:
+            children = [
+                (
+                    child
+                    if child.last_advanced_at
+                    else replace(child, last_advanced_at=_EPOCH_STAMP)
+                )
+                for child in children
+            ]
+        return tuple(children)
+    run_id = _optional_str(raw.get("active_child_run_id"))
+    if not run_id:
+        return ()
+    return (
+        ActiveChildRef(
+            run_id=run_id,
+            checkpoint_id=_optional_str(raw.get("active_child_checkpoint_id")),
+            tool_call_id=_optional_str(raw.get("active_child_tool_call_id")) or "",
+            last_advanced_at=_EPOCH_STAMP,
+        ),
+    )
 
 
 def _tool_event_payload(call, **extra: Any) -> dict[str, Any]:
