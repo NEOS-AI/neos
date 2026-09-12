@@ -648,7 +648,11 @@ class CodingRunService:
                 )
             except Exception:
                 continue
-            if claim.disposition is not ToolExecutionDisposition.DELEGATED:
+            if claim.disposition not in {
+                ToolExecutionDisposition.CLAIMED,
+                ToolExecutionDisposition.RECLAIMED,
+                ToolExecutionDisposition.DELEGATED,
+            }:
                 continue
             try:
                 await self._runs.complete_tool_execution(
