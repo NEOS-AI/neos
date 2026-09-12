@@ -87,6 +87,7 @@ class RecordingSubagents:
     def __init__(self, inner: SubagentRuntime) -> None:
         self.inner = inner
         self.advance_tickets: list[SubagentTicket] = []
+        self.fold_calls: list[str] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.cancel_for_parent_calls: list[tuple[object, str, str]] = []
 
@@ -95,6 +96,7 @@ class RecordingSubagents:
         return await self.inner.advance(ticket)
 
     async def fold(self, run_id):
+        self.fold_calls.append(run_id)
         return await self.inner.fold(run_id)
 
     async def status(self, run_id):
@@ -394,7 +396,8 @@ async def test_folded_tool_result_includes_exit_reason_cancelled() -> None:
 @pytest.mark.asyncio
 async def test_fold_after_parent_id_mismatch_does_not_leak_summary() -> None:
     secret = "UNIQUE_CHILD_REPORT_MUST_NOT_LEAK"
-    runtime, _child = _make_runtime([_child_tool(), _text(secret)])
+    inner, _child = _make_runtime([_child_tool(), _text(secret)])
+    runtime = RecordingSubagents(inner)
     original_status = runtime.status
 
     async def replaced_parent(run_id):
@@ -406,20 +409,30 @@ async def test_fold_after_parent_id_mismatch_does_not_leak_summary() -> None:
     await collect(h)
     parked = h.repository.checkpoints[-1]
     assert parked.loop_state["active_child_run_id"]
+    before = parked.loop_state
+    advances_before = len(runtime.advance_tickets)
     folded, checkpoint = await _fold_spawn(h, parked)
     result = folded.payload["result"]
     assert result["exit_reason"] == "dropped"
     assert "summary" not in result
     assert secret not in str(result)
+    assert runtime.fold_calls == []
+    assert len(runtime.advance_tickets) == advances_before
     assert ("ct_1", "s1") in h.repository.completed_tools
     completed = h.repository.completed_tools[("ct_1", "s1")]
     assert completed["exit_reason"] == "dropped"
     assert secret not in str(completed)
     state = checkpoint.loop_state
+    assert state["input_tokens"] == before["input_tokens"]
+    assert state["output_tokens"] == before["output_tokens"]
+    assert state["cost_micros"] == before["cost_micros"]
     assert secret not in str(state.get("transcript") or ())
     assert not any(secret in text for text in _user_texts(state))
     results = [item for item in _tool_results(state) if item["tool_call_id"] == "s1"]
-    assert results == []
+    assert len(results) == 1
+    content = results[-1]["content"]
+    assert content == {"exit_reason": "dropped"}
+    assert secret not in str(content)
     assert _child_by_id(state, "s1") is None
     assert state["active_child_run_id"] is None
 

@@ -1007,11 +1007,26 @@ class DurableCodingLoop:
             == call.tool_call_id
         )
         if dropped_fold:
-            after = state
-            if advance_index:
-                after = replace(
-                    after, pending_tool_index=after.pending_tool_index + 1
+            if call.tool_call_id in _tool_result_ids(state.transcript):
+                after = self._drain_completed_prefix(state)
+            elif call.tool_call_id in _tool_use_names(state.transcript):
+                after = await self._after_result(
+                    state,
+                    ToolResultContent(
+                        call.tool_call_id,
+                        "error",
+                        {"exit_reason": "dropped"},
+                    ),
+                    tool_name=call.name,
+                    tool_input=call.input,
+                    advance_index=advance_index,
                 )
+            else:
+                after = state
+                if advance_index:
+                    after = replace(
+                        after, pending_tool_index=after.pending_tool_index + 1
+                    )
         elif call.tool_call_id in _tool_result_ids(state.transcript):
             after = self._drain_completed_prefix(state)
         else:
@@ -2427,6 +2442,10 @@ class DurableCodingLoop:
         except ValueError:
             return self._spawn_tool_error(bound, "policy_schema_invalid")
         ref = self._child_ref(state, call.tool_call_id)
+        if ref is not None and ref.run_id:
+            snapshot = await self._subagents.status(ref.run_id)
+            if snapshot.parent_id != input.task_id:
+                return self._dropped_spawn_result(bound, snapshot)
         ticket = SubagentTicket(
             parent_kind=ParentKind.CODING,
             parent_id=input.task_id,
@@ -2458,10 +2477,6 @@ class DurableCodingLoop:
                 input_tokens=int(outcome.input_tokens or 0),
                 output_tokens=int(outcome.output_tokens or 0),
             )
-        snapshot = await self._subagents.status(outcome.run_id)
-        # Replaced parent must not inherit the child's report.
-        if snapshot.parent_id != input.task_id:
-            return self._dropped_spawn_result(bound, snapshot)
         folded = await self._subagents.fold(outcome.run_id)
         return self._folded_spawn_result(bound, folded)
 
