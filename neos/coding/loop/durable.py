@@ -136,8 +136,14 @@ class CodingLoopConfig:
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
     subagent_enabled: bool = False
+    subagent_max_active: int = 1
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "subagent_max_active",
+            min(4, max(1, self.subagent_max_active)),
+        )
         numeric = (
             self.max_output_tokens,
             self.timeout_sec,

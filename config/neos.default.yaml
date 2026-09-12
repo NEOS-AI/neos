@@ -20,6 +20,7 @@ coding_model:
   mutation_snapshot_interval: 5
   subagent_enabled: false
   subagent_report_budget_chars: 4000
+  subagent_max_active: 1
 
 api:
   v1_prefix: /api/v1

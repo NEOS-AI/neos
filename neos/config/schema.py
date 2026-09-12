@@ -1616,6 +1616,7 @@ class CodingModelConfig(StrictConfigModel):
     deferred_tools_threshold: int = Field(default=20, ge=1, le=100)
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
+    subagent_max_active: int = Field(default=1, ge=1, le=4)
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":

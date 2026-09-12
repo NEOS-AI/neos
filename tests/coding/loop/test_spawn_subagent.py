@@ -107,6 +107,17 @@ def _flag_on(**kwargs):
     )
 
 
+def test_coding_loop_config_clamps_subagent_max_active() -> None:
+    low = AnthropicLoopConfig(
+        model="claude-test", system="code", provider="anthropic", subagent_max_active=0
+    )
+    high = AnthropicLoopConfig(
+        model="claude-test", system="code", provider="anthropic", subagent_max_active=5
+    )
+    assert low.subagent_max_active == 1
+    assert high.subagent_max_active == 4
+
+
 def _user_texts(state) -> list[str]:
     return [
         item["text"]

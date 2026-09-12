@@ -101,7 +101,7 @@ Coding cannot get a real child by nesting another `DurableCodingLoop.run` inside
 | K5 | Evolve `spawn_agent.v1`. Additive briefing fields. Keep `prompt` as the required goal text. `max_turns` becomes live. | Avoids a parallel Task* tool. Existing schema tests stay valid. |
 | K6 | New `ToolExecutionDisposition.DELEGATED`. Do not overload `BUSY`. PR 4 ships the CHECK migration, **adopt-current-lease** on delegated resume (same transaction as the claim read), `complete_tool_execution` status predicate, and in-memory fake. | Live CHECK is `('claimed', 'completed', 'failed')`. Live `complete_tool_execution` matches **both** the current lease **and** `execution.worker_id` / `fencing_token` (`run_repository.py` ~650–665). Each Celery delivery is a new lease (`worker_id = celery-{request.id}`, token increments, previous lease released at ~297). A read-only `UNION ALL` that does not flip the row leaves delivery-1 fencing; fold then raises `StaleExecutionLease`. |
 | K7 | New tables `subagent_runs` + `subagent_checkpoints` in migration **055**. Do not reuse `coding_tasks` / `coding_runs` / `da_questions`. | Different parent kinds, different resume tokens, no FK to `coding_tasks`. **054** is reserved for the `delegated` CHECK (PR 4), so the two independently-mergeable PRs do not collide. |
-| K8 | P1: at most **one** active child per parent run. Spawn stays **hidden** in explore/plan/verify. | No recursion. Explore children cannot spawn. Product Phase 7. |
+| K8 | Default **1** active child per parent run, hard cap **4**, knob `coding_model.subagent_max_active`. Fan-out is Approach M / `docs/PARENT_MEDIATED_COLLABORATION_DESIGN.md`. Write/worktree/merge remain Subagent P2. Spawn stays **hidden** in explore/plan/verify. | No recursion. Explore children cannot spawn. Product Phase 7. |
 | K9 | Feature flag `coding_model.subagent_enabled: false`. Deferred-tool visibility is **not** the kill switch. | Tool is already deferred/searchable in implement. Flag-off preserves today’s stub contract. |
 | K10 | DA adapter ships in the **same PR series** (PR 7), same release as coding. Still default-off / opt-in (`deep_analysis.subagent_enabled: false`). Default DA path stays `Worker` / `call_json`. One `advance` per orchestrator round. Fold is a brief, not verified claims. | Same-release reuse of `neos/subagent/` without replacing Worker. Graders remain the only path to verified. Orchestrator stays the single writer. |
 | K11 | Lineage kind is explicit (`delegate` vs `compression` vs `branch`). P1 only writes `delegate`. | Hermes: those three must not share one `parent_id` meaning. |
@@ -817,8 +817,8 @@ class ToolExecutionDisposition(StrEnum):
 # neos/config/schema.py — CodingModelConfig
 subagent_enabled: bool = False
 subagent_report_budget_chars: int = 4000
-# P1 one-active-child is a hard constant (K8), not a knob.
-# Do not add subagent_max_active_per_parent until P2 fan-out.
+# Default 1 / cap 4 / knob coding_model.subagent_max_active.
+# Write/worktree/merge stay Subagent P2.
 
 # DeepAnalysisConfig — same series as coding (PR 7), still default off
 subagent_enabled: bool = False
