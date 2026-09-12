@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -75,6 +76,8 @@ from neos.coding.tools.registry import (
     ValidatedToolCall,
 )
 from neos.coding.domain.durability import ToolExecutionDisposition
+
+logger = logging.getLogger(__name__)
 
 PRE_TOOL_HOOK_TIMEOUT_SEC = 5.0
 STOP_RETRY_LIMIT = 2
@@ -2329,6 +2332,7 @@ class DurableCodingLoop:
         else:
             pending_instruction = None
         children = _restore_active_children(raw)
+        _warn_stale_active_child_scalars(raw, children)
         state = AgentLoopState(
             transcript=transcript,
             turn_count=int(raw.get("turn_count", 0)),
@@ -2513,6 +2517,7 @@ class DurableCodingLoop:
         )
 
     def _dump_state(self, input, state):
+        state = self._sync_active_children(state, state.active_children)
         current = (input.instruction or "").strip()
         if not self._is_task_seed(current):
             current = self._task_seed_text(state.transcript, input) or current
@@ -3126,6 +3131,38 @@ def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ..
             tool_call_id=_optional_str(raw.get("active_child_tool_call_id")) or "",
             last_advanced_at=_EPOCH_STAMP,
         ),
+    )
+
+
+def _warn_stale_active_child_scalars(
+    raw: Mapping[str, Any], children: tuple[ActiveChildRef, ...]
+) -> None:
+    if "active_children" not in raw:
+        return
+    raw_run = _optional_str(raw.get("active_child_run_id"))
+    raw_ckpt = _optional_str(raw.get("active_child_checkpoint_id"))
+    raw_tool = _optional_str(raw.get("active_child_tool_call_id"))
+    if raw_run is None and raw_ckpt is None and raw_tool is None:
+        return
+    head = children[0] if children else None
+    expected = (
+        head.run_id if head else None,
+        head.checkpoint_id if head else None,
+        head.tool_call_id if head else None,
+    )
+    actual = (raw_run, raw_ckpt, raw_tool)
+    if actual == expected:
+        return
+    logger.warning(
+        "active_child scalars disagree with active_children[0]; remirroring "
+        "run_id=%s checkpoint_id=%s tool_call_id=%s from list run_id=%s "
+        "checkpoint_id=%s tool_call_id=%s",
+        raw_run,
+        raw_ckpt,
+        raw_tool,
+        expected[0],
+        expected[1],
+        expected[2],
     )
 
 

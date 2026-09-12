@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import timedelta
 
@@ -340,7 +341,7 @@ def test_restore_missing_list_uses_scalars() -> None:
     assert child.last_advanced_at == "1970-01-01T00:00:00+00:00"
 
 
-def test_restore_list_mirrors_scalars() -> None:
+def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     children = [
         {
@@ -356,25 +357,36 @@ def test_restore_list_mirrors_scalars() -> None:
             "last_advanced_at": "2026-07-19T00:00:01+00:00",
         },
     ]
-    state = h.loop._restore(
-        INPUT,
-        _checkpoint(
-            {
-                "transcript": [],
-                "pending_tool_calls": [],
-                "pending_tool_index": 0,
-                "active_child_run_id": "sa_stale",
-                "active_child_checkpoint_id": "sc_stale",
-                "active_child_tool_call_id": "s2",
-                "active_children": children,
-            }
-        ),
-    )
+    with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
+        state = h.loop._restore(
+            INPUT,
+            _checkpoint(
+                {
+                    "transcript": [],
+                    "pending_tool_calls": [],
+                    "pending_tool_index": 0,
+                    "active_child_run_id": "sa_stale",
+                    "active_child_checkpoint_id": "sc_stale",
+                    "active_child_tool_call_id": "s2",
+                    "active_children": children,
+                }
+            ),
+        )
     assert [child.tool_call_id for child in state.active_children] == ["s1", "s2"]
     assert state.active_child_run_id == "sa_1"
     assert state.active_child_checkpoint_id == "sc_1"
     assert state.active_child_tool_call_id == "s1"
-    dumped = h.loop._dump_state(INPUT, state)
+    assert any(
+        "active_child scalars disagree" in record.getMessage()
+        for record in caplog.records
+    )
+    stale = replace(
+        state,
+        active_child_run_id="sa_stale",
+        active_child_checkpoint_id="sc_stale",
+        active_child_tool_call_id="s2",
+    )
+    dumped = h.loop._dump_state(INPUT, stale)
     assert dumped["active_children"][0]["tool_call_id"] == "s1"
     assert dumped["active_children"][1]["tool_call_id"] == "s2"
     assert dumped["active_child_run_id"] == "sa_1"
