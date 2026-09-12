@@ -50,7 +50,7 @@ def fold_run(
         if record.status is SubagentStatus.KILLED:
             text = "cancelled"
         elif record.status is SubagentStatus.FAILED:
-            text = "failed"
+            text = "stalled" if record.error_code == "stalled" else "failed"
         elif record.error_code == "turns_exhausted":
             text = "turns_exhausted"
         else:

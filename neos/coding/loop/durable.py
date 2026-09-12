@@ -3261,8 +3261,7 @@ def _parse_utc_stamp(stamp: str) -> datetime | None:
 
 
 def _stamp_is_stale(stamp: str, now: datetime, stale_after_sec: float) -> bool:
-    # Epoch is the restore placeholder for unknown last_advanced_at, not a
-    # real last-advance, so RR fixtures that plant it must not fold stalled.
+    # Epoch is unknown last-advance, not age 0.
     if stamp == _EPOCH_STAMP:
         return False
     parsed = _parse_utc_stamp(stamp)

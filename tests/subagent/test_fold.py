@@ -77,12 +77,17 @@ def test_fold_uses_synthetic_summary_when_assistant_text_missing() -> None:
         _record(status=SubagentStatus.FAILED, error_code="model_provider_failed"),
         {"last_assistant_text": "   "},
     )
+    stalled = fold_run(
+        _record(status=SubagentStatus.FAILED, error_code="stalled"),
+        {"last_assistant_text": ""},
+    )
     exhausted = fold_run(
         _record(status=SubagentStatus.COMPLETED, error_code="turns_exhausted"),
         {},
     )
     assert cancelled.summary == "cancelled"
     assert failed.summary == "failed"
+    assert stalled.summary == "stalled"
     assert exhausted.summary == "turns_exhausted"
     assert cancelled.truncated is False
 

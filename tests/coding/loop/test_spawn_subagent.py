@@ -695,6 +695,32 @@ async def test_old_last_advanced_at_folds_stalled_without_advance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_epoch_last_advanced_at_still_advances() -> None:
+    inner, _child = _make_runtime([_child_tool(), _child_tool()])
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    state = dict(parked.loop_state)
+    children = [dict(item) for item in state["active_children"]]
+    assert children
+    children[0]["last_advanced_at"] = "1970-01-01T00:00:00+00:00"
+    state["active_children"] = children
+    mutated = replace(parked, loop_state=state)
+    advances_before = len(runtime.advance_tickets)
+    await collect(h, mutated)
+    assert len(runtime.advance_tickets) == advances_before + 1
+    assert runtime.fail_if_stale_calls
+    assert runtime.fail_if_stale_calls[-1][0] == children[0]["run_id"]
+    assert runtime.fail_if_stale_calls[-1][2] != 0
+    loaded = await inner._store.get(children[0]["run_id"])
+    assert loaded.status is SubagentStatus.RUNNING
+    assert loaded.error_code != "stalled"
+
+
+@pytest.mark.asyncio
 async def test_one_delivery_advances_exactly_one_child() -> None:
     inner, _child = _make_runtime(
         [_child_tool(), _child_tool(), _child_tool(), _child_tool()]
