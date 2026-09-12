@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from pathlib import Path
 from contextlib import suppress
@@ -479,14 +480,66 @@ def _resolve_coding_session_factory(session_factory):
     return session_factory or db_manager.get_session
 
 
-class _NullSubagentSink:
+logger = logging.getLogger(__name__)
+
+_PARENT_SINK_EVENTS = frozenset(
+    {"subagent.started", "subagent.step", "subagent.completed"}
+)
+_PARENT_SINK_PAYLOAD = frozenset(
+    {
+        "run_id",
+        "spec",
+        "parent_kind",
+        "parent_id",
+        "parent_tool_call_id",
+        "step_kind",
+        "turn_count",
+        "tool_count",
+        "status",
+    }
+)
+
+
+class ParentSubagentEventAdapter:
+    """Forward bounded child lifecycle events onto the parent coding sink."""
+
+    def __init__(self, parent=None) -> None:
+        self._parent = parent
+
     async def emit(self, event_type: str, payload) -> None:
-        del event_type, payload
-        return None
+        if self._parent is None or event_type not in _PARENT_SINK_EVENTS:
+            return
+        raw = dict(payload or {})
+        safe = {key: raw[key] for key in _PARENT_SINK_PAYLOAD if key in raw}
+        task_id = str(safe.get("parent_id") or "")
+        if not task_id:
+            return
+        try:
+            await self._parent.append(
+                task_id=task_id,
+                event_type=event_type,
+                payload=safe,
+                run_id=str(raw.get("parent_run_id") or "") or None,
+                tool_call_id=str(safe.get("parent_tool_call_id") or "") or None,
+            )
+        except Exception:
+            logger.warning(
+                "parent subagent sink failed event_type=%s task_id=%s run_id=%s",
+                event_type,
+                task_id,
+                safe.get("run_id"),
+                exc_info=True,
+            )
 
 
 def _build_subagent_runtime(
-    *, model, tools, executor, session_factory, enabled: bool
+    *,
+    model,
+    tools,
+    executor,
+    session_factory,
+    enabled: bool,
+    parent_events=None,
 ):
     """Construct the parent-driven child runtime.
 
@@ -516,7 +569,10 @@ def _build_subagent_runtime(
         store=store,
         catalog=SpecRegistry(),
         stepper=ChildStepper(model=model, tools=port),
-        events=MetricsEventSink(_NullSubagentSink(), get_metrics_collector()),
+        events=MetricsEventSink(
+            ParentSubagentEventAdapter(parent_events),
+            get_metrics_collector(),
+        ),
         clock=SystemClock(),
     )
 
@@ -598,6 +654,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         executor=executor,
         session_factory=factory,
         enabled=coding.subagent_enabled,
+        parent_events=coding_service,
     )
 
     def finish(sandboxes) -> DurableCodingLoop:

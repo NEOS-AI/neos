@@ -37,6 +37,7 @@ from neos.subagent.ports import SystemClock
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
 from neos.subagent.types import (
+    FoldedResult,
     ModelPin,
     ParentBriefing,
     ParentKind,
@@ -86,15 +87,27 @@ class RecordingSubagents:
     def __init__(self, inner: SubagentRuntime) -> None:
         self.inner = inner
         self.advance_tickets: list[SubagentTicket] = []
+        self.fold_calls: list[str] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.cancel_for_parent_calls: list[tuple[object, str, str]] = []
+        self.fail_if_stale_calls: list[tuple[str, object, float]] = []
 
     async def advance(self, ticket):
         self.advance_tickets.append(ticket)
         return await self.inner.advance(ticket)
 
     async def fold(self, run_id):
+        self.fold_calls.append(run_id)
         return await self.inner.fold(run_id)
+
+    async def status(self, run_id):
+        return await self.inner.status(run_id)
+
+    async def fail_if_stale(self, run_id, *, now, stale_after_sec=990):
+        self.fail_if_stale_calls.append((run_id, now, stale_after_sec))
+        return await self.inner.fail_if_stale(
+            run_id, now=now, stale_after_sec=stale_after_sec
+        )
 
     async def cancel(self, run_id, reason):
         self.cancel_calls.append((run_id, reason))
@@ -170,13 +183,26 @@ def _tool_results(state) -> list[dict]:
     ]
 
 
-def _spawn_turns(prompt: str = "look around", call_id: str = "s1"):
+def _spawn_turns(prompt: str = "look around", call_id: str = "s1", max_turns: int = 4):
     return [
         [
-            tool_call(call_id, "spawn_agent.v1", {"prompt": prompt, "max_turns": 4}),
+            tool_call(
+                call_id, "spawn_agent.v1", {"prompt": prompt, "max_turns": max_turns}
+            ),
             completed(),
         ]
     ]
+
+
+async def _fold_spawn(h, checkpoint=None):
+    current = checkpoint
+    for _ in range(6):
+        events = await collect(h, current)
+        completed_events = [event for event in events if event.type == "tool.completed"]
+        if completed_events:
+            return completed_events[-1], h.repository.checkpoints[-1]
+        current = h.repository.checkpoints[-1]
+    raise AssertionError("spawn never folded")
 
 
 class TickableClock:
@@ -283,6 +309,9 @@ async def test_flag_on_multi_delivery_folds_summary_into_parent_tool_result() ->
     assert folded is not None
     result = folded.payload["result"]
     assert "login.py" in str(result.get("summary") or result)
+    assert result["exit_reason"] == "completed"
+    assert result["child_status"] == "completed"
+    assert "full_summary" not in result
     state = h.repository.checkpoints[-1].loop_state
     assert state["pending_tool_index"] == 1
     assert state["active_child_run_id"] is None
@@ -290,8 +319,129 @@ async def test_flag_on_multi_delivery_folds_summary_into_parent_tool_result() ->
     results = _tool_results(state)
     assert results
     assert "login.py" in str(results[-1]["content"].get("summary") or results[-1])
+    assert results[-1]["content"].get("exit_reason") == "completed"
+    assert "full_summary" not in results[-1]["content"]
     assert child.requests
     assert child.requests[0].task_id.startswith("sa_")
+
+
+@pytest.mark.parametrize(
+    ("exit_reason", "status"),
+    [
+        ("completed", SubagentStatus.COMPLETED),
+        ("turns_exhausted", SubagentStatus.COMPLETED),
+        ("cancelled", SubagentStatus.KILLED),
+    ],
+)
+def test_folded_spawn_result_includes_exit_reason(exit_reason, status) -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]], config=_flag_on())
+    bound = SimpleNamespace(binding=SimpleNamespace(workspace_revision="1"))
+    folded = FoldedResult(
+        run_id="sa_1",
+        status=status,
+        summary="report",
+        truncated=True,
+        citations=("README.md",),
+        turn_count=2,
+        input_tokens=4,
+        output_tokens=5,
+        exit_reason=exit_reason,
+        full_summary="secret child checkpoint text",
+    )
+    result = h.loop._folded_spawn_result(bound, folded)
+    assert result["exit_reason"] == exit_reason
+    assert result["child_status"] == status.value
+    assert result["truncated"] is True
+    assert result["input_tokens"] == 4
+    assert result["output_tokens"] == 5
+    assert result["summary"] == "report"
+    assert "full_summary" not in result
+    assert "secret child checkpoint text" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_folded_tool_result_includes_exit_reason_turns_exhausted() -> None:
+    runtime, _child = _make_runtime([_child_tool(), _text("late report")])
+    h = harness(_spawn_turns(max_turns=1), config=_flag_on(), subagents=runtime)
+    folded, checkpoint = await _fold_spawn(h)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "turns_exhausted"
+    assert result["child_status"] == "completed"
+    assert "full_summary" not in result
+    results = [
+        item
+        for item in _tool_results(checkpoint.loop_state)
+        if item["tool_call_id"] == "s1"
+    ]
+    assert results
+    assert results[-1]["content"].get("exit_reason") == "turns_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_folded_tool_result_includes_exit_reason_cancelled() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text("should not fold this")])
+    runtime = RecordingSubagents(inner)
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    run_id = parked.loop_state["active_child_run_id"]
+    await runtime.cancel(run_id, "aborted")
+    folded, checkpoint = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "cancelled"
+    assert result["child_status"] == "killed"
+    assert "full_summary" not in result
+    results = [
+        item
+        for item in _tool_results(checkpoint.loop_state)
+        if item["tool_call_id"] == "s1"
+    ]
+    assert results
+    assert results[-1]["content"].get("exit_reason") == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_fold_after_parent_id_mismatch_does_not_leak_summary() -> None:
+    secret = "UNIQUE_CHILD_REPORT_MUST_NOT_LEAK"
+    inner, _child = _make_runtime([_child_tool(), _text(secret)])
+    runtime = RecordingSubagents(inner)
+    original_status = runtime.status
+
+    async def replaced_parent(run_id):
+        snapshot = await original_status(run_id)
+        return replace(snapshot, parent_id="ct_replaced")
+
+    runtime.status = replaced_parent
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    assert parked.loop_state["active_child_run_id"]
+    before = parked.loop_state
+    advances_before = len(runtime.advance_tickets)
+    folded, checkpoint = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["exit_reason"] == "dropped"
+    assert "summary" not in result
+    assert secret not in str(result)
+    assert runtime.fold_calls == []
+    assert len(runtime.advance_tickets) == advances_before
+    assert ("ct_1", "s1") in h.repository.completed_tools
+    completed = h.repository.completed_tools[("ct_1", "s1")]
+    assert completed["exit_reason"] == "dropped"
+    assert secret not in str(completed)
+    state = checkpoint.loop_state
+    assert state["input_tokens"] == before["input_tokens"]
+    assert state["output_tokens"] == before["output_tokens"]
+    assert state["cost_micros"] == before["cost_micros"]
+    assert secret not in str(state.get("transcript") or ())
+    assert not any(secret in text for text in _user_texts(state))
+    results = [item for item in _tool_results(state) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+    content = results[-1]["content"]
+    assert content == {"exit_reason": "dropped"}
+    assert secret not in str(content)
+    assert _child_by_id(state, "s1") is None
+    assert state["active_child_run_id"] is None
 
 
 @pytest.mark.asyncio
@@ -649,6 +799,68 @@ async def test_same_tool_call_id_resume_still_parks() -> None:
     store = _subagent_store(runtime)
     assert len(store._runs) == 1
     assert list(store._by_parent.values()) == [first_run]
+
+
+@pytest.mark.asyncio
+async def test_old_last_advanced_at_folds_stalled_without_advance() -> None:
+    inner, child = _make_runtime([_child_tool(), _text("should not run")])
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    state = dict(parked.loop_state)
+    children = [dict(item) for item in state["active_children"]]
+    assert children
+    children[0]["last_advanced_at"] = (NOW - timedelta(seconds=2000)).isoformat()
+    state["active_children"] = children
+    mutated = replace(parked, loop_state=state)
+    advances_before = len(runtime.advance_tickets)
+    events = await collect(h, mutated)
+    assert len(runtime.advance_tickets) == advances_before
+    assert runtime.fail_if_stale_calls
+    assert runtime.fail_if_stale_calls[-1][0] == children[0]["run_id"]
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "stalled"
+    assert result.get("exit_reason") == "stalled"
+    assert result.get("child_status") == "failed"
+    loaded = await inner._store.get(children[0]["run_id"])
+    assert loaded.status is SubagentStatus.FAILED
+    assert loaded.error_code == "stalled"
+    after = h.repository.checkpoints[-1].loop_state
+    assert _child_by_id(after, "s1") is None
+    assert after.get("active_children") in (None, [], ())
+    assert child.requests  # first park advanced; resume must not
+
+
+@pytest.mark.asyncio
+async def test_epoch_last_advanced_at_still_advances() -> None:
+    inner, _child = _make_runtime([_child_tool(), _child_tool()])
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    state = dict(parked.loop_state)
+    children = [dict(item) for item in state["active_children"]]
+    assert children
+    children[0]["last_advanced_at"] = "1970-01-01T00:00:00+00:00"
+    state["active_children"] = children
+    mutated = replace(parked, loop_state=state)
+    advances_before = len(runtime.advance_tickets)
+    await collect(h, mutated)
+    assert len(runtime.advance_tickets) == advances_before + 1
+    assert runtime.fail_if_stale_calls
+    assert runtime.fail_if_stale_calls[-1][0] == children[0]["run_id"]
+    assert runtime.fail_if_stale_calls[-1][2] != 0
+    loaded = await inner._store.get(children[0]["run_id"])
+    assert loaded.status is SubagentStatus.RUNNING
+    assert loaded.error_code != "stalled"
 
 
 @pytest.mark.asyncio
@@ -1635,3 +1847,230 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
     assert h.repository.completed_tools[("ct_1", "s1")] == original_s1
     assert h.repository.completed_tools[("ct_1", "s2")]["reason_code"] == "aborted"
     assert after.active_children == ()
+
+
+def _parent_tokens_before_child(h) -> dict:
+    return next(
+        checkpoint.loop_state
+        for checkpoint in h.repository.checkpoints
+        if checkpoint.loop_state.get("pending_tool_calls")
+        and not checkpoint.loop_state.get("active_children")
+    )
+
+
+@pytest.mark.asyncio
+async def test_continuing_park_increments_parent_usage_fold_does_not_double_count() -> None:
+    runtime, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=2, output_tokens=3),
+            _usage_turn("found login.py", 4, 5),
+        ]
+    )
+    clock = TickableClock()
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    h.loop._clock = clock
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    before = _parent_tokens_before_child(h)
+    assert parked.loop_state["input_tokens"] == before["input_tokens"] + 2
+    assert parked.loop_state["output_tokens"] == before["output_tokens"] + 3
+    assert parked.loop_state["cost_micros"] == before["cost_micros"] + 5
+    child = _child_by_id(parked.loop_state, "s1")
+    assert child is not None
+    assert child["rolled_input_tokens"] == 2
+    assert child["rolled_output_tokens"] == 3
+    clock.tick()
+    folded = await _collect_until_folded(h, clock, parked, "s1")
+    after = folded.loop_state
+    assert after["input_tokens"] == before["input_tokens"] + 6
+    assert after["output_tokens"] == before["output_tokens"] + 8
+    assert after["cost_micros"] == before["cost_micros"] + 14
+    results = [item for item in _tool_results(after) if item["tool_call_id"] == "s1"]
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_token_budget_exceed_on_continuing_cancels_siblings() -> None:
+    inner, _child = _make_runtime(
+        [
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=0, output_tokens=0),
+            _child_tool(input_tokens=2, output_tokens=3),
+            _child_tool(),
+        ]
+    )
+    runtime = RecordingSubagents(inner)
+    clock = TickableClock()
+    h = harness(
+        _two_spawn_turns(),
+        config=_priced(subagent_max_active=2),
+        subagents=runtime,
+    )
+    h.loop._clock = clock
+    parked = await _park_two(h, clock)
+    parent_tokens = int(parked.loop_state["input_tokens"]) + int(
+        parked.loop_state["output_tokens"]
+    )
+    h.loop._config = replace(
+        h.loop._config,
+        max_total_tokens=max(1, parent_tokens),
+        max_cost_micros=10**12,
+    )
+    service = await _run_service(h, clock)
+    with pytest.raises(CodingLoopFailure) as caught:
+        for _ in range(8):
+            await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+            clock.tick()
+    assert caught.value.code == "token_budget_exceeded"
+    sibling = h.repository.completed_tools[("ct_1", "s2")]
+    assert sibling["reason_code"] == "token_budget_exceeded"
+    last_s1 = max(
+        index
+        for index, ticket in enumerate(runtime.advance_tickets)
+        if ticket.parent_tool_call_id == "s1"
+    )
+    last_sibling = max(
+        (
+            index
+            for index, ticket in enumerate(runtime.advance_tickets)
+            if ticket.parent_tool_call_id == "s2"
+        ),
+        default=-1,
+    )
+    assert last_sibling < last_s1
+    assert ("ct_1", "s1") not in h.repository.completed_tools
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ("TODO", "TBD", "todo", "  TBD  ", "<feature_name>", "implement <feature_name>"),
+)
+@pytest.mark.asyncio
+async def test_placeholder_prompt_is_policy_schema_invalid(prompt: str) -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    h = harness(_spawn_turns(prompt), config=_flag_on(), subagents=runtime)
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_schema_invalid"
+    state = h.repository.checkpoints[-1].loop_state
+    assert state.get("active_children") in (None, [], ())
+    assert state["active_child_run_id"] is None
+    assert len(_subagent_store(runtime)._runs) == 0
+
+
+def test_spawn_briefing_rejects_placeholder_and_empty_goals() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    for prompt in ("", "   ", "TODO", "TBD", "<feature_name>"):
+        call = tool_call("s1", "spawn_agent.v1", {"prompt": prompt, "max_turns": 4})
+        with pytest.raises(ValueError):
+            h.loop._spawn_briefing(call)
+
+
+@pytest.mark.asyncio
+async def test_adopt_and_complete_claim_errors_are_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
+    h.loop._metrics = metrics
+
+    async def boom_claim(**kwargs):
+        raise RuntimeError("claim exploded")
+
+    h.repository.claim_tool_execution = boom_claim
+    with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
+        claim = await h.loop._adopt_spawn_claim(h.deps, "s1")
+    assert claim is None
+    assert any("adopt spawn claim failed" in record.getMessage() for record in caplog.records)
+    assert (
+        metrics.subagent_adopt_error_total.labels(
+            parent_kind="coding", op="adopt"
+        )._value.get()
+        == 1
+    )
+
+    caplog.clear()
+    fake = ToolExecutionClaim(
+        disposition=ToolExecutionDisposition.CLAIMED,
+        tool_call_id="s1",
+        lease=h.deps.lease,
+    )
+
+    async def boom_complete(claim, result, now):
+        raise RuntimeError("complete exploded")
+
+    h.repository.complete_tool_execution = boom_complete
+    bound = await h.loop._bindings.resolve(h.deps.lease)
+    with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
+        await h.loop._complete_spawn_claim(h.deps, fake, bound, "aborted")
+    assert any(
+        "complete spawn claim failed" in record.getMessage() for record in caplog.records
+    )
+    assert (
+        metrics.subagent_adopt_error_total.labels(
+            parent_kind="coding", op="complete"
+        )._value.get()
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_subagent_list_flag_off_returns_empty() -> None:
+    h = harness(
+        [
+            [
+                ToolCallCompleted("l1", "subagent_list.v1", {}),
+                completed(),
+            ]
+        ]
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result.get("children") == []
+    assert result.get("entries") in ((), [], None) or list(result.get("entries") or ()) == []
+
+
+@pytest.mark.asyncio
+async def test_subagent_steer_refuses_unowned_run() -> None:
+    inner, _child = _make_runtime([_child_tool(), _text()])
+    foreign = await inner.advance(
+        SubagentTicket(
+            parent_kind=ParentKind.CODING,
+            parent_id="ct_other",
+            parent_run_id="cr_other",
+            parent_tool_call_id="fx",
+            spec="explore",
+            briefing=ParentBriefing(goal="foreign look"),
+            model=ModelPin(provider="anthropic", model="claude-test"),
+            max_turns=4,
+            sandbox_mode=SandboxMode.PARENT_RO,
+        )
+    )
+    h = harness(
+        [
+            [
+                tool_call(
+                    "st1",
+                    "subagent_steer.v1",
+                    {"run_id": foreign.run_id, "text": "do not steer this"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=inner,
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_not_owner"
+    state = await inner._store.get_loop_state(foreign.run_id)
+    assert "do not steer this" not in str(state)

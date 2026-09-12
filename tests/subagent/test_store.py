@@ -344,7 +344,7 @@ def test_postgres_commit_skips_terminal_run_update() -> None:
     assert "_UPDATE_RUN_IF_LIVE" in commit_src
     assert "_UPDATE_RUN," not in commit_src
     assert "AND status NOT IN ('completed', 'failed', 'killed')" in source
-    cancel_src = source.split("async def _cancel_in_session", 1)[1]
+    cancel_src = source.split("async def _mark_terminal_in_session", 1)[1]
     assert "_UPDATE_RUN," in cancel_src
 
 

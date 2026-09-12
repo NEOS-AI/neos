@@ -14,6 +14,8 @@ HOUSEKEEPING_TOOLS = frozenset(
         "search_tools.v1",
         "set_phase.v1",
         "spawn_agent.v1",
+        "subagent_list.v1",
+        "subagent_steer.v1",
     }
 )
 _PUSH_STATUSES = frozenset(

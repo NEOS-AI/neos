@@ -31,6 +31,8 @@ from neos.subagent.types import (
 REFUSED_TOOLS = frozenset(
     {
         "spawn_agent.v1",
+        "subagent_list.v1",
+        "subagent_steer.v1",
         "edit_file.v1",
         "write_file.v1",
         "execute.v1",
@@ -44,6 +46,8 @@ REFUSED_TOOLS = frozenset(
 _MAX_TOOL_BATCH = 10
 _MAX_TRANSCRIPT_BYTES = 1024 * 1024
 _MAX_TOOL_BODY = 32 * 1024
+_COMPACT_AFTER_TURNS = 2
+_COMPACT_CHAR_CAP = 64 * 1024
 
 
 class ChildStepper:
@@ -75,6 +79,8 @@ class ChildStepper:
         state: dict[str, Any],
     ) -> CheckpointWrite:
         run_id = reservation.run.run_id
+        _apply_pending_steer(state)
+        request_kwargs = _thinking_off_kwargs()
         request = ModelRequest(
             system=build_explore_system_prompt(),
             messages=_canonical_messages(state),
@@ -84,6 +90,7 @@ class ChildStepper:
             task_id=run_id,
             run_id=run_id,
             turn_id=f"sat_{uuid4().hex}",
+            **request_kwargs,
         )
         text_parts: list[str] = []
         tool_calls: list[Any] = []
@@ -181,19 +188,25 @@ def _restore(ticket: SubagentTicket, reservation: CasReservation) -> dict[str, A
         state.setdefault("cost_micros", 0)
         state.setdefault("error_code", "")
         state.setdefault("citations", [])
-        return state
-    return {
-        "messages": [{"role": "user", "text": render_brief(ticket.briefing)}],
-        "pending_tools": [],
-        "turn_count": 0,
-        "tool_count": 0,
-        "last_assistant_text": "",
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cost_micros": 0,
-        "error_code": "",
-        "citations": [],
-    }
+        state.setdefault("pending_steer", "")
+        state.setdefault("steer_applied", "")
+    else:
+        state = {
+            "messages": [{"role": "user", "text": render_brief(ticket.briefing)}],
+            "pending_tools": [],
+            "turn_count": 0,
+            "tool_count": 0,
+            "last_assistant_text": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_micros": 0,
+            "error_code": "",
+            "citations": [],
+            "pending_steer": "",
+            "steer_applied": "",
+        }
+    _queue_pending_steer(state, getattr(ticket, "pending_steer", "") or "")
+    return state
 
 
 def _write(state: dict[str, Any], status: SubagentStatus) -> CheckpointWrite:
@@ -299,11 +312,61 @@ def _collect_citations(state: dict[str, Any], result: Mapping[str, Any]) -> None
     state["citations"] = cites
 
 
+def _thinking_off_kwargs() -> dict[str, Any]:
+    fields = getattr(ModelRequest, "__dataclass_fields__", {})
+    if "thinking" in fields:
+        return {"thinking": False}
+    if "thinking_enabled" in fields:
+        return {"thinking_enabled": False}
+    return {}
+
+
+def _steer_remainder(snapshot: str, applied: str) -> str:
+    """Ticket text is the parent snapshot. Queue only the unapplied suffix."""
+    snap = str(snapshot or "").strip()
+    done = str(applied or "").strip()
+    if not snap or snap == done:
+        return ""
+    if not done:
+        return snap
+    prefix = f"{done}\n"
+    if snap.startswith(prefix):
+        return snap[len(prefix) :]
+    if snap.startswith(done):
+        return snap[len(done) :].lstrip("\n")
+    return snap
+
+
+def _queue_pending_steer(state: dict[str, Any], text: str) -> None:
+    state["pending_steer"] = _steer_remainder(
+        text, str(state.get("steer_applied") or "")
+    )
+
+
+def _apply_pending_steer(state: dict[str, Any]) -> None:
+    text = str(state.pop("pending_steer", "") or "").strip()
+    if not text:
+        return
+    state["messages"].append({"role": "user", "text": text})
+    applied = str(state.get("steer_applied") or "").strip()
+    state["steer_applied"] = "\n".join(part for part in (applied, text) if part)
+
+
+def _should_compact(state: Mapping[str, Any]) -> bool:
+    if int(state.get("turn_count") or 0) >= _COMPACT_AFTER_TURNS:
+        return True
+    return _transcript_bytes(state) > _COMPACT_CHAR_CAP
+
+
 def _compact(state: dict[str, Any]) -> None:
+    if not _should_compact(state):
+        return
     for message in state.get("messages") or ():
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
         content = message.get("content")
+        if isinstance(content, Mapping) and content.get("_ref"):
+            continue
         blob = json.dumps(content, default=str)
         if len(blob) > _MAX_TOOL_BODY:
             message["content"] = {"_ref": "dropped", "bytes": len(blob)}

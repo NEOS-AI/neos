@@ -17,6 +17,8 @@ from neos.coding.sandbox.paths import (
 )
 
 _DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
+_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+_STEER_TEXT_MAX = 2000
 _DEDICATED_EXECUTE_DENY = frozenset(
     {
         "cat",
@@ -246,6 +248,15 @@ def _deferred_tools_threshold() -> int:
         return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
 
 
+def _subagent_tools_enabled() -> bool:
+    try:
+        from neos.config.settings import settings
+
+        return bool(settings.config.coding_model.subagent_enabled)
+    except Exception:
+        return False
+
+
 class ToolRisk(StrEnum):
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
@@ -320,6 +331,15 @@ class _SpawnAgentInput(_ToolInput):
     scope: str = Field(default="", max_length=2000)
     success: str = Field(default="", max_length=2000)
     report_budget: int = Field(default=4000, ge=256, le=16384)
+
+
+class _SubagentListInput(_ToolInput):
+    pass
+
+
+class _SubagentSteerInput(_ToolInput):
+    run_id: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=_STEER_TEXT_MAX)
 
 
 class _EmptyInput(_ToolInput):
@@ -604,6 +624,26 @@ class CodingToolRegistry:
             ToolRisk.READ_ONLY,
             _SpawnAgentInput,
         ),
+        _RegisteredTool(
+            "subagent_list.v1",
+            (
+                "List live explore children of this parent. "
+                "Returns run_id, spec, status, and turn_count only. "
+                "On policy_* denial, do not retry."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentListInput,
+        ),
+        _RegisteredTool(
+            "subagent_steer.v1",
+            (
+                "Append text to the next user message of a parent-owned child. "
+                "Does not interrupt the current child step. "
+                "On policy_* denial, do not retry the same run."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentSteerInput,
+        ),
     )
 
     _CORE_TOOL_NAMES: ClassVar[frozenset[str]] = frozenset(
@@ -691,21 +731,41 @@ class CodingToolRegistry:
         )
 
     @classmethod
-    def deferred_tool_names(cls, *, phase: str | None = None) -> tuple[str, ...]:
+    def deferred_tool_names(
+        cls,
+        *,
+        phase: str | None = None,
+        subagent_enabled: bool | None = None,
+    ) -> tuple[str, ...]:
         from neos.coding.phases import hidden_tools_for_phase
 
         hidden = hidden_tools_for_phase(phase) if phase is not None else frozenset()
-        return tuple(
-            tool.name
-            for tool in cls._TOOL_SPECS
-            if tool.name not in cls._CORE_TOOL_NAMES and tool.name not in hidden
+        advertised = (
+            _subagent_tools_enabled()
+            if subagent_enabled is None
+            else bool(subagent_enabled)
         )
+        names: list[str] = []
+        for tool in cls._TOOL_SPECS:
+            if tool.name in cls._CORE_TOOL_NAMES or tool.name in hidden:
+                continue
+            if tool.name in _CONTROL_PLANE_TOOLS and not advertised:
+                continue
+            names.append(tool.name)
+        return tuple(names)
 
     @classmethod
     def search_definitions(
-        cls, query: str, *, limit: int = 8, phase: str = "implement"
+        cls,
+        query: str,
+        *,
+        limit: int = 8,
+        phase: str = "implement",
+        subagent_enabled: bool | None = None,
     ) -> tuple[Mapping[str, object], ...]:
-        candidates = cls._deferred_tools(phase=phase)
+        candidates = cls._deferred_tools(
+            phase=phase, subagent_enabled=subagent_enabled
+        )
         selected = _select_query_names(query)
         matches: list[Mapping[str, object]] = []
         if selected is not None:
@@ -733,8 +793,12 @@ class CodingToolRegistry:
         return tuple(matches)
 
     @classmethod
-    def _deferred_tools(cls, *, phase: str) -> tuple[_RegisteredTool, ...]:
-        allowed = frozenset(cls.deferred_tool_names(phase=phase))
+    def _deferred_tools(
+        cls, *, phase: str, subagent_enabled: bool | None = None
+    ) -> tuple[_RegisteredTool, ...]:
+        allowed = frozenset(
+            cls.deferred_tool_names(phase=phase, subagent_enabled=subagent_enabled)
+        )
         return tuple(tool for tool in cls._TOOL_SPECS if tool.name in allowed)
 
     def decide(

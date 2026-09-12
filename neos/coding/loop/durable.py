@@ -93,6 +93,8 @@ _THINK_UNCLOSED_RE = re.compile(
     r"<(think|thinking|reasoning)\b[^>]*>.*\Z",
     re.IGNORECASE | re.DOTALL,
 )
+_BRIEF_PLACEHOLDER_RE = re.compile(r"<[A-Za-z_][A-Za-z0-9_]*>")
+_STUB_GOALS = frozenset({"TODO", "TBD"})
 
 
 class CodingLoopFailure(RuntimeError):
@@ -181,6 +183,7 @@ class CodingLoopConfig:
 
 
 _EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
+_STALE_SLACK_SEC = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,12 +194,18 @@ class _AppliedPendingCommand:
     instructions_loaded: bool
 
 
+_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+
+
 @dataclass(frozen=True, slots=True)
 class ActiveChildRef:
     run_id: str
     checkpoint_id: str | None
     tool_call_id: str
     last_advanced_at: str  # UTC datetime.isoformat() from self._clock()
+    rolled_input_tokens: int = 0
+    rolled_output_tokens: int = 0
+    pending_steer: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +258,8 @@ class DelegatedSpawn:
     run_id: str
     checkpoint_id: str | None
     step_kind: str
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -593,13 +604,18 @@ class DurableCodingLoop:
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
         max_active = _subagent_max_active(self._config)
-        work = _select_spawn_work(state, max_active=max_active)
-        if work is not None and work.call is not None:
-            call = work.call
+        head = state.pending_tool_calls[state.pending_tool_index]
+        if head.name in _CONTROL_PLANE_TOOLS:
+            work = None
+            call = head
         else:
-            # resume with a missing pending id (mutation / corruption) uses
-            # pending[index] so the existing cap guard still fails closed
-            call = state.pending_tool_calls[state.pending_tool_index]
+            work = _select_spawn_work(state, max_active=max_active)
+            if work is not None and work.call is not None:
+                call = work.call
+            else:
+                # resume with a missing pending id (mutation / corruption) uses
+                # pending[index] so the existing cap guard still fails closed
+                call = head
         if _is_stall_denied(state, call.name, call.input):
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_stall_denied"
@@ -841,6 +857,18 @@ class DurableCodingLoop:
                         updated = result.pop("_loop_state", None)
                         if updated is not None:
                             state = updated
+                elif call.name == "subagent_list.v1":
+                    result = await self._run_subagent_list(
+                        bound, state, input=input
+                    )
+                elif call.name == "subagent_steer.v1":
+                    result = await self._run_subagent_steer(
+                        call, bound, state, input=input
+                    )
+                    if isinstance(result, dict):
+                        updated = result.pop("_loop_state", None)
+                        if updated is not None:
+                            state = updated
                 else:
                     result = await self._execute_validated(
                         bound,
@@ -870,13 +898,20 @@ class DurableCodingLoop:
                     ToolExecutionDisposition.RECLAIMED,
                 }:
                     await self._mark_spawn_delegated(deps, claim, result)
+                existing = self._child_ref(state, call.tool_call_id)
+                in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
+                    existing, result.input_tokens, result.output_tokens
+                )
                 parked = self._upsert_active_child(
-                    state,
+                    self._apply_child_usage_delta(state, in_delta, out_delta),
                     ActiveChildRef(
                         run_id=result.run_id,
                         checkpoint_id=result.checkpoint_id,
                         tool_call_id=call.tool_call_id,
                         last_advanced_at=self._utc_stamp(),
+                        rolled_input_tokens=rolled_in,
+                        rolled_output_tokens=rolled_out,
+                        pending_steer=existing.pending_steer if existing else "",
                     ),
                 )
                 payload = {
@@ -894,6 +929,13 @@ class DurableCodingLoop:
                     loop_state=self._dump_state(input, parked),
                     workspace_revision=str(bound.binding.workspace_revision),
                     now=self._clock(),
+                )
+                await self._enforce_usage_budgets_after_child_spend(
+                    parked,
+                    deps,
+                    bound,
+                    input,
+                    except_tool_call_id=call.tool_call_id,
                 )
                 yield committed.event, parked
                 return
@@ -971,17 +1013,44 @@ class DurableCodingLoop:
         status = str(result.get("status", "ok"))
         canonical_status = status if status in {"ok", "error", "denied"} else "ok"
         reused = claim.disposition is ToolExecutionDisposition.COMPLETED
+        dropped_fold = (
+            call.name == "spawn_agent.v1"
+            and str(result.get("exit_reason") or "") == "dropped"
+        )
         child_fold = call.name == "spawn_agent.v1" and "child_status" in result
-        if child_fold and (
-            not reused or self._child_ref(state, call.tool_call_id) is not None
+        if (
+            child_fold
+            and not dropped_fold
+            and (not reused or self._child_ref(state, call.tool_call_id) is not None)
         ):
-            state = self._apply_child_fold_usage(state, result)
+            state = self._apply_child_fold_usage(state, result, call.tool_call_id)
         advance_index = (
             state.has_pending_tool
             and state.pending_tool_calls[state.pending_tool_index].tool_call_id
             == call.tool_call_id
         )
-        if call.tool_call_id in _tool_result_ids(state.transcript):
+        if dropped_fold:
+            if call.tool_call_id in _tool_result_ids(state.transcript):
+                after = self._drain_completed_prefix(state)
+            elif call.tool_call_id in _tool_use_names(state.transcript):
+                after = await self._after_result(
+                    state,
+                    ToolResultContent(
+                        call.tool_call_id,
+                        "error",
+                        {"exit_reason": "dropped"},
+                    ),
+                    tool_name=call.name,
+                    tool_input=call.input,
+                    advance_index=advance_index,
+                )
+            else:
+                after = state
+                if advance_index:
+                    after = replace(
+                        after, pending_tool_index=after.pending_tool_index + 1
+                    )
+        elif call.tool_call_id in _tool_result_ids(state.transcript):
             after = self._drain_completed_prefix(state)
         else:
             after = await self._after_result(
@@ -1018,18 +1087,9 @@ class DurableCodingLoop:
             now=self._clock(),
         )
         if child_fold:
-            # Production returns on first phase.completed; a post-yield check never runs.
-            try:
-                self._check_usage_budgets(after)
-            except CodingLoopFailure as error:
-                await self.fail_all_live_spawn_claims(
-                    after,
-                    deps,
-                    bound,
-                    reason=error.code,
-                    task_id=input.task_id,
-                )
-                raise
+            await self._enforce_usage_budgets_after_child_spend(
+                after, deps, bound, input
+            )
         yield committed.event, after
         if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
@@ -1041,7 +1101,7 @@ class DurableCodingLoop:
             return None
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
-            if call.name in {"spawn_agent.v1", "set_phase.v1"}:
+            if call.name in {"spawn_agent.v1", "set_phase.v1"} | _CONTROL_PLANE_TOOLS:
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
@@ -1535,6 +1595,11 @@ class DurableCodingLoop:
 
         record_policy_capped(self._metrics, parent_kind="coding")
 
+    def _record_adopt_error(self, op: str) -> None:
+        from neos.subagent.metrics import record_adopt_error
+
+        record_adopt_error(self._metrics, parent_kind="coding", op=op)
+
     def _record_fold_rollup(
         self, input_tokens: int, output_tokens: int, cost_micros: int
     ) -> None:
@@ -1780,6 +1845,23 @@ class DurableCodingLoop:
         if state.cost_micros > self._config.max_cost_micros:
             raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
 
+    async def _enforce_usage_budgets_after_child_spend(
+        self, state, deps, bound, input, *, except_tool_call_id: str | None = None
+    ) -> None:
+        # Production returns on first phase.completed; a post-yield check never runs.
+        try:
+            self._check_usage_budgets(state)
+        except CodingLoopFailure as error:
+            await self.fail_all_live_spawn_claims(
+                state,
+                deps,
+                bound,
+                reason=error.code,
+                task_id=input.task_id,
+                except_tool_call_id=except_tool_call_id,
+            )
+            raise
+
     async def _load_workspace_instructions(self, state, bound) -> AgentLoopState:
         text = None
         session = bound.session
@@ -1833,9 +1915,17 @@ class DurableCodingLoop:
         if "revealed" in parameters:
             kwargs["revealed"] = state.revealed_tools
         if kwargs:
-            return method(**kwargs)
-        hidden = hidden_tools_for_phase(state.phase)
-        return tuple(item for item in method() if item.name not in hidden)
+            definitions = method(**kwargs)
+        else:
+            hidden = hidden_tools_for_phase(state.phase)
+            definitions = tuple(item for item in method() if item.name not in hidden)
+        if self._config.subagent_enabled:
+            return definitions
+        return tuple(
+            item
+            for item in definitions
+            if getattr(item, "name", item) not in _CONTROL_PLANE_TOOLS
+        )
 
     def _model_limits(self, state: AgentLoopState) -> ModelLimits:
         max_output_tokens = self._config.max_output_tokens
@@ -1898,9 +1988,46 @@ class DurableCodingLoop:
     def _utc_stamp(self) -> str:
         return self._clock().astimezone(UTC).isoformat()
 
+    def _child_stale_after_sec(self, max_turns: int) -> float:
+        timeout = float(getattr(self._config, "timeout_sec", 120) or 120)
+        return max(1, min(8, max_turns)) * timeout + _STALE_SLACK_SEC
+
+    async def _fold_if_stale_child(
+        self, ref: ActiveChildRef, *, max_turns: int, bound
+    ) -> dict[str, Any] | None:
+        if self._subagents is None:
+            return None
+        from neos.subagent.types import SubagentStatus
+
+        now = self._clock()
+        horizon = self._child_stale_after_sec(max_turns)
+        parent_stale = _stamp_is_stale(ref.last_advanced_at, now, horizon)
+        fail_if_stale = getattr(self._subagents, "fail_if_stale", None)
+        if not callable(fail_if_stale):
+            return None
+        # Parent last_advanced_at is the no-progress clock; 0 forces store fail.
+        snap = await fail_if_stale(
+            ref.run_id,
+            now=now,
+            stale_after_sec=0 if parent_stale else horizon,
+        )
+        store_stale = (
+            snap.status is SubagentStatus.FAILED and snap.error_code == "stalled"
+        )
+        if not parent_stale and not store_stale:
+            return None
+        folded = await self._subagents.fold(ref.run_id)
+        return self._folded_spawn_result(bound, folded)
+
     def _child_ref(self, state, tool_call_id: str) -> ActiveChildRef | None:
         for child in state.active_children:
             if child.tool_call_id == tool_call_id:
+                return child
+        return None
+
+    def _child_ref_by_run(self, state, run_id: str) -> ActiveChildRef | None:
+        for child in state.active_children or _legacy_single(state):
+            if child.run_id == run_id:
                 return child
         return None
 
@@ -2053,6 +2180,12 @@ class DurableCodingLoop:
                 + timedelta(seconds=self._config.timeout_sec + 30),
             )
         except Exception:
+            logger.warning(
+                "adopt spawn claim failed tool_call_id=%s",
+                tool_call_id,
+                exc_info=True,
+            )
+            self._record_adopt_error("adopt")
             return None
 
     async def _adopt_all_live_claims(
@@ -2095,6 +2228,13 @@ class DurableCodingLoop:
                 now=self._clock(),
             )
         except Exception:
+            logger.warning(
+                "complete spawn claim failed reason=%s tool_call_id=%s",
+                reason,
+                getattr(claim, "tool_call_id", None),
+                exc_info=True,
+            )
+            self._record_adopt_error("complete")
             return
 
     async def fail_all_live_spawn_claims(
@@ -2175,8 +2315,11 @@ class DurableCodingLoop:
             budget = int(budget)
         except (TypeError, ValueError):
             budget = 4000
+        goal = str(raw.get("prompt") or "").strip()
+        if goal.upper() in _STUB_GOALS or _BRIEF_PLACEHOLDER_RE.search(goal):
+            raise ValueError("briefing.goal is a placeholder")
         return ParentBriefing(
-            goal=str(raw.get("prompt") or "").strip(),
+            goal=goal,
             why=str(raw.get("why") or ""),
             already_tried=tuple(str(item) for item in already),
             scope=str(raw.get("scope") or ""),
@@ -2197,8 +2340,24 @@ class DurableCodingLoop:
         ) // 1_000_000
         return in_tokens, out_tokens, priced
 
-    def _apply_child_fold_usage(self, state, folded) -> AgentLoopState:
-        in_tokens, out_tokens, child_cost = self._price_child_usage(folded)
+    def _unrolled_child_usage(
+        self, child: ActiveChildRef | None, input_tokens: int, output_tokens: int
+    ) -> tuple[int, int, int, int]:
+        rolled_in = child.rolled_input_tokens if child is not None else 0
+        rolled_out = child.rolled_output_tokens if child is not None else 0
+        in_delta = max(0, int(input_tokens or 0) - rolled_in)
+        out_delta = max(0, int(output_tokens or 0) - rolled_out)
+        return in_delta, out_delta, rolled_in + in_delta, rolled_out + out_delta
+
+    def _apply_child_usage_delta(
+        self, state, input_tokens: int, output_tokens: int
+    ) -> AgentLoopState:
+        in_tokens = max(0, int(input_tokens or 0))
+        out_tokens = max(0, int(output_tokens or 0))
+        child_cost = (
+            in_tokens * self._config.input_cost_micros_per_million
+            + out_tokens * self._config.output_cost_micros_per_million
+        ) // 1_000_000
         self._record_fold_rollup(in_tokens, out_tokens, child_cost)
         return replace(
             state,
@@ -2207,12 +2366,22 @@ class DurableCodingLoop:
             cost_micros=state.cost_micros + child_cost,
         )
 
+    def _apply_child_fold_usage(
+        self, state, folded, tool_call_id: str
+    ) -> AgentLoopState:
+        in_tokens, out_tokens, _ = self._price_child_usage(folded)
+        in_delta, out_delta, _, _ = self._unrolled_child_usage(
+            self._child_ref(state, tool_call_id), in_tokens, out_tokens
+        )
+        return self._apply_child_usage_delta(state, in_delta, out_delta)
+
     def _folded_spawn_result(self, bound, folded) -> dict[str, Any]:
         from neos.subagent.types import SubagentStatus
 
         ok = folded.status is SubagentStatus.COMPLETED
         status = "ok" if ok else "error"
-        reason = "ok" if ok else folded.status.value
+        exit_reason = str(getattr(folded, "exit_reason", "") or "")
+        reason = "ok" if ok else (exit_reason or folded.status.value)
         result = dict(
             ToolResult(
                 status,
@@ -2226,6 +2395,7 @@ class DurableCodingLoop:
                     {
                         "summary": folded.summary,
                         "run_id": folded.run_id,
+                        "exit_reason": exit_reason,
                     },
                 ),
             ).to_mapping()
@@ -2235,9 +2405,111 @@ class DurableCodingLoop:
         result["truncated"] = bool(folded.truncated)
         result["citations"] = list(folded.citations)
         result["child_status"] = folded.status.value
+        result["exit_reason"] = exit_reason
         result["turn_count"] = folded.turn_count
         result["input_tokens"] = int(folded.input_tokens or 0)
         result["output_tokens"] = int(folded.output_tokens or 0)
+        result["exit_reason"] = exit_reason
+        result.pop("full_summary", None)
+        return result
+
+    def _dropped_spawn_result(self, bound, snapshot) -> dict[str, Any]:
+        result = dict(
+            ToolResult(
+                "error",
+                "dropped",
+                None,
+                None,
+                False,
+                None,
+                str(bound.binding.workspace_revision),
+                entries=(
+                    {
+                        "run_id": snapshot.run_id,
+                        "exit_reason": "dropped",
+                    },
+                ),
+            ).to_mapping()
+        )
+        result["run_id"] = snapshot.run_id
+        result["exit_reason"] = "dropped"
+        result["child_status"] = snapshot.status.value
+        result["truncated"] = False
+        result["turn_count"] = int(getattr(snapshot, "turn_count", 0) or 0)
+        result["input_tokens"] = int(snapshot.input_tokens or 0)
+        result["output_tokens"] = int(snapshot.output_tokens or 0)
+        return result
+
+    def _subagent_list_result(self, bound, children: list[dict[str, Any]]) -> dict[str, Any]:
+        result = dict(
+            ToolResult.ok(
+                workspace_revision=str(bound.binding.workspace_revision),
+                entries=tuple(children),
+            ).to_mapping()
+        )
+        result["children"] = children
+        return result
+
+    async def _run_subagent_list(self, bound, state, *, input=None) -> dict[str, Any]:
+        if not self._config.subagent_enabled or self._subagents is None:
+            return self._subagent_list_result(bound, [])
+        parent_id = input.task_id if input is not None else ""
+        children: list[dict[str, Any]] = []
+        for ref in state.active_children or _legacy_single(state):
+            try:
+                snapshot = await self._subagents.status(ref.run_id)
+            except Exception:
+                continue
+            if snapshot.parent_id != parent_id:
+                continue
+            status = snapshot.status.value
+            if status not in {"pending", "running"}:
+                continue
+            children.append(
+                {
+                    "run_id": snapshot.run_id,
+                    "spec": snapshot.spec,
+                    "status": status,
+                    "turn_count": snapshot.turn_count,
+                }
+            )
+        return self._subagent_list_result(bound, children)
+
+    async def _run_subagent_steer(
+        self, call, bound, state, *, input=None
+    ) -> dict[str, Any]:
+        if not self._config.subagent_enabled or self._subagents is None:
+            return self._spawn_tool_error(bound, "subagent_disabled")
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        run_id = str(raw.get("run_id") or "")
+        text = str(raw.get("text") or "").strip()
+        if not run_id or not text or len(text) > 2000:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        try:
+            snapshot = await self._subagents.status(run_id)
+        except Exception:
+            return self._spawn_tool_error(bound, "policy_not_owner")
+        parent_id = input.task_id if input is not None else ""
+        if snapshot.parent_id != parent_id:
+            return self._spawn_tool_error(bound, "policy_not_owner")
+        existing = self._child_ref_by_run(state, run_id)
+        if existing is None:
+            return self._spawn_tool_error(bound, "policy_not_owner")
+        merged = "\n".join(
+            part for part in (existing.pending_steer, text) if part
+        )
+        if len(merged) > 2000:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        updated = self._upsert_active_child(
+            state, replace(existing, pending_steer=merged)
+        )
+        result = dict(
+            ToolResult.ok(
+                workspace_revision=str(bound.binding.workspace_revision),
+                entries=({"run_id": run_id, "steered": True},),
+            ).to_mapping()
+        )
+        result["_loop_state"] = updated
         return result
 
     async def _run_spawn_agent(
@@ -2311,6 +2583,10 @@ class DurableCodingLoop:
         except ValueError:
             return self._spawn_tool_error(bound, "policy_schema_invalid")
         ref = self._child_ref(state, call.tool_call_id)
+        if ref is not None and ref.run_id:
+            snapshot = await self._subagents.status(ref.run_id)
+            if snapshot.parent_id != input.task_id:
+                return self._dropped_spawn_result(bound, snapshot)
         ticket = SubagentTicket(
             parent_kind=ParentKind.CODING,
             parent_id=input.task_id,
@@ -2323,7 +2599,14 @@ class DurableCodingLoop:
             sandbox_mode=SandboxMode.PARENT_RO,
             expected_checkpoint_id=ref.checkpoint_id if ref else None,
             run_id=ref.run_id if ref else None,
+            pending_steer=ref.pending_steer if ref else "",
         )
+        if ref is not None:
+            folded = await self._fold_if_stale_child(
+                ref, max_turns=max_turns, bound=bound
+            )
+            if folded is not None:
+                return folded
         self._bind_child_tools(bound, state)
         try:
             await self._renew_parent_lease(deps)
@@ -2339,6 +2622,8 @@ class DurableCodingLoop:
                 run_id=outcome.run_id,
                 checkpoint_id=outcome.checkpoint_id,
                 step_kind=outcome.kind.value,
+                input_tokens=int(outcome.input_tokens or 0),
+                output_tokens=int(outcome.output_tokens or 0),
             )
         folded = await self._subagents.fold(outcome.run_id)
         return self._folded_spawn_result(bound, folded)
@@ -2706,6 +2991,9 @@ class DurableCodingLoop:
                     "checkpoint_id": child.checkpoint_id,
                     "tool_call_id": child.tool_call_id,
                     "last_advanced_at": child.last_advanced_at,
+                    "rolled_input_tokens": child.rolled_input_tokens,
+                    "rolled_output_tokens": child.rolled_output_tokens,
+                    "pending_steer": child.pending_steer,
                 }
                 for child in state.active_children
             ],
@@ -3207,6 +3495,37 @@ def _optional_str(value: object) -> str | None:
     return text or None
 
 
+def _nonneg_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_utc_stamp(stamp: str) -> datetime | None:
+    text = (stamp or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _stamp_is_stale(stamp: str, now: datetime, stale_after_sec: float) -> bool:
+    # Epoch is unknown last-advance, not age 0.
+    if stamp == _EPOCH_STAMP:
+        return False
+    parsed = _parse_utc_stamp(stamp)
+    if parsed is None:
+        return False
+    age = (now.astimezone(UTC) - parsed).total_seconds()
+    return age >= stale_after_sec
+
+
 def _tool_result_ids(transcript) -> set[str]:
     return {
         item.tool_call_id
@@ -3289,6 +3608,13 @@ def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ..
                         checkpoint_id=_optional_str(item.get("checkpoint_id")),
                         tool_call_id=tool_call_id,
                         last_advanced_at=stamp,
+                        rolled_input_tokens=_nonneg_int(
+                            item.get("rolled_input_tokens")
+                        ),
+                        rolled_output_tokens=_nonneg_int(
+                            item.get("rolled_output_tokens")
+                        ),
+                        pending_steer=str(item.get("pending_steer") or ""),
                     )
                 )
         if len(children) > 1:

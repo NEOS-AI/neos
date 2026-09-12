@@ -82,6 +82,7 @@ class SubagentTicket:
     expected_checkpoint_id: str | None = None
     run_id: str | None = None  # set on resume
     lineage_kind: LineageKind = LineageKind.DELEGATE
+    pending_steer: str = ""
 
     def __post_init__(self) -> None:
         if self.lineage_kind is not LineageKind.DELEGATE:
@@ -135,6 +136,8 @@ class FoldedResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_micros: int = 0
+    exit_reason: str = ""
+    full_summary: str = ""
 
 
 class ToolPort(Protocol):

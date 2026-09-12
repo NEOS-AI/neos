@@ -46,6 +46,8 @@ def spec_tools() -> frozenset[str]:
 def test_explore_does_not_grant_write_or_spawn_tools() -> None:
     forbidden = {
         "spawn_agent.v1",
+        "subagent_list.v1",
+        "subagent_steer.v1",
         "edit_file.v1",
         "write_file.v1",
         "execute.v1",

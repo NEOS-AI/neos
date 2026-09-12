@@ -892,6 +892,10 @@ class SandboxToolExecutor:
             return self._search_tools(call)
         if call.name == "spawn_agent.v1":
             return self._spawn_agent()
+        if call.name == "subagent_list.v1":
+            return self._subagent_list()
+        if call.name == "subagent_steer.v1":
+            return self._subagent_steer()
         if call.name == "web_fetch.v1":
             return await self._web_fetch(session, call)
         if call.name == "glob_files.v1":
@@ -1043,6 +1047,25 @@ class SandboxToolExecutor:
         return ToolResult.ok(
             workspace_revision="unknown",
             entries=({"delegated": True},),
+        )
+
+    @staticmethod
+    def _subagent_list() -> ToolResult:
+        return ToolResult.ok(
+            workspace_revision="unknown",
+            entries=(),
+        )
+
+    @staticmethod
+    def _subagent_steer() -> ToolResult:
+        return ToolResult(
+            "error",
+            "not_intercepted",
+            None,
+            None,
+            False,
+            None,
+            "unknown",
         )
 
     async def _web_fetch(

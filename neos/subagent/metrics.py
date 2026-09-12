@@ -10,6 +10,7 @@ _OUTCOMES = frozenset(
     {"continuing", "completed", "failed", "cancelled", "unknown_spec"}
 )
 _PROVIDERS = frozenset({"anthropic", "openai", "gemini", "ollama"})
+_ADOPT_OPS = frozenset({"adopt", "complete"})
 
 
 def _parent(payload: Mapping[str, Any]) -> str:
@@ -102,6 +103,19 @@ def record_policy_capped(metrics, *, parent_kind: str) -> None:
     if counter is None:
         return
     counter.labels(parent_kind=_parent({"parent_kind": parent_kind})).inc()
+
+
+def record_adopt_error(metrics, *, parent_kind: str, op: str) -> None:
+    if metrics is None:
+        return
+    counter = getattr(metrics, "subagent_adopt_error_total", None)
+    if counter is None:
+        return
+    label = op if op in _ADOPT_OPS else "adopt"
+    counter.labels(
+        parent_kind=_parent({"parent_kind": parent_kind}),
+        op=label,
+    ).inc()
 
 
 def record_fold_rollup(
