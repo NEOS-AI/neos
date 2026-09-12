@@ -1187,6 +1187,16 @@ def _live_count(metrics) -> float:
     )
 
 
+def _live_bucket(metrics, le: str) -> float:
+    return _histogram_sample(
+        metrics.subagent_live_children,
+        "_bucket",
+        parent_kind="coding",
+        spec="explore",
+        le=le,
+    )
+
+
 @pytest.mark.asyncio
 async def test_spawn_delivery_observes_live_children_histogram() -> None:
     runtime, _child = _make_runtime([_child_tool()])
@@ -1263,3 +1273,18 @@ async def test_child_fold_records_parent_priced_rollup_not_folded_cost() -> None
         )._value.get()
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_child_fold_observes_live_children_after_drop() -> None:
+    runtime, _child = _make_runtime([_usage_turn("found login.py", 2, 3)])
+    metrics = _metrics()
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
+    h.loop._metrics = metrics
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    assert not state.get("active_children")
+    assert state["active_child_run_id"] is None
+    assert _live_count(metrics) == 1
+    assert _live_sum(metrics) == 0.0
+    assert _live_bucket(metrics, "0.0") == 1.0

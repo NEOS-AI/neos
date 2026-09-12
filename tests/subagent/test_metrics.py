@@ -194,7 +194,7 @@ def test_fold_rollup_records_parent_priced_spend_not_child_cost_micros() -> None
     )
 
 
-def test_step_payload_live_count_is_optional_allowlisted_extra() -> None:
+def test_step_payload_extras_do_not_observe_live_children_or_raise() -> None:
     metrics = _collector()
     record_subagent_event(
         metrics,
@@ -203,16 +203,21 @@ def test_step_payload_live_count_is_optional_allowlisted_extra() -> None:
             "spec": "explore",
             "parent_kind": "coding",
             "step_kind": "continuing",
-            "live_count": 2,
+            "live_count": "not-a-number",
             "run_id": "sa_should_not_be_a_label",
             "transcript": "forbidden",
             "brief": "forbidden",
         },
     )
     labels = {"parent_kind": "coding", "spec": "explore"}
-    assert _histogram_count(metrics.subagent_live_children, **labels) == 1
-    assert _histogram_sum(metrics.subagent_live_children, **labels) == 2.0
-    assert "run_id" not in metrics.subagent_live_children._labelnames
+    assert _histogram_count(metrics.subagent_live_children, **labels) == 0
+    assert _histogram_sum(metrics.subagent_live_children, **labels) == 0.0
+    assert (
+        metrics.subagent_advance_total.labels(
+            spec="explore", parent_kind="coding", outcome="continuing"
+        )._value.get()
+        == 1
+    )
 
 
 @pytest.mark.asyncio

@@ -50,13 +50,6 @@ def record_subagent_event(metrics, event_type: str, payload: Mapping[str, Any]) 
             histogram.labels(spec=spec, parent_kind=parent).observe(
                 float(payload["duration_sec"])
             )
-        if payload.get("live_count") is not None:
-            record_live_children(
-                metrics,
-                parent_kind=parent,
-                spec=spec,
-                count=int(payload["live_count"]),
-            )
         return
     if event_type == "subagent.completed":
         metrics.subagent_advance_total.labels(
