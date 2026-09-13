@@ -164,6 +164,16 @@ _LIST_PARENT = text(
        AND parent_id = :parent_id
     """
 )
+_LIST_PARENT_RUN = text(
+    """
+    SELECT run_id, parent_kind, parent_id, parent_run_id, parent_tool_call_id,
+           lineage_kind, spec, status, provider, model, max_turns, turn_count,
+           tool_count, input_tokens, output_tokens, cost_micros, briefing_json,
+           error_code, sandbox_mode, created_at, updated_at, completed_at
+      FROM subagent_runs
+     WHERE parent_run_id = :parent_run_id
+    """
+)
 _DELETE_PARENT = text(
     """
     DELETE FROM subagent_runs
@@ -451,6 +461,18 @@ class PostgresSubagentStore:
                         )
                         for row in rows
                     ]
+                )
+
+    async def list_for_parent_run(self, parent_run_id: str) -> tuple[RunRecord, ...]:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                rows = (
+                    await session.execute(
+                        _LIST_PARENT_RUN, {"parent_run_id": parent_run_id}
+                    )
+                ).all()
+                return tuple(
+                    [await self._with_latest(session, row) for row in rows]
                 )
 
     async def delete_for_parent(

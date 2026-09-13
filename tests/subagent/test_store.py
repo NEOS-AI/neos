@@ -318,6 +318,25 @@ async def test_cancel_for_parent_kills_every_active_child(
 
 
 @pytest.mark.asyncio
+async def test_list_for_parent_run_returns_only_that_parent_run(
+    store: InMemorySubagentStore,
+) -> None:
+    parent = await store.resolve_or_create(_ticket(parent_tool_call_id="parent"))
+    child = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="parent:nested",
+        )
+    )
+    other = await store.resolve_or_create(_ticket(parent_tool_call_id="other"))
+    listed = await store.list_for_parent_run(parent.run_id)
+    ids = {item.run_id for item in listed}
+    assert child.run_id in ids
+    assert parent.run_id not in ids
+    assert other.run_id not in ids
+
+
+@pytest.mark.asyncio
 async def test_delete_for_parent_removes_only_that_parent_runs_and_checkpoints(
     store: InMemorySubagentStore,
 ) -> None:

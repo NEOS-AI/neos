@@ -423,6 +423,22 @@ async def test_cancel_and_cancel_for_parent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_cascades_to_descendants() -> None:
+    runtime, store, *_ = _runtime([_tool()])
+    parent = await runtime.advance(_ticket())
+    nested = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="toolu_spawn:nested",
+        )
+    )
+    assert nested.status is SubagentStatus.PENDING
+    killed = await runtime.cancel(parent.run_id, "aborted")
+    assert killed.status is SubagentStatus.KILLED
+    assert (await store.get(nested.run_id)).status is SubagentStatus.KILLED
+
+
+@pytest.mark.asyncio
 async def test_fold_on_running_is_fail_closed() -> None:
     runtime, *_ = _runtime([_tool()])
     first = await runtime.advance(_ticket())
@@ -683,6 +699,24 @@ async def test_fail_if_stale_marks_pending_failed_stalled() -> None:
         kind == "subagent.failed" and payload.get("error_code") == "stalled"
         for kind, payload in events.events
     )
+    assert model.requests == []
+
+
+@pytest.mark.asyncio
+async def test_fail_if_stale_cancels_pending_descendants() -> None:
+    runtime, store, _tools, model, _events = _runtime([_text("should not run")])
+    parent = await store.resolve_or_create(_ticket())
+    nested = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="toolu_spawn:nested",
+        )
+    )
+    _backdate(store, parent.run_id, age_sec=DEFAULT_STALE_AFTER_SEC + 1)
+    snap = await runtime.fail_if_stale(parent.run_id, now=datetime.now(UTC))
+    assert snap.status is SubagentStatus.FAILED
+    assert snap.error_code == "stalled"
+    assert (await store.get(nested.run_id)).status is SubagentStatus.KILLED
     assert model.requests == []
 
 

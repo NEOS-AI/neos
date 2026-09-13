@@ -202,6 +202,7 @@ class SubagentRuntime:
                     "parent_kind": failed.parent_kind.value,
                 },
             )
+            await self._cascade_cancel(run_id, "stalled")
         return failed.snapshot()
 
     async def cancel(self, run_id: str, reason: str) -> SubagentSnapshot:
@@ -211,6 +212,7 @@ class SubagentRuntime:
                 "subagent.cancelled",
                 {"run_id": record.run_id, "reason": reason},
             )
+        await self._cascade_cancel(run_id, reason)
         return record.snapshot()
 
     async def cancel_for_parent(
@@ -225,7 +227,17 @@ class SubagentRuntime:
                     {"run_id": record.run_id, "reason": reason},
                 )
             snapshots.append(record.snapshot())
+            await self._cascade_cancel(record.run_id, reason)
         return tuple(snapshots)
+
+    async def _cascade_cancel(self, run_id: str, reason: str) -> None:
+        list_fn = getattr(self._store, "list_for_parent_run", None)
+        if not callable(list_fn):
+            return
+        children = await list_fn(run_id)
+        for child in children:
+            if child.status in _LIVE:
+                await self.cancel(child.run_id, reason)
 
     async def delete_for_parent(
         self, parent_kind: ParentKind, parent_id: str
