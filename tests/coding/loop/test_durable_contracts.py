@@ -746,7 +746,8 @@ async def test_denied_tool_content_is_denial_envelope() -> None:
     assert content["status"] == "denied"
     assert content["denied_by"] == "hook"
     assert content["function_id"] == "write_file.v1"
-    assert content["reason"] == "policy_hook_denied"
+    assert content["reason"] != "policy_hook_denied"
+    assert "do not retry" in content["reason"]
     assert content["args_excerpt"] == {"path": "a.txt"}
     assert "raw-secret" not in json.dumps(content)
 

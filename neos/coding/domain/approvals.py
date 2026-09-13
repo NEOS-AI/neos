@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -491,6 +491,56 @@ def approval_event_display_summary(
     return excerpt
 
 
+_DENIAL_REASONS = {
+    "policy_hook_denied": "a hook blocked this call; change the input and do not retry it",
+    "hook_prevented": "a hook stopped further tools; do not continue this batch",
+    "approval_denied": "the user denied this action; do not retry the same call",
+    "policy_approval_denied": "the user denied this action; do not retry the same call",
+    "approval_expired": "approval expired; ask again only with a safer call",
+    "approval_invalidated": "approval is no longer valid; ask again only with a safer call",
+    "policy_phase_denied": "this tool is not allowed in the current phase",
+    "policy_skill_denied": "the loaded skill does not allow this tool",
+    "policy_stall_denied": "the same call failed repeatedly; change the approach",
+    "policy_schema_invalid": "the tool input is invalid; fix the arguments",
+    "policy_unknown_tool": "this tool is not available",
+    "policy_inline_interpreter_denied": "run a file with execute.v1, not -c/-e",
+    "policy_command_path_denied": "use a workspace-relative path",
+    "policy_secret_path_denied": "do not pass secret paths",
+    "policy_executable_path_denied": "use a bare executable name",
+    "policy_git_operation_denied": "git via execute is status/diff/log only",
+    "policy_shell_command_denied": "use argv execute, not a shell -c",
+    "policy_network_client_denied": "network clients are not allowed",
+    "policy_network_operation_denied": "package install/update is not allowed",
+    "policy_dangerous_removal": "refusing a destructive rm operand",
+    "policy_executable_not_allowed": "executable is not on the allowlist",
+    "policy_protected_git_path": "do not mutate .git",
+    "policy_workspace_path_escape": "use a workspace-relative path",
+    "policy_workspace_secret_path": "secret paths are not readable",
+    "policy_binary_file": "this file is binary; do not read it as text",
+    "aborted": "the run was aborted; do not retry this call",
+}
+_WARNING_REASONS = {
+    "destructive_recursive_delete": "recursive delete is blocked; do not retry rm -r",
+    "destructive_git_reset": "git reset --hard is blocked; do not discard the tree via execute",
+    "destructive_force_push": "force-push is blocked; do not rewrite remotes via execute",
+}
+_DEFAULT_DENIAL_REASON = (
+    "this call was denied; change the input and do not retry the same one"
+)
+
+
+def adaptive_denial_reason(
+    reason_code: str, warnings: Sequence[str] = ()
+) -> str:
+    base = _DENIAL_REASONS.get(reason_code, _DEFAULT_DENIAL_REASON)
+    extras = [
+        _WARNING_REASONS[code] for code in warnings if code in _WARNING_REASONS
+    ]
+    if not extras:
+        return base
+    return " ".join((base, *extras))
+
+
 def denial_envelope(call, reason_code: str) -> dict[str, object]:
     if reason_code.startswith("policy_hook_"):
         denied_by = "hook"
@@ -510,14 +560,23 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
-    return {
+    raw_warnings = excerpt.get("warnings")
+    warnings = (
+        tuple(str(item) for item in raw_warnings)
+        if isinstance(raw_warnings, list)
+        else ()
+    )
+    envelope: dict[str, object] = {
         "reason_code": reason_code,
         "status": "denied",
         "denied_by": denied_by,
         "function_id": call.name,
-        "reason": reason_code,
+        "reason": adaptive_denial_reason(reason_code, warnings),
         "args_excerpt": redact_sensitive(excerpt),
     }
+    if warnings:
+        envelope["warnings"] = list(warnings)
+    return envelope
 
 
 def _execute_warning_codes(argv: list[object]) -> list[str]:

@@ -597,9 +597,9 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
     config = AnthropicLoopConfig(
         model="claude-test",
         system="code",
-        max_transcript_bytes=1600,
-        max_text_delta_bytes=1600,
-        max_public_text_bytes=1600,
+        max_transcript_bytes=1700,
+        max_text_delta_bytes=1700,
+        max_public_text_bytes=1700,
     )
     h = harness(
         [
@@ -624,7 +624,7 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
         state["transcript"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
-    assert len(encoded) <= 1600
+    assert len(encoded) <= 1700
     assert [call["tool_call_id"] for call in state["pending_tool_calls"]] == [
         "one",
         "two",

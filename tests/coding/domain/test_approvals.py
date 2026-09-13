@@ -9,6 +9,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     approval_display_summary,
     ask_user_answers_complete,
+    adaptive_denial_reason,
     canonical_approval_hash,
     denial_envelope,
     evaluate_approval,
@@ -673,7 +674,8 @@ def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
     assert hooked["status"] == "denied"
     assert hooked["denied_by"] == "hook"
     assert hooked["function_id"] == "write_file.v1"
-    assert hooked["reason"] == "policy_hook_denied"
+    assert hooked["reason"] == adaptive_denial_reason("policy_hook_denied")
+    assert hooked["reason"] != hooked["reason_code"]
     assert hooked["args_excerpt"]["path"] == "src/main.py"
     assert "content" not in hooked["args_excerpt"]
     assert "preview" not in hooked["args_excerpt"]
@@ -696,3 +698,28 @@ def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
     }
     assert "raw-secret-token" not in json.dumps(denied)
     assert "secret_test.py" not in json.dumps(denied)
+
+
+def test_denial_envelope_includes_argv_warnings_in_reason() -> None:
+    rm = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "-r", "tmp"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    reset = denial_envelope(
+        call(
+            "execute.v1",
+            {"argv": ["git", "reset", "--hard", "HEAD"]},
+            ToolRisk.COMMAND,
+        ),
+        "policy_git_operation_denied",
+    )
+
+    assert rm["reason_code"] == "policy_dangerous_removal"
+    assert rm["warnings"] == ["destructive_recursive_delete"]
+    assert "recursive delete" in rm["reason"]
+    assert rm["reason"] != rm["reason_code"]
+    assert reset["reason_code"] == "policy_git_operation_denied"
+    assert reset["warnings"] == ["destructive_git_reset"]
+    assert "reset --hard" in reset["reason"]
+    assert "S00" not in json.dumps(rm)
+    assert "S00" not in json.dumps(reset)
