@@ -1268,6 +1268,73 @@ def test_shrink_old_tool_results_skips_unpaired_line_numbered_read() -> None:
     assert bodies == {}
 
 
+_UNCHANGED_STUB = {
+    "preview": "File unchanged since last read.",
+    "unchanged": True,
+    "checksum": "abc123",
+    "start_line": 1,
+    "total_lines": 12,
+    "entries": [],
+}
+
+
+def test_unchanged_stub_is_not_persist_refd() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        *_pair("read1", _UNCHANGED_STUB, name="read_file.v1"),
+    )
+    bodies: dict[str, str] = {}
+    after = h.loop._maybe_ref_latest_tool_result(
+        transcript, tool_name="read_file.v1", bodies=bodies
+    )
+    result = dict(after[-1].content[0].content)
+    assert result.get("compacted") is not True
+    assert result["unchanged"] is True
+    assert result["preview"] == "File unchanged since last read."
+    assert bodies == {}
+
+
+def test_shrink_keeps_unchanged_stub_even_without_tool_name() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    message = CanonicalMessage(
+        "tool", (ToolResultContent("orphan", "ok", _UNCHANGED_STUB),)
+    )
+    bodies: dict[str, str] = {}
+    shrunk = h.loop._shrink_old_tool_results(message, bodies, {})
+    assert dict(shrunk.content[0].content) == _UNCHANGED_STUB
+    assert bodies == {}
+
+
+def test_expand_does_not_unfold_unchanged_stub_as_empty_file() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    digest = _sha256_payload(_UNCHANGED_STUB)
+    compacted = {
+        "compacted": True,
+        "sha256": digest,
+        "preview": "File unchanged since last read.",
+        "path": "src/app.py",
+        "unchanged": True,
+    }
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        CanonicalMessage(
+            "tool", (ToolResultContent("read1", "ok", compacted),)
+        ),
+    )
+    bodies = {
+        digest: json.dumps(
+            _UNCHANGED_STUB, sort_keys=True, separators=(",", ":")
+        )
+    }
+    expanded = h.loop._expand_artifact_refs(transcript, bodies)
+    result = dict(expanded[-1].content[0].content)
+    assert result.get("unchanged") is True
+    assert result["preview"] == "File unchanged since last read."
+    assert result.get("entries") in (None, [], ())
+    assert "     1|" not in json.dumps(result)
+
+
 def test_compact_keeps_full_read_file_prefix_or_drops_pair() -> None:
     config = AnthropicLoopConfig(
         model="claude-test",

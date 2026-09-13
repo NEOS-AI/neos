@@ -56,6 +56,31 @@ test("tool completion keeps name/preview and does not drop them", () => {
   assert.equal(completed.toolsById.tool_1.preview, "app.py:12");
 });
 
+test("unchanged read_file result surfaces a badge flag", () => {
+  const completed = reduceProjectionEvent(
+    emptyProjection("ct_1"),
+    event(
+      1,
+      "tool.completed",
+      {
+        name: "read_file.v1",
+        result: {
+          preview: "File unchanged since last read.",
+          unchanged: true,
+          status: "ok",
+        },
+      },
+      "tool_1"
+    )
+  );
+
+  assert.equal(completed.toolsById.tool_1.unchanged, true);
+  assert.match(
+    String(completed.toolsById.tool_1.preview),
+    /unchanged since last read/i
+  );
+});
+
 test("tool.denied keeps name/preview and records denied_by plus reason_code", () => {
   const started = reduceProjectionEvent(
     emptyProjection("ct_1"),

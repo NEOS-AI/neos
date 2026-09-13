@@ -7,6 +7,7 @@ test("projection tools carry optional name and preview", () => {
 
   assert.match(types, /name\?: string \| null/);
   assert.match(types, /preview\?: string \| null/);
+  assert.match(types, /unchanged\?: boolean/);
   assert.match(types, /tool_call_id: string/);
 });
 
@@ -23,6 +24,8 @@ test("detail panel shows tool name, status, and short preview", () => {
   assert.match(panel, /denied_by/);
   assert.match(panel, /reason_code/);
   assert.match(panel, /status === "denied"/);
+  assert.match(panel, /unchanged/);
+  assert.match(panel, /toolUnchanged/);
   assert.doesNotMatch(panel, /JSON\.stringify/);
   assert.doesNotMatch(panel, /result\.(env|secret|token|password)/);
 });

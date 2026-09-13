@@ -94,6 +94,7 @@ EMPTY_RETRY_LIMIT = 1
 STALL_DENY_AFTER = 3
 COMPACT_REF_THRESHOLD_BYTES = 4096
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 80_000
+_UNCHANGED_PREVIEW = "File unchanged since last read."
 _THINK_CLOSED_RE = re.compile(
     r"<(think|thinking|reasoning)\b[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
@@ -3503,6 +3504,9 @@ class DurableCodingLoop:
                     isinstance(item, ToolResultContent)
                     and item.content.get("compacted")
                 ):
+                    if _is_unchanged_stub(item.content):
+                        items.append(item)
+                        continue
                     digest = item.content.get("sha256")
                     raw = bodies.get(str(digest or ""))
                     if raw:
@@ -3511,9 +3515,14 @@ class DurableCodingLoop:
                         except json.JSONDecodeError:
                             restored = None
                         if isinstance(restored, dict):
+                            payload = (
+                                _unchanged_stub_content(restored, item.content)
+                                if _is_unchanged_stub(restored)
+                                else restored
+                            )
                             items.append(
                                 ToolResultContent(
-                                    item.tool_call_id, item.status, restored
+                                    item.tool_call_id, item.status, payload
                                 )
                             )
                             changed = True
@@ -3556,6 +3565,7 @@ class DurableCodingLoop:
             if (
                 isinstance(item, ToolResultContent)
                 and not item.content.get("compacted")
+                and not _is_unchanged_stub(item.content)
                 and _tool_result_bytes(item.content) >= COMPACT_REF_THRESHOLD_BYTES
             ):
                 content.append(_ref_tool_result(item, bodies, tool_name=tool_name))
@@ -3580,8 +3590,10 @@ class DurableCodingLoop:
                 "compacted"
             ):
                 name = names.get(item.tool_call_id)
-                if name == "read_file.v1" or (
-                    name is None and _looks_like_file_read(item.content)
+                if (
+                    name == "read_file.v1"
+                    or _is_unchanged_stub(item.content)
+                    or (name is None and _looks_like_file_read(item.content))
                 ):
                     content.append(item)
                     continue
@@ -3790,7 +3802,36 @@ def _tool_use_names(messages: Sequence[CanonicalMessage]) -> dict[str, str]:
     return names
 
 
+def _is_unchanged_stub(content: Mapping[str, object]) -> bool:
+    if content.get("unchanged") is True:
+        return True
+    preview = content.get("preview")
+    return isinstance(preview, str) and preview.strip() == _UNCHANGED_PREVIEW
+
+
+def _unchanged_stub_content(
+    restored: Mapping[str, object],
+    stub: Mapping[str, object],
+) -> dict[str, object]:
+    preview = restored.get("preview")
+    if not isinstance(preview, str) or not preview.strip():
+        preview = stub.get("preview")
+    if not isinstance(preview, str) or not preview.strip():
+        preview = _UNCHANGED_PREVIEW
+    kept: dict[str, object] = {
+        "preview": preview,
+        "unchanged": True,
+    }
+    for key in ("checksum", "start_line", "total_lines", "path"):
+        value = restored.get(key, stub.get(key))
+        if value is not None:
+            kept[key] = value
+    return kept
+
+
 def _looks_like_file_read(content: Mapping[str, object]) -> bool:
+    if _is_unchanged_stub(content):
+        return True
     preview = content.get("preview")
     if not isinstance(preview, str) or not preview:
         return False
@@ -3839,6 +3880,8 @@ def _ref_tool_result(
         "sha256": digest,
         "preview": preview_source[:200],
     }
+    if _is_unchanged_stub(payload):
+        shrunk["unchanged"] = True
     path = DurableCodingLoop._compact_ref_path(payload)
     if tool_name != "read_file.v1":
         bodies[digest] = payload_text

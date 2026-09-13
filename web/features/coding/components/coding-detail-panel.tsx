@@ -46,7 +46,12 @@ export function CodingDetailPanel({
                         {preview ? ` · ${preview}` : ""}
                       </span>
                     </span>
-                    <span className="shrink-0 text-muted-foreground text-xs">
+                    <span className="flex shrink-0 items-center gap-2 text-muted-foreground text-xs">
+                      {toolUnchanged(tool) ? (
+                        <span className="rounded-sm border border-amber-400/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-amber-300">
+                          unchanged
+                        </span>
+                      ) : null}
                       {tool.status}
                     </span>
                   </div>
@@ -134,6 +139,10 @@ function toolPreview(tool: CodingToolView): string | null {
   const preview =
     asTrimmedString(tool.preview) ?? asTrimmedString(tool.result?.preview);
   return preview ? preview.slice(0, 200) : null;
+}
+
+function toolUnchanged(tool: CodingToolView): boolean {
+  return tool.unchanged === true || tool.result?.unchanged === true;
 }
 
 function toolDeniedBy(tool: CodingToolView): string | null {

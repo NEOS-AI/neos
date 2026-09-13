@@ -24,6 +24,7 @@ export type CodingToolView = {
   result: Record<string, unknown> | null;
   name?: string | null;
   preview?: string | null;
+  unchanged?: boolean;
   denied_by?: string | null;
   reason_code?: string | null;
 };
