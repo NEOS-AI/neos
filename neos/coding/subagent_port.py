@@ -28,8 +28,6 @@ class CodingToolPort:
         self._executor = executor
         self._spec_name = spec
         self._session = None
-        self._phase = "implement"
-        self._revealed: frozenset[str] = frozenset()
 
     def use_spec(self, spec: str) -> None:
         self._spec_name = spec
@@ -41,17 +39,13 @@ class CodingToolPort:
         phase: str | None = None,
         revealed: frozenset[str] | None = None,
     ) -> None:
+        del phase, revealed
         self._session = session
-        if phase is not None:
-            self._phase = phase
-        if revealed is not None:
-            self._revealed = revealed
 
     def definitions(self) -> tuple[Any, ...]:
         spec = lookup_spec(self._spec_name)
-        revealed = self._revealed | spec.allowed_tools
         host = self._registry.definitions(
-            phase=self._phase, revealed=revealed
+            phase="implement", revealed=spec.allowed_tools
         )
         return tuple(item for item in host if item.name in spec.allowed_tools)
 

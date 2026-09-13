@@ -2627,11 +2627,7 @@ class DurableCodingLoop:
         if worktree_path:
             session = _session_on_workspace(session, worktree_path)
         if callable(bind):
-            bind(
-                session=session,
-                phase=state.phase,
-                revealed=state.revealed_tools,
-            )
+            bind(session=session)
 
     def _spawn_briefing(self, call):
         from neos.subagent.types import ParentBriefing
