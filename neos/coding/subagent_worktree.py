@@ -11,6 +11,16 @@ from pathlib import Path
 
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 _MAX_RUN_ID = 80
+_BASE_SHA_KEY = "neos.baseSha"
+_GIT_SAFE = (
+    "--no-pager",
+    "-c",
+    "core.pager=cat",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "commit.gpgsign=false",
+)
 _GIT_ENV_BLOCK = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -18,6 +28,16 @@ _GIT_ENV_BLOCK = (
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_PREFIX",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
+    "GIT_SEQUENCE_EDITOR",
+    "GIT_EDITOR",
+    "EDITOR",
+    "VISUAL",
 )
 
 
@@ -56,6 +76,11 @@ def _git_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in _GIT_ENV_BLOCK:
         env.pop(key, None)
+    for index in range(1, 100):
+        env.pop(f"GIT_CONFIG_KEY_{index}", None)
+        env.pop(f"GIT_CONFIG_VALUE_{index}", None)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_TERMINAL_PROMPT"] = "0"
     return env
 
 
@@ -65,7 +90,7 @@ def _run_git(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        ["git", "-C", str(cwd), *args],
+        ["git", "-C", str(cwd), *_GIT_SAFE, *args],
         capture_output=True,
         text=True,
         check=False,
@@ -114,29 +139,82 @@ def _ensure_neos_excluded(repo: Path) -> None:
         handle.write(f"{prefix}.neos/\n")
 
 
+def _worktree_git_dir(path: Path) -> Path | None:
+    gitfile = path / ".git"
+    if gitfile.is_dir():
+        return gitfile
+    if not gitfile.is_file():
+        return None
+    text = gitfile.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if not line.lower().startswith("gitdir:"):
+            continue
+        raw = line.split(":", 1)[1].strip()
+        if not raw:
+            return None
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = (path / candidate).resolve()
+        return candidate
+    return None
+
+
+def _record_base_sha(path: Path, sha: str) -> None:
+    git_dir = _worktree_git_dir(path)
+    if git_dir is None:
+        return
+    git_dir.mkdir(parents=True, exist_ok=True)
+    (git_dir / _BASE_SHA_KEY).write_text(f"{sha}\n", encoding="utf-8")
+
+
+def _read_base_sha(path: Path, fallback: str) -> str:
+    git_dir = _worktree_git_dir(path)
+    if git_dir is None:
+        return fallback
+    stamp = git_dir / _BASE_SHA_KEY
+    if not stamp.is_file():
+        return fallback
+    recorded = stamp.read_text(encoding="utf-8").strip()
+    return recorded or fallback
+
+
 def _porcelain_paths(repo: Path) -> set[str]:
-    result = _run_git(repo, "status", "--porcelain", "-uall", check=False)
-    if result.returncode != 0:
+    result = _run_git(repo, "status", "--porcelain", "-z", "-uall", check=False)
+    if result.returncode != 0 or not result.stdout:
         return set()
     paths: set[str] = set()
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
+    tokens = result.stdout.split("\0")
+    index = 0
+    while index < len(tokens):
+        entry = tokens[index]
+        index += 1
+        if len(entry) < 3:
             continue
-        rest = line[3:]
-        if " -> " in rest:
-            left, right = rest.split(" -> ", 1)
-            paths.add(left)
-            paths.add(right)
-        else:
-            paths.add(rest)
+        path = entry[3:] if entry[2:3] == " " else entry[2:]
+        if path:
+            paths.add(path)
+        if entry[:1] in {"R", "C"} or entry[1:2] in {"R", "C"}:
+            if index < len(tokens) and tokens[index]:
+                paths.add(tokens[index])
+                index += 1
     return paths
 
 
 def _name_only(repo: Path, left: str, right: str) -> set[str]:
-    result = _run_git(repo, "diff", "--name-only", "--no-renames", left, right, check=False)
+    result = _run_git(
+        repo,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        left,
+        right,
+        check=False,
+    )
     if result.returncode != 0:
         return set()
-    return {line for line in result.stdout.splitlines() if line}
+    return {line for line in result.stdout.split("\0") if line}
 
 
 def create_worktree(repo: Path, run_id: str, *, base: str = "HEAD") -> WorktreeLease:
@@ -161,9 +239,24 @@ def create_worktree(repo: Path, run_id: str, *, base: str = "HEAD") -> WorktreeL
                     repo=repo,
                     path=path,
                     branch=branch,
-                    base_sha=base_sha,
+                    base_sha=_read_base_sha(path, base_sha),
                 )
-    _run_git(repo, "worktree", "add", "-b", branch, str(path), base_sha)
+    added = _run_git(
+        repo, "worktree", "add", "-b", branch, str(path), base_sha, check=False
+    )
+    if added.returncode != 0:
+        retry = _run_git(repo, "worktree", "add", str(path), branch, check=False)
+        if retry.returncode != 0:
+            detail = (
+                (added.stderr or added.stdout or retry.stderr or retry.stdout).strip()
+                or "worktree_add_failed"
+            )
+            raise WorktreeError(detail)
+    recorded = _read_base_sha(path, "")
+    if recorded:
+        base_sha = recorded
+    else:
+        _record_base_sha(path, base_sha)
     return WorktreeLease(
         run_id=safe,
         repo=repo,
@@ -175,7 +268,9 @@ def create_worktree(repo: Path, run_id: str, *, base: str = "HEAD") -> WorktreeL
 
 def capture_diff(lease: WorktreeLease) -> str:
     _run_git(lease.path, "add", "-N", "--", ".", check=False)
-    diff = _run_git(lease.path, "diff", "--binary", lease.base_sha, check=False)
+    diff = _run_git(
+        lease.path, "diff", "--binary", "--no-ext-diff", lease.base_sha, check=False
+    )
     body = diff.stdout if diff.returncode == 0 else ""
     untracked = _run_git(
         lease.path,
@@ -191,6 +286,7 @@ def capture_diff(lease: WorktreeLease) -> str:
             lease.path,
             "diff",
             "--binary",
+            "--no-ext-diff",
             "--no-index",
             "--",
             "/dev/null",

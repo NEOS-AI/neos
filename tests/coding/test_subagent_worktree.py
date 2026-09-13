@@ -182,3 +182,60 @@ def test_module_does_not_import_durable_or_gateway() -> None:
     assert "ChannelGateway" not in text
     assert "sandbox.bindings" not in text
     assert "neos.subagent" not in text
+
+
+def test_commit_worktree_does_not_run_repo_hooks(tmp_path: Path) -> None:
+    from neos.coding.subagent_worktree import commit_worktree
+
+    repo = _init_repo(tmp_path)
+    hooks = repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    sentinel = tmp_path / "hook-ran"
+    hook = hooks / "pre-commit"
+    hook.write_text(f"#!/bin/sh\necho ran > '{sentinel}'\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    lease = create_worktree(repo, "run-hooks")
+    (lease.path / "x.py").write_text("1\n", encoding="utf-8")
+    assert commit_worktree(lease) is True
+    assert not sentinel.exists()
+    assert (lease.path / "x.py").exists()
+
+
+def test_create_worktree_keeps_original_base_after_parent_commit(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    first = create_worktree(repo, "run-base")
+    (repo / "README.md").write_text("parent-moved\n", encoding="utf-8")
+    _commit_in(repo, "parent moved")
+    second = create_worktree(repo, "run-base")
+    assert second.path == first.path
+    assert second.base_sha == first.base_sha
+    parent_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert second.base_sha != parent_head
+
+
+def test_merge_detects_dirty_overlap_on_arrow_filename(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    arrow = repo / "foo -> bar.txt"
+    arrow.write_text("orig\n", encoding="utf-8")
+    _git(repo, "add", "foo -> bar.txt")
+    _git(repo, "commit", "-m", "arrow")
+    lease = create_worktree(repo, "run-arrow")
+    (lease.path / "foo -> bar.txt").write_text("child\n", encoding="utf-8")
+    _commit_in(lease.path, "child arrow")
+    (repo / "foo -> bar.txt").write_text("parent-dirty\n", encoding="utf-8")
+    result = merge_worktree(lease)
+    assert result.status is MergeStatus.CONFLICT
+    assert "foo -> bar.txt" in result.conflict_paths
+    assert (repo / "foo -> bar.txt").read_text(encoding="utf-8") == "parent-dirty\n"
+
+
+def test_session_on_workspace_does_not_mutate_parent() -> None:
+    from types import SimpleNamespace
+
+    from neos.coding.loop.durable import _session_on_workspace
+    from neos.coding.subagent_worktree import WorktreeError
+
+    session = SimpleNamespace(workspace="/parent")
+    with pytest.raises(WorktreeError, match="worktree_session_not_cloneable"):
+        _session_on_workspace(session, "/child")
+    assert session.workspace == "/parent"

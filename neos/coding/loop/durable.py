@@ -2833,12 +2833,17 @@ class DurableCodingLoop:
             )
             if folded is not None:
                 return self._finish_implement_child(bound, folded, lease)
-        self._bind_child_tools(
-            bound,
-            state,
-            spec_name=spec_name,
-            worktree_path=str(lease.path) if lease is not None else "",
-        )
+        try:
+            self._bind_child_tools(
+                bound,
+                state,
+                spec_name=spec_name,
+                worktree_path=str(lease.path) if lease is not None else "",
+            )
+        except Exception:
+            if lease is not None:
+                _discard_lease(lease)
+            return self._spawn_tool_error(bound, "policy_worktree_unavailable")
         try:
             await self._renew_parent_lease(deps)
             outcome = await self._subagents.advance(ticket)
@@ -4081,20 +4086,21 @@ def _session_workspace(session) -> Path | None:
 def _session_on_workspace(session, workspace: str):
     from pathlib import Path as _Path
 
+    from neos.coding.sandbox.memory import MemorySandboxSession
+
     root = _Path(workspace)
-    record = getattr(session, "_record", None)
-    provider = getattr(session, "_provider", None)
-    if record is not None and provider is not None:
+    if isinstance(session, MemorySandboxSession):
         from dataclasses import replace as _replace
 
-        from neos.coding.sandbox.memory import MemorySandboxSession
-
-        return MemorySandboxSession(provider, _replace(record, workspace=root))
+        return MemorySandboxSession(
+            session._provider, _replace(session._record, workspace=root)
+        )
     clone = getattr(session, "clone_with_workspace", None)
     if callable(clone):
         return clone(root)
-    setattr(session, "workspace", root)
-    return session
+    from neos.coding.subagent_worktree import WorktreeError
+
+    raise WorktreeError("worktree_session_not_cloneable")
 
 
 def _lease_from_ref(ref: ActiveChildRef | None):
