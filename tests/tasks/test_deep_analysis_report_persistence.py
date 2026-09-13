@@ -37,6 +37,10 @@ def _install_persistence_dependencies(
     session_context,
     upsert_message,
 ):
+    # `_persist_assistant_message` 의 except 가 jobs 를 늦게 임포트한다.
+    # 스텁을 먼저 끼우면 jobs → ledger 가 DABlob 을 못 찾는다.
+    import neos.workflow.deep_analysis.jobs  # noqa: F401
+
     connection_module = ModuleType("neos.database.connection")
     connection_module.get_session_ctx = lambda: session_context
     models_module = ModuleType("neos.database.deep_analysis_models")
