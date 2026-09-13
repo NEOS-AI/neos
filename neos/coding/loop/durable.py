@@ -294,6 +294,7 @@ class AgentLoopState:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
+    last_prompt_tokens: int = 0
 
     @property
     def has_pending_tool(self) -> bool:
@@ -582,6 +583,7 @@ class DurableCodingLoop:
                     cache_read_tokens=cache_read,
                     cache_write_tokens=cache_write,
                 ),
+                last_prompt_tokens=in_tokens,
             )
             self._check_usage_budgets(retry_state)
             committed = await deps.repository.commit_model_checkpoint(
@@ -1825,6 +1827,7 @@ class DurableCodingLoop:
             terminal_pending=False,
             compacted_bodies=bodies,
             revealed_tools=revealed,
+            last_prompt_tokens=in_tokens,
             empty_retry_count=0 if reset_empty else state.empty_retry_count,
         )
 
@@ -2150,6 +2153,19 @@ class DurableCodingLoop:
             return self._config.max_transcript_tokens
         return usable
 
+    def _parent_headroom_chars(self, state: AgentLoopState) -> int:
+        remaining = max(
+            0, self._transcript_token_limit() - max(0, state.last_prompt_tokens)
+        )
+        return remaining * 4
+
+    async def _fold_child(self, run_id: str, state: AgentLoopState):
+        return await self._subagents.fold(
+            run_id,
+            parent_headroom_chars=self._parent_headroom_chars(state),
+            sibling_count=max(1, len(state.active_children or ())),
+        )
+
     def _price_tokens(
         self,
         input_tokens: int,
@@ -2286,7 +2302,7 @@ class DurableCodingLoop:
         return max(1, min(8, max_turns)) * timeout + _STALE_SLACK_SEC
 
     async def _fold_if_stale_child(
-        self, ref: ActiveChildRef, *, max_turns: int, bound
+        self, ref: ActiveChildRef, *, max_turns: int, bound, state
     ) -> dict[str, Any] | None:
         if self._subagents is None:
             return None
@@ -2309,7 +2325,7 @@ class DurableCodingLoop:
         )
         if not parent_stale and not store_stale:
             return None
-        folded = await self._subagents.fold(ref.run_id)
+        folded = await self._fold_child(ref.run_id, state)
         return self._folded_spawn_result(bound, folded)
 
     def _child_ref(self, state, tool_call_id: str) -> ActiveChildRef | None:
@@ -2918,7 +2934,7 @@ class DurableCodingLoop:
         )
         if ref is not None:
             folded = await self._fold_if_stale_child(
-                ref, max_turns=max_turns, bound=bound
+                ref, max_turns=max_turns, bound=bound, state=state
             )
             if folded is not None:
                 return self._finish_implement_child(bound, folded, lease)
@@ -2958,7 +2974,7 @@ class DurableCodingLoop:
                 worktree_branch=lease.branch if lease else "",
                 worktree_base_sha=lease.base_sha if lease else "",
             )
-        folded = await self._subagents.fold(outcome.run_id)
+        folded = await self._fold_child(outcome.run_id, state)
         return self._finish_implement_child(bound, folded, lease)
 
     def _finish_implement_child(self, bound, folded, lease) -> dict[str, Any]:
@@ -3137,6 +3153,7 @@ class DurableCodingLoop:
             cache_read_tokens=_nonneg_int(raw.get("cache_read_tokens")),
             cache_write_tokens=_nonneg_int(raw.get("cache_write_tokens")),
             reasoning_tokens=_nonneg_int(raw.get("reasoning_tokens")),
+            last_prompt_tokens=_nonneg_int(raw.get("last_prompt_tokens")),
             cost_micros=int(raw.get("cost_micros", 0)),
             terminal_pending=terminal_pending,
             read_paths=read_paths,
@@ -3348,6 +3365,7 @@ class DurableCodingLoop:
             "cache_read_tokens": state.cache_read_tokens,
             "cache_write_tokens": state.cache_write_tokens,
             "reasoning_tokens": state.reasoning_tokens,
+            "last_prompt_tokens": state.last_prompt_tokens,
             "cost_micros": state.cost_micros,
             "terminal_pending": state.terminal_pending,
             "read_paths": sorted(state.read_paths),

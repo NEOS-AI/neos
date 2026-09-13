@@ -42,6 +42,8 @@ async def test_model_completed_usage_window_persists_on_state() -> None:
     assert restored.cache_read_tokens == 8
     assert restored.cache_write_tokens == 3
     assert restored.reasoning_tokens == 4
+    assert dumped["last_prompt_tokens"] == 11
+    assert restored.last_prompt_tokens == 11
 
 
 def test_usage_budget_counts_cache_and_reasoning() -> None:
@@ -93,6 +95,61 @@ def test_cost_prices_cache_from_config_rates() -> None:
         )
         == 1_000_000 + 2_000_000 + 4_000_000 + 500_000
     )
+
+
+@pytest.mark.asyncio
+async def test_fold_child_passes_last_prompt_remainder() -> None:
+    captured: dict[str, object] = {}
+
+    class FoldSpy:
+        async def fold(self, run_id, **kwargs):
+            captured["run_id"] = run_id
+            captured.update(kwargs)
+            return "folded"
+
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            max_transcript_tokens=80_000,
+            context_window=40_000,
+            max_output_tokens=8_192,
+        ),
+    )
+    h.loop._subagents = FoldSpy()
+    usable = 40_000 - 8_192 - 4_000
+    state = replace(
+        h.loop._restore(INPUT, None),
+        last_prompt_tokens=usable - 200,
+    )
+    assert await h.loop._fold_child("sa_1", state) == "folded"
+    assert captured["run_id"] == "sa_1"
+    assert captured["parent_headroom_chars"] == 800
+    assert captured["sibling_count"] == 1
+
+
+def test_parent_headroom_chars_uses_last_prompt_remainder() -> None:
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            max_transcript_tokens=80_000,
+            context_window=40_000,
+            max_output_tokens=8_192,
+        ),
+    )
+    usable = 40_000 - 8_192 - 4_000
+    state = replace(
+        h.loop._restore(INPUT, None),
+        last_prompt_tokens=usable - 200,
+    )
+    assert h.loop._parent_headroom_chars(state) == 200 * 4
+    empty = replace(state, last_prompt_tokens=0)
+    assert h.loop._parent_headroom_chars(empty) == usable * 4
+    full = replace(state, last_prompt_tokens=usable + 10)
+    assert h.loop._parent_headroom_chars(full) == 0
 
 
 def test_compact_threshold_uses_usable_window_not_80k() -> None:

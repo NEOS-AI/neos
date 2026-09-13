@@ -92,6 +92,7 @@ class RecordingSubagents:
         self.inner = inner
         self.advance_tickets: list[SubagentTicket] = []
         self.fold_calls: list[str] = []
+        self.fold_kwargs: dict = {}
         self.cancel_calls: list[tuple[str, str]] = []
         self.cancel_for_parent_calls: list[tuple[object, str, str]] = []
         self.fail_if_stale_calls: list[tuple[str, object, float]] = []
@@ -100,9 +101,10 @@ class RecordingSubagents:
         self.advance_tickets.append(ticket)
         return await self.inner.advance(ticket)
 
-    async def fold(self, run_id):
+    async def fold(self, run_id, **kwargs):
         self.fold_calls.append(run_id)
-        return await self.inner.fold(run_id)
+        self.fold_kwargs = kwargs
+        return await self.inner.fold(run_id, **kwargs)
 
     async def status(self, run_id):
         return await self.inner.status(run_id)
@@ -1282,8 +1284,8 @@ async def test_cost_rollup_increments_parent_tokens() -> None:
     runtime = RecordingSubagents(inner)
     original_fold = runtime.fold
 
-    async def inflated(run_id):
-        folded = await original_fold(run_id)
+    async def inflated(run_id, **kwargs):
+        folded = await original_fold(run_id, **kwargs)
         assert folded.input_tokens == 2
         assert folded.output_tokens == 3
         return replace(folded, cost_micros=999_999)
@@ -1524,8 +1526,8 @@ async def test_child_fold_records_parent_priced_rollup_not_folded_cost() -> None
     runtime = RecordingSubagents(inner)
     original_fold = runtime.fold
 
-    async def inflated(run_id):
-        folded = await original_fold(run_id)
+    async def inflated(run_id, **kwargs):
+        folded = await original_fold(run_id, **kwargs)
         return replace(folded, cost_micros=999_999)
 
     runtime.fold = inflated
