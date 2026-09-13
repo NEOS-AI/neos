@@ -4,24 +4,52 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
+from neos.config.model_identity import usable_window_tokens
+
 
 @dataclass(frozen=True, slots=True)
 class ModelLimits:
     max_output_tokens: int
     timeout_sec: float
+    context_window: int | None = None
+    input_limit: int | None = None
+    thinking_budget: int = 0
 
     def __post_init__(self) -> None:
         if self.max_output_tokens < 1 or self.timeout_sec <= 0:
             raise ValueError("model limits must be positive")
+        if self.context_window is not None and self.context_window <= 0:
+            raise ValueError("model limits must be positive")
+        if self.input_limit is not None and self.input_limit <= 0:
+            raise ValueError("model limits must be positive")
+        if self.thinking_budget < 0:
+            raise ValueError("model limits must be positive")
+
+    def usable_tokens(self) -> int | None:
+        return usable_window_tokens(
+            context_window=self.context_window,
+            max_output_tokens=self.max_output_tokens,
+            input_limit=self.input_limit,
+            thinking_budget=self.thinking_budget,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class ModelUsage:
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if self.input_tokens < 0 or self.output_tokens < 0:
+        if (
+            self.input_tokens < 0
+            or self.output_tokens < 0
+            or self.cache_read_tokens < 0
+            or self.cache_write_tokens < 0
+            or self.reasoning_tokens < 0
+        ):
             raise ValueError("model usage cannot be negative")
 
 

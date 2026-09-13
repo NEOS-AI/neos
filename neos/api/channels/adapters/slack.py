@@ -66,6 +66,9 @@ class SlackAdapter(ChannelAdapterBase):
         self._team_id: Optional[str] = None
         self._user_names: dict[tuple[str, str], str] = {}
         self._seen_file_shares: set[str] = set()
+        register = getattr(gateway, "register_adapter", None)
+        if callable(register):
+            register(self)
 
     async def start(self) -> None:
         """Slack Socket Mode 핸들러를 시작한다."""
@@ -276,8 +279,23 @@ class SlackAdapter(ChannelAdapterBase):
     ) -> None:
         from neos.api.channels.outbound import resolve_outbound_file
 
-        if resolve_outbound_file(path, allow_dirs) is None:
+        resolved = resolve_outbound_file(path, allow_dirs)
+        if resolved is None:
             return
+        if not self._app:
+            logger.warning("[SlackAdapter] send_file called before start()")
+            return
+        kwargs: dict[str, Any] = {
+            "channel": channel_id,
+            "file": str(resolved),
+            "filename": resolved.name,
+        }
+        if thread_id:
+            kwargs["thread_ts"] = thread_id
+        try:
+            await self._app.client.files_upload_v2(**kwargs)
+        except Exception as e:
+            logger.warning("[SlackAdapter] files_upload_v2 failed to %s: %s", channel_id, e)
 
     def _register_handlers(self) -> None:
         if self._app is None:

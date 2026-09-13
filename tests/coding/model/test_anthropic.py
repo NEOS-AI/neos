@@ -147,7 +147,41 @@ async def test_fragmented_tool_json_becomes_one_completed_call() -> None:
     )
     assert events[-1].usage.input_tokens == 12
     assert events[-1].usage.output_tokens == 7
+    assert events[-1].usage.cache_read_tokens == 0
+    assert events[-1].usage.cache_write_tokens == 0
     assert client.messages.requests[0]["model"] == "claude-test"
+
+
+@pytest.mark.asyncio
+async def test_usage_extracts_cache_window_tokens() -> None:
+    client = FakeAnthropicClient(
+        [
+            event(
+                "message_start",
+                message=SimpleNamespace(
+                    usage=SimpleNamespace(
+                        input_tokens=20,
+                        cache_read_input_tokens=8,
+                        cache_creation_input_tokens=3,
+                    )
+                ),
+            ),
+            event(
+                "message_delta",
+                delta=SimpleNamespace(stop_reason="end_turn"),
+                usage=SimpleNamespace(output_tokens=5, reasoning_tokens=2),
+            ),
+        ]
+    )
+    events = [
+        item async for item in AnthropicCodingModel(client).stream(request())
+    ]
+    usage = events[-1].usage
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 5
+    assert usage.cache_read_tokens == 8
+    assert usage.cache_write_tokens == 3
+    assert usage.reasoning_tokens == 2
 
 
 @pytest.mark.asyncio

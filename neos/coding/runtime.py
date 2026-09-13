@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from pathlib import Path
 from contextlib import suppress
@@ -19,13 +20,19 @@ from neos.coding.application.workspace_stream_service import (
 )
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
-from neos.coding.loop.durable import CodingLoopConfig, DurableCodingLoop
+from neos.coding.loop.durable import (
+    DEFAULT_MAX_TRANSCRIPT_TOKENS,
+    CodingLoopConfig,
+    DurableCodingLoop,
+)
 from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
 from neos.dataset.adapters import TrackedCodingModel
 from neos.config.coding_selection import (
     coding_credential_for,
     resolve_coding_selection_from_app,
 )
+from neos.config.model_config import model_config, resolve_coding_rate_micros
+from neos.config.model_identity import catalog_window_for
 from neos.utils.llm_factory import create_coding_model
 from neos.coding.managed.adapters import (
     DockerShadowManagedAdapter,
@@ -475,21 +482,79 @@ def _coding_api_key(config: AppConfig, provider: str) -> str | None:
     return coding_credential_for(config, provider)
 
 
-class _NullSubagentSink:
+def _resolve_coding_session_factory(session_factory):
+    return session_factory or db_manager.get_session
+
+
+logger = logging.getLogger(__name__)
+
+_PARENT_SINK_EVENTS = frozenset(
+    {"subagent.started", "subagent.step", "subagent.completed"}
+)
+_PARENT_SINK_PAYLOAD = frozenset(
+    {
+        "run_id",
+        "spec",
+        "parent_kind",
+        "parent_id",
+        "parent_tool_call_id",
+        "step_kind",
+        "turn_count",
+        "tool_count",
+        "status",
+    }
+)
+
+
+class ParentSubagentEventAdapter:
+    """Forward bounded child lifecycle events onto the parent coding sink."""
+
+    def __init__(self, parent=None) -> None:
+        self._parent = parent
+
     async def emit(self, event_type: str, payload) -> None:
-        del event_type, payload
-        return None
+        if self._parent is None or event_type not in _PARENT_SINK_EVENTS:
+            return
+        raw = dict(payload or {})
+        safe = {key: raw[key] for key in _PARENT_SINK_PAYLOAD if key in raw}
+        task_id = str(safe.get("parent_id") or "")
+        if not task_id:
+            return
+        try:
+            await self._parent.append(
+                task_id=task_id,
+                event_type=event_type,
+                payload=safe,
+                run_id=str(raw.get("parent_run_id") or "") or None,
+                tool_call_id=str(safe.get("parent_tool_call_id") or "") or None,
+            )
+        except Exception:
+            logger.warning(
+                "parent subagent sink failed event_type=%s task_id=%s run_id=%s",
+                event_type,
+                task_id,
+                safe.get("run_id"),
+                exc_info=True,
+            )
 
 
 def _build_subagent_runtime(
-    *, model, tools, executor, session_factory, enabled: bool
+    *,
+    model,
+    tools,
+    executor,
+    session_factory,
+    enabled: bool,
+    parent_events=None,
+    input_cost_micros_per_million: int = 0,
+    output_cost_micros_per_million: int = 0,
 ):
     """Construct the parent-driven child runtime.
 
-    When the flag is on, persist children in Postgres via the same session
-    factory the coding repos use. When the flag is off, an in-memory store
-    is enough because no spawn path writes rows; the runtime is still
-    injected so a mid-flight flag flip can cancel.
+    Flag-off still injects the runtime so cancel works; the store must be
+    the durable one whenever a factory exists. InMemory remains the no-DB
+    fake (tests / no session factory and flag off). When the flag is on
+    without a factory, fall back to db_manager.get_session.
     """
     from neos.coding.subagent_port import CodingToolPort
     from neos.subagent.catalog import SpecRegistry
@@ -501,18 +566,35 @@ def _build_subagent_runtime(
     from neos.subagent.runtime import SubagentRuntime
     from neos.subagent.stepper import ChildStepper
 
-    factory = session_factory or db_manager.get_session
-    store = (
-        PostgresSubagentStore(factory) if enabled else InMemorySubagentStore()
-    )
+    if session_factory is not None:
+        store = PostgresSubagentStore(session_factory)
+    elif enabled:
+        store = PostgresSubagentStore(db_manager.get_session)
+    else:
+        store = InMemorySubagentStore()
     port = CodingToolPort(registry=tools, executor=executor)
-    return SubagentRuntime(
+    holder: list[Any] = []
+    from neos.coding.nested_spawn import RuntimeNestedSpawn
+
+    stepper = ChildStepper(
+        model=model,
+        tools=port,
+        input_cost_micros_per_million=input_cost_micros_per_million,
+        output_cost_micros_per_million=output_cost_micros_per_million,
+        nested_spawn=RuntimeNestedSpawn(lambda: holder[0]),
+    )
+    runtime = SubagentRuntime(
         store=store,
         catalog=SpecRegistry(),
-        stepper=ChildStepper(model=model, tools=port),
-        events=MetricsEventSink(_NullSubagentSink(), get_metrics_collector()),
+        stepper=stepper,
+        events=MetricsEventSink(
+            ParentSubagentEventAdapter(parent_events),
+            get_metrics_collector(),
+        ),
         clock=SystemClock(),
     )
+    holder.append(runtime)
+    return runtime
 
 
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
@@ -531,9 +613,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_output_bytes=execution.max_output_bytes,
         max_stdin_bytes=execution.max_stdin_bytes,
     )
-    repository = PostgresSandboxBindingRepository(
-        session_factory or db_manager.get_session
-    )
+    factory = _resolve_coding_session_factory(session_factory)
+    repository = PostgresSandboxBindingRepository(factory)
     allowlist = coding.command_allowlist if coding.command_enabled else []
     tools = CodingToolRegistry.default(
         command_allowlist=frozenset(allowlist),
@@ -558,6 +639,18 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
     )
+    window = catalog_window_for(
+        coding_model,
+        catalog=model_config.catalog,
+        max_output_tokens=coding.max_output_tokens,
+    )
+    rates = resolve_coding_rate_micros(
+        provider=selection.provider,
+        model=coding_model,
+        input_cost_micros_per_million=coding.input_cost_micros_per_million,
+        output_cost_micros_per_million=coding.output_cost_micros_per_million,
+        catalog=model_config.catalog,
+    )
     loop_config = CodingLoopConfig(
         model=coding_model,
         provider=selection.provider,
@@ -574,8 +667,18 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_tools=coding.max_tool_calls,
         max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
         max_cost_micros=int(coding.max_cost_usd * 1_000_000),
-        input_cost_micros_per_million=(coding.input_cost_micros_per_million),
-        output_cost_micros_per_million=(coding.output_cost_micros_per_million),
+        input_cost_micros_per_million=rates.input,
+        output_cost_micros_per_million=rates.output,
+        cache_write_cost_micros_per_million=rates.cache_write,
+        cache_read_cost_micros_per_million=rates.cache_read,
+        context_window=window.context_window,
+        input_limit=window.input_limit,
+        thinking_budget=window.thinking_budget,
+        max_transcript_tokens=(
+            DEFAULT_MAX_TRANSCRIPT_TOKENS
+            if window.usable is None
+            else max(1, window.usable)
+        ),
         max_transcript_bytes=coding.max_transcript_bytes,
         max_text_delta_bytes=coding.max_text_delta_bytes,
         max_public_text_bytes=coding.max_public_text_bytes,
@@ -591,8 +694,11 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         model=model,
         tools=tools,
         executor=executor,
-        session_factory=session_factory,
+        session_factory=factory,
         enabled=coding.subagent_enabled,
+        parent_events=coding_service,
+        input_cost_micros_per_million=coding.input_cost_micros_per_million,
+        output_cost_micros_per_million=coding.output_cost_micros_per_million,
     )
 
     def finish(sandboxes) -> DurableCodingLoop:
@@ -668,7 +774,10 @@ def create_development_coding_runtime(
         raise RuntimeError("fake and real coding loops cannot be enabled together")
     finish_loop = None
     if config.coding_model.enabled:
-        finish_loop = _prepare_real_coding_loop(config=config)
+        finish_loop = _prepare_real_coding_loop(
+            config=config,
+            session_factory=db_manager.get_session,
+        )
     sandboxes = create_sandbox_provider(config.sandbox)
     try:
         if settings.CODING_FAKE_LOOP_ENABLED:

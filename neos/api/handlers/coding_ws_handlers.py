@@ -3,6 +3,28 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
+TICKET_HEADER = "x-neos-ticket"
+TICKET_PROTOCOL_PREFIX = "neos.ticket."
+
+
+def ticket_from_websocket(websocket: WebSocket) -> str | None:
+    header = websocket.headers.get(TICKET_HEADER)
+    if header and header.strip():
+        return header.strip()
+    authorization = websocket.headers.get("authorization")
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+    offered = websocket.headers.get("sec-websocket-protocol", "")
+    for protocol in offered.split(","):
+        token = protocol.strip()
+        if token.startswith(TICKET_PROTOCOL_PREFIX):
+            extracted = token[len(TICKET_PROTOCOL_PREFIX) :]
+            if extracted:
+                return extracted
+    return None
+
 from neos.api.handlers.coding_handlers import event_response
 from neos.api.handlers.coding_handlers import get_coding_service
 from neos.api.handlers.coding_handlers import get_ws_ticket_store
@@ -124,7 +146,6 @@ async def coding_task_websocket(
     task_id: str = Query(...),
     after_seq: int = Query(0, ge=0),
     access_token: str | None = Query(None),
-    ticket: str | None = Query(None),
     service: CodingTaskService = Depends(get_coding_service),
     broker: CodingEventTransport = Depends(get_coding_event_broker),
     tickets: CodingTicketStore = Depends(get_ws_ticket_store),
@@ -137,6 +158,7 @@ async def coding_task_websocket(
         return
 
     owner_id = None
+    ticket = ticket_from_websocket(websocket)
     if ticket:
         owner_id = await tickets.consume(ticket, task_id=task_id)
     elif access_token:

@@ -149,26 +149,107 @@ payloads. The default is `240`.
 
 ### Model Catalog
 
-`neos/config/models.yaml` is the single source of truth for facts *about*
-models — which ones the pickers offer, which recommendation tier they fill,
-which thinking contract they follow, and what they cost. Adding a new Claude or
-GPT model is a `models.yaml` edit plus updating the two expected-value lists
-that pin the catalog against transcription errors, both in
-`tests/config/test_model_catalog_parity.py`:
+`neos/config/models.yaml` is the operator bump surface for facts, role-alias
+current-pins, remaps, and picker projection. Roles in `schema.py` already
+point at `sonnet-5` / `opus-5`. The chat picker fetches
+`GET /api/v1/models` at runtime, so a YAML deploy moves the live picker
+without a web rebuild. Do **not** hand-edit `web/lib/ai/models.ts` maps or
+`web/lib/ai/catalog.generated.ts`.
 
-- `ANTHROPIC_SELECTABLE` / `OPENAI_SELECTABLE`, asserted by
-  `test_catalog_selectable_lists_match_expected_order`
-- the unpriced-model set, asserted by
-  `test_every_selectable_model_without_pricing_is_known`
+#### Point-release bump playbook (Sonnet / Opus 5.1 or 5.5)
 
-Both are deliberate pins, not incidental test debt — they are what catches a
-new model silently breaking `list_models()` order or landing with no price. Do
-not delete or relax them when adding a model; update them alongside
-`models.yaml`.
+1. Add the new pin under `models:` with `role_alias`, explicit `gateway_id`,
+   `picker:` (name / description / group), thinking, vision, and pricing.
+2. Move `role_aliases.<track>.current` to the new pin.
+3. Retarget every `remaps:` value that previously landed on the old pin.
+   Remap **values** are catalog pins, not gateway ids.
+4. Remove `picker:` from the old pin so it drops off `GET /models`. Keep the
+   row and leave `selectable: true` so stored pins and non-FE clients still
+   pass `is_user_selectable_model`.
+5. Update the parity lock lists in
+   `tests/config/test_model_catalog_parity.py`:
+   - `ANTHROPIC_SELECTABLE` / `OPENAI_SELECTABLE`
+     (`test_catalog_selectable_lists_match_expected_order`)
+   - the unpriced-model set
+     (`test_every_selectable_model_without_pricing_is_known`)
+6. Add an `anthropic_families:` prefix **only if** cache-minimum and advisor
+   targets were measured. A 5.1 that shares the 5.0 contract inherits the
+   existing `claude-sonnet-5` prefix (longest match). A distinct contract is
+   a new `role_aliases.sonnet-5.5` plus one `model_routing` edit — not a
+   guessed family row.
+7. Regenerate the committed FE fallback. Do not hand-edit the file:
 
-A new **Anthropic** model has a third obligation: decide whether it belongs to
-a declared generation, and record the answer. See *Generation facts* below —
-`test_anthropic_model_families.py` fails until you do.
+   ```bash
+   python scripts/generate_catalog_fallback.py
+   ```
+
+   CI runs that script and fails on
+   `git diff --exit-code -- web/lib/ai/catalog.generated.ts`.
+8. Deploy the API. The live picker does **not** wait for a web rebuild.
+
+Do **not** edit `schema.py` role defaults or handwritten FE maps. `getTitleModel`
+/ `getArtifactModel` stay Haiku pins until an aux PR.
+
+A new **Anthropic** model still has the generation-facts obligation in
+*Generation facts* below — `test_anthropic_model_families.py` fails until
+you record the answer (or add it to `_UNCOVERED`).
+
+#### Live picker vs committed fallback
+
+| Surface | When it moves |
+|---|---|
+| `GET /api/v1/models` | API deploy (live picker) |
+| `web/lib/ai/catalog.generated.ts` | after the generator + web image |
+
+Frontend dual-read is a Next **server** env var, not AppConfig (Next cannot
+read `schema.py`):
+
+- `CATALOG_API=1` — fetch `GET /api/v1/models` with `cache: "no-store"`.
+  Requires `model_catalog.picker_api: true` on the API.
+- Unset `CATALOG_API` — use `catalog.generated.ts`.
+- API 404 / 503 / empty — same generated fallback. A 503 must not clear
+  the picker.
+
+`picker_api` production default stays **false** until soak. Staging that
+wants the live picker must set **both**:
+
+```yaml
+# API env YAML
+model_catalog:
+  picker_api: true
+```
+
+```bash
+# Next server
+CATALOG_API=1
+```
+
+Rollback: unset `CATALOG_API`. The generated file is the last shipped
+picker (still a valid selectable pin).
+
+`selectable: true` is **not** picker membership. `picker:` present → one
+`GET /models` row (plus `picker.extras`). `gpt-6-astra` and Gemini stay
+selectable and out of the chat picker until someone adds a `picker:` block.
+
+Cookie `chat-model` stores a gateway id. On page load the FE remaps it
+in memory (`raw → gateway_id` still in `models[]`; else `default_id`)
+and persists the new value after hydration via `saveChatModelAsCookie`
+(a client-invoked Server Action — Next 16 cannot `cookies().set` during
+RSC render). The next FE turn sends `metadata.model` as the remapped
+catalog pin. Stored `conversations.model_name` is **not** rewritten;
+backend-only paths stay on the stored / role pin.
+
+Tests that hit `GET /api/v1/models` must enable `picker_api`. The
+production default remains false.
+
+Custom catalogs (`NEOS_MODEL_CONFIG_PATH`) must ship `role_aliases:` (the
+schema defaults are now `sonnet-5` / `opus-5`, not dated pins). A file
+without that block will not resolve those roles: boot logs the existing
+unknown-routed-model warning and everyday traffic has no pin. The
+alternative is a dated `model_routing` override in env YAML
+(`everyday: claude-sonnet-5`). Legacy conversion does **not** invent role
+aliases. `aliases.llm.*` stay pin-valued — moving
+`role_aliases.sonnet-5.current` does not move `get_llm_model_id`.
 
 ```yaml
 models:
@@ -388,16 +469,28 @@ key is read in the old shape (`vision_models` / `llm_models` /
 Converted entries have no tier and no price, and fall back to
 `thinking: budgeted`. Provider `google` is normalized to `gemini`.
 
+Custom catalogs must ship `role_aliases:` (the schema defaults are now
+`sonnet-5` / `opus-5`, not dated pins). A file without that block will not
+resolve those roles: boot logs the existing unknown-routed-model warning and
+everyday traffic has no pin. The alternative is a dated `model_routing`
+override in env YAML (`everyday: claude-sonnet-5`). Legacy conversion does
+**not** invent role aliases. `aliases.llm.*` stay pin-valued — moving
+`role_aliases.sonnet-5.current` does not move `get_llm_model_id`.
+
 ### Model Routing
 
-`model_routing` maps a provider and a workload role to a concrete model. It only
-governs **automatic** workloads — a model the user picked is never overwritten.
+`model_routing` maps a provider and a workload role to a role alias or a
+catalog pin. The resolver accepts either and returns the pin when the pick
+is a known alias or pin; unknown values pass through. Remaps apply only to
+USER/cookie strings — a stored conversation pin or a feature override is
+not rewritten. Automatic workloads that omit a model still follow the
+role default.
 
 ```yaml
 model_routing:
   anthropic:
-    everyday: claude-sonnet-5
-    powerful: claude-opus-5
+    everyday: sonnet-5
+    powerful: opus-5
   openai:
     everyday: gpt-5.6-terra
     powerful: gpt-5.6-sol

@@ -25,6 +25,30 @@ class ModelResolution:
     provider: ModelProvider
     role: WorkloadRole
     source: ResolutionSource
+    role_alias: str | None = None
+
+
+def _canonicalize_pick(
+    picked: str, source: ResolutionSource
+) -> tuple[str, str | None]:
+    """Turn a role alias (or known pin) into the catalog pin.
+
+    Remaps apply only to user/cookie strings. Conversation rows and feature
+    pins stay as stored so a remap of a gateway id cannot rewrite a pin that
+    happens to share a spelling. Unknown values pass through — the catalog
+    is not an allowlist, and we do not fall back to a hardcoded dated id.
+    """
+    from neos.config.model_config import model_config
+    from neos.config.model_identity import canonicalize
+
+    ident = canonicalize(
+        picked,
+        catalog=model_config.catalog,
+        apply_remap=source is ResolutionSource.USER,
+    )
+    if ident is None:
+        return picked, None
+    return ident.catalog_id, ident.role_alias
 
 
 def resolve_model(
@@ -47,11 +71,13 @@ def resolve_model(
         (feature_override, ResolutionSource.FEATURE_OVERRIDE),
     ):
         if model:
+            pin, role_alias = _canonicalize_pick(model, source)
             return ModelResolution(
-                model=model,
+                model=pin,
                 provider=cast(ModelProvider, provider),
                 role=cast(WorkloadRole, role),
                 source=source,
+                role_alias=role_alias,
             )
 
     provider_mapping = getattr(config, provider)
@@ -63,9 +89,11 @@ def resolve_model(
         ) from exc
     if not model:
         raise ValueError(f"Incomplete model routing mapping for provider: {provider}")
+    pin, role_alias = _canonicalize_pick(model, ResolutionSource.ROLE_DEFAULT)
     return ModelResolution(
-        model=model,
+        model=pin,
         provider=cast(ModelProvider, provider),
         role=cast(WorkloadRole, role),
         source=ResolutionSource.ROLE_DEFAULT,
+        role_alias=role_alias,
     )

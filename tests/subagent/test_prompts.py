@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from neos.subagent.prompts import build_explore_system_prompt, render_brief
+from neos.subagent.prompts import (
+    build_explore_system_prompt,
+    build_implement_system_prompt,
+    render_brief,
+)
 from neos.subagent.types import ParentBriefing
 
 
@@ -16,8 +20,19 @@ def test_explore_system_prompt_states_readonly_investigator_contract() -> None:
     assert "no user channel" in lowered
     assert "untrusted" in lowered
     assert "do not edit" in lowered
-    assert "spawn" in lowered
+    assert "spawn_agent" in lowered
     assert "report" in lowered
+
+
+def test_implement_system_prompt_allows_worktree_writes() -> None:
+    prompt = build_implement_system_prompt()
+    lowered = prompt.lower()
+    assert "worktree" in lowered
+    assert "merge" in lowered
+    assert "do not spawn" in lowered
+    assert "approve" in lowered
+    assert "claude code" not in lowered
+    assert len(prompt) < 1200
     assert "claude code" not in lowered
     assert "hermes" not in lowered
     assert len(prompt) < 1200

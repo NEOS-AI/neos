@@ -1,5 +1,10 @@
 environment: development
 
+model_catalog:
+  picker_api: false
+  default_unknown_claude_adaptive: false
+  live_anthropic: false
+
 coding_model:
   enabled: false
   # anthropic | openai | gemini | ollama. 모델이 카탈로그에 있으면 벤더는

@@ -201,3 +201,97 @@ def test_tree_also_loads_local_and_claude_dir_files(tmp_path: Path) -> None:
     assert "from local" in text
     assert "from nested claude file" in text
     assert text.index("from agents") < text.index("from local")
+
+
+def test_tree_loads_claude_rules_markdown_files(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("from agents", encoding="utf-8")
+    (tmp_path / "CLAUDE.local.md").write_text("from local", encoding="utf-8")
+    rules = tmp_path / ".claude" / "rules"
+    nested = rules / "team"
+    nested.mkdir(parents=True)
+    (rules / "style.md").write_text("rule style", encoding="utf-8")
+    (nested / "safety.md").write_text("rule safety", encoding="utf-8")
+    (rules / "notes.txt").write_text("plain notes", encoding="utf-8")
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert "from agents" in text
+    assert "from local" in text
+    assert "rule style" in text
+    assert "rule safety" in text
+    assert "plain notes" not in text
+    assert "Source: .claude/rules/style.md" in text
+    assert "Source: .claude/rules/team/safety.md" in text
+    assert text.index("from agents") < text.index("from local")
+    assert text.index("from local") < text.index("rule style")
+    assert text.index("rule style") < text.index("rule safety")
+
+
+def test_tree_rules_deny_secret_symlink_and_do_not_follow_dirs(
+    tmp_path: Path,
+) -> None:
+    rules = tmp_path / ".claude" / "rules"
+    rules.mkdir(parents=True)
+    (tmp_path / "AGENTS.md").write_text("from agents", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET=1", encoding="utf-8")
+    (rules / "ok.md").write_text("safe rule", encoding="utf-8")
+    (rules / "secret-link.md").symlink_to(tmp_path / ".env")
+    escaped = tmp_path.parent / "escaped.md"
+    escaped.write_text("ESCAPED_OUTSIDE", encoding="utf-8")
+    (rules / "outside-link").symlink_to(tmp_path.parent)
+    git_dir = rules / ".git"
+    git_dir.mkdir()
+    (git_dir / "hook.md").write_text("GIT_SECRET", encoding="utf-8")
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert "from agents" in text
+    assert "safe rule" in text
+    assert "SECRET=1" not in text
+    assert "ESCAPED_OUTSIDE" not in text
+    assert "GIT_SECRET" not in text
+
+
+def test_tree_rules_dir_symlink_is_skipped(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "leaked.md").write_text("LEAKED_RULE", encoding="utf-8")
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "rules").symlink_to(elsewhere)
+    (tmp_path / "AGENTS.md").write_text("from agents", encoding="utf-8")
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert "from agents" in text
+    assert "LEAKED_RULE" not in text
+
+
+def test_tree_rules_follow_hierarchical_walk(tmp_path: Path) -> None:
+    root_rules = tmp_path / ".claude" / "rules"
+    root_rules.mkdir(parents=True)
+    (root_rules / "root.md").write_text("root rule", encoding="utf-8")
+    pkg = tmp_path / "pkg"
+    pkg_rules = pkg / ".claude" / "rules"
+    pkg_rules.mkdir(parents=True)
+    (pkg_rules / "pkg.md").write_text("pkg rule", encoding="utf-8")
+
+    text = load_workspace_instruction_tree(tmp_path, start=pkg)
+    assert text is not None
+    assert "root rule" in text
+    assert "pkg rule" in text
+    assert "Source: .claude/rules/root.md" in text
+    assert "Source: pkg/.claude/rules/pkg.md" in text
+    assert text.index("root rule") < text.index("pkg rule")
+
+
+def test_tree_rules_respect_byte_cap(tmp_path: Path) -> None:
+    rules = tmp_path / ".claude" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "huge.md").write_text(
+        "r" * (MAX_INSTRUCTION_BYTES + 80), encoding="utf-8"
+    )
+
+    text = load_workspace_instruction_tree(tmp_path)
+    assert text is not None
+    assert text.count("r") <= MAX_INSTRUCTION_BYTES

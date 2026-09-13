@@ -33,20 +33,28 @@ def format_help(name: str = "") -> str:
     return "\n".join(lines)
 
 
+_COST_INT_KEYS = (
+    "cost_micros",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+)
+
+
 def cost_payload_from_loop_state(loop_state: Any) -> dict[str, int]:
     if not isinstance(loop_state, dict):
         return {}
     payload: dict[str, int] = {}
-    for key in ("cost_micros", "input_tokens", "output_tokens"):
+    for key in _COST_INT_KEYS:
         value = loop_state.get(key)
         if isinstance(value, int):
             payload[key] = value
     return payload
 
 
-def format_cost_line(task_id: str, payload: dict[str, int]) -> str:
-    if not payload:
-        return f"{task_id} cost is tracked on the task."
+def format_cost_parts(payload: dict[str, int]) -> list[str]:
     parts: list[str] = []
     if "cost_micros" in payload:
         parts.append(f"cost_micros={payload['cost_micros']}")
@@ -54,7 +62,20 @@ def format_cost_line(task_id: str, payload: dict[str, int]) -> str:
     outbound = payload.get("output_tokens")
     if inbound is not None or outbound is not None:
         parts.append(f"tokens={int(inbound or 0)}+{int(outbound or 0)}")
-    return f"{task_id} " + " ".join(parts)
+    cache_read = int(payload.get("cache_read_tokens") or 0)
+    cache_write = int(payload.get("cache_write_tokens") or 0)
+    if cache_read or cache_write:
+        parts.append(f"cache={cache_read}+{cache_write}")
+    reasoning = int(payload.get("reasoning_tokens") or 0)
+    if reasoning:
+        parts.append(f"reasoning={reasoning}")
+    return parts
+
+
+def format_cost_line(task_id: str, payload: dict[str, int]) -> str:
+    if not payload:
+        return f"{task_id} cost is tracked on the task."
+    return f"{task_id} " + " ".join(format_cost_parts(payload))
 
 
 def loop_state_from_snapshot(snapshot: Any) -> dict[str, Any]:

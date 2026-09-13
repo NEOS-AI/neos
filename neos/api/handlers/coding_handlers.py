@@ -100,21 +100,38 @@ def get_managed_sandbox_service() -> ManagedSandboxStatusService:
     return managed_sandbox_status_service()
 
 
+def _error_detail(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}
+
+
+def _task_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=_error_detail("coding_task_not_found", "Coding task not found"),
+    )
+
+
+_WORKSPACE_CONFLICT_CODES = {
+    "workspace_revision_conflict",
+    "workspace_edit_exists",
+    "workspace_edit_reconcile_required",
+    "workspace_run_changed",
+    "workspace_run_not_running",
+}
+
+
+def _workspace_message(code: str) -> str:
+    return f"Coding {code.replace('_', ' ')}"
+
+
 def _raise_workspace_error(error: WorkspaceEditConflict) -> None:
     code = str(error)
+    detail = _error_detail(code, _workspace_message(code))
     if code == "workspace_not_found":
-        raise HTTPException(
-            status_code=404, detail="Coding workspace not found"
-        ) from error
-    if code in {
-        "workspace_revision_conflict",
-        "workspace_edit_exists",
-        "workspace_edit_reconcile_required",
-        "workspace_run_changed",
-        "workspace_run_not_running",
-    }:
-        raise HTTPException(status_code=409, detail=code) from error
-    raise HTTPException(status_code=422, detail=code) from error
+        raise HTTPException(status_code=404, detail=detail) from error
+    if code in _WORKSPACE_CONFLICT_CODES:
+        raise HTTPException(status_code=409, detail=detail) from error
+    raise HTTPException(status_code=422, detail=detail) from error
 
 
 def _approval_response(approval) -> dict:
@@ -218,14 +235,19 @@ async def invoke_coding_command(
             owner_id=current_user.user_id,
         )
     except CodingTaskNotFound as error:
-        raise HTTPException(
-            status_code=404, detail="Coding task not found"
-        ) from error
+        raise _task_not_found() from error
     if result.status is CommandStatus.UNKNOWN:
-        raise HTTPException(status_code=400, detail=result.message)
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("unknown_coding_command", result.message),
+        )
     if result.status is CommandStatus.CHAT:
         raise HTTPException(
-            status_code=400, detail="Request text is not a slash command"
+            status_code=400,
+            detail=_error_detail(
+                "not_a_slash_command",
+                "Request text is not a slash command",
+            ),
         )
     return result.as_mapping()
 
@@ -249,9 +271,7 @@ async def steer_coding_task(
             mode=SteeringMode(body.mode),
         )
     except CodingTaskNotFound as error:
-        raise HTTPException(
-            status_code=404, detail="Coding task not found"
-        ) from error
+        raise _task_not_found() from error
     return {"steering_id": steering.steering_id, "mode": steering.mode.value}
 
 
@@ -268,9 +288,7 @@ async def stop_coding_task(
     try:
         await runs.stop(task_id=task_id, owner_id=current_user.user_id)
     except CodingTaskNotFound as error:
-        raise HTTPException(
-            status_code=404, detail="Coding task not found"
-        ) from error
+        raise _task_not_found() from error
     return {"task_id": task_id, "status": "cancelled"}
 
 
@@ -295,10 +313,20 @@ async def resolve_coding_approval(
             remember=body.remember,
         )
     except ApprovalNotFound as error:
-        raise HTTPException(status_code=404, detail="Coding approval not found") from error
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "coding_approval_not_found",
+                "Coding approval not found",
+            ),
+        ) from error
     except ApprovalConflict as error:
         raise HTTPException(
-            status_code=409, detail="Coding approval cannot be resolved"
+            status_code=409,
+            detail=_error_detail(
+                "coding_approval_conflict",
+                "Coding approval cannot be resolved",
+            ),
         ) from error
     return _approval_response(commit.approval)
 
@@ -313,7 +341,7 @@ async def get_coding_task_snapshot(
 ):
     snapshot = await snapshots.get_owned(task_id, current_user.user_id)
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="Coding task not found")
+        raise _task_not_found()
     return snapshot
 
 
@@ -336,7 +364,13 @@ async def get_coding_sandbox_status(
         task_id=task_id, owner_id=current_user.user_id
     )
     if status_view is None:
-        raise HTTPException(status_code=404, detail="Coding sandbox not found")
+        raise HTTPException(
+            status_code=404,
+            detail=_error_detail(
+                "coding_sandbox_not_found",
+                "Coding sandbox not found",
+            ),
+        )
     return status_view.to_payload()
 
 
@@ -433,7 +467,7 @@ async def list_coding_events(
 ):
     snapshot = await service.snapshot(task_id, current_user.user_id)
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="Coding task not found")
+        raise _task_not_found()
     events = await service.events.list_after(task_id, after_seq=after_seq, limit=limit)
     return {
         "head_seq": snapshot.head_seq,
@@ -449,7 +483,7 @@ async def create_coding_ws_ticket(
     tickets: CodingTicketStore = Depends(get_ws_ticket_store),
 ):
     if await service.snapshot(task_id, current_user.user_id) is None:
-        raise HTTPException(status_code=404, detail="Coding task not found")
+        raise _task_not_found()
     ticket = await tickets.issue(owner_id=current_user.user_id, task_id=task_id)
     return {"ticket": ticket, "expires_in": tickets.expires_in}
 
@@ -466,7 +500,7 @@ async def create_workspace_ws_ticket(
     tickets: WorkspaceTicketStore = Depends(get_workspace_stream_ticket_store),
 ):
     if await service.snapshot(task_id, current_user.user_id) is None:
-        raise HTTPException(status_code=404, detail="Coding task not found")
+        raise _task_not_found()
     ticket = await tickets.issue(
         owner_id=current_user.user_id,
         task_id=task_id,

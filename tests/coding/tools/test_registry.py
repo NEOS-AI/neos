@@ -35,6 +35,10 @@ def test_default_registry_exports_stable_versioned_definitions() -> None:
         "glob_files.v1",
         "edit_file.v1",
         "write_file.v1",
+        "mkdir.v1",
+        "rm.v1",
+        "mv.v1",
+        "chmod.v1",
         "todo_write.v1",
         "execute.v1",
         "set_phase.v1",
@@ -65,6 +69,10 @@ def test_explore_definitions_omit_write_and_execute() -> None:
 
     assert "edit_file.v1" not in names
     assert "write_file.v1" not in names
+    assert "mkdir.v1" not in names
+    assert "rm.v1" not in names
+    assert "mv.v1" not in names
+    assert "chmod.v1" not in names
     assert "execute.v1" not in names
     assert "read_file.v1" in names
     assert "glob_files.v1" in names
@@ -142,8 +150,41 @@ def test_search_text_accepts_grep_schema_extras() -> None:
     assert call.input["context"] == 4
     assert call.input["path"] == "src/lib"
     assert call.input["limit"] == 250
+    assert call.input["head_limit"] is None
+    assert call.input["max_columns"] == 500
+    assert call.input["exclude"] == []
     assert denied.allowed is False
     assert denied.reason_code == "policy_schema_invalid"
+    assert escaped.allowed is False
+    assert escaped.reason_code.startswith("policy_workspace_path_")
+
+
+def test_search_text_accepts_max_columns_head_limit_and_exclude() -> None:
+    call = registry().validate(
+        "search_text.v1",
+        {
+            "query": "needle",
+            "head_limit": 12,
+            "max_columns": 80,
+            "exclude": ["**/*.min.js", "vendor/**"],
+        },
+    )
+    denied_head = registry().decide(
+        "search_text.v1", {"query": "needle", "head_limit": 251}
+    )
+    denied_columns = registry().decide(
+        "search_text.v1", {"query": "needle", "max_columns": -1}
+    )
+    escaped = registry().decide(
+        "search_text.v1", {"query": "needle", "exclude": ["../secret"]}
+    )
+
+    assert call.input["head_limit"] == 12
+    assert call.input["max_columns"] == 80
+    assert call.input["exclude"] == ["**/*.min.js", "vendor/**"]
+    assert denied_head.allowed is False
+    assert denied_head.reason_code == "policy_schema_invalid"
+    assert denied_columns.allowed is False
     assert escaped.allowed is False
     assert escaped.reason_code.startswith("policy_workspace_path_")
 
@@ -179,7 +220,11 @@ def test_glob_files_is_read_only_and_rejects_escape() -> None:
     denied = registry().decide("glob_files.v1", {"pattern": "../secret"})
 
     assert allowed.risk is ToolRisk.READ_ONLY
-    assert allowed.input == {"pattern": "src/**/*.py", "limit": 20}
+    assert allowed.input == {
+        "pattern": "src/**/*.py",
+        "limit": 20,
+        "path": None,
+    }
     assert denied.allowed is False
     assert denied.reason_code.startswith("policy_workspace_path_")
 
@@ -196,6 +241,15 @@ def test_spawn_agent_and_web_fetch_are_read_only() -> None:
     assert spawn.input == {"prompt": "inspect src", "max_turns": 2}
     assert fetch.risk is ToolRisk.READ_ONLY
     assert fetch.input == {"url": "https://example.com/doc"}
+
+
+def test_implement_spawn_is_workspace_write() -> None:
+    spawn = registry().validate(
+        "spawn_agent.v1",
+        {"prompt": "add a helper", "max_turns": 2, "spec": "implement"},
+    )
+    assert spawn.risk is ToolRisk.WORKSPACE_WRITE
+    assert spawn.input["spec"] == "implement"
 
 
 def test_definitions_defer_non_core_until_revealed(monkeypatch) -> None:
@@ -254,6 +308,27 @@ def test_search_definitions_honors_phase_hide_and_skips_core() -> None:
     assert any(item["name"] == "spawn_agent.v1" for item in implement)
     assert "write_file.v1" not in write_names
     assert "spawn_agent.v1" not in write_names
+
+
+def test_control_plane_tools_hidden_when_subagent_disabled() -> None:
+    names = CodingToolRegistry.deferred_tool_names(subagent_enabled=False)
+    assert "subagent_list.v1" not in names
+    assert "subagent_steer.v1" not in names
+    assert "spawn_agent.v1" in names
+    hidden = CodingToolRegistry.search_definitions(
+        "select:subagent_list.v1,subagent_steer.v1,spawn_agent.v1",
+        subagent_enabled=False,
+    )
+    found = {item["name"] for item in hidden}
+    assert found == {"spawn_agent.v1"}
+    shown = CodingToolRegistry.search_definitions(
+        "select:subagent_list.v1,subagent_steer.v1",
+        subagent_enabled=True,
+    )
+    assert {item["name"] for item in shown} == {
+        "subagent_list.v1",
+        "subagent_steer.v1",
+    }
 
 
 def test_load_skill_input_accepts_optional_reference() -> None:
@@ -461,6 +536,34 @@ def test_dedicated_tools_are_hard_denied_even_when_allowlisted(
 
     assert decision.allowed is False
     assert decision.reason_code == "policy_dedicated_tool_required"
+
+
+@pytest.mark.parametrize(
+    ("argv", "tool", "denied"),
+    [
+        (["cat", "README.md"], "read_file.v1", "cat"),
+        (["rg", "needle"], "search_text.v1", "rg"),
+        (["find", "."], "glob_files.v1", "find"),
+        (["sed", "s/a/b/"], "edit_file.v1", "sed"),
+        (["env", "cat", "README.md"], "read_file.v1", "cat"),
+    ],
+)
+def test_dedicated_tool_denial_includes_fix_note(
+    argv: list[str], tool: str, denied: str
+) -> None:
+    unsafe = CodingToolRegistry.default(
+        command_allowlist=frozenset({argv[0], "cat", "pytest"}),
+        allowed_env_names=frozenset(),
+    )
+
+    decision = unsafe.decide("execute.v1", {"argv": argv})
+
+    assert decision.allowed is False
+    assert decision.reason_code == "policy_dedicated_tool_required"
+    assert decision.fix_note is not None
+    assert tool in decision.fix_note
+    assert denied in decision.fix_note
+    assert "README.md" not in decision.fix_note
 
 
 @pytest.mark.parametrize(
@@ -871,6 +974,8 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("search_text.v1", {"query": "x", "after": -1}),
         ("search_text.v1", {"query": "x", "output_mode": "raw"}),
         ("search_text.v1", {"query": "x", "output_mode": "grep"}),
+        ("search_text.v1", {"query": "x", "head_limit": 0}),
+        ("search_text.v1", {"query": "x", "max_columns": 8193}),
         ("glob_files.v1", {"pattern": ""}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 0}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 501}),
@@ -878,6 +983,7 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("search_tools.v1", {"query": ""}),
         ("spawn_agent.v1", {"prompt": "x", "max_turns": 0}),
         ("spawn_agent.v1", {"prompt": "x", "max_turns": 9}),
+        ("subagent_steer.v1", {"run_id": "sa_1", "text": "x" * 2001}),
         ("git_log.v1", {"limit": 101}),
         (
             "edit_file.v1",

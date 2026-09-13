@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -25,11 +26,13 @@ from .commands import (
     parse_channel_command,
     sender_prefix,
 )
-from .inflight import SessionInflightLock
+from .inflight import SessionInboundPark, SessionInflightLock
+from .replies import ChannelOutcome, annotate_status_reply, channel_reply
 
 logger = logging.getLogger(__name__)
 
-_BUSY = "Already working on this thread."
+_BUSY = channel_reply(ChannelOutcome.DROP, "Already working on this thread.")
+_PARKED = channel_reply(ChannelOutcome.PARK, "Parked for next turn.")
 _CODE_USAGE = "Usage: /code <task>"
 _CODE_DISABLED = "Coding invoke is disabled."
 _CODE_NO_OWNER = "Coding owner is not configured."
@@ -40,6 +43,8 @@ _LEARN_DISABLED = "Learning is disabled."
 _LEARN_STAGED = "Lesson staged."
 _LEARN_USAGE = "Usage: /learn <text>"
 _SESSION_RESET = "Session reset."
+_DRAFT_WORKFLOW = "Working..."
+_DRAFT_CODING = "Starting coding task..."
 _COMPACT_UNAVAILABLE = "Compact is not available."
 _CONTEXT_CLEAR_REQUESTED = "Conversation context clear is requested."
 _COST_TRACKED = "Cost is tracked on the task."
@@ -56,6 +61,7 @@ _CONTROL_LOCK_BYPASS = frozenset(
         ChannelCommandKind.CLEAR,
         ChannelCommandKind.COST,
         ChannelCommandKind.EXPORT,
+        ChannelCommandKind.DIFF,
         ChannelCommandKind.HELP,
         ChannelCommandKind.LOOP,
         ChannelCommandKind.UNKNOWN,
@@ -107,6 +113,18 @@ async def _read_coding_snapshot(coding: Any, *, task_id: str, owner_id: str) -> 
             return None
     except Exception:
         return None
+
+
+def _generation_token(message: ChannelMessage, command: Any | None = None) -> str:
+    meta = message.metadata or {}
+    for key in ("generation_id", "generation"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return neutralize_untrusted_inline(value, max_len=80)
+    rest = str(getattr(command, "rest", "") or "").strip()
+    if rest:
+        return neutralize_untrusted_inline(rest, max_len=80)
+    return ""
 
 
 def _sender_label(message: ChannelMessage) -> str:
@@ -202,14 +220,77 @@ class ChannelGateway:
     - channel_source를 초기 state에 포함하여 워크플로우 시작 시점에 올바르게 기록
     """
 
+    _INSTANCE: "ChannelGateway | None" = None
+
+    @classmethod
+    def get_instance(cls) -> "ChannelGateway":
+        if cls._INSTANCE is None:
+            raise RuntimeError("ChannelGateway is not initialized")
+        return cls._INSTANCE
+
+    @classmethod
+    def set_instance(cls, gateway: "ChannelGateway | None") -> None:
+        cls._INSTANCE = gateway
+
+    def register_adapter(self, adapter: Any) -> None:
+        channel_type = str(getattr(adapter, "channel_type", "") or "")
+        if channel_type:
+            self._adapters[channel_type] = adapter
+
+    async def send_to_channel(
+        self,
+        channel_type: str,
+        channel_id: str,
+        content: str,
+        *,
+        thread_id: str | None = None,
+    ) -> None:
+        adapter = self._adapters.get(channel_type)
+        if adapter is None:
+            logger.warning(
+                "[ChannelGateway] no adapter registered for channel_type=%s",
+                channel_type,
+            )
+            return
+        await adapter.send_response(
+            channel_id, content, thread_id=thread_id
+        )
+
+    async def _send_start_draft(self, message: ChannelMessage, content: str) -> None:
+        from neos.config.settings import settings
+
+        if not settings.config.channels.draft_streaming:
+            return
+        adapter = self._adapters.get(message.channel_type)
+        if adapter is None:
+            return
+        send_draft = getattr(adapter, "send_draft", None)
+        if not callable(send_draft):
+            return
+        thread_id = (message.metadata or {}).get("thread_id")
+        try:
+            await send_draft(
+                message.channel_id,
+                content,
+                thread_id=str(thread_id) if thread_id is not None else None,
+            )
+        except Exception as e:
+            logger.warning(
+                "[ChannelGateway] send_draft failed channel=%s: %s",
+                message.channel_id,
+                e,
+            )
+
     def __init__(
         self,
         workflow: "MultiAgentWorkflow",
         *,
         coding: Any | None = None,
         inflight: SessionInflightLock | None = None,
+        park: SessionInboundPark | None = None,
         binds: Any | None = None,
         inbound: Any | None = None,
+        generations: Any | None = None,
         workflow_approvals: Any | None = None,
     ) -> None:
         self._workflow = workflow
@@ -218,6 +299,7 @@ class ChannelGateway:
         self._workflow_pending: Dict[str, Dict[str, str]] = {}
         self._workflow_reset: set[str] = set()
         self._inflight = inflight or SessionInflightLock()
+        self._park = park or SessionInboundPark()
         if binds is None:
             from .session_bind import InMemoryChannelCodingBindStore
 
@@ -228,11 +310,18 @@ class ChannelGateway:
 
             inbound = InMemoryChannelInboundIdempotencyStore()
         self._inbound = inbound
+        if generations is None:
+            from .generation_fence import InMemoryChannelGenerationFenceStore
+
+            generations = InMemoryChannelGenerationFenceStore()
+        self._generations = generations
+        self._adapters: Dict[str, Any] = {}
         # 채널별 async circuit_breaker (lazy init)
         self._breakers: Dict[str, Any] = {}
         # Process-local /code start dedupe: (session_id, idempotency_key) → task_id.
         # Not durable across processes or restarts. Durable store is source of truth.
         self._code_starts: Dict[tuple[str, str], str] = {}
+        ChannelGateway._INSTANCE = self
 
     def _get_breaker(self, channel_type: str):
         """채널 유형별 async circuit_breaker를 lazy-init하여 반환한다."""
@@ -280,24 +369,17 @@ class ChannelGateway:
 
         command = parse_channel_command(message.text)
         skip_lock = command.kind in _CONTROL_LOCK_BYPASS
-        if not skip_lock and not self._inflight.acquire(message.session_id):
-            if command.kind in {
-                ChannelCommandKind.CHAT,
-                ChannelCommandKind.PROMPT,
-            }:
-                binding = await self._binds.get(message.session_id)
-                if binding is not None:
-                    try:
-                        return await self._steer_bound_chat(message, binding)
-                    except Exception as e:
-                        logger.error(
-                            f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
-                        )
-                        return (
-                            "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. "
-                            "잠시 후 다시 시도해주세요."
-                        )
-            return _BUSY
+        held_lock = False
+        if not skip_lock:
+            held_lock = self._inflight.acquire(message.session_id)
+            if not held_lock:
+                if command.kind in {
+                    ChannelCommandKind.CHAT,
+                    ChannelCommandKind.PROMPT,
+                }:
+                    self._park.put(message.session_id, message)
+                    return _PARKED
+                return _BUSY
         breaker = self._get_breaker(message.channel_type)
         try:
             if idem:
@@ -320,8 +402,9 @@ class ChannelGateway:
                 await self._inbound.abandon(message.session_id, idem)
             response = "죄송합니다. 요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         finally:
-            if not skip_lock:
+            if held_lock:
                 self._inflight.release(message.session_id)
+                self._schedule_fold(message.session_id)
 
         return response
 
@@ -335,7 +418,7 @@ class ChannelGateway:
         if command.kind is ChannelCommandKind.LEARN:
             return await self._run_learn(message, command)
         if command.kind is ChannelCommandKind.NEW:
-            return await self._run_new(message)
+            return await self._run_new(message, command)
         if command.kind is ChannelCommandKind.CLEAR:
             return await self._run_clear(message)
         if command.kind is ChannelCommandKind.COMPACT:
@@ -344,6 +427,8 @@ class ChannelGateway:
             return await self._run_cost(message)
         if command.kind is ChannelCommandKind.EXPORT:
             return await self._run_export(message)
+        if command.kind is ChannelCommandKind.DIFF:
+            return await self._run_diff(message)
         if command.kind is ChannelCommandKind.HELP:
             return await self._run_help(message, command)
         if command.kind is ChannelCommandKind.LOOP:
@@ -382,6 +467,7 @@ class ChannelGateway:
             query = "The user sent a message with no text."
         query = _with_sender_prefix(message, query)
         channel_attachments = _channel_attachment_blocks(message)
+        await self._send_start_draft(message, _DRAFT_WORKFLOW)
 
         workflow_input: Dict[str, Any] = {
             "user_id": user_id,
@@ -462,6 +548,7 @@ class ChannelGateway:
             prompt = _with_sender_prefix(
                 message, command.rest + _attachment_prompt(message)
             )
+            await self._send_start_draft(message, _DRAFT_CODING)
             coding = self._coding_port()
             try:
                 task_id = await coding.start_task(owner_id=owner, prompt=prompt)
@@ -487,9 +574,11 @@ class ChannelGateway:
         coding = self._coding_port()
         if command.kind is ChannelCommandKind.STOP:
             await coding.stop_task(task_id=task_id, owner_id=owner)
-            return f"Stopped {task_id}"
+            return channel_reply(ChannelOutcome.CANCEL, f"Stopped {task_id}")
         if command.kind is ChannelCommandKind.STATUS:
-            return await coding.status(task_id=task_id, owner_id=owner)
+            return annotate_status_reply(
+                await coding.status(task_id=task_id, owner_id=owner)
+            )
         if command.kind in {
             ChannelCommandKind.APPROVE,
             ChannelCommandKind.DENY,
@@ -543,7 +632,14 @@ class ChannelGateway:
         await _persist_lesson(lesson)
         return _LEARN_STAGED
 
-    async def _run_new(self, message: ChannelMessage) -> str:
+    async def _run_new(self, message: ChannelMessage, command) -> str:
+        generation = _generation_token(message, command)
+        if generation:
+            won, _prior = await self._generations.claim(
+                message.session_id, generation
+            )
+            if not won:
+                return _SESSION_RESET
         binding = await self._binds.get(message.session_id)
         if binding is not None:
             coding = self._coding_port()
@@ -551,6 +647,7 @@ class ChannelGateway:
                 task_id=binding.task_id, owner_id=binding.owner_id
             )
         await self._binds.unbind(message.session_id)
+        self._park.clear(message.session_id)
         self._workflow_pending.pop(message.session_id, None)
         self._workflow_reset.add(message.session_id)
         self._code_starts = {
@@ -560,6 +657,43 @@ class ChannelGateway:
         }
         await self._inbound.clear_session(message.session_id)
         return _SESSION_RESET
+
+    def _schedule_fold(self, session_id: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(
+            self._fold_parked(session_id),
+            name=f"channel-fold-{session_id}",
+        )
+
+    async def _fold_parked(self, session_id: str) -> None:
+        parked = self._park.take(session_id)
+        if parked is None:
+            return
+        if not self._inflight.acquire(session_id):
+            if self._park.peek(session_id) is None:
+                self._park.put(session_id, parked)
+            return
+        try:
+            reply = await self._route(parked)
+            raw_thread = (parked.metadata or {}).get("thread_id")
+            thread_id = raw_thread if isinstance(raw_thread, str) else None
+            await self.send_to_channel(
+                parked.channel_type,
+                parked.channel_id,
+                reply,
+                thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.error(
+                f"[ChannelGateway] fold failed for session={session_id}: {e}"
+            )
+        finally:
+            self._inflight.release(session_id)
+            if self._park.peek(session_id) is not None:
+                await self._fold_parked(session_id)
 
     async def _steer_bound_chat(self, message: ChannelMessage, binding: Any) -> str:
         from neos.coding.commands import interpret_coding_command
@@ -646,6 +780,26 @@ class ChannelGateway:
         if binding is None:
             return _NO_TASK
         return _EXPORT_UI
+
+    async def _run_diff(self, message: ChannelMessage) -> str:
+        invoked = await self._invoke_bound_command(message, "/diff")
+        if invoked is not None:
+            return invoked
+        binding = await self._binds.get(message.session_id)
+        if binding is None:
+            return _NO_TASK
+        coding = self._coding_port()
+        diff_fn = getattr(coding, "turn_diff", None)
+        if callable(diff_fn):
+            try:
+                text = await diff_fn(
+                    task_id=binding.task_id, owner_id=binding.owner_id
+                )
+            except Exception:
+                text = None
+            if isinstance(text, str) and text.strip():
+                return text
+        return f"{binding.task_id} no file changes in the last turn."
 
     async def _run_help(self, message: ChannelMessage, command) -> str:
         invoked = await self._invoke_bound_command(

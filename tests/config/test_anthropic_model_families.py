@@ -115,18 +115,53 @@ def test_the_provider_modules_read_the_catalog_rather_than_their_own_table():
         )
 
 
-def test_catalog_rejects_a_prefix_nested_inside_another():
-    """중첩을 허용하면 선언 순서가 승자를 정하고, 그 사실은 어디에도 안 적힌다.
+def test_catalog_allows_a_prefix_nested_inside_another():
+    """5.1 은 `claude-sonnet-5` 의 접두사 중첩이다. 가장 긴 접두사가 이긴다."""
+    catalog = ModelCatalog.model_validate(
+        {
+            "anthropic_families": [
+                {"prefix": "claude-sonnet-5", "family": "sonnet-5"},
+                {"prefix": "claude-sonnet-5-1", "family": "sonnet-5.1"},
+            ]
+        }
+    )
 
-    이것이 파이썬 튜플 시절의 실제 상태였다 -- `_MODEL_PREFIXES` 는
-    첫 일치를 돌려주므로 순서가 의미를 가졌는데 그 줄에 주석이 없었다.
-    """
-    with pytest.raises(ValueError, match="prefix"):
+    assert catalog.canonical_model_family("claude-sonnet-5") == "sonnet-5"
+    assert catalog.canonical_model_family("claude-sonnet-5-1") == "sonnet-5.1"
+    assert (
+        catalog.canonical_model_family("claude-sonnet-5-1-20260901") == "sonnet-5.1"
+    )
+
+
+def test_without_a_nested_prefix_the_parent_generation_matches():
+    catalog = ModelCatalog.model_validate(
+        {"anthropic_families": [{"prefix": "claude-sonnet-5", "family": "sonnet-5"}]}
+    )
+
+    assert catalog.canonical_model_family("claude-sonnet-5-1") == "sonnet-5"
+
+
+def test_sonnet_4_5_does_not_match_sonnet_5():
+    catalog = ModelCatalog.model_validate(
+        {
+            "anthropic_families": [
+                {"prefix": "claude-sonnet-5", "family": "sonnet-5"},
+                {"prefix": "claude-sonnet-4-5", "family": "sonnet-4.5"},
+            ]
+        }
+    )
+
+    assert catalog.canonical_model_family("claude-sonnet-4-5-20250929") == "sonnet-4.5"
+    assert catalog.canonical_model_family("claude-sonnet-5") == "sonnet-5"
+
+
+def test_catalog_still_rejects_duplicate_prefixes():
+    with pytest.raises(ValueError, match="duplicate"):
         ModelCatalog.model_validate(
             {
                 "anthropic_families": [
-                    {"prefix": "claude-opus", "family": "opus"},
-                    {"prefix": "claude-opus-4-8", "family": "opus-4.8"},
+                    {"prefix": "claude-sonnet-5", "family": "sonnet-5"},
+                    {"prefix": "claude-sonnet-5", "family": "sonnet-5-dup"},
                 ]
             }
         )
@@ -149,11 +184,12 @@ def test_catalog_rejects_an_advisor_target_no_family_declares():
 
 
 def test_longest_prefix_wins_so_declaration_order_cannot_change_the_answer():
-    """검증기가 중첩을 막지만, 해석도 순서에 의존하지 않아야 한다."""
+    """중첩을 허용해도 승자는 선언 순서가 아니라 접두사 길이다."""
     catalog = ModelCatalog(
         anthropic_families=[
-            AnthropicFamily(prefix="claude-sonnet-4-5", family="sonnet-4.5"),
             AnthropicFamily(prefix="claude-sonnet-5", family="sonnet-5"),
+            AnthropicFamily(prefix="claude-sonnet-5-1", family="sonnet-5.1"),
+            AnthropicFamily(prefix="claude-sonnet-4-5", family="sonnet-4.5"),
         ]
     )
     reversed_catalog = ModelCatalog(
@@ -161,6 +197,7 @@ def test_longest_prefix_wins_so_declaration_order_cannot_change_the_answer():
     )
     for cat in (catalog, reversed_catalog):
         assert cat.canonical_model_family("claude-sonnet-5") == "sonnet-5"
+        assert cat.canonical_model_family("claude-sonnet-5-1") == "sonnet-5.1"
         assert (
             cat.canonical_model_family("claude-sonnet-4-5-20250929")
             == "sonnet-4.5"

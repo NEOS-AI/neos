@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.model_config import (
     ThinkingContract,
+    get_model_spec,
     models_for_provider,
     thinking_contract,
 )
@@ -80,8 +81,10 @@ class AnthropicProvider(ModelProviderBase):
         **kwargs: Any,
     ) -> BaseLanguageModel:
         """ChatAnthropic 인스턴스 생성. Thinking Blocks 설정 처리 포함."""
+        spec = get_model_spec(model)
+        wire_id = spec.wire_id if spec is not None and spec.wire_id else model
         params: dict[str, Any] = {
-            "model": model,
+            "model": wire_id,
             "temperature": temperature,
             "api_key": settings.ANTHROPIC_API_KEY,
             "max_retries": 3,

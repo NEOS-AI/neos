@@ -151,6 +151,13 @@ class PostgresSandboxBindingRepository:
                 )
         return self._from_row(result.first())
 
+    async def list_bound_sandbox_ids(self) -> frozenset[str]:
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text("SELECT sandbox_id FROM coding_sandbox_bindings")
+            )
+        return frozenset(str(row[0]) for row in result.all() if row and row[0])
+
     async def delete_admin(self, task_id: str, *, expected_version: int) -> bool:
         async with await self._session_factory() as session:
             async with session.begin():

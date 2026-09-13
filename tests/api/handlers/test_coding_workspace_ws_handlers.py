@@ -5,6 +5,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.no_db
+
 from neos.api.handlers.coding_workspace_ws_handlers import (
     get_workspace_stream_service,
     get_workspace_ticket_store,
@@ -132,7 +134,8 @@ def test_watcher_ticket_replays_changes_and_is_single_use() -> None:
     app = _app(tickets, Streams(watcher))
 
     with TestClient(app).websocket_connect(
-        f"/api/v1/coding/workspace/ws?task_id=ct_1&ticket={token}",
+        "/api/v1/coding/workspace/ws?task_id=ct_1",
+        headers={"X-Neos-Ticket": token},
         subprotocols=["neos.coding.workspace.v1"],
     ) as socket:
         assert socket.receive_json() == {
@@ -150,6 +153,27 @@ def test_watcher_ticket_replays_changes_and_is_single_use() -> None:
         }
     assert watcher.replay_called is False
 
+    with pytest.raises(Exception):
+        with TestClient(app).websocket_connect(
+            "/api/v1/coding/workspace/ws?task_id=ct_1",
+            headers={"X-Neos-Ticket": token},
+            subprotocols=["neos.coding.workspace.v1"],
+        ):
+            pass
+
+
+def test_workspace_ws_rejects_querystring_ticket() -> None:
+    tickets = InMemoryWorkspaceTicketStore()
+    import asyncio
+
+    token = asyncio.run(
+        tickets.issue(
+            owner_id="u1",
+            task_id="ct_1",
+            kind=WorkspaceStreamKind.WATCHER,
+        )
+    )
+    app = _app(tickets, Streams(Watcher()))
     with pytest.raises(Exception):
         with TestClient(app).websocket_connect(
             f"/api/v1/coding/workspace/ws?task_id=ct_1&ticket={token}",
@@ -183,7 +207,8 @@ def test_pty_create_output_input_resize_and_explicit_kill() -> None:
     app = _app(tickets, streams)
 
     with TestClient(app).websocket_connect(
-        f"/api/v1/coding/pty/ws?task_id=ct_1&ticket={token}",
+        "/api/v1/coding/pty/ws?task_id=ct_1",
+        headers={"X-Neos-Ticket": token},
         subprotocols=["neos.coding.pty.v1"],
     ) as socket:
         assert socket.receive_json()["type"] == "pty.ready"

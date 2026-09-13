@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from neos.config.model_config import model_config
 from neos.config.model_routing import resolve_model
 from neos.config.schema import (
     DeepAnalysisModelsConfig,
@@ -31,16 +32,16 @@ def test_deep_analysis_settings_defaults():
 
 
 @pytest.mark.parametrize(
-    ("field", "role", "expected"),
+    ("field", "role", "alias"),
     [
-        ("scout", "everyday", "claude-sonnet-5"),
-        ("dig", "powerful", "claude-opus-5"),
-        ("synth", "powerful", "claude-opus-5"),
-        ("judge", "everyday", "claude-sonnet-5"),
+        ("scout", "everyday", "sonnet-5"),
+        ("dig", "powerful", "opus-5"),
+        ("synth", "powerful", "opus-5"),
+        ("judge", "everyday", "sonnet-5"),
     ],
 )
 def test_deep_analysis_models_use_role_defaults(
-    field, role, expected
+    field, role, alias
 ) -> None:
     models = DeepAnalysisModelsConfig()
 
@@ -52,7 +53,7 @@ def test_deep_analysis_models_use_role_defaults(
             role=role,
             feature_override=getattr(models, field),
         ).model
-        == expected
+        == model_config.catalog.role_aliases[alias].current
     )
 
 
@@ -90,7 +91,7 @@ def test_recursive_planner_uses_powerful_role_without_feature_override() -> None
             role="powerful",
             feature_override=recursive.planner_model,
         ).model
-        == "claude-opus-5"
+        == model_config.catalog.role_aliases["opus-5"].current
     )
 
 
@@ -111,7 +112,7 @@ def test_explicit_recursive_planner_model_wins_over_powerful_role() -> None:
 @pytest.mark.parametrize(
     ("feature_model", "expected_model"),
     [
-        (None, "claude-opus-5"),
+        (None, model_config.catalog.role_aliases["opus-5"].current),
         ("claude-manual", "claude-manual"),
     ],
 )

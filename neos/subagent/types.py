@@ -36,6 +36,7 @@ class StepKind(StrEnum):
 class SandboxMode(StrEnum):
     NONE = "none"  # DA P1 / explore default
     PARENT_RO = "parent_ro"  # coding explore: reuse parent binding, RO tools only
+    WORKTREE = "worktree"  # coding implement: isolated git worktree + branch
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,12 +83,18 @@ class SubagentTicket:
     expected_checkpoint_id: str | None = None
     run_id: str | None = None  # set on resume
     lineage_kind: LineageKind = LineageKind.DELEGATE
+    pending_steer: str = ""
+    input_cost_micros_per_million: int = 0
+    output_cost_micros_per_million: int = 0
+    spawn_depth: int = 0  # 0 = parent-spawned; 1 = nested; cannot nest further
 
     def __post_init__(self) -> None:
         if self.lineage_kind is not LineageKind.DELEGATE:
             raise ValueError("P1 lineage_kind must be delegate")
         if not 1 <= self.max_turns <= 8:
             raise ValueError("max_turns must be 1–8")
+        if not 0 <= self.spawn_depth <= 1:
+            raise ValueError("spawn_depth must be 0 or 1")
         # Identity fence is structural: these names are not fields.
         # Do not hasattr-check them — a frozen slots dataclass will
         # never have them. Strip happens in identity.py on JSON write.
@@ -135,11 +142,21 @@ class FoldedResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_micros: int = 0
+    exit_reason: str = ""
+    full_summary: str = ""
 
 
 class ToolPort(Protocol):
     def definitions(self) -> tuple[Any, ...]: ...
     async def execute(self, name: str, input: Mapping[str, object]) -> Mapping[str, Any]: ...
+
+
+class NestedSpawnHost(Protocol):
+    """Parent-injected 1-step nested spawn. Explore children only."""
+
+    async def spawn(
+        self, parent: "SubagentTicket", call: Mapping[str, object]
+    ) -> Mapping[str, Any]: ...
 
 
 class SubagentEventSink(Protocol):

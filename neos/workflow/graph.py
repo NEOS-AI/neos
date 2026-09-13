@@ -1371,6 +1371,7 @@ class MultiAgentWorkflow:
             "chat_history",
             "original_query",
             "memory_context",
+            "channel_attachments",
             "channel_type",
             "recursive_task_tree",
             "final_response",

@@ -47,7 +47,7 @@ test("terminal failure remains isolated in PTY state", () => {
   assert.equal(state.issue, "pty_resync_required");
 });
 
-test("reconnect URL carries only the stream-specific cursor and ticket", () => {
+test("reconnect URL carries only the stream-specific cursor and never a ticket", () => {
   const url = buildWorkspaceSocketUrl({
     websocketUrl: "wss://example.test/api/v1/coding/pty/ws",
     taskId: "ct_1",
@@ -56,7 +56,7 @@ test("reconnect URL carries only the stream-specific cursor and ticket", () => {
     ptyId: "pty_1",
   });
   assert.equal(url.searchParams.get("after_cursor"), "17");
-  assert.equal(url.searchParams.get("ticket"), "ticket_2");
+  assert.equal(url.searchParams.get("ticket"), null);
   assert.equal(url.searchParams.get("pty_id"), "pty_1");
   assert.equal(url.searchParams.has("after_seq"), false);
 });

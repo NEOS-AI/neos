@@ -18,6 +18,28 @@ test("approval decision uses the task-scoped route", async () => {
   );
 });
 
+test("dict detail uses message and does not stringify the object", async () => {
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        detail: {
+          code: "workspace_revision_conflict",
+          message: "Coding workspace revision conflict",
+        },
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } }
+    );
+  await assert.rejects(
+    () => decideCodingApproval("ct/1", "ca/1", "deny"),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Coding workspace revision conflict");
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    }
+  );
+});
+
 test("approval remember flag is forwarded for this-run writes", async () => {
   const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
   globalThis.fetch = async (input, init) => {

@@ -45,6 +45,8 @@ pytestmark = pytest.mark.no_db
         ("/help compact", ChannelCommandKind.HELP, "compact"),
         ("/loop 5m check", ChannelCommandKind.LOOP, "5m check"),
         ("/plan auth", ChannelCommandKind.PROMPT, "auth"),
+        ("/diff", ChannelCommandKind.DIFF, ""),
+        ("!diff", ChannelCommandKind.DIFF, ""),
         ("/not-a-command", ChannelCommandKind.UNKNOWN, ""),
     ],
 )

@@ -1,8 +1,12 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from neos.config.loader import load_yaml_file
 from neos.config.schema import AppConfig
+
+pytestmark = pytest.mark.no_db
 
 CONFIG_DIR = Path("config")
 PROFILE_FILES = [
@@ -38,7 +42,7 @@ def test_committed_config_profiles_exist_and_validate():
     for path in PROFILE_FILES:
         assert path.exists(), f"missing config profile: {path}"
         config = AppConfig.model_validate(load_yaml_file(path))
-        assert config.model_routing.anthropic.everyday == "claude-sonnet-5"
+        assert config.model_routing.anthropic.everyday == "sonnet-5"
         assert config.model_routing.openai.powerful == "gpt-5.6-sol"
         assert config.coding_model.model is None
         assert config.recursive_agent.planner_model is None

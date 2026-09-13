@@ -107,6 +107,25 @@ def test_model_limits_must_be_positive(
         )
 
 
+def test_model_limits_usable_tokens_follow_catalog_formula() -> None:
+    limits = ModelLimits(
+        max_output_tokens=8_192,
+        timeout_sec=5,
+        context_window=200_000,
+        thinking_budget=0,
+    )
+    assert limits.usable_tokens() == 200_000 - 8_192 - 20_000
+
+
+def test_model_limits_unknown_window_has_no_usable() -> None:
+    assert ModelLimits(max_output_tokens=100, timeout_sec=5).usable_tokens() is None
+
+
+def test_model_limits_reject_negative_thinking_budget() -> None:
+    with pytest.raises(ValueError, match="model limits must be positive"):
+        ModelLimits(max_output_tokens=100, timeout_sec=5, thinking_budget=-1)
+
+
 def test_canonical_values_are_immutable() -> None:
     event = TextDelta("hello")
 

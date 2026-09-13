@@ -11,20 +11,41 @@ from neos.api.services.pagination import (
     decode_conversation_cursor,
     encode_conversation_cursor,
 )
+from neos.config.model_config import model_config
+from neos.config.model_identity import canonicalize
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
 from neos.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_ROLE_ROUTED = frozenset({"anthropic", "openai"})
+
 
 def resolve_new_chat_model(model_name: str | None) -> str:
-    """Resolve a new chat's explicit choice or the Anthropic everyday role."""
+    """Resolve a new chat's explicit choice or the Anthropic everyday role.
+
+    Provider comes from catalog identity. Gemini/Ollama are not role-routed
+    (`resolve_model` only accepts anthropic|openai) so those pins return as-is.
+    """
+    if model_name:
+        identity = canonicalize(
+            model_name, catalog=model_config.catalog, apply_remap=True
+        )
+        if identity is None:
+            return model_name
+        if identity.provider not in _ROLE_ROUTED:
+            return identity.catalog_id
+        return resolve_model(
+            config=settings.config.model_routing,
+            provider=identity.provider,  # type: ignore[arg-type]
+            role="everyday",
+            user_model=identity.catalog_id,
+        ).model
     return resolve_model(
         config=settings.config.model_routing,
         provider="anthropic",
         role="everyday",
-        user_model=model_name,
     ).model
 
 

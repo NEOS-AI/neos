@@ -11,8 +11,13 @@ from neos.coding.application.task_service import (
     CodingTaskSnapshot,
     clamp_task_list_limit,
 )
+from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.events import CodingEvent
-from neos.coding.domain.models import CodingTask, CodingTaskStatus
+from neos.coding.domain.models import (
+    ARCHIVABLE_TASK_STATUSES,
+    CodingTask,
+    CodingTaskStatus,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -307,6 +312,70 @@ class PostgresCodingService:
             )
             for row in rows
         ]
+
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        now = datetime.now(UTC)
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT status, deleted_at
+                              FROM coding_tasks
+                             WHERE task_id = :task_id
+                               AND owner_id = :owner_id
+                             FOR UPDATE
+                            """
+                        ),
+                        {"task_id": task_id, "owner_id": owner_id},
+                    )
+                ).first()
+                if row is None:
+                    return False
+                status = CodingTaskStatus(row[0])
+                already = (
+                    status is CodingTaskStatus.ARCHIVED or row[1] is not None
+                )
+                if not already and status not in ARCHIVABLE_TASK_STATUSES:
+                    raise InvalidTaskTransition(
+                        f"cannot transition coding task from {status.value} "
+                        "to archived"
+                    )
+                if not already:
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE coding_tasks
+                               SET status = 'archived',
+                                   deleted_at = :now,
+                                   updated_at = :now,
+                                   version = version + 1
+                             WHERE task_id = :task_id
+                               AND owner_id = :owner_id
+                               AND deleted_at IS NULL
+                               AND status IN (
+                                   'failed', 'completed', 'cancelled', 'expired'
+                               )
+                            """
+                        ),
+                        {
+                            "task_id": task_id,
+                            "owner_id": owner_id,
+                            "now": now,
+                        },
+                    )
+                await session.execute(
+                    text(
+                        """
+                        DELETE FROM subagent_runs
+                         WHERE parent_kind = :parent_kind
+                           AND parent_id = :parent_id
+                        """
+                    ),
+                    {"parent_kind": "coding", "parent_id": task_id},
+                )
+        return True
 
     async def list_after(
         self, task_id: str, *, after_seq: int = 0, limit: int = 500

@@ -139,6 +139,20 @@ def test_cost_line_and_export_helpers() -> None:
         {"cost_micros": 2, "input_tokens": 4, "output_tokens": 1}
     )
     assert format_cost_line("ct_1", payload) == "ct_1 cost_micros=2 tokens=4+1"
+    windowed = cost_payload_from_loop_state(
+        {
+            "cost_micros": 9,
+            "input_tokens": 4,
+            "output_tokens": 1,
+            "cache_read_tokens": 8,
+            "cache_write_tokens": 3,
+            "reasoning_tokens": 2,
+        }
+    )
+    assert (
+        format_cost_line("ct_1", windowed)
+        == "ct_1 cost_micros=9 tokens=4+1 cache=8+3 reasoning=2"
+    )
     exported = export_transcript(
         {"transcript": [{"role": "user", "content": [{"text": "hi"}]}]}
     )

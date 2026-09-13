@@ -50,6 +50,8 @@ from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.registry import CodingToolRegistry
 from tests.coding.fakes import InMemoryCodingRunRepository, RecordingCodingAuditSink
 
+pytestmark = pytest.mark.no_db
+
 NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
 
@@ -98,8 +100,8 @@ class Executor:
 
 
 class Bindings:
-    def __init__(self, *, mutation_error=None, files=None):
-        self.session = Session(files=files)
+    def __init__(self, *, mutation_error=None, files=None, workspace=None):
+        self.session = Session(files=files, workspace=workspace)
         self.mutation_error = mutation_error
 
     async def resolve(self, lease):
@@ -115,12 +117,18 @@ class Bindings:
 
 
 class Session:
-    def __init__(self, files=None) -> None:
+    def __init__(self, files=None, workspace=None) -> None:
         self.writes = 0
+        self.workspace = workspace
         self.files = {
             name: value if isinstance(value, bytes) else value.encode("utf-8")
             for name, value in dict(files or {}).items()
         }
+
+    def clone_with_workspace(self, workspace):
+        cloned = Session(files=self.files, workspace=workspace)
+        cloned.writes = self.writes
+        return cloned
 
     async def workspace_revision(self) -> int:
         return self.writes + 1
@@ -161,6 +169,7 @@ def harness(
     approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
     hooks=None,
     subagents=None,
+    command_allowlist=frozenset({"git"}),
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
@@ -174,7 +183,7 @@ def harness(
     bindings = bindings or Bindings()
     loop = AnthropicCodingLoop(
         model=model,
-        tools=CodingToolRegistry.default(command_allowlist=frozenset({"git"})),
+        tools=CodingToolRegistry.default(command_allowlist=frozenset(command_allowlist)),
         executor=executor,
         bindings=bindings,
         config=config or AnthropicLoopConfig(model="claude-test", system="code"),
@@ -335,13 +344,15 @@ async def test_remember_write_approval_adds_tool_to_approved_always() -> None:
     )
 
     await collect(h, h.repository.checkpoints[-1])
-    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
+    remembered = h.repository.checkpoints[-1].loop_state["approved_always"]
+    assert "write_file.v1:a.txt" in remembered
+    assert "write_file.v1" not in remembered
 
     events = await collect(h, h.repository.checkpoints[-1])
 
-    assert not any(event.type == "approval.requested" for event in events)
-    assert h.bindings.session.writes == 2
-    assert "write_file.v1" in h.repository.checkpoints[-1].loop_state["approved_always"]
+    assert any(event.type == "approval.requested" for event in events)
+    assert h.bindings.session.writes == 1
+    assert "write_file.v1:a.txt" in h.repository.checkpoints[-1].loop_state["approved_always"]
 
 
 @pytest.mark.asyncio
@@ -586,9 +597,9 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
     config = AnthropicLoopConfig(
         model="claude-test",
         system="code",
-        max_transcript_bytes=1600,
-        max_text_delta_bytes=1600,
-        max_public_text_bytes=1600,
+        max_transcript_bytes=1700,
+        max_text_delta_bytes=1700,
+        max_public_text_bytes=1700,
     )
     h = harness(
         [
@@ -613,7 +624,7 @@ async def test_transcript_byte_cap_preserves_pending_multi_tool_structure() -> N
         state["transcript"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
-    assert len(encoded) <= 1600
+    assert len(encoded) <= 1700
     assert [call["tool_call_id"] for call in state["pending_tool_calls"]] == [
         "one",
         "two",
@@ -1462,10 +1473,17 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
         transcript=(state.transcript[0],) + long_prefix,
         llm_compact_attempts=0,
     )
-    compacted, attempts = await h.loop._maybe_llm_compact(state, state.transcript)
+    compacted, attempts, summary = await h.loop._maybe_llm_compact(state, state.transcript)
     assert attempts == 1
     assert compacted[0].content[0].text == "Fix it"
-    assert "old files were edited" in compacted[1].content[0].text
+    assert summary == "old files were edited"
+    assert all(
+        "Prior context summary" not in item.text
+        for message in compacted
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    )
 
 
 class _DecisionHook:

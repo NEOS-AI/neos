@@ -111,6 +111,16 @@ class SubagentStore(Protocol):
 
     async def cancel(self, run_id: str, reason: str) -> RunRecord: ...
 
+    async def fail(self, run_id: str, error_code: str) -> RunRecord: ...
+
     async def cancel_for_parent(
         self, parent_kind: ParentKind, parent_id: str, reason: str
     ) -> tuple[RunRecord, ...]: ...
+
+    async def list_for_parent_run(
+        self, parent_run_id: str
+    ) -> tuple[RunRecord, ...]: ...
+
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int: ...

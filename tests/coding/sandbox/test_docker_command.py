@@ -1,6 +1,7 @@
 import asyncio
 import os
 import signal
+import sys
 
 import pytest
 
@@ -15,6 +16,7 @@ from neos.coding.sandbox.base import (
 from neos.coding.sandbox.command import (
     DockerCommandResult,
     DockerCommandRunner,
+    DockerInteractiveProcess,
     build_create_args,
 )
 
@@ -265,6 +267,140 @@ async def test_execute_timeout_sigterm_host_when_guest_id_unknown(
     runner = DockerCommandRunner()
     with pytest.raises(SandboxTimeout, match="docker_command_timeout"):
         await runner.run("volume", "create", "neos-vol", timeout_sec=0.01)
+
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert all(argv[1] != "kill" for argv in spawned if len(argv) > 1)
+
+
+async def test_execute_docker_does_not_buffer_via_communicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+    original = asyncio.subprocess.Process.communicate
+    original_create = asyncio.create_subprocess_exec
+
+    async def wrapped(
+        self: asyncio.subprocess.Process,
+        *args: object,
+        **kwargs: object,
+    ):
+        nonlocal called
+        called = True
+        return await original(self, *args, **kwargs)
+
+    async def create_subprocess_exec(*args: object, **kwargs: object):
+        return await original_create(
+            sys.executable,
+            "-c",
+            "print('ok')",
+            **kwargs,
+        )
+
+    monkeypatch.setattr(asyncio.subprocess.Process, "communicate", wrapped)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+
+    result = await command_mod._execute_docker("version", timeout_sec=2)
+
+    assert called is False
+    assert result.exit_code == 0
+    assert b"ok" in result.stdout
+
+
+async def test_execute_docker_truncates_oversized_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(command_mod, "_DOCKER_MAX_OUTPUT_BYTES", 8, raising=False)
+    original_create = asyncio.create_subprocess_exec
+
+    async def create_subprocess_exec(*args: object, **kwargs: object):
+        return await original_create(
+            sys.executable,
+            "-c",
+            "import sys; "
+            "sys.stdout.buffer.write(b'o' * 20); "
+            "sys.stderr.buffer.write(b'e' * 20); "
+            "sys.stdout.buffer.flush(); "
+            "sys.stderr.buffer.flush()",
+            **kwargs,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+
+    result = await command_mod._execute_docker("logs", timeout_sec=2)
+
+    assert result.stdout == b"oooooooo"
+    assert result.stderr == b"eeeeeeee"
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is True
+    assert len(result.stdout) == 8
+    assert len(result.stderr) == 8
+
+
+async def test_execute_docker_overflow_does_not_kill_guest_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(command_mod, "_DOCKER_MAX_OUTPUT_BYTES", 8, raising=False)
+    killed: list[tuple[str, str]] = []
+    original_create = asyncio.create_subprocess_exec
+
+    async def fake_kill(target: str, sig: str) -> None:
+        killed.append((target, sig))
+
+    async def create_subprocess_exec(*args: object, **kwargs: object):
+        argv = tuple(str(arg) for arg in args)
+        if len(argv) >= 2 and argv[0] == "docker" and argv[1] == "kill":
+            raise AssertionError(f"guest kill spawned: {argv}")
+        return await original_create(
+            sys.executable,
+            "-c",
+            "import sys, time; "
+            "sys.stdout.buffer.write(b'o' * 20); "
+            "sys.stdout.buffer.flush(); "
+            "time.sleep(2)",
+            **kwargs,
+        )
+
+    monkeypatch.setattr(command_mod, "_docker_kill_guest", fake_kill)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+
+    result = await command_mod._execute_docker(
+        "exec", "neos-sb_live", "cat", "huge.txt", timeout_sec=2
+    )
+
+    assert result.stdout_truncated is True
+    assert killed == []
+
+
+async def test_pty_terminate_sigterm_then_sigkill_host_and_guest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDockerProcess(exit_on=signal.SIGKILL)
+    sent: list[int] = []
+    spawned: list[tuple[str, ...]] = []
+
+    async def create_subprocess_exec(*args: object, **kwargs: object) -> object:
+        argv = tuple(str(arg) for arg in args)
+        spawned.append(argv)
+        if len(argv) > 1 and argv[1] == "kill":
+            return _ImmediateProcess()
+        assert kwargs.get("start_new_session") is True
+        return fake
+
+    def killpg(pid: int, sig: int) -> None:
+        if pid == fake.pid:
+            sent.append(sig)
+            fake.deliver(sig)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(process_mod, "TERMINATE_GRACE_SEC", 0.01)
+    monkeypatch.setattr(command_mod, "TERMINATE_GRACE_SEC", 0.01)
+
+    process = await DockerInteractiveProcess.start(
+        "exec", "-i", "-t", "neos-sb_guest", "/bin/sh"
+    )
+    await process.terminate()
+    await process.wait()
 
     assert sent == [signal.SIGTERM, signal.SIGKILL]
     assert all(argv[1] != "kill" for argv in spawned if len(argv) > 1)

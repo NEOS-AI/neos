@@ -122,8 +122,10 @@ export function useCodingStream(taskId: string) {
         const url = new URL(authorization.websocket_url);
         url.searchParams.set("task_id", taskId);
         url.searchParams.set("after_seq", String(afterSeq.current));
-        url.searchParams.set("ticket", authorization.ticket);
-        socket = new WebSocket(url, "neos.coding.v1");
+        socket = new WebSocket(url, [
+          "neos.coding.v1",
+          `neos.ticket.${authorization.ticket}`,
+        ]);
         socket.onmessage = (message) => {
           let envelope: Record<string, unknown>;
           try {

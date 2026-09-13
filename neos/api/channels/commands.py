@@ -45,6 +45,7 @@ class ChannelCommandKind(StrEnum):
     HELP = "help"
     LOOP = "loop"
     PROMPT = "prompt"
+    DIFF = "diff"
     UNKNOWN = "unknown"
 
 
@@ -116,6 +117,8 @@ _KIND_BY_NAME = {
 def parse_channel_command(text: str) -> ChannelCommand:
     decision = interpret_coding_command(text)
     parsed = decision.parsed
+    if parsed.slash and parsed.name == "diff":
+        return ChannelCommand(ChannelCommandKind.DIFF, parsed.args)
     if decision.disposition is CommandDisposition.CHAT:
         return ChannelCommand(ChannelCommandKind.CHAT, parsed.raw.strip())
     if decision.disposition is CommandDisposition.UNKNOWN:

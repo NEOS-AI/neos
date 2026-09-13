@@ -54,6 +54,7 @@ export function reduceSnapshot(
           ...tool,
           name: tool.name ?? nameFromUnknown(tool.result),
           preview: clippedPreview(tool.preview ?? previewFromUnknown(tool.result)),
+          unchanged: tool.unchanged === true || tool.result?.unchanged === true,
           denied_by: tool.denied_by ?? stringField(tool.result, "denied_by"),
           reason_code: tool.reason_code ?? stringField(tool.result, "reason_code"),
         },
@@ -177,6 +178,10 @@ export function reduceProjectionEvent(
     const preview = clippedPreview(
       pickToolPreview(event.payload, result, previous)
     );
+    const unchanged =
+      event.payload.unchanged === true ||
+      result?.unchanged === true ||
+      previous?.unchanged === true;
     const deniedBy =
       stringField(event.payload, "denied_by") ??
       stringField(result, "denied_by") ??
@@ -198,6 +203,7 @@ export function reduceProjectionEvent(
       result,
       name,
       preview,
+      unchanged,
       denied_by: status === "denied" ? deniedBy : previous?.denied_by ?? null,
       reason_code: status === "denied" ? reasonCode : previous?.reason_code ?? null,
     };

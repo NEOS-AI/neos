@@ -7,6 +7,7 @@ from neos.coding.domain.models import CodingTask, CodingTaskStatus
 class Database(Protocol):
     async def fetch_one(self, query: str, *params): ...
     async def fetch_all(self, query: str, *params): ...
+    async def execute(self, query: str, *params): ...
 
 
 class CodingTaskRepository:
@@ -56,6 +57,29 @@ class CodingTaskRepository:
             for row in rows or ()
             if (task := _task_from_row(row)) is not None
         ]
+
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        result = await self._database.execute(
+            """
+            UPDATE coding_tasks
+               SET status = 'archived',
+                   deleted_at = NOW(),
+                   updated_at = NOW(),
+                   version = version + 1
+             WHERE task_id = $1 AND owner_id = $2 AND deleted_at IS NULL
+               AND status IN ('failed', 'completed', 'cancelled', 'expired')
+            RETURNING task_id
+            """,
+            task_id,
+            owner_id,
+        )
+        row = result.fetchone() if hasattr(result, "fetchone") else None
+        if row is None:
+            first = getattr(result, "first", None)
+            row = first() if callable(first) else None
+        if row is not None:
+            return True
+        return bool(getattr(result, "rowcount", 0))
 
 
 def _task_from_row(row) -> CodingTask | None:

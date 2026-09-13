@@ -1,6 +1,7 @@
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { adaptBEConversation } from "@/lib/adapters/chat-adapters";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { loadCatalog } from "@/lib/ai/catalog";
 import { mapToBackendModelName } from "@/lib/ai/models";
 import { callBackendAPI } from "@/lib/backend-api";
 import { ChatSDKError } from "@/lib/errors";
@@ -65,6 +66,8 @@ export async function POST(request: Request) {
     // (이전에는 file 파트를 폐기해 첨부가 백엔드에 도달하지 못했다)
     const messageContent = extractTextContent(message.parts);
     const messageAttachments = extractAttachments(message.parts);
+    const catalog = await loadCatalog();
+    const backendModel = mapToBackendModelName(selectedChatModel, catalog);
 
     // 기존 conversation 조회 (id = FE chat UUID = backendConversationId)
     let conversationId: string | null = null;
@@ -85,7 +88,7 @@ export async function POST(request: Request) {
             user_id: backendUserId,
             conversation_id: id,
             title: "New chat",
-            model_name: mapToBackendModelName(selectedChatModel),
+            model_name: backendModel,
             mode: "standard",
             temperature: 0.7,
             visibility: selectedVisibilityType,
@@ -135,7 +138,7 @@ export async function POST(request: Request) {
           attachments: messageAttachments,
           metadata: {
             fe_chat_id: id,
-            model: mapToBackendModelName(selectedChatModel),
+            model: backendModel,
             visibility: selectedVisibilityType,
             autonomy_level: autonomyLevel,
           },

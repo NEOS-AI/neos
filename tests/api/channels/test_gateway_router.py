@@ -313,9 +313,10 @@ async def test_stop_bypasses_held_inflight_on_bound_session(monkeypatch):
 
     reply = await gateway.dispatch(_message("/stop", "sess-ctrl"))
 
-    assert reply == "Stopped ct_channel"
+    assert reply == "cancel: Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
+    gateway._inflight.release("sess-ctrl")
     steered = await gateway.dispatch(_message("hello", "sess-ctrl"))
     assert steered == "Steered ct_channel"
     assert coding.steered == [("ct_channel", "[U_alice] hello")]
@@ -511,8 +512,8 @@ async def test_duplicate_stop_same_idempotency_key_stops_once(monkeypatch):
     reply1 = await gateway.dispatch(first)
     reply2 = await gateway.dispatch(second)
 
-    assert reply1 == "Stopped ct_channel"
-    assert reply2 == "Stopped ct_channel"
+    assert reply1 == "cancel: Stopped ct_channel"
+    assert reply2 == "cancel: Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
     assert workflow.calls == []
 
@@ -529,7 +530,7 @@ async def test_status_and_stop_same_card_ts_both_run(monkeypatch):
     stop_reply = await gateway.dispatch(stop)
 
     assert status_reply == "ct_channel queued"
-    assert stop_reply == "Stopped ct_channel"
+    assert stop_reply == "cancel: Stopped ct_channel"
     assert coding.stopped == ["ct_channel"]
 
 
@@ -547,7 +548,7 @@ async def test_pending_claim_without_outcome_is_busy(monkeypatch):
 
     reply = await gateway.dispatch(message)
 
-    assert reply == "Already working on this thread."
+    assert reply == "drop: Already working on this thread."
     assert workflow.calls == []
 
 
@@ -628,7 +629,8 @@ async def test_remembered_key_replays_while_other_key_is_inflight(monkeypatch):
     assert await gateway.dispatch(first) == "workflow-ok"
     assert gateway._inflight.acquire("sess-busy-id") is True
     assert await gateway.dispatch(replay) == "workflow-ok"
-    assert await gateway.dispatch(other) == "Already working on this thread."
+    parked = await gateway.dispatch(other)
+    assert "park" in parked.lower()
     assert len(workflow.calls) == 1
 
 
@@ -873,21 +875,22 @@ class _FakeResumeGraph:
             yield {}
 
 
-async def test_inflight_second_message_is_dropped(monkeypatch):
+async def test_inflight_second_message_is_parked(monkeypatch):
     gateway, workflow, _coding = _gateway(monkeypatch)
     assert gateway._inflight.acquire("sess-busy") is True
     reply = await gateway.dispatch(_message("hello", "sess-busy"))
-    assert reply == "Already working on this thread."
+    assert "park" in reply.lower()
+    assert "already working" not in reply.lower()
     assert workflow.calls == []
 
 
-async def test_bound_chat_steers_while_inflight(monkeypatch):
+async def test_bound_chat_parks_while_inflight(monkeypatch):
     gateway, workflow, coding = _gateway(monkeypatch)
     await gateway.dispatch(_message("/code fix auth", "sess-busy-bind"))
     assert gateway._inflight.acquire("sess-busy-bind") is True
     reply = await gateway.dispatch(_message("also add tests", "sess-busy-bind"))
-    assert reply == "Steered ct_channel"
-    assert coding.steered == [("ct_channel", "[U_alice] also add tests")]
+    assert "park" in reply.lower()
+    assert coding.steered == []
     assert workflow.calls == []
 
 

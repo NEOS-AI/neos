@@ -221,6 +221,12 @@ class EnterpriseMetricsCollector:
             ["parent_kind", "provider"],
             registry=self.registry,
         )
+        self.subagent_adopt_error_total = Counter(
+            "subagent_adopt_error_total",
+            "Spawn claim adopt/complete failures skipped so the parent does not crash",
+            ["parent_kind", "op"],
+            registry=self.registry,
+        )
         self.coding_sandbox_lifecycle_seconds = Histogram(
             "coding_sandbox_lifecycle_seconds",
             "Coding sandbox lifecycle operation duration",
@@ -405,6 +411,24 @@ class EnterpriseMetricsCollector:
             'LLM cost lookups with no known price (cost aggregated as zero)',
             ['provider', 'model'],
             registry=self.registry
+        )
+
+        # Catalog identity. Labels are cardinality-safe: never a raw model id.
+        self.catalog_resolve_total = Counter(
+            "neos_catalog_resolve_total",
+            "Catalog canonicalize results by identity source",
+            ["source"],
+            registry=self.registry,
+        )
+        self.catalog_remap_total = Counter(
+            "neos_catalog_remap_total",
+            "Catalog remaps applied to a user/cookie string",
+            registry=self.registry,
+        )
+        self.catalog_live_unknown_total = Counter(
+            "neos_catalog_live_unknown_total",
+            "Live Anthropic ids not present in the YAML catalog",
+            registry=self.registry,
         )
 
         # === Database Metrics ===

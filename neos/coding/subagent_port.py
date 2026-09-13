@@ -7,6 +7,7 @@ from typing import Any
 
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk, ToolValidationError
 from neos.subagent.catalog import lookup_spec
+from neos.subagent.types import SandboxMode
 
 
 class CodingToolPortError(RuntimeError):
@@ -30,6 +31,9 @@ class CodingToolPort:
         self._phase = "implement"
         self._revealed: frozenset[str] = frozenset()
 
+    def use_spec(self, spec: str) -> None:
+        self._spec_name = spec
+
     def bind(
         self,
         *,
@@ -45,8 +49,9 @@ class CodingToolPort:
 
     def definitions(self) -> tuple[Any, ...]:
         spec = lookup_spec(self._spec_name)
+        revealed = self._revealed | spec.allowed_tools
         host = self._registry.definitions(
-            phase=self._phase, revealed=self._revealed
+            phase=self._phase, revealed=revealed
         )
         return tuple(item for item in host if item.name in spec.allowed_tools)
 
@@ -58,7 +63,8 @@ class CodingToolPort:
             validated = self._registry.validate(name, dict(input))
         except ToolValidationError as error:
             raise CodingToolPortError(error.reason_code) from error
-        if validated.risk is not ToolRisk.READ_ONLY:
+        write_ok = spec.sandbox_mode is SandboxMode.WORKTREE
+        if validated.risk is not ToolRisk.READ_ONLY and not write_ok:
             raise CodingToolPortError("tool_not_read_only")
         if self._session is None:
             raise CodingToolPortError("sandbox_session_missing")

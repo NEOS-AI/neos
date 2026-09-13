@@ -36,6 +36,17 @@ logger = logging.getLogger(__name__)
 _TELEGRAM_MAX_CHARS = 4096
 
 
+def telegram_inbound_filters(filters: Any) -> list[Any]:
+    inbound = [filters.TEXT, filters.PHOTO, filters.Document.ALL]
+    caption = getattr(filters, "CAPTION", None)
+    if caption is not None:
+        inbound.append(caption)
+    video = getattr(filters, "VIDEO", None)
+    if video is not None:
+        inbound.append(video)
+    return inbound
+
+
 def _telegram_session_id(raw: Any) -> str:
     chat = getattr(raw, "effective_chat", None)
     message = getattr(raw, "effective_message", None)
@@ -100,6 +111,9 @@ class TelegramAdapter(ChannelAdapterBase):
         self._gateway = gateway
         self._app: Optional[Any] = None       # telegram.ext.Application
         self._polling_task: Optional[asyncio.Task] = None
+        register = getattr(gateway, "register_adapter", None)
+        if callable(register):
+            register(self)
 
     async def start(self) -> None:
         """Telegram 봇 폴링을 시작한다."""
@@ -128,10 +142,10 @@ class TelegramAdapter(ChannelAdapterBase):
                 .build()
             )
 
-            inbound = filters.TEXT | filters.PHOTO | filters.Document.ALL
-            caption = getattr(filters, "CAPTION", None)
-            if caption is not None:
-                inbound = inbound | caption
+            inbound_parts = telegram_inbound_filters(filters)
+            inbound = inbound_parts[0]
+            for part in inbound_parts[1:]:
+                inbound = inbound | part
             self._app.add_handler(MessageHandler(inbound, self._handle_message))
             self._app.add_handler(CallbackQueryHandler(self._handle_callback))
 
@@ -312,8 +326,24 @@ class TelegramAdapter(ChannelAdapterBase):
     ) -> None:
         from neos.api.channels.outbound import resolve_outbound_file
 
-        if resolve_outbound_file(path, allow_dirs) is None:
+        resolved = resolve_outbound_file(path, allow_dirs)
+        if resolved is None:
             return
+        if not self._app:
+            logger.warning("[TelegramAdapter] send_file called before start()")
+            return
+        kwargs: dict[str, Any] = {
+            "chat_id": channel_id,
+            "document": str(resolved),
+        }
+        if thread_id:
+            kwargs["reply_to_message_id"] = int(thread_id)
+        try:
+            await self._app.bot.send_document(**kwargs)
+        except Exception as e:
+            logger.warning(
+                "[TelegramAdapter] send_document failed to %s: %s", channel_id, e
+            )
 
     async def _handle_message(self, update: Any, context: Any) -> None:
         """
@@ -333,6 +363,7 @@ class TelegramAdapter(ChannelAdapterBase):
         has_media = bool(
             getattr(effective_message, "photo", None)
             or getattr(effective_message, "document", None)
+            or getattr(effective_message, "video", None)
         )
         has_attachment = bool(settings.config.channels.inbound_media and has_media)
         if not text.strip() and not has_attachment:

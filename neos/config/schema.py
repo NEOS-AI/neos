@@ -147,8 +147,8 @@ class ProviderModelRolesConfig(StrictConfigModel):
 class ModelRoutingConfig(StrictConfigModel):
     anthropic: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
-            everyday="claude-sonnet-5",
-            powerful="claude-opus-5",
+            everyday="sonnet-5",
+            powerful="opus-5",
         )
     )
     openai: ProviderModelRolesConfig = Field(
@@ -157,6 +157,14 @@ class ModelRoutingConfig(StrictConfigModel):
             powerful="gpt-5.6-sol",
         )
     )
+
+
+class ModelCatalogConfig(StrictConfigModel):
+    """Runtime catalog flags. All default off."""
+
+    picker_api: bool = False
+    default_unknown_claude_adaptive: bool = False
+    live_anthropic: bool = False
 
 
 class EmbeddingDatasetConfig(StrictConfigModel):
@@ -1617,6 +1625,7 @@ class CodingModelConfig(StrictConfigModel):
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
     subagent_max_active: int = Field(default=1, ge=1, le=4)
+    file_watch: bool = False
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":
@@ -1769,6 +1778,7 @@ class AppConfig(StrictConfigModel):
     smart_cache: SmartCacheConfig = Field(default_factory=SmartCacheConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
+    model_catalog: ModelCatalogConfig = Field(default_factory=ModelCatalogConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)

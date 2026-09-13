@@ -6,8 +6,9 @@ pytestmark = pytest.mark.no_db
 
 
 class FakeResult:
-    def __init__(self, row=None):
+    def __init__(self, row=None, rowcount=1):
         self._row = row
+        self.rowcount = rowcount
 
     def first(self):
         return self._row
@@ -232,3 +233,93 @@ async def test_list_owned_scopes_to_owner_and_orders_by_activity() -> None:
     assert "ORDER BY last_activity_at DESC, task_id DESC" in sql
     assert params["owner"] == "owner-a"
     assert params["limit"] == 50
+
+
+class ArchiveSession(FakeSession):
+    def __init__(self, status="completed", deleted_at=None):
+        super().__init__()
+        self.status = status
+        self.deleted_at = deleted_at
+
+    async def execute(self, statement, params=None):
+        sql = str(statement)
+        self.statements.append((sql, params or {}))
+        if "SELECT status, deleted_at" in sql:
+            return FakeResult((self.status, self.deleted_at))
+        if "UPDATE coding_tasks" in sql:
+            self.status = "archived"
+            self.deleted_at = params.get("now") if params else True
+            return FakeResult(rowcount=1)
+        return FakeResult()
+
+
+async def test_archive_soft_deletes_task_and_orphans_subagent_runs() -> None:
+    session = ArchiveSession()
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    archived = await service.archive("ct_drop", "owner-a")
+
+    assert archived is True
+    sql = "\n".join(statement for statement, _ in session.statements)
+    assert "SELECT status, deleted_at" in sql
+    assert "FOR UPDATE" in sql
+    assert "UPDATE coding_tasks" in sql
+    assert "deleted_at = :now" in sql
+    assert "status = 'archived'" in sql
+    assert "DELETE FROM subagent_runs" in sql
+    assert sql.index("SELECT status, deleted_at") < sql.index("DELETE FROM subagent_runs")
+    update_params = next(
+        params
+        for statement, params in session.statements
+        if "UPDATE coding_tasks" in statement
+    )
+    delete_params = next(
+        params
+        for statement, params in session.statements
+        if "DELETE FROM subagent_runs" in statement
+    )
+    assert update_params["task_id"] == "ct_drop"
+    assert update_params["owner_id"] == "owner-a"
+    assert delete_params["parent_kind"] == "coding"
+    assert delete_params["parent_id"] == "ct_drop"
+
+
+async def test_archive_retries_orphan_delete_when_already_archived() -> None:
+    session = ArchiveSession(status="archived", deleted_at="already")
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    archived = await service.archive("ct_drop", "owner-a")
+
+    assert archived is True
+    sql = "\n".join(statement for statement, _ in session.statements)
+    assert "DELETE FROM subagent_runs" in sql
+    assert "UPDATE coding_tasks" not in sql
+    delete_params = next(
+        params
+        for statement, params in session.statements
+        if "DELETE FROM subagent_runs" in statement
+    )
+    assert delete_params["parent_kind"] == "coding"
+    assert delete_params["parent_id"] == "ct_drop"
+
+
+async def test_archive_refuses_non_terminal_status() -> None:
+    from neos.coding.domain.errors import InvalidTaskTransition
+
+    session = ArchiveSession(status="running")
+
+    async def session_factory():
+        return session
+
+    service = PostgresCodingService(session_factory)
+    with pytest.raises(InvalidTaskTransition, match="running.*archived"):
+        await service.archive("ct_live", "owner-a")
+    sql = "\n".join(statement for statement, _ in session.statements)
+    assert "DELETE FROM subagent_runs" not in sql
+    assert "UPDATE coding_tasks" not in sql

@@ -1,6 +1,13 @@
 """Provider-reusable subagent runtime. Must not import the durable coding loop."""
 
-from neos.subagent.catalog import EXPLORE, SpecRegistry, UnknownSpec, lookup_spec
+from neos.subagent.catalog import (
+    EXPLORE,
+    IMPLEMENT,
+    SpecRegistry,
+    UnknownSpec,
+    lookup_spec,
+    may_spawn,
+)
 from neos.subagent.fold import FoldNotReady
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.types import (
@@ -21,6 +28,7 @@ from neos.subagent.types import (
 
 __all__ = [
     "EXPLORE",
+    "IMPLEMENT",
     "FoldNotReady",
     "FoldedResult",
     "LineageKind",
@@ -39,4 +47,5 @@ __all__ = [
     "ToolPort",
     "UnknownSpec",
     "lookup_spec",
+    "may_spawn",
 ]

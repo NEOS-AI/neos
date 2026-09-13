@@ -21,6 +21,9 @@ from neos.coding.sandbox.base import (
 from neos.coding.sandbox.process import (
     TERMINATE_GRACE_SEC,
     _close_stdio,
+    _feed_stdin,
+    _read_capped,
+    _read_task_result,
     _signal_process_group,
     terminate_process_group,
 )
@@ -28,6 +31,7 @@ from neos.coding.sandbox.process import (
 
 _DIGEST_IMAGE = re.compile(r"^[^\s]+@sha256:[0-9a-f]{64}$")
 _SANDBOX_ID = re.compile(r"^sb_[A-Za-z0-9_-]+$")
+_DOCKER_MAX_OUTPUT_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +90,15 @@ class DockerCommandRunner:
 class DockerInteractiveProcess:
     """Interactive Docker CLI process attached to a local POSIX PTY."""
 
-    def __init__(self, process: asyncio.subprocess.Process, master_fd: int) -> None:
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        master_fd: int,
+        guest: str | None = None,
+    ) -> None:
         self._process = process
         self._master_fd = master_fd
+        self._guest = guest
 
     @classmethod
     async def start(cls, *args: str) -> DockerInteractiveProcess:
@@ -109,7 +119,7 @@ class DockerInteractiveProcess:
             raise SandboxUnavailable("docker_cli_unavailable") from error
         finally:
             os.close(slave_fd)
-        return cls(process, master_fd)
+        return cls(process, master_fd, _docker_guest_id(args))
 
     async def read(self, maximum: int) -> bytes:
         loop = asyncio.get_running_loop()
@@ -143,6 +153,10 @@ class DockerInteractiveProcess:
         )
 
     async def terminate(self) -> None:
+        # Interactive `docker exec` targets the long-lived sandbox
+        # container name. Kill only the CLI process group — same as
+        # stream overflow. `_terminate_docker_process` is for timeout
+        # of a container the CLI actually owns (`docker run`).
         await terminate_process_group(self._process)
 
     async def wait(self) -> int:
@@ -298,7 +312,12 @@ def _docker_guest_id(args: tuple[str, ...]) -> str | None:
             return target if target and "\0" not in target else None
         if arg.startswith("-"):
             key, separator, _value = arg.partition("=")
-            if separator or key not in _DOCKER_VALUE_OPTS:
+            # `docker exec/run -t` is --tty. `-t` is --time only on
+            # stop/restart/rm.
+            takes_value = key in _DOCKER_VALUE_OPTS and not (
+                key == "-t" and args[0] in {"exec", "run", "create"}
+            )
+            if separator or not takes_value:
                 index += 1
                 continue
             index += 2
@@ -358,6 +377,47 @@ async def _terminate_docker_process(
             await process.wait()
 
 
+async def _collect_docker(
+    process: asyncio.subprocess.Process,
+    input: bytes,
+) -> tuple[bytes, bytes, bool, bool]:
+    overflow = asyncio.Event()
+    stdin_task = asyncio.create_task(_feed_stdin(process, input))
+    stdout_task = asyncio.create_task(
+        _read_capped(process.stdout, _DOCKER_MAX_OUTPUT_BYTES, overflow)
+    )
+    stderr_task = asyncio.create_task(
+        _read_capped(process.stderr, _DOCKER_MAX_OUTPUT_BYTES, overflow)
+    )
+    wait_task = asyncio.create_task(process.wait())
+    overflow_task = asyncio.create_task(overflow.wait())
+    try:
+        await asyncio.wait(
+            {wait_task, overflow_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if overflow.is_set():
+            for task in (stdout_task, stderr_task, wait_task):
+                if not task.done():
+                    task.cancel()
+            if process.returncode is None:
+                # Cap the exec stream only. Do not docker-kill the
+                # long-lived sandbox container (guest id is the
+                # `docker exec` target name).
+                await terminate_process_group(process)
+        elif not wait_task.done():
+            await wait_task
+        stdout, stdout_truncated = await _read_task_result(stdout_task)
+        stderr, stderr_truncated = await _read_task_result(stderr_task)
+        await stdin_task
+    finally:
+        overflow_task.cancel()
+        for task in (stdin_task, stdout_task, stderr_task, wait_task):
+            if not task.done():
+                task.cancel()
+    return stdout, stderr, stdout_truncated, stderr_truncated
+
+
 async def _execute_docker(
     *args: str,
     timeout_sec: float,
@@ -377,15 +437,16 @@ async def _execute_docker(
     )
     try:
         async with asyncio.timeout(timeout_sec):
-            stdout, stderr = await process.communicate(input or None)
+            stdout, stderr, stdout_truncated, stderr_truncated = (
+                await _collect_docker(process, input)
+            )
     except TimeoutError:
         await _terminate_docker_process(process, _docker_guest_id(args))
         raise
-    maximum = 1024 * 1024
     return DockerCommandResult(
         exit_code=process.returncode,
-        stdout=stdout[:maximum],
-        stderr=stderr[:maximum],
-        stdout_truncated=len(stdout) > maximum,
-        stderr_truncated=len(stderr) > maximum,
+        stdout=stdout,
+        stderr=stderr,
+        stdout_truncated=stdout_truncated,
+        stderr_truncated=stderr_truncated,
     )

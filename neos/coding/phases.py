@@ -8,6 +8,8 @@ from enum import StrEnum
 from neos.coding.tools.registry import ToolRisk
 
 _VERDICT_RE = re.compile(r"VERDICT:\s*(PASS|FAIL|PARTIAL)\b", re.IGNORECASE)
+_FENCED_COMMAND_RE = re.compile(r"```(?:command|bash|sh|shell|zsh)?\s*\n(.+?)```", re.IGNORECASE | re.DOTALL)
+_COMMAND_SECTION_RE = re.compile(r"(?im)^\s*Command:[ \t]*(\S.+)$")
 _CRITICAL_HEADING_RE = re.compile(
     r"(?im)^\s{0,3}(?:#{1,6}\s+)?(?:\*{0,2}|_{0,2})Critical Files?(?:\*{0,2}|_{0,2})\s*:?\s*$"
 )
@@ -27,8 +29,14 @@ _HIDDEN_WRITES = frozenset(
     {
         "edit_file.v1",
         "write_file.v1",
+        "mkdir.v1",
+        "rm.v1",
+        "mv.v1",
+        "chmod.v1",
         "execute.v1",
         "spawn_agent.v1",
+        "subagent_list.v1",
+        "subagent_steer.v1",
     }
 )
 
@@ -36,15 +44,39 @@ _HIDDEN: dict[CodingAgentPhase, frozenset[str]] = {
     CodingAgentPhase.EXPLORE: _HIDDEN_WRITES,
     CodingAgentPhase.PLAN: _HIDDEN_WRITES,
     CodingAgentPhase.VERIFY: frozenset(
-        {"edit_file.v1", "write_file.v1", "spawn_agent.v1"}
+        {
+            "edit_file.v1",
+            "write_file.v1",
+            "mkdir.v1",
+            "rm.v1",
+            "mv.v1",
+            "chmod.v1",
+            "spawn_agent.v1",
+            "subagent_list.v1",
+            "subagent_steer.v1",
+        }
     ),
     CodingAgentPhase.IMPLEMENT: frozenset(),
 }
 
 
+def _has_verify_command(text: str) -> bool:
+    blob = text or ""
+    for match in _FENCED_COMMAND_RE.finditer(blob):
+        if match.group(1).strip():
+            return True
+    match = _COMMAND_SECTION_RE.search(blob)
+    return bool(match and match.group(1).strip())
+
+
 def parse_verify_verdict(text: str) -> str | None:
     match = _VERDICT_RE.search(text or "")
-    return match.group(1).upper() if match else None
+    if match is None:
+        return None
+    verdict = match.group(1).upper()
+    if verdict == "PASS" and not _has_verify_command(text):
+        return None
+    return verdict
 
 
 def persist_verify_verdict(text: str) -> str | None:
@@ -66,6 +98,28 @@ def restore_plan_critical_files(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
     return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def plan_text_has_body(text: str) -> bool:
+    blob = text or ""
+    heading = _CRITICAL_HEADING_RE.search(blob)
+    if heading is not None:
+        start = heading.start()
+        end = heading.end()
+        for line in blob[end:].splitlines(keepends=True):
+            if _NEXT_HEADING_RE.match(line):
+                break
+            item = _CRITICAL_ITEM_RE.match(line)
+            if item:
+                end += len(line)
+                continue
+            if line.strip() and not item:
+                break
+            end += len(line)
+        blob = blob[:start] + blob[end:]
+    else:
+        blob = _CRITICAL_INLINE_RE.sub("", blob)
+    return bool(blob.strip())
 
 
 def parse_plan_critical_files(text: str) -> list[str] | None:

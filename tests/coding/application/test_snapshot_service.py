@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from neos.coding.application.snapshot_service import CodingSnapshotService
 from neos.coding.domain.approvals import ApprovalStatus
 from neos.coding.tools.registry import ToolRisk
@@ -164,6 +166,52 @@ async def test_snapshot_is_owner_scoped() -> None:
     service = CodingSnapshotService(ProjectionFixtureRepository(head_seq=14))
 
     assert await service.get_owned("ct_1", "foreign") is None
+
+
+@pytest.mark.no_db
+async def test_snapshot_active_children_empty_when_flag_off() -> None:
+    service = CodingSnapshotService(ProjectionFixtureRepository(head_seq=14))
+
+    snapshot = await service.get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.active_children == ()
+
+
+@pytest.mark.no_db
+async def test_snapshot_exposes_opaque_active_children() -> None:
+    from dataclasses import replace
+
+    class ChildrenRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            if rows is None or rows.latest_checkpoint is None:
+                return rows
+            loop_state = dict(rows.latest_checkpoint.loop_state)
+            loop_state["active_children"] = [
+                {"run_id": "sa_1", "status": "running", "spec": "explore"},
+                {"run_id": "sa_2", "tool_call_id": "s2"},
+            ]
+            return replace(
+                rows,
+                latest_checkpoint=replace(
+                    rows.latest_checkpoint, loop_state=loop_state
+                ),
+            )
+
+    snapshot = await CodingSnapshotService(
+        ChildrenRepository(head_seq=14)
+    ).get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert [child.run_id for child in snapshot.active_children] == ["sa_1", "sa_2"]
+    assert snapshot.active_children[0].status == "running"
+    assert snapshot.active_children[0].spec == "explore"
+    assert snapshot.active_children[1].status is None
+    assert snapshot.active_children[1].spec is None
+    assert not hasattr(snapshot.active_children[1], "tool_call_id") or not getattr(
+        snapshot.active_children[1], "tool_call_id", None
+    )
 
 
 class FakeResult:

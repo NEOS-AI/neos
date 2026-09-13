@@ -8,7 +8,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
-from neos.subagent.identity import new_checkpoint_id, new_run_id, strip_channel_keys
+from neos.subagent.identity import (
+    new_checkpoint_id,
+    new_run_id,
+    persist_payload,
+)
 from neos.subagent.store import (
     PLACEHOLDER_STATE,
     CasReservation,
@@ -33,7 +37,7 @@ def _now() -> datetime:
 
 
 def _briefing_payload(ticket: SubagentTicket) -> dict[str, Any]:
-    return strip_channel_keys(
+    return persist_payload(
         {
             "goal": ticket.briefing.goal,
             "why": ticket.briefing.why,
@@ -169,7 +173,7 @@ class InMemorySubagentStore:
             row = self._row(reservation.run.run_id, reservation.seq)
             if row is None:
                 raise SubagentNotFound(reservation.run.run_id)
-            state = strip_channel_keys(dict(write.loop_state))
+            state = persist_payload(dict(write.loop_state))
             row["loop_state"] = state
             if run.status in _TERMINAL:
                 return run
@@ -196,7 +200,15 @@ class InMemorySubagentStore:
 
     async def cancel(self, run_id: str, reason: str) -> RunRecord:
         async with self._lock:
-            return self._cancel_locked(run_id, reason)
+            return self._mark_terminal_locked(
+                run_id, SubagentStatus.KILLED, reason
+            )
+
+    async def fail(self, run_id: str, error_code: str) -> RunRecord:
+        async with self._lock:
+            return self._mark_terminal_locked(
+                run_id, SubagentStatus.FAILED, error_code
+            )
 
     async def cancel_for_parent(
         self, parent_kind: ParentKind, parent_id: str, reason: str
@@ -208,18 +220,53 @@ class InMemorySubagentStore:
                 if run.parent_kind is parent_kind and run.parent_id == parent_id
             ]
             return tuple(
-                self._cancel_locked(run.run_id, reason) for run in children
+                self._mark_terminal_locked(
+                    run.run_id, SubagentStatus.KILLED, reason
+                )
+                for run in children
             )
 
-    def _cancel_locked(self, run_id: str, reason: str) -> RunRecord:
+    async def list_for_parent_run(self, parent_run_id: str) -> tuple[RunRecord, ...]:
+        async with self._lock:
+            return tuple(
+                run
+                for run in self._runs.values()
+                if run.parent_run_id == parent_run_id
+            )
+
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int:
+        async with self._lock:
+            victims = [
+                run
+                for run in self._runs.values()
+                if run.parent_kind is parent_kind and run.parent_id == parent_id
+            ]
+            for run in victims:
+                self._runs.pop(run.run_id, None)
+                self._checkpoints.pop(run.run_id, None)
+                self._by_parent.pop(
+                    (
+                        run.parent_kind.value,
+                        run.parent_id,
+                        run.parent_tool_call_id,
+                    ),
+                    None,
+                )
+            return len(victims)
+
+    def _mark_terminal_locked(
+        self, run_id: str, status: SubagentStatus, error_code: str
+    ) -> RunRecord:
         run = self._require(run_id)
         if run.status in _TERMINAL:
             return run
         now = _now()
         updated = replace(
             run,
-            status=SubagentStatus.KILLED,
-            error_code=reason,
+            status=status,
+            error_code=error_code,
             updated_at=now,
             completed_at=now,
         )

@@ -155,8 +155,19 @@ def test_approval_not_found_and_conflict_are_sanitized() -> None:
         "/api/v1/coding/tasks/ct_1/approvals/stale", json={"decision": "deny"}
     )
     assert missing.status_code == 404
+    assert missing.json() == {
+        "detail": {
+            "code": "coding_approval_not_found",
+            "message": "Coding approval not found",
+        }
+    }
     assert conflict.status_code == 409
-    assert conflict.json() == {"detail": "Coding approval cannot be resolved"}
+    assert conflict.json() == {
+        "detail": {
+            "code": "coding_approval_conflict",
+            "message": "Coding approval cannot be resolved",
+        }
+    }
 
 
 def test_create_task_returns_202_and_replayable_created_event() -> None:
@@ -405,7 +416,12 @@ def test_foreign_workspace_is_hidden_and_revision_conflict_is_stable() -> None:
 
     assert hidden.status_code == 404
     assert conflict.status_code == 409
-    assert conflict.json() == {"detail": "workspace_revision_conflict"}
+    assert conflict.json() == {
+        "detail": {
+            "code": "workspace_revision_conflict",
+            "message": "Coding workspace revision conflict",
+        }
+    }
 
 
 def test_snapshot_returns_phase_and_checkpoint_state() -> None:

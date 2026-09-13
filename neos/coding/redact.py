@@ -48,7 +48,7 @@ def _redact_secret_values(text: str) -> str:
     return _SECRET_VALUE_RE.sub(_REDACTED, text)
 
 
-def redact_sensitive(value: Any, *, depth: int = 0) -> Any:
+def redact_sensitive(value: Any, *, depth: int = 0, clip: bool = True) -> Any:
     if depth >= _MAX_DEPTH:
         return _REDACTED
     if isinstance(value, Mapping):
@@ -57,15 +57,21 @@ def redact_sensitive(value: Any, *, depth: int = 0) -> Any:
             if _is_secret_key(key):
                 redacted[key] = _REDACTED
             else:
-                redacted[key] = redact_sensitive(child, depth=depth + 1)
+                redacted[key] = redact_sensitive(
+                    child, depth=depth + 1, clip=clip
+                )
         return redacted
     if isinstance(value, list):
-        return [redact_sensitive(item, depth=depth + 1) for item in value]
+        return [
+            redact_sensitive(item, depth=depth + 1, clip=clip) for item in value
+        ]
     if isinstance(value, tuple):
-        return tuple(redact_sensitive(item, depth=depth + 1) for item in value)
+        return tuple(
+            redact_sensitive(item, depth=depth + 1, clip=clip) for item in value
+        )
     if isinstance(value, str):
         value = _redact_secret_values(value)
-        if len(value) > _MAX_STRING:
+        if clip and len(value) > _MAX_STRING:
             return value[:_MAX_STRING] + "…"
         return value
     return value

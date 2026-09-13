@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 from typing import Callable, Protocol
 from uuid import uuid4
 
-from neos.coding.domain.models import CodingTask, CodingTaskStatus
+from neos.coding.domain.errors import InvalidTaskTransition
+from neos.coding.domain.models import (
+    ARCHIVABLE_TASK_STATUSES,
+    CodingTask,
+    CodingTaskStatus,
+    transition_task,
+)
 from neos.coding.events.store import InMemoryCodingEventStore
 
 
@@ -56,6 +62,28 @@ class InMemoryCodingTaskRepository:
     def mark_deleted(self, task_id: str, when: datetime | None = None) -> None:
         self._deleted_at[task_id] = when or datetime.now(UTC)
 
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        if task is None or task.owner_id != owner_id:
+            return False
+        if task.status is CodingTaskStatus.ARCHIVED:
+            return True
+        now = datetime.now(UTC)
+        self._tasks[task_id] = transition_task(
+            task, CodingTaskStatus.ARCHIVED, now
+        )
+        self.mark_deleted(task_id, now)
+        return True
+
+    async def delete(self, task_id: str, owner_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        if task is None or task.owner_id != owner_id:
+            return False
+        self._tasks.pop(task_id, None)
+        self._last_activity_at.pop(task_id, None)
+        self._deleted_at.pop(task_id, None)
+        return True
+
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
         owned = [
             task
@@ -85,11 +113,13 @@ class CodingTaskService:
         events: InMemoryCodingEventStore,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        subagents=None,
     ) -> None:
         self.tasks = tasks
         self.events = events
         self._clock = clock
         self._task_created_notifier: Callable[[str], bool | None] | None = None
+        self._subagents = subagents
 
     def set_task_created_notifier(
         self, notifier: Callable[[str], bool | None] | None
@@ -147,3 +177,73 @@ class CodingTaskService:
         return await self.tasks.list_owned(
             owner_id, limit=clamp_task_list_limit(limit)
         )
+
+    async def archive(self, task_id: str, owner_id: str) -> bool:
+        task = await self._owned_including_archived(task_id, owner_id)
+        if task is None:
+            return False
+        if task.status is not CodingTaskStatus.ARCHIVED:
+            if task.status not in ARCHIVABLE_TASK_STATUSES:
+                raise InvalidTaskTransition(
+                    f"cannot transition coding task from {task.status.value} "
+                    "to archived"
+                )
+            archiver = getattr(self.tasks, "archive", None)
+            if archiver is not None:
+                await archiver(task_id, owner_id)
+            else:
+                marker = getattr(self.tasks, "mark_deleted", None)
+                if marker is not None:
+                    marker(task_id)
+        await self._purge_parent_subagents(task_id)
+        return True
+
+    async def delete(self, task_id: str, owner_id: str) -> bool:
+        raw = await self._lookup_task(task_id)
+        if raw is None:
+            await self._purge_parent_subagents(task_id)
+            return False
+        if raw.owner_id != owner_id:
+            return False
+        deleter = getattr(self.tasks, "delete", None)
+        if deleter is not None:
+            await deleter(task_id, owner_id)
+        else:
+            marker = getattr(self.tasks, "mark_deleted", None)
+            if marker is not None:
+                marker(task_id)
+        await self._purge_parent_subagents(task_id)
+        return True
+
+    async def fail(self, task_id: str, owner_id: str) -> bool:
+        task = await self.tasks.get_owned(task_id, owner_id)
+        if task is None:
+            return False
+        if task.status is not CodingTaskStatus.FAILED:
+            task = transition_task(task, CodingTaskStatus.FAILED, self._clock())
+            await self.tasks.save(task)
+        await self._purge_parent_subagents(task_id)
+        return True
+
+    async def _purge_parent_subagents(self, task_id: str) -> None:
+        if self._subagents is None:
+            return
+        from neos.subagent.types import ParentKind
+
+        await self._subagents.delete_for_parent(ParentKind.CODING, task_id)
+
+    async def _lookup_task(self, task_id: str) -> CodingTask | None:
+        getter = getattr(self.tasks, "get", None)
+        if getter is not None:
+            return await getter(task_id)
+        return None
+
+    async def _owned_including_archived(
+        self, task_id: str, owner_id: str
+    ) -> CodingTask | None:
+        getter = getattr(self.tasks, "get", None)
+        if getter is not None:
+            task = await getter(task_id)
+            if task is not None and task.owner_id == owner_id:
+                return task
+        return await self.tasks.get_owned(task_id, owner_id)

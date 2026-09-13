@@ -276,6 +276,21 @@ async def test_reclaimed_mutating_claim_synthesizes_unknown_without_execute() ->
     assert any(event.type == "tool.completed" for event in events)
 
 
+def test_approval_gate_forwards_unattended_from_loop_config() -> None:
+    attended = harness([[completed()]])
+    unattended = harness(
+        [[completed()]],
+        config=AnthropicLoopConfig(
+            model="claude-test",
+            system="code",
+            approval_unattended=True,
+        ),
+    )
+    state = attended.loop._restore(INPUT, None)
+    assert attended.loop._approval_gate(state).unattended is False
+    assert unattended.loop._approval_gate(state).unattended is True
+
+
 def _phase_checkpoint(h, phase: str) -> CodingCheckpoint:
     state = h.loop._restore(INPUT, None)
     dumped = h.loop._dump_state(INPUT, state)
@@ -304,9 +319,22 @@ async def test_verify_end_turn_without_verdict_stays_in_verify() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_end_turn_with_verdict_is_terminal() -> None:
+async def test_verify_pass_without_command_stays_in_verify() -> None:
     h = harness(
         [[TextDelta("ran pytest\nVERDICT: PASS"), ModelCompleted("end_turn", ModelUsage(2, 1))]]
+    )
+    await collect(h, _phase_checkpoint(h, "verify"))
+
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["phase"] == "verify"
+    assert state["terminal_pending"] is False
+    assert state.get("verdict") not in {"PASS"}
+
+
+@pytest.mark.asyncio
+async def test_verify_end_turn_with_verdict_is_terminal() -> None:
+    h = harness(
+        [[TextDelta("Command: pytest -q\nVERDICT: PASS"), ModelCompleted("end_turn", ModelUsage(2, 1))]]
     )
     await collect(h, _phase_checkpoint(h, "verify"))
 
@@ -335,11 +363,28 @@ async def test_plan_end_turn_without_critical_files_stays_in_plan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
+async def test_plan_end_turn_with_only_critical_files_stays_in_plan() -> None:
     h = harness(
         [
             [
                 TextDelta("## Critical Files:\n- src/app.py\n"),
+                ModelCompleted("end_turn", ModelUsage(2, 1)),
+            ]
+        ]
+    )
+    await collect(h, _phase_checkpoint(h, "plan"))
+
+    state = h.repository.checkpoints[-1].loop_state
+    assert state["phase"] == "plan"
+    assert state["terminal_pending"] is False
+
+
+@pytest.mark.asyncio
+async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
+    h = harness(
+        [
+            [
+                TextDelta("Add auth middleware.\n\n## Critical Files:\n- src/app.py\n"),
                 ModelCompleted("end_turn", ModelUsage(2, 1)),
             ]
         ]
@@ -701,7 +746,8 @@ async def test_denied_tool_content_is_denial_envelope() -> None:
     assert content["status"] == "denied"
     assert content["denied_by"] == "hook"
     assert content["function_id"] == "write_file.v1"
-    assert content["reason"] == "policy_hook_denied"
+    assert content["reason"] != "policy_hook_denied"
+    assert "do not retry" in content["reason"]
     assert content["args_excerpt"] == {"path": "a.txt"}
     assert "raw-secret" not in json.dumps(content)
 
@@ -1141,6 +1187,7 @@ async def test_latest_tool_result_over_threshold_is_persisted_as_ref() -> None:
 @pytest.mark.asyncio
 async def test_latest_huge_read_file_result_is_previewed() -> None:
     fat = _fat_payload(preview_prefix="     1|")
+    fat["path"] = "big.txt"
     assert (
         len(json.dumps(fat, sort_keys=True, separators=(",", ":")).encode())
         >= COMPACT_REF_THRESHOLD_BYTES
@@ -1153,11 +1200,16 @@ async def test_latest_huge_read_file_result_is_previewed() -> None:
         executor=_FatExecutor(fat, name="read_file.v1"),
     )
     await collect(h)
-    results = _transcript_tool_results(h.repository.checkpoints[-1].loop_state)
-    assert results[-1]["content"]["compacted"] is True
-    assert "entries" not in results[-1]["content"]
-    digest = results[-1]["content"]["sha256"]
-    assert digest in h.repository.checkpoints[-1].loop_state["compacted_bodies"]
+    state = h.repository.checkpoints[-1].loop_state
+    results = _transcript_tool_results(state)
+    content = results[-1]["content"]
+    assert content["compacted"] is True
+    assert content["preview"]
+    assert content["path"] == "big.txt"
+    assert "entries" not in content
+    digest = content["sha256"]
+    assert digest not in state["compacted_bodies"]
+    assert "x" * 200 not in json.dumps(state.get("compacted_bodies") or {})
 
     await collect(h, h.repository.checkpoints[-1])
     request_results = {
@@ -1167,6 +1219,8 @@ async def test_latest_huge_read_file_result_is_previewed() -> None:
         if isinstance(item, ToolResultContent)
     }
     assert request_results["r1"]["compacted"] is True
+    assert request_results["r1"]["preview"]
+    assert request_results["r1"]["path"] == "big.txt"
     assert "entries" not in request_results["r1"]
     assert "x" * 200 not in json.dumps(request_results["r1"])
 
@@ -1213,6 +1267,73 @@ def test_shrink_old_tool_results_skips_unpaired_line_numbered_read() -> None:
     shrunk = h.loop._shrink_old_tool_results(message, bodies, {})
     assert dict(shrunk.content[0].content) == read_body
     assert bodies == {}
+
+
+_UNCHANGED_STUB = {
+    "preview": "File unchanged since last read.",
+    "unchanged": True,
+    "checksum": "abc123",
+    "start_line": 1,
+    "total_lines": 12,
+    "entries": [],
+}
+
+
+def test_unchanged_stub_is_not_persist_refd() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        *_pair("read1", _UNCHANGED_STUB, name="read_file.v1"),
+    )
+    bodies: dict[str, str] = {}
+    after = h.loop._maybe_ref_latest_tool_result(
+        transcript, tool_name="read_file.v1", bodies=bodies
+    )
+    result = dict(after[-1].content[0].content)
+    assert result.get("compacted") is not True
+    assert result["unchanged"] is True
+    assert result["preview"] == "File unchanged since last read."
+    assert bodies == {}
+
+
+def test_shrink_keeps_unchanged_stub_even_without_tool_name() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    message = CanonicalMessage(
+        "tool", (ToolResultContent("orphan", "ok", _UNCHANGED_STUB),)
+    )
+    bodies: dict[str, str] = {}
+    shrunk = h.loop._shrink_old_tool_results(message, bodies, {})
+    assert dict(shrunk.content[0].content) == _UNCHANGED_STUB
+    assert bodies == {}
+
+
+def test_expand_does_not_unfold_unchanged_stub_as_empty_file() -> None:
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    digest = _sha256_payload(_UNCHANGED_STUB)
+    compacted = {
+        "compacted": True,
+        "sha256": digest,
+        "preview": "File unchanged since last read.",
+        "path": "src/app.py",
+        "unchanged": True,
+    }
+    transcript = (
+        CanonicalMessage("user", (TextContent("start"),)),
+        CanonicalMessage(
+            "tool", (ToolResultContent("read1", "ok", compacted),)
+        ),
+    )
+    bodies = {
+        digest: json.dumps(
+            _UNCHANGED_STUB, sort_keys=True, separators=(",", ":")
+        )
+    }
+    expanded = h.loop._expand_artifact_refs(transcript, bodies)
+    result = dict(expanded[-1].content[0].content)
+    assert result.get("unchanged") is True
+    assert result["preview"] == "File unchanged since last read."
+    assert result.get("entries") in (None, [], ())
+    assert "     1|" not in json.dumps(result)
 
 
 def test_compact_keeps_full_read_file_prefix_or_drops_pair() -> None:

@@ -12,7 +12,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from neos.subagent.identity import new_checkpoint_id, new_run_id, strip_channel_keys
+from neos.subagent.identity import (
+    new_checkpoint_id,
+    new_run_id,
+    persist_payload,
+    strip_channel_keys,
+)
 from neos.subagent.store import (
     PLACEHOLDER_STATE,
     CasReservation,
@@ -159,6 +164,23 @@ _LIST_PARENT = text(
        AND parent_id = :parent_id
     """
 )
+_LIST_PARENT_RUN = text(
+    """
+    SELECT run_id, parent_kind, parent_id, parent_run_id, parent_tool_call_id,
+           lineage_kind, spec, status, provider, model, max_turns, turn_count,
+           tool_count, input_tokens, output_tokens, cost_micros, briefing_json,
+           error_code, sandbox_mode, created_at, updated_at, completed_at
+      FROM subagent_runs
+     WHERE parent_run_id = :parent_run_id
+    """
+)
+_DELETE_PARENT = text(
+    """
+    DELETE FROM subagent_runs
+     WHERE parent_kind = :parent_kind
+       AND parent_id = :parent_id
+    """
+)
 
 
 def _now() -> datetime:
@@ -166,7 +188,7 @@ def _now() -> datetime:
 
 
 def _json(value: Mapping[str, Any] | dict[str, Any]) -> str:
-    return json.dumps(strip_channel_keys(dict(value)))
+    return json.dumps(persist_payload(dict(value)))
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -233,7 +255,7 @@ class PostgresSubagentStore:
                     return await self._with_latest(session, existing)
                 now = _now()
                 run_id = new_run_id()
-                briefing = strip_channel_keys(
+                briefing = persist_payload(
                     {
                         "goal": ticket.briefing.goal,
                         "why": ticket.briefing.why,
@@ -407,7 +429,16 @@ class PostgresSubagentStore:
     async def cancel(self, run_id: str, reason: str) -> RunRecord:
         async with await self._session_factory() as session:
             async with session.begin():
-                return await self._cancel_in_session(session, run_id, reason)
+                return await self._mark_terminal_in_session(
+                    session, run_id, SubagentStatus.KILLED, reason
+                )
+
+    async def fail(self, run_id: str, error_code: str) -> RunRecord:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                return await self._mark_terminal_in_session(
+                    session, run_id, SubagentStatus.FAILED, error_code
+                )
 
     async def cancel_for_parent(
         self, parent_kind: ParentKind, parent_id: str, reason: str
@@ -425,13 +456,45 @@ class PostgresSubagentStore:
                 ).all()
                 return tuple(
                     [
-                        await self._cancel_in_session(session, row.run_id, reason)
+                        await self._mark_terminal_in_session(
+                            session, row.run_id, SubagentStatus.KILLED, reason
+                        )
                         for row in rows
                     ]
                 )
 
-    async def _cancel_in_session(
-        self, session: AsyncSession, run_id: str, reason: str
+    async def list_for_parent_run(self, parent_run_id: str) -> tuple[RunRecord, ...]:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                rows = (
+                    await session.execute(
+                        _LIST_PARENT_RUN, {"parent_run_id": parent_run_id}
+                    )
+                ).all()
+                return tuple(
+                    [await self._with_latest(session, row) for row in rows]
+                )
+
+    async def delete_for_parent(
+        self, parent_kind: ParentKind, parent_id: str
+    ) -> int:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    _DELETE_PARENT,
+                    {
+                        "parent_kind": parent_kind.value,
+                        "parent_id": parent_id,
+                    },
+                )
+        return int(result.rowcount or 0)
+
+    async def _mark_terminal_in_session(
+        self,
+        session: AsyncSession,
+        run_id: str,
+        status: SubagentStatus,
+        error_code: str,
     ) -> RunRecord:
         row = (
             await session.execute(_SELECT_RUN_FOR_UPDATE, {"run_id": run_id})
@@ -446,13 +509,13 @@ class PostgresSubagentStore:
             _UPDATE_RUN,
             {
                 "run_id": run_id,
-                "status": SubagentStatus.KILLED.value,
+                "status": status.value,
                 "turn_count": run.turn_count,
                 "tool_count": run.tool_count,
                 "input_tokens": run.input_tokens,
                 "output_tokens": run.output_tokens,
                 "cost_micros": run.cost_micros,
-                "error_code": reason,
+                "error_code": error_code,
                 "updated_at": now,
                 "completed_at": now,
             },

@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from neos.coding.model.base import ToolDefinition
-from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
+from neos.coding.prompts import (
+    SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    CodingPromptEnv,
+    build_coding_system_prompt,
+    inject_previous_summary,
+)
 
 pytestmark = pytest.mark.no_db
 
@@ -104,6 +109,21 @@ def test_live_registry_descriptions_teach_search_over_execute() -> None:
     assert "edit_file.v1" in prompt
 
 
+def test_previous_summary_is_injected_after_cache_boundary() -> None:
+    system = build_coding_system_prompt(_tools())
+    injected = inject_previous_summary(system, "  auth uses JWT  ")
+    empty = inject_previous_summary(system, "   ")
+    missing = inject_previous_summary("static only", "auth uses JWT")
+
+    assert empty == system
+    assert injected.index(SYSTEM_PROMPT_DYNAMIC_BOUNDARY) < injected.index(
+        "## Conversation summary"
+    )
+    assert injected.index("## Conversation summary") < injected.index("## Session")
+    assert "auth uses JWT" in injected
+    assert missing.endswith("## Conversation summary\nauth uses JWT")
+
+
 def test_runtime_uses_the_builder_instead_of_the_one_liner() -> None:
     source = (REPO_ROOT / "neos" / "coding" / "runtime.py").read_text(encoding="utf-8")
     assert "build_coding_system_prompt" in source
@@ -165,6 +185,8 @@ def test_session_lists_deferred_tool_names_not_schemas() -> None:
     assert "git_status.v1" in session
     assert "web_fetch.v1" in session
     assert "spawn_agent.v1" in session
+    assert "subagent_list.v1" not in session
+    assert "subagent_steer.v1" not in session
 
 
 def test_environment_holds_workspace_and_allowlist() -> None:

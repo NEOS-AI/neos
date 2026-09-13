@@ -16,13 +16,19 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
+from neos.config.model_identity import (
+    RemapCycleError,
+    canonicalize,
+    catalog_shaped,
+)
 from neos.config.schema import StrictConfigModel
 
 if TYPE_CHECKING:
@@ -33,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 Tier = Literal["fast", "balanced", "powerful"]
 CatalogProvider = Literal["anthropic", "openai", "gemini", "ollama"]
+PickerGroup = Literal["anthropic", "openai", "reasoning"]
 
 # 추천 티어 표시 순서 (저비용 → 고성능)
 _TIER_ORDER: tuple[Tier, ...] = ("fast", "balanced", "powerful")
@@ -60,6 +67,34 @@ class ModelPricing(StrictConfigModel):
     cache_read: float = 0.0
 
 
+class PickerRow(StrictConfigModel):
+    """피커 extras 한 줄. extras 에서는 gateway_id 가 필수다."""
+
+    name: str
+    description: str
+    group: PickerGroup
+    gateway_id: str | None = None
+
+
+class PickerSpec(StrictConfigModel):
+    """채팅 피커 노출. 이 블록이 있으면 to_picker_payload 한 줄이 생긴다.
+
+    `selectable` 과 다르다 — selectable 은 list_models / 턴 오버라이드 허용
+    목록이고, 피커 멤버십은 따로 고른다.
+    """
+
+    name: str
+    description: str
+    group: PickerGroup
+    extras: list[PickerRow] = Field(default_factory=list)
+
+
+class RoleAlias(StrictConfigModel):
+    """역할이 가리키는 트랙. current 는 항상 models: 키(핀)다."""
+
+    current: str
+
+
 class ModelSpec(StrictConfigModel):
     provider: CatalogProvider
     # 추천 티어. 비어 있으면 추천 목록에 등장하지 않는다(수동 선택 전용).
@@ -69,6 +104,9 @@ class ModelSpec(StrictConfigModel):
     # list_models() 노출 여부. 가격만 아는 레거시 모델은 false.
     selectable: bool = True
     max_tokens: int | None = None
+    context_window: int | None = Field(default=None, gt=0)
+    input_limit: int | None = Field(default=None, gt=0)
+    thinking_budgets: dict[str, int] = Field(default_factory=dict)
     description: str | None = None
     # 이미지·PDF 입력을 받는가. 유일한 독자는 첨부 게이트
     # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
@@ -76,6 +114,26 @@ class ModelSpec(StrictConfigModel):
     vision: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
+    # role_aliases: 키만. anthropic_families[].family 가 아니다.
+    role_alias: str | None = None
+    # 쿠키 / 피커 id. `provider/catalog_key` 로 추론하지 않는다.
+    gateway_id: str | None = None
+    # 프로바이더에 보내는 id. 없으면 카탈로그 키.
+    wire_id: str | None = None
+    # 추가로 받는 철자. 날짜 접미사를 지어내지 않는다.
+    id_forms: list[str] = Field(default_factory=list)
+    picker: PickerSpec | None = None
+
+    @field_validator("thinking_budgets")
+    @classmethod
+    def _thinking_budgets_nonneg(cls, value: dict[str, int]) -> dict[str, int]:
+        cleaned: dict[str, int] = {}
+        for key, tokens in value.items():
+            count = int(tokens)
+            if count < 0:
+                raise ValueError(f"thinking_budgets.{key} cannot be negative")
+            cleaned[str(key)] = count
+        return cleaned
 
 
 #: 프롬프트 캐시 최소 입력 토큰의 기본값. 가족이 값을 선언하지 않거나
@@ -109,15 +167,18 @@ class ModelCatalog(StrictConfigModel):
     # 레거시 별칭 API용. {group: {alias: model_name}}
     aliases: dict[str, dict[str, str]] = Field(default_factory=dict)
     defaults: dict[str, str] = Field(default_factory=dict)
+    # YAML 에서는 anthropic_families: 뒤에 둔다 (FE 정규식 잠금).
+    role_aliases: dict[str, RoleAlias] = Field(default_factory=dict)
+    remaps: dict[str, str] = Field(default_factory=dict)
+    # Optional helper slots (fast / title / artifact) → catalog pin.
+    aux: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_families(self) -> "ModelCatalog":
-        """접두사는 서로 중첩될 수 없고, advisor 대상은 실재해야 한다.
+        """접두사 중복은 거부하고, advisor 대상은 실재해야 한다.
 
-        중첩을 금지하는 이유가 이 표를 코드에서 옮겨 온 이유와 같다: 파이썬
-        튜플 시절에는 **선언 순서**가 승자를 정했고 그 사실이 어디에도 적혀
-        있지 않았다. 중첩이 없으면 순서가 결과를 바꾸지 못하므로 YAML 의
-        나열 순서를 사람이 자유롭게 바꿔도 안전하다.
+        중첩은 허용한다 — `claude-sonnet-5` 옆에 `claude-sonnet-5-1` 이
+        와야 한다. 승자는 선언 순서가 아니라 가장 긴 접두사다.
         """
         seen: dict[str, str] = {}
         for entry in self.anthropic_families:
@@ -126,13 +187,6 @@ class ModelCatalog(StrictConfigModel):
                     f"duplicate anthropic family prefix {entry.prefix!r}"
                 )
             seen[entry.prefix] = entry.family or ""
-        for prefix in seen:
-            for other in seen:
-                if prefix != other and other.startswith(prefix):
-                    raise ValueError(
-                        f"anthropic family prefix {prefix!r} is a prefix of "
-                        f"{other!r}; nesting hides which one wins"
-                    )
         known = {e.family for e in self.anthropic_families if e.family}
         for entry in self.anthropic_families:
             unknown = sorted(set(entry.advisor_targets) - known)
@@ -158,6 +212,11 @@ class ModelCatalog(StrictConfigModel):
 
         for group, entries in self.aliases.items():
             for alias, model in entries.items():
+                if model in self.role_aliases:
+                    raise ValueError(
+                        f"alias {group}.{alias} points at role alias {model!r}; "
+                        "legacy aliases must stay pin-valued"
+                    )
                 if model not in self.models:
                     raise ValueError(
                         f"alias {group}.{alias} points to unknown model {model!r}"
@@ -172,6 +231,86 @@ class ModelCatalog(StrictConfigModel):
                 raise ValueError(
                     f"default {group}={alias!r} is not defined in aliases.{group}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> "ModelCatalog":
+        """role_aliases / remaps / picker / gateway / wire 유일성."""
+        for name, alias in self.role_aliases.items():
+            if alias.current not in self.models:
+                raise ValueError(
+                    f"role_aliases.{name}.current points to unknown model "
+                    f"{alias.current!r}"
+                )
+
+        for raw, pin in self.remaps.items():
+            if pin not in self.models:
+                raise ValueError(
+                    f"remap {raw!r} points to unknown model {pin!r}"
+                )
+            if not self.models[pin].selectable:
+                raise ValueError(
+                    f"remap {raw!r} targets non-selectable pin {pin!r}"
+                )
+
+        claimed_lookup: dict[str, str] = {}
+        claimed_wire: dict[tuple[str, str], str] = {}
+
+        def claim(spelling: str, pin: str, kind: str) -> None:
+            existing = claimed_lookup.get(spelling)
+            if existing is not None:
+                raise ValueError(
+                    f"{kind} {spelling!r} is claimed by both {existing!r} "
+                    f"and {pin!r}"
+                )
+            claimed_lookup[spelling] = pin
+
+        for name, spec in self.models.items():
+            if spec.role_alias is not None and spec.role_alias not in self.role_aliases:
+                raise ValueError(
+                    f"model {name!r} role_alias {spec.role_alias!r} is not "
+                    "declared in role_aliases"
+                )
+            if spec.picker is not None and not spec.gateway_id:
+                raise ValueError(
+                    f"model {name!r} has picker: but no gateway_id"
+                )
+            if spec.picker is not None:
+                for index, extra in enumerate(spec.picker.extras):
+                    if not extra.gateway_id:
+                        raise ValueError(
+                            f"model {name!r} picker.extras[{index}] is "
+                            "missing gateway_id"
+                        )
+
+            claim(name, name, "catalog key")
+            if spec.gateway_id:
+                claim(spec.gateway_id, name, "gateway_id")
+            for form in spec.id_forms:
+                claim(form, name, "id_form")
+            if spec.picker is not None:
+                for extra in spec.picker.extras:
+                    if extra.gateway_id:
+                        claim(extra.gateway_id, name, "gateway_id")
+
+            wire = spec.wire_id or name
+            wire_key = (spec.provider, wire)
+            if wire_key in claimed_wire and claimed_wire[wire_key] != name:
+                raise ValueError(
+                    f"wire_id {wire!r} for provider {spec.provider!r} is "
+                    f"claimed by both {claimed_wire[wire_key]!r} and {name!r}"
+                )
+            claimed_wire[wire_key] = name
+
+        for name in self.role_aliases:
+            claim(name, name, "role_alias")
+
+        for slot, pin in self.aux.items():
+            if pin not in self.models:
+                raise ValueError(
+                    f"aux.{slot} points to unknown model {pin!r}"
+                )
+
         return self
 
     # ---- 파생 뷰 ----
@@ -198,9 +337,23 @@ class ModelCatalog(StrictConfigModel):
         return {tier: by_tier[tier] for tier in _TIER_ORDER if tier in by_tier}
 
     def thinking_contract(self, model: str) -> ThinkingContract:
-        """모델의 thinking 요청 계약. 미등록 모델은 BUDGETED(레거시 경로)."""
-        spec = self.models.get(model)
-        return spec.thinking if spec else ThinkingContract.BUDGETED
+        """모델의 thinking 요청 계약.
+
+        카탈로그 핀은 그 핀의 계약. 미등록은 BUDGETED. 플래그가 켜지면
+        카탈로그 미스이면서 catalog_shaped 가 claude- 인 모델만 ADAPTIVE.
+        등재된 4.5 핀은 플래그와 무관하게 budgeted. remap 은 따르지 않는다.
+        """
+        ident = canonicalize(model, catalog=self, apply_remap=False)
+        if ident is not None:
+            return self.models[ident.catalog_id].thinking
+        from neos.config.settings import settings
+
+        if (
+            settings.config.model_catalog.default_unknown_claude_adaptive
+            and catalog_shaped(model).lower().startswith("claude-")
+        ):
+            return ThinkingContract.ADAPTIVE
+        return ThinkingContract.BUDGETED
 
     def pricing_for(self, provider: str, model: str) -> ModelPricing | None:
         spec = self.models.get(model)
@@ -208,11 +361,27 @@ class ModelCatalog(StrictConfigModel):
             return None
         return spec.pricing
 
+    def rate_micros_for(
+        self,
+        provider: str,
+        model: str,
+        *,
+        input_cost_micros_per_million: int,
+        output_cost_micros_per_million: int,
+    ) -> CodingRateMicros:
+        return resolve_coding_rate_micros(
+            provider=provider,
+            model=model,
+            input_cost_micros_per_million=input_cost_micros_per_million,
+            output_cost_micros_per_million=output_cost_micros_per_million,
+            catalog=self,
+        )
+
     def _anthropic_family_for(self, model: str) -> AnthropicFamily | None:
         """`model` 에 걸리는 가족. 가장 **긴** 접두사가 이긴다.
 
-        `_validate_families` 가 중첩을 금지하므로 후보는 사실상 하나뿐이고,
-        `max` 는 그 사실이 깨졌을 때 조용히 다른 답을 내지 않기 위한 것이다.
+        중첩(`claude-sonnet-5` / `claude-sonnet-5-1`)을 허용하므로 후보가
+        둘 이상일 수 있다. `max` 가 승자를 정한다.
         """
         normalized = model.lower()
         matches = [
@@ -419,6 +588,9 @@ class ModelConfig:
                 self._catalog = ModelCatalog()
             return
         self._catalog = new_catalog
+        from neos.config.model_discovery import sync_live_overlay
+
+        sync_live_overlay(new_catalog)
         logger.info("Model catalog loaded from: %s", path)
 
     # ---- 레거시 API ----
@@ -426,7 +598,21 @@ class ModelConfig:
     def _legacy_entry(self, group: str, alias: str) -> dict[str, Any]:
         model_id = self.catalog.resolve_alias(group, alias)
         spec = self.catalog.models[model_id]
-        entry = spec.model_dump(exclude_none=True, exclude={"pricing", "tiers"})
+        entry = spec.model_dump(
+            exclude_none=True,
+            exclude={
+                "pricing",
+                "tiers",
+                "role_alias",
+                "gateway_id",
+                "wire_id",
+                "id_forms",
+                "picker",
+                "context_window",
+                "input_limit",
+                "thinking_budgets",
+            },
+        )
         entry["model_id"] = model_id
         return entry
 
@@ -489,7 +675,12 @@ def get_embedding_model_id(model_name: str | None = None) -> str:
 
 
 def get_model_spec(model: str) -> ModelSpec | None:
-    return model_config.catalog.get_model_spec(model)
+    spec = model_config.catalog.get_model_spec(model)
+    if spec is not None:
+        return spec
+    from neos.config.model_discovery import live_model_spec
+
+    return live_model_spec(model)
 
 
 def model_known(model: str) -> bool:
@@ -516,6 +707,25 @@ def models_for_provider(provider: str) -> list[str]:
     return model_config.catalog.models_for_provider(provider)
 
 
+def resolve_user_selectable_model(model: str) -> str | None:
+    """USER/cookie strings → selectable catalog pin, or None.
+
+    Remaps and role aliases are resolved first so create/regenerate use
+    the same hop as the per-turn override.
+    """
+    try:
+        identity = canonicalize(
+            model, catalog=model_config.catalog, apply_remap=True
+        )
+    except RemapCycleError:
+        return None
+    if identity is None:
+        return None
+    if identity.catalog_id not in models_for_provider(identity.provider):
+        return None
+    return identity.catalog_id
+
+
 def is_user_selectable_model(model: str) -> bool:
     """`model`이 사용자가 고를 수 있는 카탈로그 모델인가.
 
@@ -532,10 +742,7 @@ def is_user_selectable_model(model: str) -> bool:
     턴 오버라이드(`chat_stream_pipeline.resolve_turn_model_name`), 대화 생성,
     메시지 재생성. 문은 여럿이지만 규칙은 하나여야 한다.
     """
-    spec = get_model_spec(model)
-    if spec is None:
-        return False
-    return model in models_for_provider(spec.provider)
+    return resolve_user_selectable_model(model) is not None
 
 
 def tiers_for_provider(provider: str) -> dict[str, str]:
@@ -548,6 +755,44 @@ def thinking_contract(model: str) -> ThinkingContract:
 
 def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRateMicros:
+    input: int
+    output: int
+    cache_write: int
+    cache_read: int
+
+
+def _usd_to_micros(usd: float) -> int:
+    return int(round(float(usd) * 1_000_000))
+
+
+def resolve_coding_rate_micros(
+    *,
+    provider: str,
+    model: str,
+    input_cost_micros_per_million: int,
+    output_cost_micros_per_million: int,
+    catalog: ModelCatalog | None = None,
+) -> CodingRateMicros:
+    """Operator prices win when set. Zeros and cache rates use the catalog."""
+    ident = canonicalize(model, catalog=catalog or model_config.catalog, apply_remap=False)
+    pin = ident.catalog_id if ident is not None else model
+    pricing = (catalog or model_config.catalog).pricing_for(provider, pin)
+    inp = input_cost_micros_per_million
+    out = output_cost_micros_per_million
+    cache_write = 0
+    cache_read = 0
+    if pricing is not None:
+        if inp <= 0:
+            inp = _usd_to_micros(pricing.input)
+        if out <= 0:
+            out = _usd_to_micros(pricing.output)
+        cache_write = _usd_to_micros(pricing.cache_creation)
+        cache_read = _usd_to_micros(pricing.cache_read)
+    return CodingRateMicros(inp, out, cache_write, cache_read)
 
 
 def canonical_model_family(model: str) -> str | None:
@@ -613,20 +858,29 @@ def warn_unknown_routed_models(routing: "ModelRoutingConfig") -> list[str]:
             "ERROR logged at catalog load time and fix neos/config/models.yaml "
             "(or the file at NEOS_MODEL_CONFIG_PATH)."
         )
+    from neos.config.model_identity import canonicalize
+
     unknown: list[str] = []
     for provider in ("anthropic", "openai"):
         provider_roles = getattr(routing, provider)
         for role in ("everyday", "powerful"):
             model = getattr(provider_roles, role)
-            if model and catalog.get_model_spec(model) is None:
-                unknown.append(model)
-                logger.warning(
-                    "model_routing.%s.%s = %r is not declared in the model catalog "
-                    "(neos/config/models.yaml) — check for a typo",
-                    provider,
-                    role,
-                    model,
-                )
+            if not model:
+                continue
+            # Role defaults are aliases or pins. Resolve the alias before the
+            # membership check so sonnet-5 is known when role_aliases exist,
+            # and still warned on a custom catalog that omitted them.
+            ident = canonicalize(model, catalog=catalog, apply_remap=False)
+            if ident is not None:
+                continue
+            unknown.append(model)
+            logger.warning(
+                "model_routing.%s.%s = %r is not declared in the model catalog "
+                "(neos/config/models.yaml) — check for a typo",
+                provider,
+                role,
+                model,
+            )
     return unknown
 
 

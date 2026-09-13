@@ -17,6 +17,7 @@ import { imageArtifact } from "@/artifacts/image/client";
 import { sheetArtifact } from "@/artifacts/sheet/client";
 import { textArtifact } from "@/artifacts/text/client";
 import { useArtifact, useArtifacts } from "@/hooks/use-artifact";
+import type { CatalogPayload } from "@/lib/ai/models";
 import type { Document, Vote } from "@/lib/db/schema";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { fetcher } from "@/lib/utils";
@@ -69,6 +70,7 @@ function PureArtifact({
   isReadonly,
   selectedVisibilityType,
   selectedModelId,
+  catalog,
 }: {
   chatId: string;
   input: string;
@@ -85,6 +87,7 @@ function PureArtifact({
   isReadonly: boolean;
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
+  catalog: CatalogPayload;
 }) {
   // Use the original useArtifact hook for backward compatibility with metadata
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
@@ -343,6 +346,7 @@ function PureArtifact({
                 <div className="relative flex w-full flex-row items-end gap-2 px-4 pb-4">
                   <MultimodalInput
                     attachments={attachments}
+                    catalog={catalog}
                     chatId={chatId}
                     className="bg-background dark:bg-muted"
                     input={input}
@@ -559,6 +563,9 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
     return false;
   }
   if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
+    return false;
+  }
+  if (!equal(prevProps.catalog, nextProps.catalog)) {
     return false;
   }
 

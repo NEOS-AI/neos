@@ -225,26 +225,74 @@ async def collect_slack_attachments(
     )
 
 
+class DiscordAttachmentRefused(Exception):
+    """Attachment present but att.read() failed. CDN URL fallback is forbidden."""
+
+    def __init__(self, reason: str, *, name: str = "file") -> None:
+        self.reason = reason
+        self.name = name
+        super().__init__(reason)
+
+
+class _DiscordAttachmentSkip(Exception):
+    def __init__(self, reason: str, *, name: str = "file") -> None:
+        self.reason = reason
+        self.name = name
+        super().__init__(reason)
+
+
+async def _read_discord_attachment_bytes(item: Any) -> bytes:
+    name = str(getattr(item, "filename", None) or "file")
+    try:
+        size = int(getattr(item, "size", None) or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size > MAX_INBOUND_MEDIA_BYTES:
+        raise _DiscordAttachmentSkip("too_large", name=name)
+    reader = getattr(item, "read", None)
+    if not callable(reader):
+        logger.info(
+            "[channel-media] discord attachment missing read(); refusing CDN fallback name=%s",
+            name,
+        )
+        raise DiscordAttachmentRefused("missing_read", name=name)
+    try:
+        data = await reader()
+    except DiscordAttachmentRefused:
+        raise
+    except Exception as exc:
+        logger.info(
+            "[channel-media] discord att.read() failed name=%s err=%s",
+            name,
+            exc,
+        )
+        raise DiscordAttachmentRefused("read_failed", name=name) from exc
+    if data is None:
+        raise DiscordAttachmentRefused("read_failed", name=name)
+    raw = bytes(data)
+    if len(raw) > MAX_INBOUND_MEDIA_BYTES:
+        raise _DiscordAttachmentSkip("too_large", name=name)
+    return raw
+
+
 async def collect_discord_attachments(
     attachments: list[Any],
-    *,
-    fetch: FetchFn | None = None,
-    resolve_host: ResolveFn | None = None,
 ) -> list[dict[str, Any]]:
-    specs = []
+    collected: list[dict[str, Any]] = []
     for item in attachments:
-        specs.append(
-            {
-                "url": getattr(item, "url", None) or "",
-                "name": getattr(item, "filename", None) or "file",
-                "content_type": getattr(item, "content_type", None)
-                or "application/octet-stream",
-                "size": getattr(item, "size", None) or 0,
-            }
+        try:
+            data = await _read_discord_attachment_bytes(item)
+        except _DiscordAttachmentSkip:
+            continue
+        collected.append(
+            _attachment(
+                name=str(getattr(item, "filename", None) or "file"),
+                content_type=str(getattr(item, "content_type", None)
+                or "application/octet-stream"),
+                data=data,
+            )
         )
-    return await collect_url_attachments(
-        specs, fetch=fetch, resolve_host=resolve_host
-    )
+    return collected
 
 
 async def collect_telegram_attachments(
@@ -260,6 +308,7 @@ async def collect_telegram_attachments(
     size = 0
     document = getattr(message, "document", None)
     photo = getattr(message, "photo", None) or ()
+    video = getattr(message, "video", None)
     if document is not None:
         file_id = str(getattr(document, "file_id", "") or "")
         name = str(getattr(document, "file_name", None) or "file")
@@ -273,6 +322,11 @@ async def collect_telegram_attachments(
         name = "photo.jpg"
         content_type = "image/jpeg"
         size = int(getattr(largest, "file_size", None) or 0)
+    elif video is not None:
+        file_id = str(getattr(video, "file_id", "") or "")
+        name = str(getattr(video, "file_name", None) or "video.mp4")
+        content_type = str(getattr(video, "mime_type", None) or "video/mp4")
+        size = int(getattr(video, "file_size", None) or 0)
     if not file_id or bot is None:
         return []
     if size > MAX_INBOUND_MEDIA_BYTES:

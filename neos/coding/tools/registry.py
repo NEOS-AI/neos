@@ -17,6 +17,8 @@ from neos.coding.sandbox.paths import (
 )
 
 _DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
+_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+_STEER_TEXT_MAX = 2000
 _DEDICATED_EXECUTE_DENY = frozenset(
     {
         "cat",
@@ -37,8 +39,53 @@ _DEDICATED_EXECUTE_DENY = frozenset(
         "fdfind",
         "sed",
         "awk",
+        "mkdir",
+        "rm",
+        "rmdir",
+        "mv",
+        "chmod",
     }
 )
+_DEDICATED_TOOL_FOR = {
+    "cat": "read_file.v1",
+    "tac": "read_file.v1",
+    "head": "read_file.v1",
+    "tail": "read_file.v1",
+    "less": "read_file.v1",
+    "more": "read_file.v1",
+    "nl": "read_file.v1",
+    "rg": "search_text.v1",
+    "grep": "search_text.v1",
+    "egrep": "search_text.v1",
+    "fgrep": "search_text.v1",
+    "ag": "search_text.v1",
+    "ack": "search_text.v1",
+    "find": "glob_files.v1",
+    "fd": "glob_files.v1",
+    "fdfind": "glob_files.v1",
+    "sed": "edit_file.v1",
+    "awk": "edit_file.v1",
+    "mkdir": "mkdir.v1",
+    "rm": "rm.v1",
+    "rmdir": "rm.v1",
+    "mv": "mv.v1",
+    "chmod": "chmod.v1",
+}
+_POLICY_FIX_NOTES = {
+    "policy_inline_interpreter_denied": "run a file with execute.v1, not -c/-e",
+    "policy_command_path_denied": "use a workspace-relative path",
+    "policy_secret_path_denied": "do not pass secret paths",
+    "policy_executable_path_denied": "use a bare executable name",
+    "policy_git_operation_denied": "git via execute is status/diff/log only",
+    "policy_shell_command_denied": "use argv execute, not a shell -c",
+    "policy_network_client_denied": "network clients are not allowed",
+    "policy_network_operation_denied": "package install/update is not allowed",
+    "policy_dangerous_removal": "refusing a destructive rm operand",
+    "policy_executable_not_allowed": "executable is not on the allowlist",
+    "policy_protected_git_path": "do not mutate .git",
+    "policy_workspace_path_escape": "use a workspace-relative path",
+    "policy_workspace_secret_path": "secret paths are not readable",
+}
 _EXECUTE_WRAPPERS = frozenset(
     {
         "env",
@@ -199,6 +246,30 @@ def _subcommand_after(argv: tuple[str, ...], executable: str) -> str | None:
     return None
 
 
+_NUMERIC_MODE = re.compile(r"^0?[0-7]{3,4}$")
+
+
+def _parse_numeric_mode(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ToolValidationError("policy_schema_invalid")
+    if isinstance(value, int):
+        if value < 0 or value > 0o7777:
+            raise ToolValidationError("policy_schema_invalid")
+        return value
+    if not _NUMERIC_MODE.fullmatch(value):
+        raise ToolValidationError("policy_schema_invalid")
+    return int(value, 8)
+
+
+def _dedicated_tool_fix_note(name: str) -> str:
+    tool = _DEDICATED_TOOL_FOR.get(name, "a dedicated tool")
+    return f"use {tool} instead of {name}"
+
+
+def _policy_fix_note(reason_code: str) -> str | None:
+    return _POLICY_FIX_NOTES.get(reason_code)
+
+
 def _operand_escapes_workspace(value: str) -> bool:
     if value.startswith("/") or value.startswith("~"):
         return True
@@ -246,6 +317,15 @@ def _deferred_tools_threshold() -> int:
         return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
 
 
+def _subagent_tools_enabled() -> bool:
+    try:
+        from neos.config.settings import settings
+
+        return bool(settings.config.coding_model.subagent_enabled)
+    except Exception:
+        return False
+
+
 class ToolRisk(StrEnum):
     READ_ONLY = "read_only"
     WORKSPACE_WRITE = "workspace_write"
@@ -257,6 +337,7 @@ class ToolRisk(StrEnum):
 class PolicyDecision:
     allowed: bool
     reason_code: str
+    fix_note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,9 +348,10 @@ class ValidatedToolCall:
 
 
 class ToolValidationError(ValueError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, fix_note: str | None = None) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
+        self.fix_note = fix_note
 
 
 class _ToolInput(BaseModel):
@@ -287,8 +369,10 @@ class _ListTreeInput(_ToolInput):
 class _SearchTextInput(_ToolInput):
     query: str = Field(min_length=1)
     paths: list[str] = Field(default_factory=lambda: ["**/*"], min_length=1)
+    exclude: list[str] = Field(default_factory=list)
     regex: bool = False
     limit: int = Field(default=100, ge=1, le=250)
+    head_limit: int | None = Field(default=None, ge=1, le=250)
     before: int = Field(default=0, ge=0, le=20)
     after: int = Field(default=0, ge=0, le=20)
     ignore_case: bool = False
@@ -296,11 +380,13 @@ class _SearchTextInput(_ToolInput):
     context: int = Field(default=0, ge=0, le=20)
     path: str | None = None
     output_mode: Literal["files", "content", "count"] = "content"
+    max_columns: int = Field(default=500, ge=0, le=8192)
 
 
 class _GlobFilesInput(_ToolInput):
     pattern: str = Field(min_length=1)
     limit: int = Field(default=100, ge=1, le=500)
+    path: str | None = None
 
 
 class _WebFetchInput(_ToolInput):
@@ -320,6 +406,15 @@ class _SpawnAgentInput(_ToolInput):
     scope: str = Field(default="", max_length=2000)
     success: str = Field(default="", max_length=2000)
     report_budget: int = Field(default=4000, ge=256, le=16384)
+
+
+class _SubagentListInput(_ToolInput):
+    pass
+
+
+class _SubagentSteerInput(_ToolInput):
+    run_id: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=_STEER_TEXT_MAX)
 
 
 class _EmptyInput(_ToolInput):
@@ -348,6 +443,24 @@ class _EditFileInput(_PathInput):
 class _WriteFileInput(_PathInput):
     content: str
     parents: bool = False
+
+
+class _MkdirInput(_PathInput):
+    parents: bool = False
+
+
+class _RmInput(_PathInput):
+    recursive: bool = False
+
+
+class _MvInput(_ToolInput):
+    src: str
+    dest: str
+    overwrite: bool = False
+
+
+class _ChmodInput(_PathInput):
+    mode: int | str
 
 
 class _TodoItem(_ToolInput):
@@ -448,6 +561,9 @@ class CodingToolRegistry:
             (
                 "Search workspace text. Use this instead of a shell search. "
                 "output_mode files returns unique paths; count returns path + match count. "
+                "max_columns caps each match line in bytes (0 = no cap). "
+                "head_limit caps returned entries and sets truncated when more remain. "
+                "exclude skips matching globs. "
                 "Do not use execute.v1 with rg/grep/find. "
                 "On policy_* denial, do not retry the same query."
             ),
@@ -528,6 +644,47 @@ class CodingToolRegistry:
             _WriteFileInput,
         ),
         _RegisteredTool(
+            "mkdir.v1",
+            (
+                "Create a workspace directory. parents defaults to false. "
+                "Do not use execute.v1 mkdir. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _MkdirInput,
+        ),
+        _RegisteredTool(
+            "rm.v1",
+            (
+                "Remove a workspace file or empty directory. "
+                "recursive defaults to false and is required for a non-empty directory. "
+                "Do not use execute.v1 rm. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _RmInput,
+        ),
+        _RegisteredTool(
+            "mv.v1",
+            (
+                "Move or rename a workspace path. overwrite defaults to false. "
+                "Do not use execute.v1 mv. "
+                "On policy_* denial, do not retry the same src."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _MvInput,
+        ),
+        _RegisteredTool(
+            "chmod.v1",
+            (
+                "Change a workspace path mode. Numeric mode only. "
+                "Do not use execute.v1 chmod. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _ChmodInput,
+        ),
+        _RegisteredTool(
             "todo_write.v1",
             (
                 "Replace the coding-task checklist. "
@@ -597,12 +754,32 @@ class CodingToolRegistry:
         _RegisteredTool(
             "spawn_agent.v1",
             (
-                "Spawn a read-only explore child. Wait for the folded report. "
-                "Do not use this to write files. "
+                "Spawn an explore child, or spec=implement for an isolated "
+                "worktree write worker. Parent merges. "
                 "On policy_* denial, do not retry the same prompt."
             ),
             ToolRisk.READ_ONLY,
             _SpawnAgentInput,
+        ),
+        _RegisteredTool(
+            "subagent_list.v1",
+            (
+                "List live explore children of this parent. "
+                "Returns run_id, spec, status, and turn_count only. "
+                "On policy_* denial, do not retry."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentListInput,
+        ),
+        _RegisteredTool(
+            "subagent_steer.v1",
+            (
+                "Append text to the next user message of a parent-owned child. "
+                "Does not interrupt the current child step. "
+                "On policy_* denial, do not retry the same run."
+            ),
+            ToolRisk.READ_ONLY,
+            _SubagentSteerInput,
         ),
     )
 
@@ -615,6 +792,10 @@ class CodingToolRegistry:
             "stat.v1",
             "edit_file.v1",
             "write_file.v1",
+            "mkdir.v1",
+            "rm.v1",
+            "mv.v1",
+            "chmod.v1",
             "execute.v1",
             "todo_write.v1",
             "set_phase.v1",
@@ -691,21 +872,41 @@ class CodingToolRegistry:
         )
 
     @classmethod
-    def deferred_tool_names(cls, *, phase: str | None = None) -> tuple[str, ...]:
+    def deferred_tool_names(
+        cls,
+        *,
+        phase: str | None = None,
+        subagent_enabled: bool | None = None,
+    ) -> tuple[str, ...]:
         from neos.coding.phases import hidden_tools_for_phase
 
         hidden = hidden_tools_for_phase(phase) if phase is not None else frozenset()
-        return tuple(
-            tool.name
-            for tool in cls._TOOL_SPECS
-            if tool.name not in cls._CORE_TOOL_NAMES and tool.name not in hidden
+        advertised = (
+            _subagent_tools_enabled()
+            if subagent_enabled is None
+            else bool(subagent_enabled)
         )
+        names: list[str] = []
+        for tool in cls._TOOL_SPECS:
+            if tool.name in cls._CORE_TOOL_NAMES or tool.name in hidden:
+                continue
+            if tool.name in _CONTROL_PLANE_TOOLS and not advertised:
+                continue
+            names.append(tool.name)
+        return tuple(names)
 
     @classmethod
     def search_definitions(
-        cls, query: str, *, limit: int = 8, phase: str = "implement"
+        cls,
+        query: str,
+        *,
+        limit: int = 8,
+        phase: str = "implement",
+        subagent_enabled: bool | None = None,
     ) -> tuple[Mapping[str, object], ...]:
-        candidates = cls._deferred_tools(phase=phase)
+        candidates = cls._deferred_tools(
+            phase=phase, subagent_enabled=subagent_enabled
+        )
         selected = _select_query_names(query)
         matches: list[Mapping[str, object]] = []
         if selected is not None:
@@ -733,8 +934,12 @@ class CodingToolRegistry:
         return tuple(matches)
 
     @classmethod
-    def _deferred_tools(cls, *, phase: str) -> tuple[_RegisteredTool, ...]:
-        allowed = frozenset(cls.deferred_tool_names(phase=phase))
+    def _deferred_tools(
+        cls, *, phase: str, subagent_enabled: bool | None = None
+    ) -> tuple[_RegisteredTool, ...]:
+        allowed = frozenset(
+            cls.deferred_tool_names(phase=phase, subagent_enabled=subagent_enabled)
+        )
         return tuple(tool for tool in cls._TOOL_SPECS if tool.name in allowed)
 
     def decide(
@@ -743,7 +948,11 @@ class CodingToolRegistry:
         try:
             self.validate(name, input)
         except ToolValidationError as error:
-            return PolicyDecision(False, error.reason_code)
+            return PolicyDecision(
+                False,
+                error.reason_code,
+                fix_note=error.fix_note or _policy_fix_note(error.reason_code),
+            )
         return PolicyDecision(True, "policy_allowed")
 
     def validate(
@@ -778,6 +987,9 @@ class CodingToolRegistry:
                 if key not in provided:
                     data.pop(key, None)
         self._normalize_paths(name, data)
+        if name == "chmod.v1":
+            data["mode"] = _parse_numeric_mode(data["mode"])
+            self._deny_secret_world_writable(data)
         if name == "search_text.v1" and data["regex"]:
             try:
                 re.compile(data["query"])
@@ -785,7 +997,10 @@ class CodingToolRegistry:
                 raise ToolValidationError("policy_schema_invalid") from error
         if name == "execute.v1":
             self._validate_command(data)
-        return ValidatedToolCall(name=name, input=data, risk=tool.risk)
+        risk = tool.risk
+        if name == "spawn_agent.v1" and str(data.get("spec") or "explore") == "implement":
+            risk = ToolRisk.WORKSPACE_WRITE
+        return ValidatedToolCall(name=name, input=data, risk=risk)
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:
@@ -793,15 +1008,31 @@ class CodingToolRegistry:
             if isinstance(raw_path, str):
                 normalizer = (
                     ensure_mutable_workspace_path
-                    if name in {"write_file.v1", "edit_file.v1"}
+                    if name
+                    in {
+                        "write_file.v1",
+                        "edit_file.v1",
+                        "mkdir.v1",
+                        "rm.v1",
+                        "chmod.v1",
+                    }
                     else normalize_workspace_path
                 )
                 data["path"] = str(normalizer(raw_path))
+            for key in ("src", "dest"):
+                raw = data.get(key)
+                if isinstance(raw, str):
+                    data[key] = str(ensure_mutable_workspace_path(raw))
+            self._deny_secret_write_paths(name, data)
             if "pattern" in data:
                 data["pattern"] = str(normalize_workspace_path(data["pattern"]))
             if "paths" in data:
                 data["paths"] = [
                     str(normalize_workspace_path(path)) for path in data["paths"]
+                ]
+            if "exclude" in data:
+                data["exclude"] = [
+                    str(normalize_workspace_path(path)) for path in data["exclude"]
                 ]
             if "cwd" in data:
                 data["cwd"] = str(normalize_workspace_path(data["cwd"]))
@@ -810,6 +1041,31 @@ class CodingToolRegistry:
             if code == "protected_git_path":
                 raise ToolValidationError("policy_protected_git_path") from error
             raise ToolValidationError(f"policy_{code}") from error
+
+    def _deny_secret_write_paths(self, name: str, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        if name not in {"mkdir.v1", "rm.v1", "mv.v1"}:
+            return
+        candidates = [data.get("path"), data.get("src"), data.get("dest")]
+        if any(
+            isinstance(path, str) and is_denied_secret_path(path)
+            for path in candidates
+        ):
+            raise ToolValidationError("policy_secret_path_denied")
+
+    def _deny_secret_world_writable(self, data: dict[str, Any]) -> None:
+        from neos.coding.domain.approvals import is_denied_secret_path
+
+        path = data.get("path")
+        mode = data.get("mode")
+        if (
+            isinstance(path, str)
+            and isinstance(mode, int)
+            and is_denied_secret_path(path)
+            and mode & 0o002
+        ):
+            raise ToolValidationError("policy_secret_path_denied")
 
     def _validate_command(self, data: dict[str, Any]) -> None:
         from neos.coding.domain.approvals import is_denied_secret_path
@@ -823,8 +1079,19 @@ class CodingToolRegistry:
         names = _unwrapped_command_names(argv)
         if "git" in names and any(_is_git_dangerous_flag(part) for part in argv):
             raise ToolValidationError("policy_git_operation_denied")
-        if any(name in _DEDICATED_EXECUTE_DENY for name in names):
-            raise ToolValidationError("policy_dedicated_tool_required")
+        if any(name in _REMOVAL_EXECUTABLES for name in names):
+            for operand in _command_operands(argv):
+                if (
+                    operand in _DANGEROUS_REMOVAL_OPERANDS
+                    or _operand_escapes_workspace(operand)
+                ):
+                    raise ToolValidationError("policy_dangerous_removal")
+        denied = next((name for name in names if name in _DEDICATED_EXECUTE_DENY), None)
+        if denied is not None:
+            raise ToolValidationError(
+                "policy_dedicated_tool_required",
+                fix_note=_dedicated_tool_fix_note(denied),
+            )
         if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
             raise ToolValidationError("policy_shell_command_denied")
         if any(name in _INLINE_INTERPRETERS for name in names):
@@ -868,13 +1135,6 @@ class CodingToolRegistry:
             for value in argv[1:]
         ):
             raise ToolValidationError("policy_network_operation_denied")
-        if any(name in _REMOVAL_EXECUTABLES for name in names):
-            for operand in _command_operands(argv):
-                if (
-                    operand in _DANGEROUS_REMOVAL_OPERANDS
-                    or _operand_escapes_workspace(operand)
-                ):
-                    raise ToolValidationError("policy_dangerous_removal")
         for operand in _command_operands(argv):
             if is_denied_secret_path(operand):
                 raise ToolValidationError("policy_secret_path_denied")

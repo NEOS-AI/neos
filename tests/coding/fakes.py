@@ -162,6 +162,11 @@ class InMemorySandboxBindingRepository:
         self.current = None
         return True
 
+    async def list_bound_sandbox_ids(self):
+        if self.current is None:
+            return frozenset()
+        return frozenset({self.current.sandbox_id})
+
 
 class InMemoryCodingRunRepository:
     def __init__(

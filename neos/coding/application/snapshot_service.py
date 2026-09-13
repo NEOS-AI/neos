@@ -99,6 +99,13 @@ class CodingWorkspaceEditProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingActiveChildProjection:
+    run_id: str
+    status: str | None = None
+    spec: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionSnapshot:
     task: CodingTaskProjection
     active_run: CodingRunProjection | None
@@ -111,6 +118,7 @@ class CodingProjectionSnapshot:
     latest_checkpoint: CodingCheckpointProjection | None
     head_seq: int
     connection_basis: str = "checkpoint"
+    active_children: tuple[CodingActiveChildProjection, ...] = ()
 
 
 class ProjectionRepository(Protocol):
@@ -242,7 +250,31 @@ class CodingSnapshotService:
             workspace=workspace,
             latest_checkpoint=checkpoint,
             head_seq=rows.head_seq,
+            active_children=_active_children(loop_state),
         )
+
+
+def _active_children(
+    loop_state: Mapping[str, Any],
+) -> tuple[CodingActiveChildProjection, ...]:
+    items = loop_state.get("active_children") or ()
+    children: list[CodingActiveChildProjection] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        run_id = item.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        status = item.get("status")
+        spec = item.get("spec")
+        children.append(
+            CodingActiveChildProjection(
+                run_id=run_id,
+                status=status if isinstance(status, str) and status else None,
+                spec=spec if isinstance(spec, str) and spec else None,
+            )
+        )
+    return tuple(children)
 
 
 def _tool_names(loop_state: Mapping[str, Any]) -> dict[str, str]:

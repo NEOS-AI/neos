@@ -347,6 +347,119 @@ def test_thinking_contract_of_unregistered_model_is_budgeted(tmp_path: Path) -> 
     assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.BUDGETED
 
 
+def _set_unknown_claude_adaptive(monkeypatch, enabled: bool) -> None:
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.config.model_catalog,
+        "default_unknown_claude_adaptive",
+        enabled,
+    )
+
+
+def test_unknown_claude_adaptive_flag_defaults_false() -> None:
+    from neos.config.schema import AppConfig
+
+    assert AppConfig().model_catalog.default_unknown_claude_adaptive is False
+
+
+def test_default_yaml_does_not_enable_unknown_claude_adaptive() -> None:
+    from neos.config.loader import load_yaml_file
+    from neos.config.schema import AppConfig
+
+    config = AppConfig.model_validate(load_yaml_file(Path("config/neos.default.yaml")))
+
+    assert config.model_catalog.default_unknown_claude_adaptive is False
+
+
+def test_unknown_claude_stays_budgeted_when_flag_off(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, False)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.BUDGETED
+    assert catalog.thinking_contract("anthropic/claude-sonnet-5-1") is ThinkingContract.BUDGETED
+
+
+def test_unknown_claude_is_adaptive_when_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.ADAPTIVE
+    # catalog_shaped must strip the provider prefix; raw anthropic/… is not claude-.
+    assert catalog.thinking_contract("anthropic/claude-sonnet-5-1") is ThinkingContract.ADAPTIVE
+    assert catalog.thinking_contract("claude-sonnet-5.1") is ThinkingContract.ADAPTIVE
+
+
+def test_unknown_non_claude_stays_budgeted_when_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(_write(tmp_path, {"models": {}}))
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("gpt-from-the-future") is ThinkingContract.BUDGETED
+    assert catalog.thinking_contract("anthropic/gpt-from-the-future") is ThinkingContract.BUDGETED
+
+
+def test_listed_budgeted_pins_stay_budgeted_when_unknown_claude_flag_on(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-sonnet-4-5-20250929": {
+                        "provider": "anthropic",
+                        "thinking": "budgeted",
+                        "gateway_id": "anthropic/claude-sonnet-4.5",
+                    },
+                    "claude-sonnet-5": {
+                        "provider": "anthropic",
+                        "thinking": "adaptive",
+                    },
+                }
+            },
+        )
+    )
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert (
+        catalog.thinking_contract("claude-sonnet-4-5-20250929")
+        is ThinkingContract.BUDGETED
+    )
+    assert (
+        catalog.thinking_contract("anthropic/claude-sonnet-4.5")
+        is ThinkingContract.BUDGETED
+    )
+    assert catalog.thinking_contract("claude-sonnet-5") is ThinkingContract.ADAPTIVE
+
+
+def test_thinking_contract_does_not_follow_remaps_for_unknown_claude(
+    tmp_path: Path, monkeypatch
+) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-sonnet-4-5-20250929": {
+                        "provider": "anthropic",
+                        "thinking": "budgeted",
+                    }
+                },
+                "remaps": {"claude-from-the-future": "claude-sonnet-4-5-20250929"},
+            },
+        )
+    )
+    _set_unknown_claude_adaptive(monkeypatch, True)
+
+    assert catalog.thinking_contract("claude-from-the-future") is ThinkingContract.ADAPTIVE
+
+
 def test_committed_catalog_loads_and_is_non_empty() -> None:
     """리포지토리에 커밋된 카탈로그가 실제로 유효하다."""
     catalog = load_catalog(Path("neos/config/models.yaml"))
@@ -466,6 +579,46 @@ def test_warn_unknown_routed_models_is_silent_for_committed_defaults(caplog) -> 
 
     assert unknown == []
     assert not [r for r in caplog.records if "model_routing" in r.message]
+
+
+def test_warn_unknown_routed_models_flags_role_aliases_missing_from_custom_catalog(
+    tmp_path: Path, monkeypatch, restore_model_config, caplog
+) -> None:
+    from neos.config.schema import ModelRoutingConfig
+
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-sonnet-5": {"provider": "anthropic"},
+                "claude-opus-5": {"provider": "anthropic"},
+                "gpt-5.6-terra": {"provider": "openai"},
+                "gpt-5.6-sol": {"provider": "openai"},
+            }
+        },
+    )
+    monkeypatch.setenv("NEOS_MODEL_CONFIG_PATH", str(path))
+    model_config.reload()
+
+    with caplog.at_level("WARNING", logger="neos.config.model_config"):
+        unknown = warn_unknown_routed_models(ModelRoutingConfig())
+
+    assert "sonnet-5" in unknown
+    assert "opus-5" in unknown
+
+    dated = ModelRoutingConfig.model_validate(
+        {
+            "anthropic": {
+                "everyday": "claude-sonnet-5",
+                "powerful": "claude-opus-5",
+            },
+            "openai": {
+                "everyday": "gpt-5.6-terra",
+                "powerful": "gpt-5.6-sol",
+            },
+        }
+    )
+    assert warn_unknown_routed_models(dated) == []
 
 
 def test_main_lifespan_checks_routed_models_against_the_catalog() -> None:
@@ -596,3 +749,341 @@ def test_supports_vision_reads_the_live_catalog() -> None:
     assert supports_vision("no-such-model-xyz") is False
     # 카탈로그가 True 로 적은 모델은 True 다
     assert supports_vision("claude-sonnet-5") is True
+
+
+# ---- identity surfaces (role_aliases / remaps / picker / gateway_id) ----
+
+
+def test_catalog_rejects_role_alias_current_missing_from_models(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "role_aliases": {"sonnet-5": {"current": "claude-missing"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-missing"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_remap_to_unknown_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "remaps": {"old/cookie": "claude-typo"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-typo"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_remap_to_non_selectable_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "judge": {"provider": "anthropic", "selectable": False},
+                "ok": {"provider": "anthropic"},
+            },
+            "remaps": {"old/cookie": "judge"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="selectable"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_legacy_alias_pointing_at_a_role_alias(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "role_aliases": {"sonnet-5": {"current": "claude-a"}},
+            "aliases": {"llm": {"claude_sonnet": "sonnet-5"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="role alias"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_spec_role_alias_that_is_not_declared(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic", "role_alias": "sonnet-5"}
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="role_alias"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_picker_without_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="gateway_id"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_picker_extra_without_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/a",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "name": "Thinking",
+                                "description": "extra",
+                                "group": "reasoning",
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="gateway_id"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_duplicate_gateway_ids(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/shared",
+                },
+                "claude-b": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/shared",
+                },
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/shared"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_same_pin_primary_and_extra_gateway_id(tmp_path: Path) -> None:
+    """A pin cannot reuse its primary gateway_id on a picker extra."""
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-sonnet-4-5-20250929": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/claude-sonnet-4.5-thinking",
+                    "picker": {
+                        "name": "Sonnet 4.5",
+                        "description": "prev",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "gateway_id": "anthropic/claude-sonnet-4.5-thinking",
+                                "name": "Thinking",
+                                "description": "extended",
+                                "group": "reasoning",
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/claude-sonnet-4.5-thinking"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_two_extras_with_the_same_gateway_id(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {
+                    "provider": "anthropic",
+                    "gateway_id": "anthropic/a",
+                    "picker": {
+                        "name": "A",
+                        "description": "shown",
+                        "group": "anthropic",
+                        "extras": [
+                            {
+                                "gateway_id": "anthropic/a-extra",
+                                "name": "One",
+                                "description": "first",
+                                "group": "reasoning",
+                            },
+                            {
+                                "gateway_id": "anthropic/a-extra",
+                                "name": "Two",
+                                "description": "second",
+                                "group": "reasoning",
+                            },
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="anthropic/a-extra"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_role_alias_key_that_shadows_a_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-sonnet-5": {"provider": "anthropic"}},
+            "role_aliases": {"claude-sonnet-5": {"current": "claude-sonnet-5"}},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-sonnet-5"):
+        load_catalog(path)
+
+
+def test_committed_role_aliases_do_not_shadow_pin_keys() -> None:
+    catalog = model_config.catalog
+
+    assert set(catalog.role_aliases) & set(catalog.models) == set()
+
+
+def test_catalog_rejects_duplicate_wire_id_on_the_same_provider(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic", "wire_id": "wire-1"},
+                "claude-b": {"provider": "anthropic", "wire_id": "wire-1"},
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="wire"):
+        load_catalog(path)
+
+
+def test_catalog_rejects_id_form_colliding_with_another_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {
+                "claude-a": {"provider": "anthropic"},
+                "claude-b": {
+                    "provider": "anthropic",
+                    "id_forms": ["claude-a"],
+                },
+            }
+        },
+    )
+
+    with pytest.raises(ValidationError, match="claude-a"):
+        load_catalog(path)
+
+
+def test_committed_role_aliases_current_pins_exist() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.role_aliases["sonnet-5"].current == "claude-sonnet-5"
+    assert catalog.role_aliases["opus-5"].current == "claude-opus-5"
+    assert catalog.role_aliases["haiku-4.5"].current == "claude-haiku-4-5-20251001"
+    for name, alias in catalog.role_aliases.items():
+        assert alias.current in catalog.models, name
+
+
+def test_committed_remap_targets_are_selectable_pins() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.remaps
+    for raw, pin in catalog.remaps.items():
+        spec = catalog.models[pin]
+        assert spec.selectable, f"{raw} remaps to non-selectable {pin}"
+
+
+# ---- aux helper slots ------------------------------------------------------
+
+
+def test_aux_defaults_to_empty_map(tmp_path: Path) -> None:
+    catalog = load_catalog(
+        _write(tmp_path, {"models": {"claude-a": {"provider": "anthropic"}}})
+    )
+
+    assert catalog.aux == {}
+
+
+def test_aux_accepts_fast_title_artifact_pins(tmp_path: Path) -> None:
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "models": {
+                    "claude-haiku-4-5-20251001": {"provider": "anthropic"},
+                },
+                "aux": {
+                    "fast": "claude-haiku-4-5-20251001",
+                    "title": "claude-haiku-4-5-20251001",
+                    "artifact": "claude-haiku-4-5-20251001",
+                },
+            },
+        )
+    )
+
+    assert catalog.aux["fast"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["title"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["artifact"] == "claude-haiku-4-5-20251001"
+
+
+def test_aux_rejects_unknown_pin(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "models": {"claude-a": {"provider": "anthropic"}},
+            "aux": {"title": "claude-missing"},
+        },
+    )
+
+    with pytest.raises(ValidationError, match="aux"):
+        load_catalog(path)
+
+
+def test_committed_aux_points_at_dated_haiku_pin() -> None:
+    catalog = model_config.catalog
+
+    assert catalog.aux["fast"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["title"] == "claude-haiku-4-5-20251001"
+    assert catalog.aux["artifact"] == "claude-haiku-4-5-20251001"
+    for slot, pin in catalog.aux.items():
+        assert pin in catalog.models, slot

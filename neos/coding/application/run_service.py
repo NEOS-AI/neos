@@ -625,6 +625,9 @@ class CodingRunService:
         if checkpoint is None:
             return
         loop_state = checkpoint.loop_state or {}
+        discard = getattr(self._loop, "discard_child_worktrees", None)
+        if callable(discard):
+            discard(loop_state)
         tool_call_ids: list[str] = []
         raw_children = loop_state.get("active_children")
         if isinstance(raw_children, list):
@@ -644,7 +647,8 @@ class CodingRunService:
                     lease=lease,
                     tool_call_id=tool_call_id,
                     now=now,
-                    claim_expires_at=now + timedelta(seconds=30),
+                    claim_expires_at=now
+                    + timedelta(seconds=self._child_lease_horizon()),
                 )
             except Exception:
                 continue

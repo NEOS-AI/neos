@@ -81,6 +81,36 @@ class TestConversationManagement:
             mock_repo.create_conversation.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_create_conversation_stores_selectable_gemini_pin(self):
+        """gemini-1.5-pro-latest is selectable but not role-routed — store the pin."""
+        with (
+            patch("neos.api.services.chat_service.ChatRepository") as mock_repo,
+            patch.object(
+                ChatService,
+                "get_conversation",
+                AsyncMock(return_value={"model_name": "gemini-1.5-pro-latest"}),
+            ),
+        ):
+            mock_repo.create_conversation = AsyncMock()
+            mock_repo.update_conversation = AsyncMock()
+
+            result = await ChatService.create_conversation(
+                user_id="user_123",
+                model_name="gemini-1.5-pro-latest",
+            )
+
+            assert result["model_name"] == "gemini-1.5-pro-latest"
+            mock_repo.create_conversation.assert_awaited_once_with(
+                user_id="user_123",
+                conversation_id=ANY,
+                model_name="gemini-1.5-pro-latest",
+                system_prompt=None,
+                template_id=None,
+                mode="standard",
+                visibility="private",
+            )
+
+    @pytest.mark.asyncio
     async def test_create_conversation_error(self):
         """Test conversation creation error handling"""
         with patch("neos.api.services.chat_service.ChatRepository") as mock_repo:

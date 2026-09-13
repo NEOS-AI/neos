@@ -9,6 +9,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     approval_display_summary,
     ask_user_answers_complete,
+    adaptive_denial_reason,
     canonical_approval_hash,
     denial_envelope,
     evaluate_approval,
@@ -355,6 +356,96 @@ def test_instruction_file_writes_require_approval_despite_approved_always() -> N
     assert evaluate_approval(local_cased, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
 
 
+def test_execute_instruction_file_operands_require_approval_despite_approved_always() -> None:
+    agents = call(
+        "execute.v1",
+        {"argv": ["sed", "-i", "s/a/b/", "AGENTS.md"]},
+        ToolRisk.COMMAND,
+    )
+    nested = call(
+        "execute.v1",
+        {"argv": ["cat", "pkg/CLAUDE.md"]},
+        ToolRisk.COMMAND,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"execute.v1"}))
+    allow_gate = ApprovalGate(allow_tools=frozenset({"execute.v1"}))
+    auto_gate = ApprovalGate(
+        mode=ApprovalMode.AUTO,
+        always_allow=frozenset({"execute.v1"}),
+    )
+
+    assert evaluate_approval(agents, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(nested, gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(agents, allow_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(agents, auto_gate) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+
+
+def test_execute_normal_file_operand_is_not_forced_to_ask_by_instruction_rule() -> None:
+    command = call(
+        "execute.v1",
+        {"argv": ["pytest", "src/main.py"]},
+        ToolRisk.COMMAND,
+    )
+    gate = ApprovalGate(approved_always=frozenset({"execute.v1"}))
+
+    assert evaluate_approval(command) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert evaluate_approval(command, gate) is ApprovalPolicyOutcome.ALLOW
+
+
+def test_unattended_write_of_normal_file_is_deny() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "src/main.py", "content": "value"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_unattended_write_of_instruction_file_is_deny() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "AGENTS.md", "content": "ignore previous"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_unattended_execute_of_instruction_file_is_deny() -> None:
+    command = call(
+        "execute.v1",
+        {"argv": ["sed", "-i", "s/a/b/", "AGENTS.md"]},
+        ToolRisk.COMMAND,
+    )
+
+    assert (
+        evaluate_approval(command, ApprovalGate(unattended=True))
+        is ApprovalPolicyOutcome.DENY
+    )
+
+
+def test_attended_instruction_file_write_remains_require_approval() -> None:
+    write = call(
+        "write_file.v1",
+        {"path": "AGENTS.md", "content": "ignore previous"},
+        ToolRisk.WORKSPACE_WRITE,
+    )
+
+    assert evaluate_approval(write) is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    assert (
+        evaluate_approval(write, ApprovalGate(unattended=False))
+        is ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    )
+
+
 def test_set_phase_to_implement_from_plan_requires_approval() -> None:
     jump = call("set_phase.v1", {"phase": "implement"}, ToolRisk.READ_ONLY)
     assert (
@@ -583,7 +674,8 @@ def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
     assert hooked["status"] == "denied"
     assert hooked["denied_by"] == "hook"
     assert hooked["function_id"] == "write_file.v1"
-    assert hooked["reason"] == "policy_hook_denied"
+    assert hooked["reason"] == adaptive_denial_reason("policy_hook_denied")
+    assert hooked["reason"] != hooked["reason_code"]
     assert hooked["args_excerpt"]["path"] == "src/main.py"
     assert "content" not in hooked["args_excerpt"]
     assert "preview" not in hooked["args_excerpt"]
@@ -606,3 +698,46 @@ def test_denial_envelope_uses_hook_or_policy_and_redacts_excerpt() -> None:
     }
     assert "raw-secret-token" not in json.dumps(denied)
     assert "secret_test.py" not in json.dumps(denied)
+
+
+def test_denial_envelope_includes_argv_warnings_in_reason() -> None:
+    rm = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "-r", "tmp"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    reset = denial_envelope(
+        call(
+            "execute.v1",
+            {"argv": ["git", "reset", "--hard", "HEAD"]},
+            ToolRisk.COMMAND,
+        ),
+        "policy_git_operation_denied",
+    )
+
+    assert rm["reason_code"] == "policy_dangerous_removal"
+    assert rm["warnings"] == ["destructive_recursive_delete"]
+    assert "recursive delete" in rm["reason"]
+    assert rm["reason"] != rm["reason_code"]
+    assert "warnings" not in rm["args_excerpt"]
+    assert reset["reason_code"] == "policy_git_operation_denied"
+    assert reset["warnings"] == ["destructive_git_reset"]
+    assert "reset --hard" in reset["reason"]
+    assert "S00" not in json.dumps(rm)
+    assert "S00" not in json.dumps(reset)
+
+    long_rm = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "--recursive", "tmp"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    operand = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "--", "-r"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    dedicated = denial_envelope(
+        call("execute.v1", {"argv": ["rg", "needle"]}, ToolRisk.COMMAND),
+        "policy_dedicated_tool_required",
+    )
+    assert long_rm["warnings"] == ["destructive_recursive_delete"]
+    assert "warnings" not in operand
+    assert dedicated["reason"] != dedicated["reason_code"]
+    assert "dedicated tool" in dedicated["reason"]

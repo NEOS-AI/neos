@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -49,6 +49,8 @@ class ApprovalGate:
     always_allow: frozenset[str] = frozenset()
     approved_always: frozenset[str] = frozenset()
     current_phase: str | None = None
+    unattended: bool = False
+    workspace_root: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,9 +142,33 @@ def evaluate_approval(
     gate: ApprovalGate | None = None,
 ) -> ApprovalPolicyOutcome:
     try:
-        return _evaluate_approval(call, gate or ApprovalGate())
+        resolved = gate or ApprovalGate()
+        outcome = _evaluate_approval(call, resolved)
+        if resolved.unattended and outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
+            return ApprovalPolicyOutcome.DENY
+        return outcome
     except Exception:
         return ApprovalPolicyOutcome.DENY
+
+
+def approval_remember_key(call: ValidatedToolCall) -> str:
+    raw_path = call.input.get("path")
+    if isinstance(raw_path, str) and raw_path.strip():
+        try:
+            from neos.coding.sandbox.paths import normalize_workspace_path
+
+            scoped = str(normalize_workspace_path(raw_path))
+        except Exception:
+            scoped = raw_path.replace("\\", "/").strip()
+        if scoped:
+            return f"{call.name}:{scoped}"
+    if call.name == "execute.v1":
+        argv = call.input.get("argv")
+        if isinstance(argv, (list, tuple)) and argv:
+            token = str(argv[0]).strip()
+            if token:
+                return f"{call.name}:{token}"
+    return call.name
 
 
 def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
@@ -150,6 +176,10 @@ def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
     raw_path = call.input.get("path")
     if isinstance(raw_path, str) and raw_path:
         found.append(raw_path)
+    for key in ("src", "dest"):
+        raw = call.input.get(key)
+        if isinstance(raw, str) and raw:
+            found.append(raw)
     raw_paths = call.input.get("paths")
     if isinstance(raw_paths, (list, tuple)):
         found.extend(str(item) for item in raw_paths if item)
@@ -176,7 +206,9 @@ def is_denied_secret_path(path: object) -> bool:
     parts = _posix_path_parts(path)
     if not parts:
         return False
-    folded = tuple(part.casefold() for part in parts)
+    from neos.coding.sandbox.paths import compare_path_key
+
+    folded = tuple(compare_path_key(part) for part in parts)
     name = folded[-1]
     if name == ".env" or name.startswith(".env."):
         return True
@@ -213,7 +245,16 @@ _PROTECTED_INSTRUCTION_BASENAMES = frozenset(
         "claude.local.md",
     }
 )
-_INSTRUCTION_WRITE_TOOLS = frozenset({"write_file.v1", "edit_file.v1"})
+_INSTRUCTION_WRITE_TOOLS = frozenset(
+    {
+        "write_file.v1",
+        "edit_file.v1",
+        "mkdir.v1",
+        "rm.v1",
+        "mv.v1",
+        "chmod.v1",
+    }
+)
 _SENSITIVE_CONFIG_BASENAMES = frozenset(
     {
         ".bashrc",
@@ -231,13 +272,57 @@ _PREVIEW_MAX_LINES = 40
 _PREVIEW_MAX_CHARS = 2000
 
 
-def _is_protected_instruction_write(call: ValidatedToolCall) -> bool:
-    if call.name not in _INSTRUCTION_WRITE_TOOLS:
+def _has_protected_instruction_basename(path: str) -> bool:
+    from neos.coding.sandbox.paths import compare_path_key
+
+    parts = _posix_path_parts(path)
+    return bool(parts) and compare_path_key(parts[-1]) in _PROTECTED_INSTRUCTION_BASENAMES
+
+
+def _is_claude_rules_path(path: str) -> bool:
+    from neos.coding.sandbox.paths import compare_path_key
+
+    parts = _posix_path_parts(path)
+    folded = tuple(compare_path_key(part) for part in parts)
+    for index, part in enumerate(folded[:-1]):
+        if part == ".claude" and folded[index + 1] == "rules":
+            return index + 2 < len(folded)
+    return False
+
+
+def _looks_like_instruction_file(path: str) -> bool:
+    return _has_protected_instruction_basename(path) or _is_claude_rules_path(path)
+
+
+def _is_instruction_file_path(path: str, workspace_root: str | None = None) -> bool:
+    if _looks_like_instruction_file(path):
+        return True
+    if not workspace_root:
         return False
-    for path in _call_paths(call):
-        parts = _posix_path_parts(path)
-        if parts and parts[-1].casefold() in _PROTECTED_INSTRUCTION_BASENAMES:
-            return True
+    from neos.coding.sandbox.paths import realpath_for_compare
+
+    resolved = realpath_for_compare(workspace_root, path)
+    return resolved != path and _looks_like_instruction_file(resolved)
+
+
+def _is_protected_instruction_write(
+    call: ValidatedToolCall,
+    workspace_root: str | None = None,
+) -> bool:
+    if call.name not in _INSTRUCTION_WRITE_TOOLS and call.name != "execute.v1":
+        return False
+    if any(
+        _is_instruction_file_path(path, workspace_root) for path in _call_paths(call)
+    ):
+        return True
+    if call.name == "execute.v1":
+        argv = call.input.get("argv")
+        if isinstance(argv, (list, tuple)):
+            return any(
+                _is_instruction_file_path(str(item), workspace_root)
+                for item in argv
+                if item
+            )
     return False
 
 
@@ -267,6 +352,16 @@ def _truncated_text(text: str) -> tuple[str, bool]:
     return preview, truncated
 
 
+def _approved_always_allows(
+    call: ValidatedToolCall, approved_always: frozenset[str]
+) -> bool:
+    if not approved_always:
+        return False
+    if call.name in approved_always:
+        return True
+    return approval_remember_key(call) in approved_always
+
+
 def _evaluate_approval(
     call: ValidatedToolCall, gate: ApprovalGate
 ) -> ApprovalPolicyOutcome:
@@ -275,13 +370,13 @@ def _evaluate_approval(
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY
     # Instruction files persist agent behavior; never auto-approve writes.
-    if _is_protected_instruction_write(call):
+    if _is_protected_instruction_write(call, gate.workspace_root):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if _is_sensitive_config_write(call):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
-    if call.name in gate.approved_always:
+    if _approved_always_allows(call, gate.approved_always):
         return ApprovalPolicyOutcome.ALLOW
     if call.name in gate.always_allow and gate.mode is ApprovalMode.AUTO:
         return ApprovalPolicyOutcome.ALLOW
@@ -396,6 +491,66 @@ def approval_event_display_summary(
     return excerpt
 
 
+_DENIAL_REASONS = {
+    "policy_hook_denied": "a hook blocked this call; change the input and do not retry it",
+    "hook_prevented": "a hook stopped further tools; do not continue this batch",
+    "approval_denied": "the user denied this action; do not retry the same call",
+    "policy_approval_denied": "the user denied this action; do not retry the same call",
+    "approval_expired": "approval expired; ask again only with a safer call",
+    "approval_invalidated": "approval is no longer valid; ask again only with a safer call",
+    "policy_phase_denied": "this tool is not allowed in the current phase",
+    "policy_skill_denied": "the loaded skill does not allow this tool",
+    "policy_stall_denied": "the same call failed repeatedly; change the approach",
+    "policy_schema_invalid": "the tool input is invalid; fix the arguments",
+    "policy_unknown_tool": "this tool is not available",
+    "policy_inline_interpreter_denied": "run a file with execute.v1, not -c/-e",
+    "policy_command_path_denied": "use a workspace-relative path",
+    "policy_secret_path_denied": "do not pass secret paths",
+    "policy_executable_path_denied": "use a bare executable name",
+    "policy_git_operation_denied": "git via execute is status/diff/log only",
+    "policy_shell_command_denied": "use argv execute, not a shell -c",
+    "policy_network_client_denied": "network clients are not allowed",
+    "policy_network_operation_denied": "package install/update is not allowed",
+    "policy_dangerous_removal": "refusing a destructive rm operand",
+    "policy_executable_not_allowed": "executable is not on the allowlist",
+    "policy_protected_git_path": "do not mutate .git",
+    "policy_workspace_path_escape": "use a workspace-relative path",
+    "policy_workspace_secret_path": "secret paths are not readable",
+    "policy_binary_file": "this file is binary; do not read it as text",
+    "policy_dedicated_tool_required": "use a dedicated tool instead of this executable",
+    "policy_publish_denied": "publish/release is not allowed",
+    "policy_command_timeout_exceeded": "timeout is too large; lower timeout_sec",
+    "policy_command_output_exceeded": "output cap is too large; lower max_output_bytes",
+    "policy_command_stdin_exceeded": "stdin is too large",
+    "policy_environment_name_denied": "that environment variable is not allowed",
+    "aborted": "the run was aborted; do not retry this call",
+}
+_WARNING_REASONS = {
+    "destructive_recursive_delete": "recursive delete is blocked; do not retry rm -r",
+    "destructive_git_reset": "git reset --hard is blocked; do not discard the tree via execute",
+    "destructive_force_push": "force-push is blocked; do not rewrite remotes via execute",
+}
+_DEFAULT_DENIAL_REASON = (
+    "this call was denied; change the input and do not retry the same one"
+)
+
+
+def adaptive_denial_reason(
+    reason_code: str, warnings: Sequence[str] = ()
+) -> str:
+    base = _DENIAL_REASONS.get(reason_code)
+    if base is None:
+        from neos.coding.tools.registry import _policy_fix_note
+
+        base = _policy_fix_note(reason_code) or _DEFAULT_DENIAL_REASON
+    extras = [
+        _WARNING_REASONS[code] for code in warnings if code in _WARNING_REASONS
+    ]
+    if not extras:
+        return base
+    return " ".join((base, *extras))
+
+
 def denial_envelope(call, reason_code: str) -> dict[str, object]:
     if reason_code.startswith("policy_hook_"):
         denied_by = "hook"
@@ -415,14 +570,23 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
-    return {
+    raw_warnings = excerpt.pop("warnings", None)
+    warnings = (
+        tuple(str(item) for item in raw_warnings)
+        if isinstance(raw_warnings, list)
+        else ()
+    )
+    envelope: dict[str, object] = {
         "reason_code": reason_code,
         "status": "denied",
         "denied_by": denied_by,
         "function_id": call.name,
-        "reason": reason_code,
+        "reason": adaptive_denial_reason(reason_code, warnings),
         "args_excerpt": redact_sensitive(excerpt),
     }
+    if warnings:
+        envelope["warnings"] = list(warnings)
+    return envelope
 
 
 def _execute_warning_codes(argv: list[object]) -> list[str]:
@@ -430,7 +594,11 @@ def _execute_warning_codes(argv: list[object]) -> list[str]:
     if not parts:
         return []
     executable = parts[0]
-    flags = parts[1:]
+    flags: list[str] = []
+    for part in parts[1:]:
+        if part == "--":
+            break
+        flags.append(part)
     warnings: list[str] = []
     if executable == "rm" and any(_is_recursive_rm_flag(flag) for flag in flags):
         warnings.append("destructive_recursive_delete")
@@ -441,13 +609,23 @@ def _execute_warning_codes(argv: list[object]) -> list[str]:
     return warnings
 
 
+_RM_SHORT_OPTS = frozenset("fiIrRdv")
+
+
 def _is_recursive_rm_flag(flag: str) -> bool:
-    return flag in {"-r", "-R", "-rf", "-fr", "-Rf", "-fR"} or (
-        flag.startswith("-")
-        and not flag.startswith("--")
-        and "r" in flag.lower()
-    )
+    if flag in {"-r", "-R", "-rf", "-fr", "-Rf", "-fR"}:
+        return True
+    if flag == "--recursive" or flag.startswith("--recursive="):
+        return True
+    if not flag.startswith("-") or flag.startswith("--"):
+        return False
+    body = flag[1:]
+    return bool(body) and set(body) <= _RM_SHORT_OPTS and "r" in body.lower()
 
 
 def _has_force_push_flag(flags: list[str]) -> bool:
-    return any(flag == "--force" or flag == "-f" for flag in flags)
+    return any(
+        flag in {"--force", "-f", "--force-with-lease"}
+        or flag.startswith("--force-with-lease=")
+        for flag in flags
+    )

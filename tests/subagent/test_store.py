@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from neos.subagent.identity import strip_channel_keys
+from neos.subagent.identity import persist_payload, strip_channel_keys
 from neos.subagent.memory import InMemorySubagentStore
-from neos.subagent.store import PLACEHOLDER_STATE, CheckpointWrite
+from neos.subagent.store import PLACEHOLDER_STATE, CheckpointWrite, SubagentNotFound
 from neos.subagent.types import (
     LineageKind,
     ModelPin,
@@ -130,6 +130,78 @@ async def test_writes_strip_channel_keys_from_briefing_and_loop_state(
 
 
 @pytest.mark.asyncio
+async def test_commit_redacts_secrets_in_loop_state(
+    store: InMemorySubagentStore,
+) -> None:
+    created = await store.resolve_or_create(
+        _ticket(
+            briefing=ParentBriefing(
+                goal="inspect auth",
+                why="token sk-abcdefghijklmnopqrstuvwxyz1234",
+            )
+        )
+    )
+    assert created.briefing["why"] == persist_payload(
+        "token sk-abcdefghijklmnopqrstuvwxyz1234"
+    )
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in created.briefing["why"]
+    reserved = await store.reserve(created.run_id, None)
+    await store.commit(
+        reserved,
+        _write(
+            loop_state={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "use sk-abcdefghijklmnopqrstuvwxyz1234",
+                    }
+                ],
+                "api_key": "super-secret",
+                "authorization": "Bearer abc",
+            }
+        ),
+    )
+    state = await store.get_loop_state(created.run_id)
+    assert state["api_key"] == "<redacted>"
+    assert state["authorization"] == "<redacted>"
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in state["messages"][0]["content"]
+    assert state["messages"][0]["content"] == persist_payload(
+        "use sk-abcdefghijklmnopqrstuvwxyz1234"
+    )
+
+
+@pytest.mark.asyncio
+async def test_commit_keeps_long_report_and_steer_for_fold(
+    store: InMemorySubagentStore,
+) -> None:
+    from neos.subagent.fold import fold_run
+
+    report = "r" * 2000
+    steer = "s" * 800
+    created = await store.resolve_or_create(_ticket())
+    reserved = await store.reserve(created.run_id, None)
+    committed = await store.commit(
+        reserved,
+        _write(
+            status=SubagentStatus.COMPLETED,
+            loop_state={
+                "last_assistant_text": report,
+                "steer_applied": steer,
+                "api_key": "super-secret",
+            },
+        ),
+    )
+    state = await store.get_loop_state(created.run_id)
+    assert state["last_assistant_text"] == report
+    assert state["steer_applied"] == steer
+    assert state["api_key"] == "<redacted>"
+    folded = fold_run(committed, state)
+    assert folded.summary == report
+    assert folded.truncated is False
+    assert folded.full_summary == ""
+
+
+@pytest.mark.asyncio
 async def test_cas_inserts_seq_one_when_no_rows_and_expected_is_none(
     store: InMemorySubagentStore,
 ) -> None:
@@ -246,6 +318,54 @@ async def test_cancel_for_parent_kills_every_active_child(
 
 
 @pytest.mark.asyncio
+async def test_list_for_parent_run_returns_only_that_parent_run(
+    store: InMemorySubagentStore,
+) -> None:
+    parent = await store.resolve_or_create(_ticket(parent_tool_call_id="parent"))
+    child = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="parent:nested",
+        )
+    )
+    other = await store.resolve_or_create(_ticket(parent_tool_call_id="other"))
+    listed = await store.list_for_parent_run(parent.run_id)
+    ids = {item.run_id for item in listed}
+    assert child.run_id in ids
+    assert parent.run_id not in ids
+    assert other.run_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_delete_for_parent_removes_only_that_parent_runs_and_checkpoints(
+    store: InMemorySubagentStore,
+) -> None:
+    keep_parent = "ct_other"
+    victim_a = await store.resolve_or_create(_ticket(parent_tool_call_id="a"))
+    victim_b = await store.resolve_or_create(_ticket(parent_tool_call_id="b"))
+    other = await store.resolve_or_create(
+        _ticket(parent_id=keep_parent, parent_tool_call_id="a")
+    )
+    reserved = await store.reserve(victim_a.run_id, None)
+    await store.commit(reserved, _write())
+    other_reserved = await store.reserve(other.run_id, None)
+    await store.commit(other_reserved, _write())
+
+    deleted = await store.delete_for_parent(ParentKind.CODING, "ct_parent")
+    assert deleted == 2
+    with pytest.raises(SubagentNotFound):
+        await store.get(victim_a.run_id)
+    with pytest.raises(SubagentNotFound):
+        await store.get(victim_b.run_id)
+    kept = await store.get(other.run_id)
+    assert kept.run_id == other.run_id
+    assert kept.parent_id == keep_parent
+    state = await store.get_loop_state(other.run_id)
+    assert state.get("messages") == [{"role": "user", "content": "brief"}]
+    assert await store.delete_for_parent(ParentKind.CODING, "ct_parent") == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "write_status",
     [SubagentStatus.RUNNING, SubagentStatus.COMPLETED],
@@ -318,16 +438,33 @@ async def test_reserve_expected_set_with_no_checkpoints_is_mismatch(
     assert loaded.latest_checkpoint_id is None
 
 
-def test_postgres_json_strips_channel_keys() -> None:
+def test_postgres_json_strips_channel_keys_and_redacts_secrets() -> None:
     postgres = pytest.importorskip("neos.subagent.postgres")
     dumped = postgres._json(
         {
             "goal": "inspect",
             "session_key": "sk_live",
-            "nested": {"chat_id": "C1", "keep": True},
+            "api_key": "super-secret",
+            "nested": {
+                "chat_id": "C1",
+                "keep": True,
+                "token": "abc",
+                "note": "token sk-abcdefghijklmnopqrstuvwxyz1234",
+            },
         }
     )
-    assert json.loads(dumped) == {"goal": "inspect", "nested": {"keep": True}}
+    assert json.loads(dumped) == {
+        "goal": "inspect",
+        "api_key": "<redacted>",
+        "nested": {
+            "keep": True,
+            "token": "<redacted>",
+            "note": persist_payload("token sk-abcdefghijklmnopqrstuvwxyz1234"),
+        },
+    }
+    assert "sk-abcdefghijklmnopqrstuvwxyz1234" not in dumped
+    assert "session_key" not in dumped
+    assert "chat_id" not in dumped
 
 
 def test_postgres_commit_skips_terminal_run_update() -> None:
@@ -344,8 +481,15 @@ def test_postgres_commit_skips_terminal_run_update() -> None:
     assert "_UPDATE_RUN_IF_LIVE" in commit_src
     assert "_UPDATE_RUN," not in commit_src
     assert "AND status NOT IN ('completed', 'failed', 'killed')" in source
-    cancel_src = source.split("async def _cancel_in_session", 1)[1]
+    cancel_src = source.split("async def _mark_terminal_in_session", 1)[1]
     assert "_UPDATE_RUN," in cancel_src
+    delete_src = source.split("async def delete_for_parent", 1)[1].split(
+        "async def _cancel_in_session", 1
+    )[0]
+    assert "_DELETE_PARENT" in delete_src
+    assert "DELETE FROM subagent_runs" in source
+    assert "parent_kind = :parent_kind" in source
+    assert "parent_id = :parent_id" in source
 
 
 def test_migration_055_creates_subagent_tables_without_coding_fk() -> None:

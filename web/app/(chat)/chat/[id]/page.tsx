@@ -5,7 +5,7 @@ import { Suspense } from "react";
 import { auth } from "@/app/(auth)/auth";
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { loadPageCatalog } from "@/lib/ai/catalog";
 import { adaptBEConversation } from "@/lib/adapters/chat-adapters";
 import { callBackendAPI } from "@/lib/backend-api";
 import type { ChatMessage } from "@/lib/types";
@@ -63,7 +63,9 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const cookieStore = await cookies();
-  const chatModelFromCookie = cookieStore.get("chat-model");
+  const { catalog, modelId, rewriteTo } = await loadPageCatalog(
+    cookieStore.get("chat-model")?.value
+  );
 
   return (
     <>
@@ -72,8 +74,10 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
         // 예전 동작은 재개가 아니라 워크플로우 재실행이라 새로고침만으로 재과금됐다.
         // (use-chat-stream.ts의 resumeStream도 no-op으로 이중 차단)
         autoResume={false}
+        catalog={catalog}
+        cookieRewriteTo={rewriteTo}
         id={chat.id}
-        initialChatModel={chatModelFromCookie?.value ?? DEFAULT_CHAT_MODEL}
+        initialChatModel={modelId}
         initialMessages={uiMessages}
         initialVisibilityType={chat.visibility}
         isReadonly={convRaw.user_id !== backendUserId}
