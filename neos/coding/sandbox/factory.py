@@ -30,7 +30,11 @@ def create_sandbox_provider(config: SandboxConfig):
             watcher_replay_events=streams.replay_events,
         )
 
-    if config.enabled and not _docker_cli_available():
+    if (
+        config.provider == "docker"
+        and config.enabled
+        and not _docker_cli_available()
+    ):
         raise SandboxUnavailable("sandbox_required_unavailable")
     docker = config.docker
     resources = config.resources

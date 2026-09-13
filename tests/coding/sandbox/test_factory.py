@@ -45,6 +45,23 @@ def test_factory_selects_docker_provider() -> None:
     assert isinstance(provider, DockerSandboxProvider)
 
 
+def test_factory_enabled_docker_constructs_when_cli_present(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "neos.coding.sandbox.factory._docker_cli_available", lambda: True
+    )
+    config = SandboxConfig.model_validate(
+        {
+            "enabled": True,
+            "provider": "docker",
+            "docker": {"image": DIGEST_IMAGE},
+        }
+    )
+
+    provider = create_sandbox_provider(config)
+
+    assert isinstance(provider, DockerSandboxProvider)
+
+
 def test_factory_refuses_enabled_docker_without_cli(monkeypatch) -> None:
     monkeypatch.setattr(
         "neos.coding.sandbox.factory._docker_cli_available", lambda: False
