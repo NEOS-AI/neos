@@ -10,13 +10,16 @@ CI runs this script and `git diff --exit-code -- web/lib/ai/catalog.generated.ts
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-from neos.config.model_config import model_config
-from neos.config.model_identity import to_picker_payload
-from neos.config.schema import ModelRoutingConfig
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from neos.config.model_config import model_config  # noqa: E402
+from neos.config.model_identity import to_picker_payload  # noqa: E402
+from neos.config.schema import ModelRoutingConfig  # noqa: E402
 OUT_PATH = ROOT / "web" / "lib" / "ai" / "catalog.generated.ts"
 
 
