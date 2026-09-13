@@ -236,8 +236,12 @@ class SubagentRuntime:
             return
         children = await list_fn(run_id)
         for child in children:
-            if child.status in _LIVE:
+            if child.status not in _LIVE:
+                continue
+            try:
                 await self.cancel(child.run_id, reason)
+            except Exception:
+                continue
 
     async def delete_for_parent(
         self, parent_kind: ParentKind, parent_id: str

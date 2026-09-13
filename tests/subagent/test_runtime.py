@@ -439,6 +439,35 @@ async def test_cancel_cascades_to_descendants() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cascade_cancel_continues_after_one_child_fails() -> None:
+    runtime, store, *_ = _runtime([_tool()])
+    parent = await runtime.advance(_ticket())
+    first = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="toolu_spawn:a",
+        )
+    )
+    second = await store.resolve_or_create(
+        _ticket(
+            parent_run_id=parent.run_id,
+            parent_tool_call_id="toolu_spawn:b",
+        )
+    )
+    original = store.cancel
+
+    async def boom(run_id, reason):
+        if run_id == first.run_id:
+            raise RuntimeError("cancel exploded")
+        return await original(run_id, reason)
+
+    store.cancel = boom
+    killed = await runtime.cancel(parent.run_id, "aborted")
+    assert killed.status is SubagentStatus.KILLED
+    assert (await store.get(second.run_id)).status is SubagentStatus.KILLED
+
+
+@pytest.mark.asyncio
 async def test_fold_on_running_is_fail_closed() -> None:
     runtime, *_ = _runtime([_tool()])
     first = await runtime.advance(_ticket())
