@@ -172,6 +172,35 @@ async def test_slack_empty_file_dispatches_when_media_on(
     assert attachments[0]["bytes"] == b"png-bytes"
 
 
+def _discord_attachment(
+    *,
+    filename: str = "a.png",
+    content_type: str = "image/png",
+    url: str = "https://cdn.discordapp.com/attachments/1/a.png",
+    size: int = 3,
+    data: bytes | None = b"img",
+    error: BaseException | None = None,
+    omit_read: bool = False,
+) -> SimpleNamespace:
+    attachment = SimpleNamespace(
+        filename=filename,
+        content_type=content_type,
+        url=url,
+        size=size,
+    )
+    if omit_read:
+        return attachment
+
+    async def read() -> bytes:
+        if error is not None:
+            raise error
+        assert data is not None
+        return data
+
+    attachment.read = read
+    return attachment
+
+
 async def test_discord_empty_file_dispatches_when_media_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -182,7 +211,6 @@ async def test_discord_empty_file_dispatches_when_media_on(
         FakeGateway,
         _adapter,
         _message,
-        _mentioned_content,
         _bot_mention,
     )
 
@@ -192,27 +220,134 @@ async def test_discord_empty_file_dispatches_when_media_on(
     channel = FakeChannel(CHANNEL_ID)
     gateway = FakeGateway()
     adapter = _adapter(gateway, channel)
+    fetched: list[str] = []
 
     async def fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
-        return 200, b"img"
+        fetched.append(url)
+        return 200, b"cdn-should-not-run"
 
     adapter._media_fetch = fetch  # type: ignore[attr-defined]
     adapter._media_resolve = lambda _host: ["1.2.3.4"]  # type: ignore[attr-defined]
-    attachment = SimpleNamespace(
-        filename="a.png",
-        content_type="image/png",
-        url="https://cdn.discordapp.com/attachments/1/a.png",
-        size=3,
-    )
     message = _message(
         content="",
         channel=channel,
         mentions=[_bot_mention()],
     )
-    message.attachments = [attachment]
+    message.attachments = [_discord_attachment()]
     await adapter._handle_message(message)
     assert len(gateway.calls) == 1
     assert gateway.calls[0].metadata["attachments"][0]["bytes"] == b"img"
+    assert fetched == []
+
+
+async def test_discord_att_read_uses_authenticated_bytes() -> None:
+    from neos.api.channels.media import collect_discord_attachments
+
+    attachments = await collect_discord_attachments(
+        [_discord_attachment(data=b"from-read")]
+    )
+    assert attachments[0]["bytes"] == b"from-read"
+    assert attachments[0]["name"] == "a.png"
+
+
+async def test_discord_att_read_403_is_refused() -> None:
+    from neos.api.channels.media import (
+        DiscordAttachmentRefused,
+        collect_discord_attachments,
+    )
+
+    with pytest.raises(DiscordAttachmentRefused) as exc_info:
+        await collect_discord_attachments(
+            [_discord_attachment(error=OSError("HTTP 403"))]
+        )
+    assert exc_info.value.reason == "read_failed"
+
+
+async def test_discord_missing_read_is_refused() -> None:
+    from neos.api.channels.media import (
+        DiscordAttachmentRefused,
+        collect_discord_attachments,
+    )
+
+    with pytest.raises(DiscordAttachmentRefused) as exc_info:
+        await collect_discord_attachments([_discord_attachment(omit_read=True)])
+    assert exc_info.value.reason == "missing_read"
+
+
+async def test_discord_oversized_attachment_is_skipped() -> None:
+    from neos.api.channels.media import (
+        MAX_INBOUND_MEDIA_BYTES,
+        collect_discord_attachments,
+    )
+
+    attachments = await collect_discord_attachments(
+        [
+            _discord_attachment(
+                filename="huge.bin",
+                size=MAX_INBOUND_MEDIA_BYTES + 1,
+                data=b"x",
+            ),
+            _discord_attachment(filename="ok.png", data=b"ok"),
+        ]
+    )
+    assert [item["name"] for item in attachments] == ["ok.png"]
+    assert attachments[0]["bytes"] == b"ok"
+
+
+async def test_discord_partial_read_failure_refuses_all() -> None:
+    from neos.api.channels.media import (
+        DiscordAttachmentRefused,
+        collect_discord_attachments,
+    )
+
+    with pytest.raises(DiscordAttachmentRefused):
+        await collect_discord_attachments(
+            [
+                _discord_attachment(filename="ok.png", data=b"ok"),
+                _discord_attachment(
+                    filename="bad.png", error=OSError("HTTP 403")
+                ),
+            ]
+        )
+
+
+async def test_discord_read_failure_does_not_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.api.channels.test_discord_adapter import (
+        CHANNEL_ID,
+        USER_ID,
+        FakeChannel,
+        FakeGateway,
+        _adapter,
+        _message,
+        _bot_mention,
+    )
+
+    install_channel_settings(
+        monkeypatch, allowed_users=[str(USER_ID)], inbound_media=True
+    )
+    channel = FakeChannel(CHANNEL_ID)
+    gateway = FakeGateway()
+    adapter = _adapter(gateway, channel)
+    fetched: list[str] = []
+
+    async def fetch(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        fetched.append(url)
+        return 200, b"cdn"
+
+    adapter._media_fetch = fetch  # type: ignore[attr-defined]
+    adapter._media_resolve = lambda _host: ["1.2.3.4"]  # type: ignore[attr-defined]
+    message = _message(
+        content="look at this",
+        channel=channel,
+        mentions=[_bot_mention()],
+    )
+    message.attachments = [_discord_attachment(error=OSError("HTTP 403"))]
+    await adapter._handle_message(message)
+    assert gateway.calls == []
+    assert fetched == []
+    assert channel.sent == ["Could not read the attached file."]
 
 
 async def test_telegram_empty_photo_dispatches_when_media_on(

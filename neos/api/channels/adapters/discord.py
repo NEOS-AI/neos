@@ -161,15 +161,21 @@ class DiscordAdapter(ChannelAdapterBase):
             "idempotency_key": str(raw.id),
         }
         if settings.config.channels.inbound_media:
-            from neos.api.channels.media import collect_discord_attachments
-
-            attachments = await collect_discord_attachments(
-                list(getattr(raw, "attachments", None) or []),
-                fetch=getattr(self, "_media_fetch", None),
-                resolve_host=getattr(self, "_media_resolve", None),
+            from neos.api.channels.media import (
+                DiscordAttachmentRefused,
+                collect_discord_attachments,
             )
-            if attachments:
-                metadata["attachments"] = attachments
+
+            try:
+                attachments = await collect_discord_attachments(
+                    list(getattr(raw, "attachments", None) or []),
+                )
+            except DiscordAttachmentRefused as exc:
+                metadata["attachments_error"] = exc.reason
+                metadata["attachments_error_name"] = exc.name
+            else:
+                if attachments:
+                    metadata["attachments"] = attachments
         return ChannelMessage(
             user_id=user_id,
             session_id=_discord_session_id(raw),
@@ -308,6 +314,19 @@ class DiscordAdapter(ChannelAdapterBase):
 
         try:
             channel_message = await self.receive_message(message)
+            if (channel_message.metadata or {}).get("attachments_error"):
+                logger.info(
+                    "[DiscordAdapter] attachment refused reason=%s name=%s",
+                    channel_message.metadata.get("attachments_error"),
+                    channel_message.metadata.get("attachments_error_name"),
+                )
+                await self.send_response(
+                    channel_message.channel_id,
+                    "Could not read the attached file.",
+                    thread_id=str(channel_message.metadata.get("thread_id") or "")
+                    or None,
+                )
+                return
             logger.info(
                 "[DiscordAdapter] Received: channel_id=%s text=%r",
                 channel_message.channel_id,
