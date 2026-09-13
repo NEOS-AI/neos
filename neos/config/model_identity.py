@@ -15,8 +15,87 @@ if TYPE_CHECKING:
 
 _KNOWN_PREFIXES = frozenset({"anthropic", "openai", "google", "gemini", "xai"})
 _MAX_REMAP_HOPS = 4
+RESERVED_WINDOW_CAP = 20_000
 
 IdentitySource = Literal["role_alias", "pin", "remap", "gateway", "id_form"]
+
+
+def reserved_tokens(window: int) -> int:
+    """Hooks/lessons/instructions must not eat the usable window."""
+    if window <= 0:
+        return 0
+    return min(RESERVED_WINDOW_CAP, window // 10)
+
+
+def usable_window_tokens(
+    *,
+    context_window: int | None,
+    max_output_tokens: int,
+    input_limit: int | None = None,
+    thinking_budget: int = 0,
+) -> int | None:
+    """usable = (input_limit ?? window − max_out) − reserved − thinking.
+
+    Unknown models (no window and no input_limit) return None so callers
+    keep request shaping and fall back to the 80k compact constant.
+    """
+    if input_limit is not None:
+        raw = input_limit
+        window = context_window if context_window is not None else input_limit
+    elif context_window is not None:
+        raw = context_window - max_output_tokens
+        window = context_window
+    else:
+        return None
+    return max(0, raw - reserved_tokens(window) - max(0, thinking_budget))
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogWindow:
+    context_window: int | None
+    input_limit: int | None
+    thinking_budget: int
+    usable: int | None
+
+
+def catalog_window_for(
+    raw: str,
+    *,
+    catalog: ModelCatalog,
+    max_output_tokens: int,
+) -> CatalogWindow:
+    """Resolve a catalog pin to window fields. Unknown models stay empty."""
+    ident = canonicalize(raw, catalog=catalog, apply_remap=False)
+    if ident is None:
+        return CatalogWindow(None, None, 0, None)
+    spec = catalog.models.get(ident.catalog_id)
+    if spec is None:
+        return CatalogWindow(None, None, 0, None)
+    budgets = spec.thinking_budgets or {}
+    thinking = int(budgets.get("default") or 0)
+    usable = usable_window_tokens(
+        context_window=spec.context_window,
+        max_output_tokens=max_output_tokens,
+        input_limit=spec.input_limit,
+        thinking_budget=thinking,
+    )
+    return CatalogWindow(
+        context_window=spec.context_window,
+        input_limit=spec.input_limit,
+        thinking_budget=thinking,
+        usable=usable,
+    )
+
+
+def usable_window_for(
+    raw: str,
+    *,
+    catalog: ModelCatalog,
+    max_output_tokens: int,
+) -> int | None:
+    return catalog_window_for(
+        raw, catalog=catalog, max_output_tokens=max_output_tokens
+    ).usable
 
 
 class RemapCycleError(ValueError):

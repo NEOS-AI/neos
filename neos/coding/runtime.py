@@ -20,13 +20,19 @@ from neos.coding.application.workspace_stream_service import (
 )
 from neos.coding.loop.base import CodingLoop
 from neos.coding.loop.fake import FakeDurableCodingLoop
-from neos.coding.loop.durable import CodingLoopConfig, DurableCodingLoop
+from neos.coding.loop.durable import (
+    DEFAULT_MAX_TRANSCRIPT_TOKENS,
+    CodingLoopConfig,
+    DurableCodingLoop,
+)
 from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
 from neos.dataset.adapters import TrackedCodingModel
 from neos.config.coding_selection import (
     coding_credential_for,
     resolve_coding_selection_from_app,
 )
+from neos.config.model_config import model_config, resolve_coding_rate_micros
+from neos.config.model_identity import catalog_window_for
 from neos.utils.llm_factory import create_coding_model
 from neos.coding.managed.adapters import (
     DockerShadowManagedAdapter,
@@ -633,6 +639,18 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
     )
+    window = catalog_window_for(
+        coding_model,
+        catalog=model_config.catalog,
+        max_output_tokens=coding.max_output_tokens,
+    )
+    rates = resolve_coding_rate_micros(
+        provider=selection.provider,
+        model=coding_model,
+        input_cost_micros_per_million=coding.input_cost_micros_per_million,
+        output_cost_micros_per_million=coding.output_cost_micros_per_million,
+        catalog=model_config.catalog,
+    )
     loop_config = CodingLoopConfig(
         model=coding_model,
         provider=selection.provider,
@@ -649,8 +667,14 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_tools=coding.max_tool_calls,
         max_consecutive_tool_errors=coding.max_consecutive_tool_errors,
         max_cost_micros=int(coding.max_cost_usd * 1_000_000),
-        input_cost_micros_per_million=(coding.input_cost_micros_per_million),
-        output_cost_micros_per_million=(coding.output_cost_micros_per_million),
+        input_cost_micros_per_million=rates.input,
+        output_cost_micros_per_million=rates.output,
+        cache_write_cost_micros_per_million=rates.cache_write,
+        cache_read_cost_micros_per_million=rates.cache_read,
+        context_window=window.context_window,
+        input_limit=window.input_limit,
+        thinking_budget=window.thinking_budget,
+        max_transcript_tokens=window.usable or DEFAULT_MAX_TRANSCRIPT_TOKENS,
         max_transcript_bytes=coding.max_transcript_bytes,
         max_text_delta_bytes=coding.max_text_delta_bytes,
         max_public_text_bytes=coding.max_public_text_bytes,

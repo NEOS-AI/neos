@@ -18,6 +18,9 @@
 #   wire_id      프로바이더에 보내는 id. 기본은 카탈로그 키
 #   id_forms     추가로 받는 철자. 날짜 접미사를 지어내지 않는다
 #   aux          헬퍼 슬롯(fast|title|artifact) → 카탈로그 핀
+#   context_window  전체 창. 없으면 compact 는 80k 폴백 (요청 형태는 유지)
+#   input_limit     선택. 있으면 usable 의 출발점 (window − max_out 대신)
+#   thinking_budgets  선택 {default, max, ...}. usable 에서 default 를 뺀다
 #
 # 선언 순서가 list_models() 순서다. 최신 → 레거시 순을 유지할 것.
 
@@ -29,6 +32,7 @@ models:
     thinking: adaptive
     description: "Anthropic Claude Sonnet 5"
     max_tokens: 8192
+    context_window: 200000
     vision: true
     role_alias: sonnet-5
     gateway_id: anthropic/claude-sonnet-5
@@ -44,6 +48,7 @@ models:
     thinking: adaptive
     description: "Anthropic Claude Opus 5"
     max_tokens: 8192
+    context_window: 200000
     vision: true
     role_alias: opus-5
     gateway_id: anthropic/claude-opus-5
@@ -75,6 +80,7 @@ models:
     thinking: adaptive
     description: "Anthropic Claude Opus 4.8 (deep-analysis judge)"
     max_tokens: 8192
+    context_window: 200000
     vision: true
     pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
 
@@ -84,6 +90,7 @@ models:
     thinking: budgeted
     description: "Anthropic Claude Haiku 4.5"
     max_tokens: 8192
+    context_window: 200000
     vision: true
     role_alias: haiku-4.5
     gateway_id: anthropic/claude-haiku-4.5
@@ -97,6 +104,7 @@ models:
   claude-sonnet-4-5-20250929:
     provider: anthropic
     thinking: budgeted
+    context_window: 200000
     vision: true
     gateway_id: anthropic/claude-sonnet-4.5
     id_forms: [claude-sonnet-4-5, claude-sonnet-4.5]
@@ -120,6 +128,7 @@ models:
     provider: anthropic
     thinking: budgeted
     selectable: false
+    context_window: 200000
     vision: true
     pricing: {input: 3.00, output: 15.00, cache_creation: 3.75, cache_read: 0.30}
 
@@ -127,6 +136,7 @@ models:
     provider: anthropic
     thinking: budgeted
     selectable: false
+    context_window: 200000
     vision: true
     pricing: {input: 15.00, output: 75.00, cache_creation: 18.75, cache_read: 1.50}
 
@@ -177,6 +187,7 @@ models:
     selectable: false
     description: "OpenAI GPT-4o Vision"
     max_tokens: 4096
+    context_window: 128000
     vision: true
     pricing: {input: 2.50, output: 10.00}
 
@@ -184,6 +195,7 @@ models:
     provider: openai
     thinking: none
     selectable: false
+    context_window: 128000
     vision: true
     pricing: {input: 0.15, output: 0.60}
 
@@ -191,12 +203,14 @@ models:
     provider: openai
     thinking: none
     selectable: false
+    context_window: 128000
     pricing: {input: 10.00, output: 30.00}
 
   gpt-3.5-turbo:
     provider: openai
     thinking: none
     selectable: false
+    context_window: 16385
     pricing: {input: 0.50, output: 1.50}
 
   gpt-4-turbo-preview:
@@ -205,6 +219,7 @@ models:
     selectable: false
     description: "OpenAI GPT-4 Turbo"
     max_tokens: 4096
+    context_window: 128000
     # 가격 미상. aliases.llm.gpt4가 가리키는 레거시 별칭 대상이다.
 
   text-embedding-3-small:
@@ -233,6 +248,7 @@ models:
     provider: gemini
     tiers: [fast]
     thinking: none
+    context_window: 1048576
     vision: true
 
   gemini-2.5-flash-lite:
@@ -240,6 +256,7 @@ models:
     thinking: none
     vision: true
     description: "Google Gemini 2.5 Flash Lite"
+    context_window: 1048576
 
   gemini-1.5-pro-latest:
     provider: gemini
@@ -247,6 +264,7 @@ models:
     thinking: none
     description: "Google Gemini 1.5 Pro"
     max_tokens: 8192
+    context_window: 2097152
     vision: true
 
   # ---- Ollama (tier만 이관. list_models()는 라이브 서버 조회 유지) ----

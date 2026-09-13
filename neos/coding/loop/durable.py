@@ -46,6 +46,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
+from neos.config.model_identity import usable_window_tokens
 from neos.coding.phases import (
     CodingAgentPhase,
     durable_phase_kind,
@@ -149,6 +150,11 @@ class CodingLoopConfig:
     max_cost_micros: int = 100_000_000
     input_cost_micros_per_million: int = 0
     output_cost_micros_per_million: int = 0
+    cache_write_cost_micros_per_million: int = 0
+    cache_read_cost_micros_per_million: int = 0
+    context_window: int | None = None
+    input_limit: int | None = None
+    thinking_budget: int = 0
     max_transcript_messages: int = 100
     max_transcript_bytes: int = 1_048_576
     max_transcript_tokens: int = DEFAULT_MAX_TRANSCRIPT_TOKENS
@@ -198,8 +204,16 @@ class CodingLoopConfig:
         if (
             self.input_cost_micros_per_million < 0
             or self.output_cost_micros_per_million < 0
+            or self.cache_write_cost_micros_per_million < 0
+            or self.cache_read_cost_micros_per_million < 0
         ):
             raise ValueError("coding model prices cannot be negative")
+        if self.context_window is not None and self.context_window <= 0:
+            raise ValueError("coding loop configuration limits must be positive")
+        if self.input_limit is not None and self.input_limit <= 0:
+            raise ValueError("coding loop configuration limits must be positive")
+        if self.thinking_budget < 0:
+            raise ValueError("coding loop configuration limits must be positive")
 
 
 _EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
@@ -1774,13 +1788,11 @@ class DurableCodingLoop:
         )
         in_tokens, out_tokens = _usage_tokens(completion)
         cache_read, cache_write, reasoning = _usage_window(completion)
-        cost = (
-            state.cost_micros
-            + (
-                in_tokens * self._config.input_cost_micros_per_million
-                + out_tokens * self._config.output_cost_micros_per_million
-            )
-            // 1_000_000
+        cost = state.cost_micros + self._price_tokens(
+            in_tokens,
+            out_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
         reset_empty = bool(calls) or not _is_empty_or_think_only(text)
         return replace(
@@ -1931,7 +1943,14 @@ class DurableCodingLoop:
         )
 
     def _check_usage_budgets(self, state):
-        if state.input_tokens + state.output_tokens > self._config.max_total_tokens:
+        spent = (
+            state.input_tokens
+            + state.output_tokens
+            + state.cache_read_tokens
+            + state.cache_write_tokens
+            + state.reasoning_tokens
+        )
+        if spent > self._config.max_total_tokens:
             raise CodingLoopFailure("token_budget_exceeded", retryable=False)
         if state.cost_micros > self._config.max_cost_micros:
             raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
@@ -2072,7 +2091,39 @@ class DurableCodingLoop:
         max_output_tokens = self._config.max_output_tokens
         if state.output_token_escalations:
             max_output_tokens = min(max_output_tokens * 4, 64_000)
-        return ModelLimits(max_output_tokens, self._config.timeout_sec)
+        return ModelLimits(
+            max_output_tokens,
+            self._config.timeout_sec,
+            context_window=self._config.context_window,
+            input_limit=self._config.input_limit,
+            thinking_budget=self._config.thinking_budget,
+        )
+
+    def _transcript_token_limit(self) -> int:
+        usable = usable_window_tokens(
+            context_window=self._config.context_window,
+            max_output_tokens=self._config.max_output_tokens,
+            input_limit=self._config.input_limit,
+            thinking_budget=self._config.thinking_budget,
+        )
+        if usable is None:
+            return self._config.max_transcript_tokens
+        return usable
+
+    def _price_tokens(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+    ) -> int:
+        return (
+            input_tokens * self._config.input_cost_micros_per_million
+            + output_tokens * self._config.output_cost_micros_per_million
+            + cache_write_tokens * self._config.cache_write_cost_micros_per_million
+            + cache_read_tokens * self._config.cache_read_cost_micros_per_million
+        ) // 1_000_000
 
     async def _compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
         before = state.transcript
@@ -2553,10 +2604,7 @@ class DurableCodingLoop:
         else:
             in_tokens = int(folded.input_tokens or 0)
             out_tokens = int(folded.output_tokens or 0)
-        priced = (
-            in_tokens * self._config.input_cost_micros_per_million
-            + out_tokens * self._config.output_cost_micros_per_million
-        ) // 1_000_000
+        priced = self._price_tokens(in_tokens, out_tokens)
         return in_tokens, out_tokens, priced
 
     def _unrolled_child_usage(
@@ -2573,10 +2621,7 @@ class DurableCodingLoop:
     ) -> AgentLoopState:
         in_tokens = max(0, int(input_tokens or 0))
         out_tokens = max(0, int(output_tokens or 0))
-        child_cost = (
-            in_tokens * self._config.input_cost_micros_per_million
-            + out_tokens * self._config.output_cost_micros_per_million
-        ) // 1_000_000
+        child_cost = self._price_tokens(in_tokens, out_tokens)
         self._record_fold_rollup(in_tokens, out_tokens, child_cost)
         return replace(
             state,
@@ -3023,6 +3068,9 @@ class DurableCodingLoop:
                     cost_micros=int(raw.get("cost_micros", 0)),
                     input_tokens=int(raw.get("input_tokens", 0)),
                     output_tokens=int(raw.get("output_tokens", 0)),
+                    cache_read_tokens=_nonneg_int(raw.get("cache_read_tokens")),
+                    cache_write_tokens=_nonneg_int(raw.get("cache_write_tokens")),
+                    reasoning_tokens=_nonneg_int(raw.get("reasoning_tokens")),
                 )
                 transcript = applied.transcript
                 bodies = applied.bodies
@@ -3100,6 +3148,9 @@ class DurableCodingLoop:
         cost_micros: int,
         input_tokens: int,
         output_tokens: int,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        reasoning_tokens: int = 0,
     ):
         from neos.coding.commands.interpret import interpret_coding_command
         from neos.coding.commands.parse import sanitize_command_args
@@ -3143,9 +3194,19 @@ class DurableCodingLoop:
                 False,
             )
         if spec_name == "cost":
-            notice = (
-                f"cost_micros={cost_micros} "
-                f"tokens={input_tokens}+{output_tokens}"
+            from neos.coding.commands.service import format_cost_parts
+
+            notice = " ".join(
+                format_cost_parts(
+                    {
+                        "cost_micros": cost_micros,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "cache_read_tokens": cache_read_tokens,
+                        "cache_write_tokens": cache_write_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                    }
+                )
             )
             return _AppliedPendingCommand(
                 self._append_user_meta(transcript, notice),
@@ -3322,7 +3383,7 @@ class DurableCodingLoop:
             or self._serialized_bytes(transcript)
             > self._config.max_transcript_bytes
             or self._estimated_tokens(transcript)
-            > self._config.max_transcript_tokens
+            > self._transcript_token_limit()
         )
 
     def _over_bytes(self, transcript) -> bool:

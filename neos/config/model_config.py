@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from neos.config.model_identity import (
     RemapCycleError,
@@ -103,6 +104,9 @@ class ModelSpec(StrictConfigModel):
     # list_models() 노출 여부. 가격만 아는 레거시 모델은 false.
     selectable: bool = True
     max_tokens: int | None = None
+    context_window: int | None = Field(default=None, gt=0)
+    input_limit: int | None = Field(default=None, gt=0)
+    thinking_budgets: dict[str, int] = Field(default_factory=dict)
     description: str | None = None
     # 이미지·PDF 입력을 받는가. 유일한 독자는 첨부 게이트
     # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
@@ -119,6 +123,17 @@ class ModelSpec(StrictConfigModel):
     # 추가로 받는 철자. 날짜 접미사를 지어내지 않는다.
     id_forms: list[str] = Field(default_factory=list)
     picker: PickerSpec | None = None
+
+    @field_validator("thinking_budgets")
+    @classmethod
+    def _thinking_budgets_nonneg(cls, value: dict[str, int]) -> dict[str, int]:
+        cleaned: dict[str, int] = {}
+        for key, tokens in value.items():
+            count = int(tokens)
+            if count < 0:
+                raise ValueError(f"thinking_budgets.{key} cannot be negative")
+            cleaned[str(key)] = count
+        return cleaned
 
 
 #: 프롬프트 캐시 최소 입력 토큰의 기본값. 가족이 값을 선언하지 않거나
@@ -345,6 +360,22 @@ class ModelCatalog(StrictConfigModel):
         if spec is None or spec.provider != provider:
             return None
         return spec.pricing
+
+    def rate_micros_for(
+        self,
+        provider: str,
+        model: str,
+        *,
+        input_cost_micros_per_million: int,
+        output_cost_micros_per_million: int,
+    ) -> CodingRateMicros:
+        return resolve_coding_rate_micros(
+            provider=provider,
+            model=model,
+            input_cost_micros_per_million=input_cost_micros_per_million,
+            output_cost_micros_per_million=output_cost_micros_per_million,
+            catalog=self,
+        )
 
     def _anthropic_family_for(self, model: str) -> AnthropicFamily | None:
         """`model` 에 걸리는 가족. 가장 **긴** 접두사가 이긴다.
@@ -577,6 +608,9 @@ class ModelConfig:
                 "wire_id",
                 "id_forms",
                 "picker",
+                "context_window",
+                "input_limit",
+                "thinking_budgets",
             },
         )
         entry["model_id"] = model_id
@@ -721,6 +755,44 @@ def thinking_contract(model: str) -> ThinkingContract:
 
 def pricing_for(provider: str, model: str) -> ModelPricing | None:
     return model_config.catalog.pricing_for(provider, model)
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRateMicros:
+    input: int
+    output: int
+    cache_write: int
+    cache_read: int
+
+
+def _usd_to_micros(usd: float) -> int:
+    return int(round(float(usd) * 1_000_000))
+
+
+def resolve_coding_rate_micros(
+    *,
+    provider: str,
+    model: str,
+    input_cost_micros_per_million: int,
+    output_cost_micros_per_million: int,
+    catalog: ModelCatalog | None = None,
+) -> CodingRateMicros:
+    """Operator prices win when set. Zeros and cache rates use the catalog."""
+    ident = canonicalize(model, catalog=catalog or model_config.catalog, apply_remap=False)
+    pin = ident.catalog_id if ident is not None else model
+    pricing = (catalog or model_config.catalog).pricing_for(provider, pin)
+    inp = input_cost_micros_per_million
+    out = output_cost_micros_per_million
+    cache_write = 0
+    cache_read = 0
+    if pricing is not None:
+        if inp <= 0:
+            inp = _usd_to_micros(pricing.input)
+        if out <= 0:
+            out = _usd_to_micros(pricing.output)
+        cache_write = _usd_to_micros(pricing.cache_creation)
+        cache_read = _usd_to_micros(pricing.cache_read)
+    return CodingRateMicros(inp, out, cache_write, cache_read)
 
 
 def canonical_model_family(model: str) -> str | None:

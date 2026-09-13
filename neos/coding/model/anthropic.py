@@ -46,6 +46,8 @@ class AnthropicCodingModel:
     ) -> AsyncIterator[ModelEvent]:
         buffers: dict[int, ToolArgumentBuffer] = {}
         input_tokens = 0
+        cache_read_tokens = 0
+        cache_write_tokens = 0
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
                 async with self._client.messages.stream(
@@ -56,7 +58,14 @@ class AnthropicCodingModel:
                         if event_type == "message_start":
                             usage = getattr(raw.message, "usage", None)
                             input_tokens = int(
-                                getattr(usage, "input_tokens", 0)
+                                getattr(usage, "input_tokens", 0) or 0
+                            )
+                            cache_read_tokens = int(
+                                getattr(usage, "cache_read_input_tokens", 0) or 0
+                            )
+                            cache_write_tokens = int(
+                                getattr(usage, "cache_creation_input_tokens", 0)
+                                or 0
                             )
                             continue
                         if event_type == "content_block_start":
@@ -108,6 +117,13 @@ class AnthropicCodingModel:
                                 usage=ModelUsage(
                                     input_tokens=input_tokens,
                                     output_tokens=output_tokens,
+                                    cache_read_tokens=cache_read_tokens,
+                                    cache_write_tokens=cache_write_tokens,
+                                    reasoning_tokens=int(
+                                        getattr(usage, "reasoning_tokens", 0)
+                                        or getattr(usage, "thinking_tokens", 0)
+                                        or 0
+                                    ),
                                 ),
                             )
         except CodingModelError:

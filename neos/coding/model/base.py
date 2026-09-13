@@ -4,15 +4,34 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
+from neos.config.model_identity import usable_window_tokens
+
 
 @dataclass(frozen=True, slots=True)
 class ModelLimits:
     max_output_tokens: int
     timeout_sec: float
+    context_window: int | None = None
+    input_limit: int | None = None
+    thinking_budget: int = 0
 
     def __post_init__(self) -> None:
         if self.max_output_tokens < 1 or self.timeout_sec <= 0:
             raise ValueError("model limits must be positive")
+        if self.context_window is not None and self.context_window <= 0:
+            raise ValueError("model limits must be positive")
+        if self.input_limit is not None and self.input_limit <= 0:
+            raise ValueError("model limits must be positive")
+        if self.thinking_budget < 0:
+            raise ValueError("model limits must be positive")
+
+    def usable_tokens(self) -> int | None:
+        return usable_window_tokens(
+            context_window=self.context_window,
+            max_output_tokens=self.max_output_tokens,
+            input_limit=self.input_limit,
+            thinking_budget=self.thinking_budget,
+        )
 
 
 @dataclass(frozen=True, slots=True)
