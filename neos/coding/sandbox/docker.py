@@ -222,7 +222,7 @@ except NotImplementedError:
 _SEARCH_TEXT_HELPER = (
     IGNORE_RUNTIME
     + """
-import fnmatch, json, re, sys
+import json, re, sys
 from pathlib import Path
 query, regex, limit, before, after, output_mode, ignore_case, multiline, max_columns, search_path, exclude_json, *patterns = sys.argv[1:]
 flags = 0
@@ -256,8 +256,14 @@ def is_binary(item):
         return True
 
 def matches_glob(relative, pattern):
-    return fnmatch.fnmatch(relative, pattern) or (
-        pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
+    if pattern.endswith('/**'):
+        return relative.startswith(pattern[:-3].rstrip('/') + '/')
+    try:
+        if Path(relative).match(pattern):
+            return True
+    except (ValueError, OSError):
+        return False
+    return pattern.startswith('**/') and Path(relative).match(pattern[3:])
 
 def clip(line):
     if max_columns <= 0:

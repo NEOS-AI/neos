@@ -310,6 +310,8 @@ def test_docker_helpers_do_not_follow_dir_symlinks_and_cap_reads() -> None:
     assert ".sl" in _GLOB_FILES_HELPER
     assert "exclude_json" in _SEARCH_TEXT_HELPER
     assert "encode('utf-8')" in _SEARCH_TEXT_HELPER
+    assert "endswith('/**')" in _SEARCH_TEXT_HELPER
+    assert "Path(relative).match(pattern)" in _SEARCH_TEXT_HELPER
 
 
 def test_write_file_helper_fsyncs_before_replace() -> None:

@@ -528,6 +528,7 @@ async def test_search_text_exclude_glob_and_line_byte_cap(
     session = await provider.open_session(sandbox.sandbox_id)
     await session.write_file("src/keep.py", b"needle\n")
     await session.write_file("src/skip.min.js", b"needle\n")
+    await session.write_file("src/nested/deep.py", b"needle\n")
     await session.write_file("vendor/lib.py", b"needle\n")
     await session.write_file("wide.py", "한한needle\n".encode())
 
@@ -541,8 +542,20 @@ async def test_search_text_exclude_glob_and_line_byte_cap(
         max_columns=3,
     )
 
-    assert {match.path for match in filtered} == {"src/keep.py", "wide.py"}
+    assert {match.path for match in filtered} == {
+        "src/keep.py",
+        "src/nested/deep.py",
+        "wide.py",
+    }
     assert clipped[0].text == "한"
+
+    one_level = await session.search_text("needle", exclude=("src/*.py",))
+    assert {match.path for match in one_level} == {
+        "src/skip.min.js",
+        "src/nested/deep.py",
+        "vendor/lib.py",
+        "wide.py",
+    }
     await provider.close()
 
 
