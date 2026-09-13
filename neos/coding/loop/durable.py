@@ -573,6 +573,13 @@ class DurableCodingLoop:
                 cache_read_tokens=state.cache_read_tokens + cache_read,
                 cache_write_tokens=state.cache_write_tokens + cache_write,
                 reasoning_tokens=state.reasoning_tokens + reasoning,
+                cost_micros=state.cost_micros
+                + self._price_tokens(
+                    in_tokens,
+                    out_tokens,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cache_write,
+                ),
             )
             self._check_usage_budgets(retry_state)
             committed = await deps.repository.commit_model_checkpoint(

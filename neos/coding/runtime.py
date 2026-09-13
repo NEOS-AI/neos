@@ -674,7 +674,11 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         context_window=window.context_window,
         input_limit=window.input_limit,
         thinking_budget=window.thinking_budget,
-        max_transcript_tokens=window.usable or DEFAULT_MAX_TRANSCRIPT_TOKENS,
+        max_transcript_tokens=(
+            DEFAULT_MAX_TRANSCRIPT_TOKENS
+            if window.usable is None
+            else max(1, window.usable)
+        ),
         max_transcript_bytes=coding.max_transcript_bytes,
         max_text_delta_bytes=coding.max_text_delta_bytes,
         max_public_text_bytes=coding.max_public_text_bytes,
