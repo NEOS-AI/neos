@@ -1793,8 +1793,12 @@ class DurableCodingLoop:
         if content:
             transcript += (CanonicalMessage("assistant", tuple(content)),)
         bodies = dict(state.compacted_bodies)
+        before_compact = transcript
         transcript = await self._compact_with_hook(
             transcript, preserve_tools=bool(calls), bodies=bodies
+        )
+        revealed = state.revealed_tools | self._revealed_from_transcript(
+            before_compact
         )
         in_tokens, out_tokens = _usage_tokens(completion)
         cache_read, cache_write, reasoning = _usage_window(completion)
@@ -1820,6 +1824,7 @@ class DurableCodingLoop:
             cost_micros=cost,
             terminal_pending=False,
             compacted_bodies=bodies,
+            revealed_tools=revealed,
             empty_retry_count=0 if reset_empty else state.empty_retry_count,
         )
 
@@ -2023,6 +2028,31 @@ class DurableCodingLoop:
             instructions_loaded=True,
         )
 
+    def _revealed_from_transcript(
+        self, transcript: Sequence[CanonicalMessage]
+    ) -> frozenset[str]:
+        deferred = frozenset(self._tools.deferred_tool_names())
+        search_ids: set[str] = set()
+        names: set[str] = set()
+        for message in transcript:
+            for item in message.content:
+                if isinstance(item, ToolUseContent):
+                    if item.name == "search_tools.v1":
+                        search_ids.add(item.tool_call_id)
+                    elif item.name in deferred:
+                        names.add(item.name)
+                elif (
+                    isinstance(item, ToolResultContent)
+                    and item.tool_call_id in search_ids
+                ):
+                    entries = item.content.get("entries")
+                    if not isinstance(entries, (list, tuple)):
+                        continue
+                    for entry in entries:
+                        if isinstance(entry, Mapping) and entry.get("name"):
+                            names.add(str(entry["name"]))
+        return frozenset(names)
+
     def _tool_definitions(self, state: AgentLoopState):
         method = self._tools.definitions
         try:
@@ -2160,6 +2190,8 @@ class DurableCodingLoop:
             compacted_bodies=bodies,
             instructions_loaded=False,
             summary=summary,
+            revealed_tools=state.revealed_tools
+            | self._revealed_from_transcript(before),
         )
 
     def _recent_read_preview(self, state: AgentLoopState) -> str:
@@ -2204,6 +2236,8 @@ class DurableCodingLoop:
             transcript=after,
             transcript_digest=self._digest(after),
             prompt_compact_retries=state.prompt_compact_retries + 1,
+            revealed_tools=state.revealed_tools
+            | self._revealed_from_transcript(state.transcript),
         )
 
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
@@ -3061,6 +3095,7 @@ class DurableCodingLoop:
         todos = tuple(
             dict(item) for item in raw_todos if isinstance(item, Mapping)
         )
+        pre_revealed = self._revealed_from_transcript(transcript)
         if isinstance(pending_instruction, str) and pending_instruction:
             if not has_open_tool_pair:
                 applied = self._apply_pending_command(
@@ -3113,7 +3148,8 @@ class DurableCodingLoop:
             output_token_escalations=int(raw.get("output_token_escalations", 0)),
             llm_compact_attempts=int(raw.get("llm_compact_attempts", 0)),
             summary=str(raw.get("summary") or ""),
-            revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ()),
+            revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ())
+            | pre_revealed,
             allowed_tools=frozenset(str(name) for name in raw.get("allowed_tools") or ()),
             approved_always=frozenset(
                 str(name) for name in raw.get("approved_always") or ()

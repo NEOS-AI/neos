@@ -493,6 +493,85 @@ async def test_llm_compact_keeps_tool_result_ref_bodies() -> None:
     assert dumped["summary"] == "compressed facts"
 
 
+def _search_tools_transcript() -> tuple[CanonicalMessage, ...]:
+    return (
+        CanonicalMessage("user", (TextContent("Fix it"),)),
+        CanonicalMessage(
+            "assistant",
+            (ToolUseContent("st1", "search_tools.v1", {"query": "web"}),),
+        ),
+        CanonicalMessage(
+            "tool",
+            (
+                ToolResultContent(
+                    "st1",
+                    "ok",
+                    {
+                        "status": "ok",
+                        "entries": (
+                            {
+                                "name": "web_fetch.v1",
+                                "description": "Fetch a URL",
+                                "input_schema": {"type": "object"},
+                            },
+                        ),
+                    },
+                ),
+            ),
+        ),
+        CanonicalMessage("user", (TextContent("later note " + ("x" * 40)),)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_compact_keeps_revealed_tool_definitions() -> None:
+    h = harness(
+        [[TextDelta("facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
+    )
+    state = replace(
+        h.loop._restore(INPUT, None),
+        transcript=_search_tools_transcript(),
+        revealed_tools=frozenset({"web_fetch.v1"}),
+        llm_compact_attempts=0,
+        instructions_loaded=True,
+    )
+
+    after = await h.loop._compact_after_prompt_too_long(state)
+    names = {tool.name for tool in h.loop._tool_definitions(after)}
+
+    assert "web_fetch.v1" in after.revealed_tools
+    assert "web_fetch.v1" in names
+    dumped = h.loop._dump_state(INPUT, after)
+    restored = h.loop._restore(
+        INPUT,
+        CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW),
+    )
+    assert "web_fetch.v1" in restored.revealed_tools
+    assert "web_fetch.v1" in {
+        tool.name for tool in h.loop._tool_definitions(restored)
+    }
+
+
+@pytest.mark.asyncio
+async def test_compact_recovers_revealed_tools_from_transcript() -> None:
+    h = harness(
+        [[TextDelta("facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
+    )
+    state = replace(
+        h.loop._restore(INPUT, None),
+        transcript=_search_tools_transcript(),
+        revealed_tools=frozenset(),
+        llm_compact_attempts=0,
+        instructions_loaded=True,
+    )
+
+    after = await h.loop._compact_after_prompt_too_long(state)
+    names = {tool.name for tool in h.loop._tool_definitions(after)}
+
+    assert "web_fetch.v1" in after.revealed_tools
+    assert "web_fetch.v1" in names
+
+
 @pytest.mark.asyncio
 async def test_skill_allowed_tools_deny_disallowed_tool() -> None:
     from tests.coding.loop.test_anthropic_loop import tool_call, completed
