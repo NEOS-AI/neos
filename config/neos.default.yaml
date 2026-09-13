@@ -26,6 +26,10 @@ coding_model:
   subagent_enabled: false
   subagent_report_budget_chars: 4000
   subagent_max_active: 1
+  notebook_edit: false
+  image_tool: false
+  pdf_tool: false
+  web_search: false
 
 api:
   v1_prefix: /api/v1

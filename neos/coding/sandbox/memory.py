@@ -22,6 +22,7 @@ from neos.coding.sandbox.base import (
     CommandRequest,
     CommandResult,
     FileEntry,
+    read_byte_cap,
     Sandbox,
     SandboxLimits,
     SandboxNotFound,
@@ -623,6 +624,7 @@ class MemorySandboxSession:
         *,
         offset: int = 1,
         limit: int | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
         await self._require_running()
         item = resolve_readable_workspace_path(self._record.workspace, path)
@@ -630,13 +632,13 @@ class MemorySandboxSession:
             raise SandboxPolicyViolation("workspace_path_is_not_file")
         if offset < 1 or (limit is not None and limit < 1):
             raise SandboxPolicyViolation("invalid_read_request")
-        max_bytes = self._record.sandbox.limits.max_output_bytes
+        cap = read_byte_cap(self._record.sandbox.limits.max_output_bytes, max_bytes)
         if limit is None:
-            if item.stat().st_size > max_bytes:
+            if item.stat().st_size > cap:
                 raise SandboxPolicyViolation("file_read_limit_exceeded")
             return await asyncio.to_thread(item.read_bytes)
         return await asyncio.to_thread(
-            _read_file_range, item, offset, limit, max_bytes
+            _read_file_range, item, offset, limit, cap
         )
 
     async def read_file_for_edit(self, path: str) -> bytes:

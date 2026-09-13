@@ -198,6 +198,16 @@ def test_explicit_coding_model_wins_over_everyday_role() -> None:
     )
 
 
+def test_optional_media_tools_default_off() -> None:
+    config = CodingModelConfig()
+
+    assert config.notebook_edit is False
+    assert config.image_tool is False
+    assert config.pdf_tool is False
+    assert config.web_search is False
+    assert config.pdf_max_pages == 20
+
+
 def test_deferred_tools_threshold_is_removed_and_ignored() -> None:
     config = CodingModelConfig()
     leftover = CodingModelConfig.model_validate({"deferred_tools_threshold": 1})

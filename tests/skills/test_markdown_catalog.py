@@ -38,6 +38,10 @@ def test_coding_catalog_excludes_research_only_names() -> None:
 
     assert "verify" in names
     assert "commit" in names
+    assert "notebook" in names
+    assert "read-image" in names
+    assert "read-pdf" in names
+    assert "web-search" in names
     for name in RESEARCH_ONLY_NAMES:
         assert name not in names
         assert _coding_catalog().get(name) is None
