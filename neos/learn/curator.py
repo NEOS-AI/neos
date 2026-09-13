@@ -16,11 +16,14 @@ class AsyncLessonStore(Protocol):
     async def update(self, lesson: Lesson) -> None: ...
 
 
-def _activity_anchor(lesson: Lesson) -> datetime:
-    stamp = lesson.last_injected_at or lesson.created_at
+def _as_utc(stamp: datetime) -> datetime:
     if stamp.tzinfo is None:
         return stamp.replace(tzinfo=UTC)
     return stamp
+
+
+def _activity_anchor(lesson: Lesson) -> datetime:
+    return _as_utc(lesson.last_injected_at or lesson.created_at)
 
 
 def _never_used(lesson: Lesson) -> bool:
@@ -50,6 +53,7 @@ def _curation_updates(
     stale_days: int,
     archive_days: int,
 ) -> tuple[tuple[Lesson, ...], dict[str, int]]:
+    now = _as_utc(now)
     stale_before = now - timedelta(days=stale_days)
     archive_before = now - timedelta(days=archive_days)
     archived = 0
