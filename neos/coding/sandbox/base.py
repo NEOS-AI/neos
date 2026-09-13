@@ -278,6 +278,7 @@ class SandboxSession(Protocol):
         context: int = 0,
         path: str | None = None,
         max_columns: int = 500,
+        exclude: tuple[str, ...] = (),
     ) -> tuple[SearchMatch, ...]: ...
 
     async def glob_files(

@@ -224,7 +224,7 @@ _SEARCH_TEXT_HELPER = (
     + """
 import fnmatch, json, re, sys
 from pathlib import Path
-query, regex, limit, before, after, output_mode, ignore_case, multiline, max_columns, search_path, *patterns = sys.argv[1:]
+query, regex, limit, before, after, output_mode, ignore_case, multiline, max_columns, search_path, exclude_json, *patterns = sys.argv[1:]
 flags = 0
 if ignore_case == '1':
     flags |= re.IGNORECASE
@@ -234,6 +234,13 @@ expression = re.compile(query if regex == '1' else re.escape(query), flags)
 before = max(0, min(int(before), 20))
 after = max(0, min(int(after), 20))
 max_columns = int(max_columns)
+try:
+    excludes = json.loads(exclude_json)
+    if not isinstance(excludes, list):
+        excludes = []
+except (TypeError, ValueError):
+    excludes = []
+excludes = [str(item) for item in excludes]
 if output_mode not in {'files', 'content', 'count'}:
     output_mode = 'content'
 root = Path('/workspace')
@@ -248,17 +255,29 @@ def is_binary(item):
     except OSError:
         return True
 
+def matches_glob(relative, pattern):
+    return fnmatch.fnmatch(relative, pattern) or (
+        pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
+
+def clip(line):
+    if max_columns <= 0:
+        return line
+    data = line.encode('utf-8')
+    if len(data) <= max_columns:
+        return line
+    return data[:max_columns].decode('utf-8', errors='ignore')
+
 def emit_content(relative, number, column, line, lines):
-    text = line if max_columns <= 0 else line[:max_columns]
     ctx = max(0, number - 1 - before)
     matches.append({'path': relative, 'line': number, 'column': column,
-                    'text': text, 'before': lines[ctx:number - 1],
-                    'after': lines[number:number + after]})
+                    'text': clip(line),
+                    'before': [clip(item) for item in lines[ctx:number - 1]],
+                    'after': [clip(item) for item in lines[number:number + after]]})
 
 def consider_file(item, relative):
-    if not any(fnmatch.fnmatch(relative, pattern) or
-               (pattern.startswith('**/') and fnmatch.fnmatch(relative, pattern[3:]))
-               for pattern in patterns):
+    if not any(matches_glob(relative, pattern) for pattern in patterns):
+        return False
+    if excludes and any(matches_glob(relative, pattern) for pattern in excludes):
         return False
     if is_binary(item):
         return False
@@ -1453,6 +1472,7 @@ class DockerSandboxSession:
         context: int = 0,
         path: str | None = None,
         max_columns: int = 500,
+        exclude: tuple[str, ...] = (),
     ) -> tuple[SearchMatch, ...]:
         if not query or limit < 1:
             raise SandboxPolicyViolation("invalid_search_request")
@@ -1463,6 +1483,8 @@ class DockerSandboxSession:
         before = max(0, min(int(before), 20))
         after = max(0, min(int(after), 20))
         for candidate in paths:
+            normalize_workspace_path(candidate)
+        for candidate in exclude:
             normalize_workspace_path(candidate)
         search_path = ""
         if path is not None:
@@ -1480,6 +1502,7 @@ class DockerSandboxSession:
             "1" if multiline else "0",
             str(max_columns),
             search_path,
+            json.dumps(list(exclude)),
             *paths,
         )
         try:

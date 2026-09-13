@@ -150,8 +150,41 @@ def test_search_text_accepts_grep_schema_extras() -> None:
     assert call.input["context"] == 4
     assert call.input["path"] == "src/lib"
     assert call.input["limit"] == 250
+    assert call.input["head_limit"] is None
+    assert call.input["max_columns"] == 500
+    assert call.input["exclude"] == []
     assert denied.allowed is False
     assert denied.reason_code == "policy_schema_invalid"
+    assert escaped.allowed is False
+    assert escaped.reason_code.startswith("policy_workspace_path_")
+
+
+def test_search_text_accepts_max_columns_head_limit_and_exclude() -> None:
+    call = registry().validate(
+        "search_text.v1",
+        {
+            "query": "needle",
+            "head_limit": 12,
+            "max_columns": 80,
+            "exclude": ["**/*.min.js", "vendor/**"],
+        },
+    )
+    denied_head = registry().decide(
+        "search_text.v1", {"query": "needle", "head_limit": 251}
+    )
+    denied_columns = registry().decide(
+        "search_text.v1", {"query": "needle", "max_columns": -1}
+    )
+    escaped = registry().decide(
+        "search_text.v1", {"query": "needle", "exclude": ["../secret"]}
+    )
+
+    assert call.input["head_limit"] == 12
+    assert call.input["max_columns"] == 80
+    assert call.input["exclude"] == ["**/*.min.js", "vendor/**"]
+    assert denied_head.allowed is False
+    assert denied_head.reason_code == "policy_schema_invalid"
+    assert denied_columns.allowed is False
     assert escaped.allowed is False
     assert escaped.reason_code.startswith("policy_workspace_path_")
 
@@ -941,6 +974,8 @@ def test_execute_environment_names_are_allowlisted() -> None:
         ("search_text.v1", {"query": "x", "after": -1}),
         ("search_text.v1", {"query": "x", "output_mode": "raw"}),
         ("search_text.v1", {"query": "x", "output_mode": "grep"}),
+        ("search_text.v1", {"query": "x", "head_limit": 0}),
+        ("search_text.v1", {"query": "x", "max_columns": 8193}),
         ("glob_files.v1", {"pattern": ""}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 0}),
         ("glob_files.v1", {"pattern": "*.py", "limit": 501}),

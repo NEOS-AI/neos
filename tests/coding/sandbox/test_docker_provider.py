@@ -279,7 +279,7 @@ async def test_session_search_context_and_glob_use_fixed_helpers() -> None:
     assert matches[0].before == ("alpha",)
     assert matches[0].after == ("gamma", "delta")
     assert found == ("src/app.py", "src/util.py")
-    assert runner.calls[-2][-11:] == (
+    assert runner.calls[-2][-12:] == (
         "needle",
         "0",
         "10",
@@ -290,6 +290,7 @@ async def test_session_search_context_and_glob_use_fixed_helpers() -> None:
         "0",
         "500",
         "",
+        "[]",
         "src/**",
     )
     assert runner.calls[-1][-2:] == ("src/*.py", "500")
@@ -307,6 +308,8 @@ def test_docker_helpers_do_not_follow_dir_symlinks_and_cap_reads() -> None:
     assert "max_bytes" in _READ_FILE_HELPER
     assert ".jj" in _SEARCH_TEXT_HELPER
     assert ".sl" in _GLOB_FILES_HELPER
+    assert "exclude_json" in _SEARCH_TEXT_HELPER
+    assert "encode('utf-8')" in _SEARCH_TEXT_HELPER
 
 
 def test_write_file_helper_fsyncs_before_replace() -> None:

@@ -877,6 +877,7 @@ class MemorySandboxSession:
         context: int = 0,
         path: str | None = None,
         max_columns: int = 500,
+        exclude: tuple[str, ...] = (),
     ) -> tuple[SearchMatch, ...]:
         await self._require_running()
         if not query or limit < 1:
@@ -906,6 +907,10 @@ class MemorySandboxSession:
             workspace, root=start, rules=rules
         ):
             if not any(self._matches_path(relative, pattern) for pattern in paths):
+                continue
+            if exclude and any(
+                self._matches_path(relative, pattern) for pattern in exclude
+            ):
                 continue
             if _file_is_binary(item):
                 continue
@@ -1352,6 +1357,15 @@ def _read_file_range(
     return b"".join(chunks)
 
 
+def _clip_line_bytes(line: str, max_columns: int) -> str:
+    if max_columns <= 0:
+        return line
+    encoded = line.encode("utf-8")
+    if len(encoded) <= max_columns:
+        return line
+    return encoded[:max_columns].decode("utf-8", errors="ignore")
+
+
 def _search_match(
     relative: str,
     line_number: int,
@@ -1363,12 +1377,17 @@ def _search_match(
     max_columns: int,
 ) -> SearchMatch:
     start = max(0, line_number - 1 - before)
-    text = line if max_columns <= 0 else line[:max_columns]
     return SearchMatch(
         path=relative,
         line=line_number,
         column=column,
-        text=text,
-        before=tuple(lines[start : line_number - 1]),
-        after=tuple(lines[line_number : line_number + after]),
+        text=_clip_line_bytes(line, max_columns),
+        before=tuple(
+            _clip_line_bytes(item, max_columns)
+            for item in lines[start : line_number - 1]
+        ),
+        after=tuple(
+            _clip_line_bytes(item, max_columns)
+            for item in lines[line_number : line_number + after]
+        ),
     )

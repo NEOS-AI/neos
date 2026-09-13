@@ -369,8 +369,10 @@ class _ListTreeInput(_ToolInput):
 class _SearchTextInput(_ToolInput):
     query: str = Field(min_length=1)
     paths: list[str] = Field(default_factory=lambda: ["**/*"], min_length=1)
+    exclude: list[str] = Field(default_factory=list)
     regex: bool = False
     limit: int = Field(default=100, ge=1, le=250)
+    head_limit: int | None = Field(default=None, ge=1, le=250)
     before: int = Field(default=0, ge=0, le=20)
     after: int = Field(default=0, ge=0, le=20)
     ignore_case: bool = False
@@ -378,6 +380,7 @@ class _SearchTextInput(_ToolInput):
     context: int = Field(default=0, ge=0, le=20)
     path: str | None = None
     output_mode: Literal["files", "content", "count"] = "content"
+    max_columns: int = Field(default=500, ge=0, le=8192)
 
 
 class _GlobFilesInput(_ToolInput):
@@ -558,6 +561,9 @@ class CodingToolRegistry:
             (
                 "Search workspace text. Use this instead of a shell search. "
                 "output_mode files returns unique paths; count returns path + match count. "
+                "max_columns caps each match line in bytes (0 = no cap). "
+                "head_limit caps returned entries and sets truncated when more remain. "
+                "exclude skips matching globs. "
                 "Do not use execute.v1 with rg/grep/find. "
                 "On policy_* denial, do not retry the same query."
             ),
@@ -1023,6 +1029,10 @@ class CodingToolRegistry:
             if "paths" in data:
                 data["paths"] = [
                     str(normalize_workspace_path(path)) for path in data["paths"]
+                ]
+            if "exclude" in data:
+                data["exclude"] = [
+                    str(normalize_workspace_path(path)) for path in data["exclude"]
                 ]
             if "cwd" in data:
                 data["cwd"] = str(normalize_workspace_path(data["cwd"]))

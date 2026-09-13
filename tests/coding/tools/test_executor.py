@@ -500,10 +500,11 @@ async def test_search_text_forwards_before_and_after() -> None:
     forwarded = session.called[1][1]
     assert forwarded["paths"] == ("src",)
     assert forwarded["regex"] is False
-    assert forwarded["limit"] == 10
+    assert forwarded["limit"] == 11
     assert forwarded["before"] == 2
     assert forwarded["after"] == 3
     assert forwarded["output_mode"] == "content"
+    assert forwarded["max_columns"] == 500
     assert result.entries == (
         {
             "path": "a.py",
@@ -600,6 +601,59 @@ async def test_search_text_forwards_grep_schema_extras() -> None:
     assert forwarded["multiline"] is True
     assert forwarded["context"] == 2
     assert forwarded["path"] == "src"
+    assert forwarded["limit"] == 11
+    assert forwarded["max_columns"] == 500
+
+
+@pytest.mark.asyncio
+async def test_search_text_forwards_exclude_and_max_columns() -> None:
+    session = FakeSession()
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["src"],
+                "regex": False,
+                "limit": 10,
+                "max_columns": 80,
+                "exclude": ["**/*.min.js"],
+            },
+        ),
+    )
+    assert result.status == "ok"
+    forwarded = session.called[1][1]
+    assert forwarded["max_columns"] == 80
+    assert forwarded["exclude"] == ("**/*.min.js",)
+
+
+@pytest.mark.asyncio
+async def test_search_text_head_limit_sets_truncated() -> None:
+    session = FakeSession()
+    session.search_matches = (
+        SearchMatch("a.py", 1, 1, "needle"),
+        SearchMatch("b.py", 2, 1, "needle"),
+        SearchMatch("c.py", 3, 1, "needle"),
+    )
+    result = await SandboxToolExecutor(10, 10).execute(
+        session,
+        call(
+            "search_text.v1",
+            {
+                "query": "needle",
+                "paths": ["**/*"],
+                "regex": False,
+                "limit": 100,
+                "head_limit": 2,
+            },
+        ),
+    )
+    assert result.status == "ok"
+    forwarded = session.called[1][1]
+    assert forwarded["limit"] == 3
+    assert [entry["path"] for entry in result.entries] == ["a.py", "b.py"]
+    assert result.truncated is True
 
 
 @pytest.mark.asyncio

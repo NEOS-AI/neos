@@ -1038,10 +1038,14 @@ class SandboxToolExecutor:
             return self._entry_result((entry,), await self._revision(session))
         if call.name == "search_text.v1":
             output_mode = str(call.input.get("output_mode", "content"))
+            requested = int(call.input["limit"])
+            head_limit = call.input.get("head_limit")
+            if head_limit is not None:
+                requested = min(requested, int(head_limit))
             kwargs: dict[str, Any] = {
                 "paths": tuple(str(path) for path in call.input["paths"]),
                 "regex": bool(call.input["regex"]),
-                "limit": int(call.input["limit"]),
+                "limit": requested + 1,
                 "before": int(call.input.get("before", 0)),
                 "after": int(call.input.get("after", 0)),
                 "output_mode": output_mode,
@@ -1057,6 +1061,10 @@ class SandboxToolExecutor:
             search_root = call.input.get("path")
             if search_root:
                 extras["path"] = str(search_root)
+            extras["max_columns"] = int(call.input.get("max_columns", 500))
+            exclude = tuple(str(path) for path in (call.input.get("exclude") or ()))
+            if exclude:
+                extras["exclude"] = exclude
             try:
                 matches = await session.search_text(
                     str(call.input["query"]), **kwargs, **extras
@@ -1069,6 +1077,7 @@ class SandboxToolExecutor:
                 matches,
                 await self._revision(session),
                 output_mode=output_mode,
+                limit=requested,
             )
         if call.name == "git_status.v1":
             result = await session.git_status()
@@ -1297,7 +1306,9 @@ class SandboxToolExecutor:
         revision: str,
         *,
         output_mode: str,
+        limit: int,
     ) -> ToolResult:
+        cap = min(max(limit, 1), self._max_entries)
         if output_mode == "files":
             paths: list[str] = []
             seen: set[str] = set()
@@ -1306,7 +1317,7 @@ class SandboxToolExecutor:
                     continue
                 seen.add(match.path)
                 paths.append(match.path)
-            entries = tuple({"path": path} for path in paths[: self._max_entries])
+            entries = tuple({"path": path} for path in paths[:cap])
             return ToolResult(
                 "ok",
                 "ok",
@@ -1329,7 +1340,7 @@ class SandboxToolExecutor:
                     counts[match.path] += increment
             entries = tuple(
                 {"path": path, "count": counts[path]}
-                for path in order[: self._max_entries]
+                for path in order[:cap]
             )
             return ToolResult(
                 "ok",
@@ -1347,7 +1358,7 @@ class SandboxToolExecutor:
                 for key, value in self._json_entry(match).items()
                 if key != "count"
             }
-            for match in matches[: self._max_entries]
+            for match in matches[:cap]
         )
         return ToolResult(
             "ok",
