@@ -226,6 +226,12 @@ class ActiveChildRef:
     rolled_input_tokens: int = 0
     rolled_output_tokens: int = 0
     pending_steer: str = ""
+    spec: str = "explore"
+    spawn_depth: int = 0
+    worktree_repo: str = ""
+    worktree_path: str = ""
+    worktree_branch: str = ""
+    worktree_base_sha: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +291,12 @@ class DelegatedSpawn:
     step_kind: str
     input_tokens: int = 0
     output_tokens: int = 0
+    spec: str = "explore"
+    spawn_depth: int = 0
+    worktree_repo: str = ""
+    worktree_path: str = ""
+    worktree_branch: str = ""
+    worktree_base_sha: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -858,6 +870,7 @@ class DurableCodingLoop:
         if (
             claim.disposition is ToolExecutionDisposition.RECLAIMED
             and validated.risk is not ToolRisk.READ_ONLY
+            and call.name != "spawn_agent.v1"
         ):
             async for item in self._emit_unknown_tool_result(
                 input, state, bound, deps, call, claim=claim
@@ -967,6 +980,20 @@ class DurableCodingLoop:
                         rolled_input_tokens=rolled_in,
                         rolled_output_tokens=rolled_out,
                         pending_steer=existing.pending_steer if existing else "",
+                        spec=result.spec or (existing.spec if existing else "explore"),
+                        spawn_depth=(
+                            result.spawn_depth
+                            if result.spawn_depth
+                            else (existing.spawn_depth if existing else 0)
+                        ),
+                        worktree_repo=result.worktree_repo
+                        or (existing.worktree_repo if existing else ""),
+                        worktree_path=result.worktree_path
+                        or (existing.worktree_path if existing else ""),
+                        worktree_branch=result.worktree_branch
+                        or (existing.worktree_branch if existing else ""),
+                        worktree_base_sha=result.worktree_base_sha
+                        or (existing.worktree_base_sha if existing else ""),
                     ),
                 )
                 payload = {
@@ -2275,6 +2302,12 @@ class DurableCodingLoop:
 
         await self._subagents.cancel_for_parent(ParentKind.CODING, task_id, "cancelled")
 
+    def discard_child_worktrees(self, loop_state) -> None:
+        if not isinstance(loop_state, Mapping):
+            return
+        for ref in _restore_active_children(loop_state):
+            _discard_lease(_lease_from_ref(ref))
+
     async def _cancel_active_child(
         self, state, *, reason: str, task_id: str | None = None
     ) -> None:
@@ -2284,6 +2317,7 @@ class DurableCodingLoop:
         if state is not None:
             refs = state.active_children or _legacy_single(state)
         for ref in refs:
+            _discard_lease(_lease_from_ref(ref))
             await self._subagents.cancel(ref.run_id, reason)
         if task_id:
             from neos.subagent.types import ParentKind
@@ -2440,6 +2474,7 @@ class DurableCodingLoop:
             if claim is None or claim.disposition is ToolExecutionDisposition.COMPLETED:
                 continue
             await self._complete_spawn_claim(deps, claim, bound, reason)
+            _discard_lease(_lease_from_ref(ref))
             if ref.tool_call_id not in done:
                 advance_index = (
                     after.has_pending_tool
@@ -2461,15 +2496,28 @@ class DurableCodingLoop:
         after = self._sync_active_children(after, tuple(kept))
         return self._drain_completed_prefix(after)
 
-    def _bind_child_tools(self, bound, state) -> None:
+    def _bind_child_tools(
+        self,
+        bound,
+        state,
+        *,
+        spec_name: str = "explore",
+        worktree_path: str = "",
+    ) -> None:
         if self._subagents is None:
             return
         stepper = getattr(self._subagents, "_stepper", None)
         port = getattr(stepper, "_tools", None) if stepper is not None else None
         bind = getattr(port, "bind", None)
+        use_spec = getattr(port, "use_spec", None)
+        if callable(use_spec):
+            use_spec(spec_name)
+        session = bound.session
+        if worktree_path:
+            session = _session_on_workspace(session, worktree_path)
         if callable(bind):
             bind(
-                session=bound.session,
+                session=session,
                 phase=state.phase,
                 revealed=state.revealed_tools,
             )
@@ -2738,7 +2786,7 @@ class DurableCodingLoop:
         raw = call.input if isinstance(call.input, Mapping) else {}
         spec_name = str(raw.get("spec") or "explore")
         try:
-            lookup_spec(spec_name)
+            spec = lookup_spec(spec_name)
         except UnknownSpec:
             return self._spawn_tool_error(bound, "policy_unknown_spec")
         provider = self._config.provider
@@ -2758,6 +2806,12 @@ class DurableCodingLoop:
             snapshot = await self._subagents.status(ref.run_id)
             if snapshot.parent_id != input.task_id:
                 return self._dropped_spawn_result(bound, snapshot)
+        lease = _lease_from_ref(ref)
+        if spec.sandbox_mode is SandboxMode.WORKTREE and lease is None:
+            try:
+                lease = _open_implement_worktree(bound.session, call.tool_call_id)
+            except Exception:
+                return self._spawn_tool_error(bound, "policy_worktree_unavailable")
         ticket = SubagentTicket(
             parent_kind=ParentKind.CODING,
             parent_id=input.task_id,
@@ -2767,23 +2821,31 @@ class DurableCodingLoop:
             briefing=briefing,
             model=ModelPin(provider=provider, model=self._config.model),
             max_turns=max_turns,
-            sandbox_mode=SandboxMode.PARENT_RO,
+            sandbox_mode=spec.sandbox_mode,
             expected_checkpoint_id=ref.checkpoint_id if ref else None,
             run_id=ref.run_id if ref else None,
             pending_steer=ref.pending_steer if ref else "",
+            spawn_depth=ref.spawn_depth if ref else 0,
         )
         if ref is not None:
             folded = await self._fold_if_stale_child(
                 ref, max_turns=max_turns, bound=bound
             )
             if folded is not None:
-                return folded
-        self._bind_child_tools(bound, state)
+                return self._finish_implement_child(bound, folded, lease)
+        self._bind_child_tools(
+            bound,
+            state,
+            spec_name=spec_name,
+            worktree_path=str(lease.path) if lease is not None else "",
+        )
         try:
             await self._renew_parent_lease(deps)
             outcome = await self._subagents.advance(ticket)
             await self._renew_parent_lease(deps)
         except asyncio.CancelledError:
+            if lease is not None:
+                _discard_lease(lease)
             await self._cancel_active_child(
                 state, reason="aborted", task_id=input.task_id
             )
@@ -2795,9 +2857,44 @@ class DurableCodingLoop:
                 step_kind=outcome.kind.value,
                 input_tokens=int(outcome.input_tokens or 0),
                 output_tokens=int(outcome.output_tokens or 0),
+                spec=spec_name,
+                spawn_depth=ticket.spawn_depth,
+                worktree_repo=str(lease.repo) if lease else "",
+                worktree_path=str(lease.path) if lease else "",
+                worktree_branch=lease.branch if lease else "",
+                worktree_base_sha=lease.base_sha if lease else "",
             )
         folded = await self._subagents.fold(outcome.run_id)
-        return self._folded_spawn_result(bound, folded)
+        return self._finish_implement_child(bound, folded, lease)
+
+    def _finish_implement_child(self, bound, folded, lease) -> dict[str, Any]:
+        if isinstance(folded, dict):
+            result = dict(folded)
+        else:
+            result = self._folded_spawn_result(bound, folded)
+        if lease is None:
+            return result
+        from neos.coding.subagent_worktree import (
+            commit_worktree,
+            discard_worktree,
+            merge_worktree,
+        )
+
+        try:
+            commit_worktree(lease)
+            merged = merge_worktree(lease)
+        except Exception as error:
+            result["merge_status"] = "failed"
+            result["merge_applied"] = False
+            result["merge_message"] = str(error)
+            return result
+        result["merge_status"] = merged.status.value
+        result["merge_applied"] = bool(merged.applied)
+        result["merge_conflicts"] = list(merged.conflict_paths)
+        result["merge_message"] = merged.message
+        if merged.status.value in {"fast_forward", "empty"}:
+            _discard_lease(lease)
+        return result
 
     async def _maybe_llm_compact(
         self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
@@ -3179,6 +3276,12 @@ class DurableCodingLoop:
                     "rolled_input_tokens": child.rolled_input_tokens,
                     "rolled_output_tokens": child.rolled_output_tokens,
                     "pending_steer": child.pending_steer,
+                    "spec": child.spec,
+                    "spawn_depth": child.spawn_depth,
+                    "worktree_repo": child.worktree_repo,
+                    "worktree_path": child.worktree_path,
+                    "worktree_branch": child.worktree_branch,
+                    "worktree_base_sha": child.worktree_base_sha,
                 }
                 for child in state.active_children
             ],
@@ -3822,6 +3925,12 @@ def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ..
                             item.get("rolled_output_tokens")
                         ),
                         pending_steer=str(item.get("pending_steer") or ""),
+                        spec=str(item.get("spec") or "explore"),
+                        spawn_depth=max(0, min(1, _nonneg_int(item.get("spawn_depth")))),
+                        worktree_repo=str(item.get("worktree_repo") or ""),
+                        worktree_path=str(item.get("worktree_path") or ""),
+                        worktree_branch=str(item.get("worktree_branch") or ""),
+                        worktree_base_sha=str(item.get("worktree_base_sha") or ""),
                     )
                 )
         if len(children) > 1:
@@ -3956,3 +4065,66 @@ def _message_from_mapping(value: Mapping[str, Any]) -> CanonicalMessage:
                 ToolResultContent(item["tool_call_id"], item["status"], item["content"])
             )
     return CanonicalMessage(value["role"], tuple(content))
+
+
+def _session_workspace(session) -> Path | None:
+    from pathlib import Path as _Path
+
+    raw = getattr(session, "workspace", None)
+    if raw:
+        return _Path(raw)
+    record = getattr(session, "_record", None)
+    workspace = getattr(record, "workspace", None)
+    return _Path(workspace) if workspace else None
+
+
+def _session_on_workspace(session, workspace: str):
+    from pathlib import Path as _Path
+
+    root = _Path(workspace)
+    record = getattr(session, "_record", None)
+    provider = getattr(session, "_provider", None)
+    if record is not None and provider is not None:
+        from dataclasses import replace as _replace
+
+        from neos.coding.sandbox.memory import MemorySandboxSession
+
+        return MemorySandboxSession(provider, _replace(record, workspace=root))
+    clone = getattr(session, "clone_with_workspace", None)
+    if callable(clone):
+        return clone(root)
+    setattr(session, "workspace", root)
+    return session
+
+
+def _lease_from_ref(ref: ActiveChildRef | None):
+    if ref is None or not ref.worktree_path or not ref.worktree_repo:
+        return None
+    from pathlib import Path as _Path
+
+    from neos.coding.subagent_worktree import WorktreeLease
+
+    return WorktreeLease(
+        run_id=ref.tool_call_id,
+        repo=_Path(ref.worktree_repo),
+        path=_Path(ref.worktree_path),
+        branch=ref.worktree_branch,
+        base_sha=ref.worktree_base_sha,
+    )
+
+
+def _open_implement_worktree(session, tool_call_id: str):
+    from neos.coding.subagent_worktree import WorktreeError, create_worktree
+
+    workspace = _session_workspace(session)
+    if workspace is None:
+        raise WorktreeError("worktree_parent_not_git")
+    return create_worktree(workspace, tool_call_id)
+
+
+def _discard_lease(lease) -> None:
+    if lease is None:
+        return
+    from neos.coding.subagent_worktree import discard_worktree
+
+    discard_worktree(lease)

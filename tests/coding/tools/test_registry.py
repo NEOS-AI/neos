@@ -210,6 +210,15 @@ def test_spawn_agent_and_web_fetch_are_read_only() -> None:
     assert fetch.input == {"url": "https://example.com/doc"}
 
 
+def test_implement_spawn_is_workspace_write() -> None:
+    spawn = registry().validate(
+        "spawn_agent.v1",
+        {"prompt": "add a helper", "max_turns": 2, "spec": "implement"},
+    )
+    assert spawn.risk is ToolRisk.WORKSPACE_WRITE
+    assert spawn.input["spec"] == "implement"
+
+
 def test_definitions_defer_non_core_until_revealed(monkeypatch) -> None:
     monkeypatch.setattr(
         "neos.coding.tools.registry._deferred_tools_threshold",

@@ -19,10 +19,15 @@ from neos.coding.model.base import (
     ToolUseContent,
 )
 from neos.coding.model.errors import CodingModelError
-from neos.subagent.catalog import SubagentSpec
-from neos.subagent.prompts import build_explore_system_prompt, render_brief
+from neos.subagent.catalog import SubagentSpec, may_spawn
+from neos.subagent.prompts import (
+    build_explore_system_prompt,
+    build_implement_system_prompt,
+    render_brief,
+)
 from neos.subagent.store import CasReservation, CheckpointWrite, is_placeholder
 from neos.subagent.types import (
+    NestedSpawnHost,
     SubagentStatus,
     SubagentTicket,
     ToolPort,
@@ -58,9 +63,11 @@ class ChildStepper:
         tools: ToolPort,
         input_cost_micros_per_million: int = 0,
         output_cost_micros_per_million: int = 0,
+        nested_spawn: NestedSpawnHost | None = None,
     ) -> None:
         self._model = model
         self._tools = tools
+        self._nested_spawn = nested_spawn
         self._input_cost_micros_per_million = max(
             0, int(input_cost_micros_per_million or 0)
         )
@@ -95,9 +102,13 @@ class ChildStepper:
         _apply_pending_steer(state)
         request_kwargs = _thinking_off_kwargs()
         request = ModelRequest(
-            system=build_explore_system_prompt(),
+            system=(
+                build_implement_system_prompt()
+                if spec.name == "implement"
+                else build_explore_system_prompt()
+            ),
             messages=_canonical_messages(state),
-            tools=_child_tools(spec, self._tools),
+            tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),
             model=ticket.model.alias or ticket.model.model,
             limits=ModelLimits(max_output_tokens=4096, timeout_sec=120),
             task_id=run_id,
@@ -154,13 +165,41 @@ class ChildStepper:
     ) -> CheckpointWrite:
         batch = pending[:_MAX_TOOL_BATCH]
         rest = pending[_MAX_TOOL_BATCH:]
-        for call in batch:
+        for index, call in enumerate(batch):
             name = str(call.get("name") or "")
             raw_input = call.get("input") or {}
             payload = dict(raw_input) if isinstance(raw_input, Mapping) else {}
-            if name in REFUSED_TOOLS or name not in spec.allowed_tools:
-                result: Mapping[str, Any] = {"error": "tool_not_allowed"}
+            if not _tool_permitted(spec, name, spawn_depth=ticket.spawn_depth):
+                result = {"error": "tool_not_allowed"}
                 status = "error"
+            elif name == "spawn_agent.v1":
+                try:
+                    if self._nested_spawn is None:
+                        raise RuntimeError("nested_spawn_unavailable")
+                    resume = str(state.get("nested_run_id") or "")
+                    if resume:
+                        payload = {**payload, "run_id": resume}
+                    payload = {
+                        **payload,
+                        "tool_call_id": str(call.get("tool_call_id") or ""),
+                    }
+                    result = await self._nested_spawn.spawn(ticket, payload)
+                    if (
+                        isinstance(result, Mapping)
+                        and result.get("status") == "continuing"
+                    ):
+                        state["nested_run_id"] = result.get("nested_run_id")
+                        state["pending_tools"] = [
+                            call,
+                            *batch[index + 1 :],
+                            *rest,
+                        ]
+                        return self._write(ticket, state, SubagentStatus.RUNNING)
+                    state.pop("nested_run_id", None)
+                    status = "ok"
+                except Exception as exc:
+                    result = {"error": str(exc)}
+                    status = "error"
             else:
                 try:
                     result = await self._tools.execute(name, payload)
@@ -266,17 +305,26 @@ def _tool_name(item: Any) -> str:
     return str(getattr(item, "name", "") or "")
 
 
-def _child_tools(spec: SubagentSpec, port: ToolPort) -> tuple[ToolDefinition, ...]:
+def _tool_permitted(spec: SubagentSpec, name: str, *, spawn_depth: int) -> bool:
+    if not name or name not in spec.allowed_tools:
+        return False
+    if name == "spawn_agent.v1":
+        return may_spawn(spec, spawn_depth)
+    if name in REFUSED_TOOLS and name not in spec.allowed_tools:
+        return False
+    return True
+
+
+def _child_tools(
+    spec: SubagentSpec, port: ToolPort, *, spawn_depth: int
+) -> tuple[ToolDefinition, ...]:
     definitions: list[ToolDefinition] = []
     seen: set[str] = set()
     for item in port.definitions():
         name = _tool_name(item)
-        if (
-            not name
-            or name not in spec.allowed_tools
-            or name in REFUSED_TOOLS
-            or name in seen
-        ):
+        if not name or name in seen:
+            continue
+        if not _tool_permitted(spec, name, spawn_depth=spawn_depth):
             continue
         seen.add(name)
         if isinstance(item, ToolDefinition):

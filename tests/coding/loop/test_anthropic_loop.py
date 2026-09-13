@@ -100,8 +100,8 @@ class Executor:
 
 
 class Bindings:
-    def __init__(self, *, mutation_error=None, files=None):
-        self.session = Session(files=files)
+    def __init__(self, *, mutation_error=None, files=None, workspace=None):
+        self.session = Session(files=files, workspace=workspace)
         self.mutation_error = mutation_error
 
     async def resolve(self, lease):
@@ -117,12 +117,18 @@ class Bindings:
 
 
 class Session:
-    def __init__(self, files=None) -> None:
+    def __init__(self, files=None, workspace=None) -> None:
         self.writes = 0
+        self.workspace = workspace
         self.files = {
             name: value if isinstance(value, bytes) else value.encode("utf-8")
             for name, value in dict(files or {}).items()
         }
+
+    def clone_with_workspace(self, workspace):
+        cloned = Session(files=self.files, workspace=workspace)
+        cloned.writes = self.writes
+        return cloned
 
     async def workspace_revision(self) -> int:
         return self.writes + 1

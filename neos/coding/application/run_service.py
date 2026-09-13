@@ -625,6 +625,9 @@ class CodingRunService:
         if checkpoint is None:
             return
         loop_state = checkpoint.loop_state or {}
+        discard = getattr(self._loop, "discard_child_worktrees", None)
+        if callable(discard):
+            discard(loop_state)
         tool_call_ids: list[str] = []
         raw_children = loop_state.get("active_children")
         if isinstance(raw_children, list):

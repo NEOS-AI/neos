@@ -111,6 +111,18 @@ def test_p1_enums_match_design() -> None:
     }
     assert SandboxMode.NONE == "none"
     assert SandboxMode.PARENT_RO == "parent_ro"
+    assert SandboxMode.WORKTREE == "worktree"
+
+
+def test_ticket_spawn_depth_defaults_to_zero_and_rejects_negative() -> None:
+    ticket = _ticket()
+    assert ticket.spawn_depth == 0
+    nested = _ticket(spawn_depth=1)
+    assert nested.spawn_depth == 1
+    with pytest.raises(ValueError, match="spawn_depth"):
+        _ticket(spawn_depth=-1)
+    with pytest.raises(ValueError, match="spawn_depth"):
+        _ticket(spawn_depth=2)
 
 
 def test_public_dataclasses_are_frozen() -> None:

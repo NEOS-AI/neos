@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -49,6 +51,8 @@ from tests.coding.loop.test_anthropic_loop import (
     INPUT,
     LEASE,
     NOW,
+    Bindings,
+    Session,
     collect,
     completed,
     harness,
@@ -750,13 +754,40 @@ async def test_coding_tool_port_intersects_and_refuses_writes() -> None:
     port = CodingToolPort(registry=registry, executor=object())
     names = {item.name for item in port.definitions()}
     assert "read_file.v1" in names
-    assert "spawn_agent.v1" not in names
+    assert "spawn_agent.v1" in names
     assert "write_file.v1" not in names
     assert "execute.v1" not in names
     with pytest.raises(Exception):
         await port.execute("write_file.v1", {"path": "a.txt", "content": "x"})
     write = registry.validate("write_file.v1", {"path": "a.txt", "content": "x"})
     assert write.risk is not ToolRisk.READ_ONLY
+
+
+class _WriteExecutor:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def execute(self, session, validated):
+        self.calls.append(validated.name)
+        return {"ok": True, "path": validated.input.get("path")}
+
+
+@pytest.mark.asyncio
+async def test_implement_tool_port_allows_workspace_writes() -> None:
+    from neos.coding.subagent_port import CodingToolPort
+
+    registry = CodingToolRegistry.default(command_allowlist=frozenset({"pytest"}))
+    executor = _WriteExecutor()
+    port = CodingToolPort(registry=registry, executor=executor, spec="implement")
+    port.bind(session=object())
+    names = {item.name for item in port.definitions()}
+    assert "write_file.v1" in names
+    assert "edit_file.v1" in names
+    assert "execute.v1" in names
+    assert "spawn_agent.v1" not in names
+    result = await port.execute("write_file.v1", {"path": "a.txt", "content": "x"})
+    assert result["ok"] is True
+    assert executor.calls == ["write_file.v1"]
 
 
 @pytest.mark.asyncio
@@ -2034,6 +2065,228 @@ async def test_subagent_list_flag_off_returns_empty() -> None:
     result = completed_events[-1].payload["result"]
     assert result.get("children") == []
     assert result.get("entries") in ((), [], None) or list(result.get("entries") or ()) == []
+
+
+def _init_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True
+    )
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_implement_spawn_without_git_workspace_is_denied() -> None:
+    runtime, _child = _make_runtime([_text()])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "add helper", "max_turns": 2, "spec": "implement"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+    )
+    events = await collect(h)
+    result = [event for event in events if event.type == "tool.completed"][-1].payload[
+        "result"
+    ]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_worktree_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_implement_spawn_resumes_instead_of_unknown() -> None:
+    runtime, _child = _make_runtime([_text()])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "add helper", "max_turns": 2, "spec": "implement"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+    )
+    h.repository.tool_claims[("ct_1", "s1")] = (
+        SimpleNamespace(disposition=ToolExecutionDisposition.CLAIMED),
+        NOW - timedelta(seconds=1),
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result.get("reason_code") != "tool_outcome_unknown"
+    assert result["reason_code"] == "policy_worktree_unavailable"
+    assert h.executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_implement_spawn_merges_worktree_on_fold(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    runtime, _child = _make_runtime([_child_tool(), _text("done")])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "add helper", "max_turns": 4, "spec": "implement"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+        bindings=Bindings(workspace=repo),
+    )
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    child = (parked.loop_state.get("active_children") or [None])[0]
+    assert child is not None
+    assert child["spec"] == "implement"
+    assert child["worktree_path"]
+    worktree = Path(child["worktree_path"])
+    assert worktree.is_dir()
+    (worktree / "helper.py").write_text("x = 1\n", encoding="utf-8")
+    folded, _ckpt = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["merge_status"] == "fast_forward"
+    assert result["merge_applied"] is True
+    assert (repo / "helper.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+@pytest.mark.asyncio
+async def test_implement_conflict_keeps_worktree(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    runtime, _child = _make_runtime([_child_tool(), _text("done")])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "add helper", "max_turns": 4, "spec": "implement"},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+        bindings=Bindings(workspace=repo),
+    )
+    await collect(h)
+    parked = h.repository.checkpoints[-1]
+    child = (parked.loop_state.get("active_children") or [None])[0]
+    worktree = Path(child["worktree_path"])
+    (worktree / "README.md").write_text("child\n", encoding="utf-8")
+    (repo / "README.md").write_text("parent\n", encoding="utf-8")
+    folded, _ckpt = await _fold_spawn(h, parked)
+    result = folded.payload["result"]
+    assert result["merge_status"] == "conflict"
+    assert result["merge_applied"] is False
+    assert (repo / "README.md").read_text(encoding="utf-8") == "parent\n"
+    assert worktree.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_discard_child_worktrees_from_checkpoint_state(tmp_path: Path) -> None:
+    from neos.coding.subagent_worktree import create_worktree
+
+    repo = _init_repo(tmp_path)
+    lease = create_worktree(repo, "s1")
+    assert lease.path.is_dir()
+    h = harness([[completed()]], config=_flag_on())
+    h.loop.discard_child_worktrees(
+        {
+            "active_children": [
+                {
+                    "run_id": "sa_1",
+                    "checkpoint_id": "sc_1",
+                    "tool_call_id": "s1",
+                    "last_advanced_at": NOW.isoformat(),
+                    "worktree_repo": str(lease.repo),
+                    "worktree_path": str(lease.path),
+                    "worktree_branch": lease.branch,
+                    "worktree_base_sha": lease.base_sha,
+                }
+            ]
+        }
+    )
+    assert not lease.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_explore_child_nested_spawn_uses_depth_one() -> None:
+    from neos.coding.nested_spawn import RuntimeNestedSpawn
+
+    child_model = ScriptedCodingModel(
+        [
+            (
+                TextDelta("nest"),
+                ToolCallCompleted(
+                    "n1", "spawn_agent.v1", {"prompt": "look deeper"}
+                ),
+                ModelCompleted("tool_use", ModelUsage(1, 1)),
+            ),
+            _text("nested report"),
+            _text("parent done"),
+        ]
+    )
+    store = InMemorySubagentStore()
+    holder: list = []
+    runtime = SubagentRuntime(
+        store=store,
+        catalog=SpecRegistry(),
+        stepper=ChildStepper(
+            model=child_model,
+            tools=FakeChildTools(names=("read_file.v1", "spawn_agent.v1")),
+            nested_spawn=RuntimeNestedSpawn(lambda: holder[0]),
+        ),
+        events=_NullSink(),
+        clock=SystemClock(),
+    )
+    wrapped = RecordingSubagents(runtime)
+    holder.append(wrapped)
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=wrapped)
+    folded, _ckpt = await _fold_spawn(h)
+    result = folded.payload["result"]
+    assert result["status"] == "ok"
+    tickets = wrapped.advance_tickets
+    depths = [ticket.spawn_depth for ticket in tickets]
+    assert 1 in depths
+    assert all(ticket.spec == "explore" for ticket in tickets if ticket.spawn_depth == 1)
 
 
 @pytest.mark.asyncio

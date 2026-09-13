@@ -748,8 +748,8 @@ class CodingToolRegistry:
         _RegisteredTool(
             "spawn_agent.v1",
             (
-                "Spawn a read-only explore child. Wait for the folded report. "
-                "Do not use this to write files. "
+                "Spawn an explore child, or spec=implement for an isolated "
+                "worktree write worker. Parent merges. "
                 "On policy_* denial, do not retry the same prompt."
             ),
             ToolRisk.READ_ONLY,
@@ -991,7 +991,10 @@ class CodingToolRegistry:
                 raise ToolValidationError("policy_schema_invalid") from error
         if name == "execute.v1":
             self._validate_command(data)
-        return ValidatedToolCall(name=name, input=data, risk=tool.risk)
+        risk = tool.risk
+        if name == "spawn_agent.v1" and str(data.get("spec") or "explore") == "implement":
+            risk = ToolRisk.WORKSPACE_WRITE
+        return ValidatedToolCall(name=name, input=data, risk=risk)
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:

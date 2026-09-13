@@ -567,21 +567,28 @@ def _build_subagent_runtime(
     else:
         store = InMemorySubagentStore()
     port = CodingToolPort(registry=tools, executor=executor)
-    return SubagentRuntime(
+    holder: list[Any] = []
+    from neos.coding.nested_spawn import RuntimeNestedSpawn
+
+    stepper = ChildStepper(
+        model=model,
+        tools=port,
+        input_cost_micros_per_million=input_cost_micros_per_million,
+        output_cost_micros_per_million=output_cost_micros_per_million,
+        nested_spawn=RuntimeNestedSpawn(lambda: holder[0]),
+    )
+    runtime = SubagentRuntime(
         store=store,
         catalog=SpecRegistry(),
-        stepper=ChildStepper(
-            model=model,
-            tools=port,
-            input_cost_micros_per_million=input_cost_micros_per_million,
-            output_cost_micros_per_million=output_cost_micros_per_million,
-        ),
+        stepper=stepper,
         events=MetricsEventSink(
             ParentSubagentEventAdapter(parent_events),
             get_metrics_collector(),
         ),
         clock=SystemClock(),
     )
+    holder.append(runtime)
+    return runtime
 
 
 def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):

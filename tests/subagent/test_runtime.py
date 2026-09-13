@@ -256,10 +256,10 @@ async def test_unknown_spec_is_fail_closed_before_create() -> None:
 async def test_refuses_forbidden_tools_without_executing() -> None:
     runtime, _store, tools, _model, _events = _runtime(
         [
-            _tool("spawn_agent.v1", prompt="nope"),
+            _tool("write_file.v1", path="secret.py", content="x"),
             _text("stopped"),
         ],
-        tools=FakeToolPort(names=("read_file.v1", "spawn_agent.v1")),
+        tools=FakeToolPort(names=("read_file.v1", "write_file.v1")),
     )
     first = await runtime.advance(_ticket())
     assert first.kind is StepKind.CONTINUING
@@ -269,6 +269,140 @@ async def test_refuses_forbidden_tools_without_executing() -> None:
     assert tools.calls == []
     assert second.kind is StepKind.CONTINUING
     assert REFUSED_TOOLS
+
+
+class FakeNestedSpawn:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, dict]] = []
+
+    async def spawn(self, parent, call):
+        self.calls.append((parent.spec, parent.spawn_depth, dict(call)))
+        return {"ok": True, "nested_run_id": "sa_nested", "summary": "child report"}
+
+
+@pytest.mark.asyncio
+async def test_explore_child_can_spawn_via_host() -> None:
+    host = FakeNestedSpawn()
+    model = ScriptedCodingModel(
+        [_tool("spawn_agent.v1", prompt="look deeper"), _text("done")]
+    )
+    tools = FakeToolPort(names=("read_file.v1", "spawn_agent.v1"))
+    runtime = SubagentRuntime(
+        store=InMemorySubagentStore(),
+        catalog=SpecRegistry(),
+        stepper=ChildStepper(model=model, tools=tools, nested_spawn=host),
+        events=RecordingSink(),
+        clock=SystemClock(),
+    )
+    first = await runtime.advance(_ticket())
+    second = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id=first.checkpoint_id)
+    )
+    assert host.calls[0][0] == "explore"
+    assert host.calls[0][1] == 0
+    assert host.calls[0][2]["prompt"] == "look deeper"
+    assert tools.calls == []
+    assert second.kind is StepKind.CONTINUING
+
+
+class ContinuingThenDone:
+    def __init__(self) -> None:
+        self.n = 0
+
+    async def spawn(self, parent, call):
+        self.n += 1
+        if self.n == 1:
+            return {
+                "ok": True,
+                "status": "continuing",
+                "nested_run_id": "sa_nested",
+            }
+        return {"ok": True, "status": "completed", "summary": "child report"}
+
+
+@pytest.mark.asyncio
+async def test_continuing_nested_spawn_keeps_sibling_tools() -> None:
+    host = ContinuingThenDone()
+    model = ScriptedCodingModel(
+        [
+            (
+                TextDelta("looking"),
+                ToolCallCompleted(
+                    "call_1", "spawn_agent.v1", {"prompt": "look deeper"}
+                ),
+                ToolCallCompleted("call_2", "read_file.v1", {"path": "a.py"}),
+                ModelCompleted("tool_use", ModelUsage(4, 1)),
+            ),
+            _text("done"),
+        ]
+    )
+    tools = FakeToolPort(names=("read_file.v1", "spawn_agent.v1"))
+    runtime = SubagentRuntime(
+        store=InMemorySubagentStore(),
+        catalog=SpecRegistry(),
+        stepper=ChildStepper(model=model, tools=tools, nested_spawn=host),
+        events=RecordingSink(),
+        clock=SystemClock(),
+    )
+    first = await runtime.advance(_ticket())
+    parked = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id=first.checkpoint_id)
+    )
+    pending = (await runtime._store.get_loop_state(first.run_id))["pending_tools"]
+    assert parked.kind is StepKind.CONTINUING
+    assert [item["name"] for item in pending] == ["spawn_agent.v1", "read_file.v1"]
+    assert tools.calls == []
+    third = await runtime.advance(
+        _ticket(run_id=first.run_id, expected_checkpoint_id=parked.checkpoint_id)
+    )
+    assert host.n == 2
+    assert tools.calls == [("read_file.v1", {"path": "a.py"})]
+    assert third.kind is StepKind.CONTINUING
+
+
+@pytest.mark.asyncio
+async def test_nested_explore_and_implement_cannot_spawn() -> None:
+    host = FakeNestedSpawn()
+    for ticket in (_ticket(spawn_depth=1), _ticket(spec="implement")):
+        model = ScriptedCodingModel(
+            [_tool("spawn_agent.v1", prompt="again"), _text("done")]
+        )
+        runtime = SubagentRuntime(
+            store=InMemorySubagentStore(),
+            catalog=SpecRegistry(),
+            stepper=ChildStepper(
+                model=model,
+                tools=FakeToolPort(names=("read_file.v1", "spawn_agent.v1")),
+                nested_spawn=host,
+            ),
+            events=RecordingSink(),
+            clock=SystemClock(),
+        )
+        first = await runtime.advance(ticket)
+        await runtime.advance(
+            replace(ticket, run_id=first.run_id, expected_checkpoint_id=first.checkpoint_id)
+        )
+    assert host.calls == []
+
+
+@pytest.mark.asyncio
+async def test_implement_child_can_execute_write_tools() -> None:
+    tools = FakeToolPort(names=("write_file.v1", "read_file.v1"))
+    runtime, _store, tools, _model, _events = _runtime(
+        [_tool("write_file.v1", path="a.py", content="ok"), _text("wrote")],
+        tools=tools,
+    )
+    first = await runtime.advance(_ticket(spec="implement"))
+    second = await runtime.advance(
+        _ticket(
+            spec="implement",
+            run_id=first.run_id,
+            expected_checkpoint_id=first.checkpoint_id,
+        )
+    )
+    assert tools.calls == [("write_file.v1", {"path": "a.py", "content": "ok"})]
+    assert second.kind is StepKind.CONTINUING
+    assert "worktree" in _model.requests[0].system.lower()
 
 
 @pytest.mark.asyncio
