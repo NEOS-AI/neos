@@ -517,6 +517,12 @@ _DENIAL_REASONS = {
     "policy_workspace_path_escape": "use a workspace-relative path",
     "policy_workspace_secret_path": "secret paths are not readable",
     "policy_binary_file": "this file is binary; do not read it as text",
+    "policy_dedicated_tool_required": "use a dedicated tool instead of this executable",
+    "policy_publish_denied": "publish/release is not allowed",
+    "policy_command_timeout_exceeded": "timeout is too large; lower timeout_sec",
+    "policy_command_output_exceeded": "output cap is too large; lower max_output_bytes",
+    "policy_command_stdin_exceeded": "stdin is too large",
+    "policy_environment_name_denied": "that environment variable is not allowed",
     "aborted": "the run was aborted; do not retry this call",
 }
 _WARNING_REASONS = {
@@ -532,7 +538,11 @@ _DEFAULT_DENIAL_REASON = (
 def adaptive_denial_reason(
     reason_code: str, warnings: Sequence[str] = ()
 ) -> str:
-    base = _DENIAL_REASONS.get(reason_code, _DEFAULT_DENIAL_REASON)
+    base = _DENIAL_REASONS.get(reason_code)
+    if base is None:
+        from neos.coding.tools.registry import _policy_fix_note
+
+        base = _policy_fix_note(reason_code) or _DEFAULT_DENIAL_REASON
     extras = [
         _WARNING_REASONS[code] for code in warnings if code in _WARNING_REASONS
     ]
@@ -560,7 +570,7 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
-    raw_warnings = excerpt.get("warnings")
+    raw_warnings = excerpt.pop("warnings", None)
     warnings = (
         tuple(str(item) for item in raw_warnings)
         if isinstance(raw_warnings, list)
@@ -584,7 +594,11 @@ def _execute_warning_codes(argv: list[object]) -> list[str]:
     if not parts:
         return []
     executable = parts[0]
-    flags = parts[1:]
+    flags: list[str] = []
+    for part in parts[1:]:
+        if part == "--":
+            break
+        flags.append(part)
     warnings: list[str] = []
     if executable == "rm" and any(_is_recursive_rm_flag(flag) for flag in flags):
         warnings.append("destructive_recursive_delete")
@@ -595,13 +609,23 @@ def _execute_warning_codes(argv: list[object]) -> list[str]:
     return warnings
 
 
+_RM_SHORT_OPTS = frozenset("fiIrRdv")
+
+
 def _is_recursive_rm_flag(flag: str) -> bool:
-    return flag in {"-r", "-R", "-rf", "-fr", "-Rf", "-fR"} or (
-        flag.startswith("-")
-        and not flag.startswith("--")
-        and "r" in flag.lower()
-    )
+    if flag in {"-r", "-R", "-rf", "-fr", "-Rf", "-fR"}:
+        return True
+    if flag == "--recursive" or flag.startswith("--recursive="):
+        return True
+    if not flag.startswith("-") or flag.startswith("--"):
+        return False
+    body = flag[1:]
+    return bool(body) and set(body) <= _RM_SHORT_OPTS and "r" in body.lower()
 
 
 def _has_force_push_flag(flags: list[str]) -> bool:
-    return any(flag == "--force" or flag == "-f" for flag in flags)
+    return any(
+        flag in {"--force", "-f", "--force-with-lease"}
+        or flag.startswith("--force-with-lease=")
+        for flag in flags
+    )

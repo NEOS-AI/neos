@@ -718,8 +718,26 @@ def test_denial_envelope_includes_argv_warnings_in_reason() -> None:
     assert rm["warnings"] == ["destructive_recursive_delete"]
     assert "recursive delete" in rm["reason"]
     assert rm["reason"] != rm["reason_code"]
+    assert "warnings" not in rm["args_excerpt"]
     assert reset["reason_code"] == "policy_git_operation_denied"
     assert reset["warnings"] == ["destructive_git_reset"]
     assert "reset --hard" in reset["reason"]
     assert "S00" not in json.dumps(rm)
     assert "S00" not in json.dumps(reset)
+
+    long_rm = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "--recursive", "tmp"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    operand = denial_envelope(
+        call("execute.v1", {"argv": ["rm", "--", "-r"]}, ToolRisk.COMMAND),
+        "policy_dangerous_removal",
+    )
+    dedicated = denial_envelope(
+        call("execute.v1", {"argv": ["rg", "needle"]}, ToolRisk.COMMAND),
+        "policy_dedicated_tool_required",
+    )
+    assert long_rm["warnings"] == ["destructive_recursive_delete"]
+    assert "warnings" not in operand
+    assert dedicated["reason"] != dedicated["reason_code"]
+    assert "dedicated tool" in dedicated["reason"]
