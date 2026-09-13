@@ -16,7 +16,6 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 
-_DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
 _CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
 _STEER_TEXT_MAX = 2000
 _DEDICATED_EXECUTE_DENY = frozenset(
@@ -306,15 +305,6 @@ def _search_query_terms(query: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
         elif token:
             optional.append(token.casefold())
     return tuple(required), tuple(optional)
-
-
-def _deferred_tools_threshold() -> int:
-    try:
-        from neos.config.settings import settings
-
-        return int(settings.config.coding_model.deferred_tools_threshold)
-    except Exception:
-        return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
 
 
 def _subagent_tools_enabled() -> bool:
