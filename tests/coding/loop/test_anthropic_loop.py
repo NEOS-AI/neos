@@ -1473,10 +1473,17 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
         transcript=(state.transcript[0],) + long_prefix,
         llm_compact_attempts=0,
     )
-    compacted, attempts, _summary = await h.loop._maybe_llm_compact(state, state.transcript)
+    compacted, attempts, summary = await h.loop._maybe_llm_compact(state, state.transcript)
     assert attempts == 1
     assert compacted[0].content[0].text == "Fix it"
-    assert "old files were edited" in compacted[1].content[0].text
+    assert summary == "old files were edited"
+    assert all(
+        "Prior context summary" not in item.text
+        for message in compacted
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    )
 
 
 class _DecisionHook:

@@ -211,6 +211,13 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
     prompt = h.model.requests[0].messages[0].content[0].text
     assert "old facts about auth" in prompt
     assert after.summary == "new compressed facts"
+    assert all(
+        "Prior context summary" not in item.text
+        for message in after.transcript
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    )
     dumped = h.loop._dump_state(INPUT, after)
     restored = h.loop._restore(
         INPUT,
@@ -218,6 +225,40 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
     )
     assert dumped["summary"] == "new compressed facts"
     assert restored.summary == "new compressed facts"
+
+
+@pytest.mark.asyncio
+async def test_previous_summary_is_injected_after_cache_boundary() -> None:
+    from neos.coding.loop.anthropic import AnthropicLoopConfig
+    from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+
+    system = f"static policy\n{SYSTEM_PROMPT_DYNAMIC_BOUNDARY}\n## Session\ndynamic tail"
+    h = harness(
+        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
+        config=AnthropicLoopConfig(model="claude-test", system=system),
+    )
+    state = replace(
+        h.loop._restore(INPUT, None),
+        summary="auth uses JWT",
+        instructions_loaded=True,
+    )
+
+    await collect(h, _checkpoint(h, state))
+
+    sent = h.model.requests[0].system
+    assert "auth uses JWT" in sent
+    assert sent.index(SYSTEM_PROMPT_DYNAMIC_BOUNDARY) < sent.index(
+        "## Conversation summary"
+    )
+    assert sent.index("## Conversation summary") < sent.index("## Session")
+    assert "Prior context summary" not in sent
+    assert all(
+        "Prior context summary" not in item.text
+        for message in h.model.requests[0].messages
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text")
+    )
 
 
 class _InjectCompactHooks:

@@ -21,6 +21,21 @@ class CodingPromptEnv:
     approved_lessons: tuple[str, ...] = ()
 
 
+def inject_previous_summary(system: str, summary: str) -> str:
+    blob = (summary or "").strip()
+    if not blob:
+        return system
+    section = f"## Conversation summary\n{blob}"
+    marker = SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+    if marker not in system:
+        return f"{system}\n\n{section}" if system else section
+    prefix, suffix = system.split(marker, 1)
+    rest = suffix.lstrip("\n")
+    if not rest:
+        return f"{prefix}{marker}\n\n{section}"
+    return f"{prefix}{marker}\n\n{section}\n\n{rest}"
+
+
 def build_coding_system_prompt(
     tools: Sequence[ToolDefinition],
     env: CodingPromptEnv | None = None,

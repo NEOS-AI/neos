@@ -32,6 +32,7 @@ from neos.coding.instructions import (
 )
 from neos.coding.learn_lessons import coding_turn_system
 from neos.coding.loop.base import LoopDependencies, LoopInput
+from neos.coding.prompts import inject_previous_summary
 from neos.coding.model.errors import CodingModelError
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -420,6 +421,7 @@ class DurableCodingLoop:
                 transcript_digest=self._digest(transcript),
             )
         system = await coding_turn_system(self._config.system, input.owner_id)
+        system = inject_previous_summary(system, state.summary)
         system_note = str(note.get("system") or "")
         if system_note:
             system = f"{system}\n\n{system_note}" if system else system_note
@@ -3009,12 +3011,7 @@ class DurableCodingLoop:
         summary = "".join(parts).strip()
         if not summary:
             return transcript, attempts + 1, previous
-        compacted = (head,) + (
-            CanonicalMessage(
-                "user",
-                (TextContent(f"Prior context summary:\n{summary}"),),
-            ),
-        ) + transcript[tail_start:]
+        compacted = (head,) + transcript[tail_start:]
         return compacted, attempts + 1, summary
 
     def _restore(self, input, checkpoint):
