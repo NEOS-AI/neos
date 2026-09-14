@@ -75,8 +75,22 @@ def refresh_live_overlay(
 
 
 def sync_live_overlay(catalog: ModelCatalog) -> frozenset[str]:
-    """Apply the process flag + key. No network when the flag is off."""
-    from neos.config.settings import settings
+    """Apply the process flag + key. No network when the flag is off.
+
+    Never constructs the settings singleton. The first catalog load happens
+    while `neos.config.model_config` is still importing; building `Settings()`
+    there runs the AppConfig validators, and `validate_coding_model_policy`
+    needs this very catalog -- a circular import that stayed hidden only while
+    `coding_model.enabled` was false everywhere. Until settings is bound the
+    overlay is left as is; the API lifespan and the Celery worker init sync
+    explicitly once both singletons exist.
+    """
+    import sys
+
+    settings_module = sys.modules.get("neos.config.settings")
+    settings = getattr(settings_module, "settings", None)
+    if settings is None:
+        return _overlay
 
     return refresh_live_overlay(
         catalog,

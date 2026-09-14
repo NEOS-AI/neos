@@ -24,6 +24,10 @@ def test_coding_websocket_bypasses_generic_production_filter() -> None:
 def test_runtime_creates_supervisor_only_with_fake_loop_enabled(
     monkeypatch,
 ) -> None:
+    # development 프로파일은 실제 루프를 켠다. fake 와 real 을 함께 켜면 런타임이
+    # 거부하므로(아래 test_runtime_rejects_fake_and_real_execution_together) 이
+    # 테스트는 fake 경로만 보도록 실제 루프를 끈다.
+    monkeypatch.setattr(settings.config.coding_model, "enabled", False)
     monkeypatch.setattr(settings, "CODING_CELERY_ENABLED", False)
     monkeypatch.setattr(settings, "CODING_FAKE_LOOP_ENABLED", True)
     runtime = create_development_coding_runtime()

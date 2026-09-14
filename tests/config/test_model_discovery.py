@@ -43,6 +43,62 @@ def test_live_anthropic_flag_defaults_false() -> None:
     assert AppConfig().model_catalog.live_anthropic is False
 
 
+def test_sync_live_overlay_never_constructs_settings_before_it_is_bound(
+    reset_overlay, monkeypatch
+) -> None:
+    """The first catalog load runs while `model_config` is importing.
+
+    Constructing `Settings()` there re-enters `validate_coding_model_policy`,
+    which needs the catalog that is still being built -- a circular import.
+    """
+    import sys
+    import types
+
+    from neos.config import model_discovery
+
+    monkeypatch.setitem(
+        sys.modules,
+        "neos.config.settings",
+        types.ModuleType("neos.config.settings"),
+    )
+    refreshed: list[int] = []
+    monkeypatch.setattr(
+        model_discovery,
+        "refresh_live_overlay",
+        lambda *args, **kwargs: refreshed.append(1) or frozenset({"x"}),
+    )
+
+    assert model_discovery.sync_live_overlay(_catalog()) == frozenset()
+    assert refreshed == []
+
+
+def test_fresh_process_imports_coding_modules_with_real_loop_enabled() -> None:
+    """development enables the real coding loop; importing must not cycle."""
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "NEOS_ENV": "development",
+        "ANTHROPIC_API_KEY": "sk-ant-test-placeholder",
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import neos.coding.loop.durable\n"
+            "from neos.config.settings import settings\n"
+            "assert settings.config.coding_model.enabled is True\n",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
 def test_flag_off_does_not_fetch_and_overlay_is_empty(reset_overlay) -> None:
     from neos.config.model_discovery import current_overlay, refresh_live_overlay
 

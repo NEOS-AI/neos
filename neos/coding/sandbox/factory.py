@@ -1,4 +1,5 @@
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 
 from neos.coding.sandbox.base import SandboxUnavailable
@@ -12,11 +13,19 @@ def _docker_cli_available() -> bool:
     return shutil.which("docker") is not None
 
 
-def create_sandbox_provider(config: SandboxConfig):
+def create_sandbox_provider(
+    config: SandboxConfig,
+    *,
+    managed_backends: Mapping[str, object] | None = None,
+):
     """Construct the configured provider without starting sandbox resources.
 
     When ``sandbox.enabled`` is true the named provider is required. Missing
     Docker is refused; there is no silent memory/host fallback.
+
+    ``provider: managed`` builds a `ManagedSandboxProvider` for
+    ``sandbox.managed.provider``. Remote providers (e2b, modal) need a bound
+    `ManagedBackend` in ``managed_backends``; without one they are refused.
     """
     streams = config.streams
     if config.provider == "memory":
@@ -30,12 +39,22 @@ def create_sandbox_provider(config: SandboxConfig):
             watcher_replay_events=streams.replay_events,
         )
 
-    if (
-        config.provider == "docker"
-        and config.enabled
-        and not _docker_cli_available()
-    ):
+    if config.provider == "managed":
+        from neos.coding.sandbox.managed import create_managed_sandbox_provider
+
+        return create_managed_sandbox_provider(
+            config,
+            backends=managed_backends,  # type: ignore[arg-type]
+            docker_provider_factory=lambda: _docker_provider(config),
+        )
+
+    return _docker_provider(config)
+
+
+def _docker_provider(config: SandboxConfig) -> DockerSandboxProvider:
+    if config.enabled and not _docker_cli_available():
         raise SandboxUnavailable("sandbox_required_unavailable")
+    streams = config.streams
     docker = config.docker
     resources = config.resources
     return DockerSandboxProvider(

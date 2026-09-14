@@ -44,17 +44,19 @@
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수. 카탈로그 불변식 지키기 |
 | **C. 프론트엔드** | ✅ **인벤토리 비었다** (FE1~FE17 전부 종결) | `deep_analysis.enabled` — 트랙 A의 관문이다 |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2(멀티홉 스킬화) · D4(SDK 전환) · D3b(langgraph 교체 → **별도 문서로 분리 결정**) |
-| **E. 코딩 에이전트** | 🟢 **플랜 14개 전부 완료** · CA1~CA12 전부 종결 | **E-S2 하나** — 코드가 아니라 **배포 결정**(플래그 둘이 `False`) |
+| **E. 코딩 에이전트** | 🟢 **플랜 14개 전부 완료** · CA1~CA12 전부 종결 · **development 프로파일은 실제 루프 기본 on**(2026-09-14) | E-S2(staging·production 배포 결정) · 잔여 스트림은 [PLAN_260913.md](PLAN_260913.md) A~H가 정본. `sandbox.provider: managed` 브리지는 코드에 있으나 **B2 게이트([재검토 §8.2](MANAGED_SANDBOX_PROVIDER_REVIEW_260914.md)) 미충족** — `neos-sandboxd`·durable ledger·named profile 없음, e2b/modal은 클라이언트 미바인딩으로 거부 |
 | **F. 개선 루프 서브에이전트화** | 🔴 **F1 닫힘** (세 번 측정, 전부 미달) | 이 설계로는 진행 안 함. 재개하려면 **새 스펙 + 새 사전 등록** |
-| **G. 그래프 계약·검증** | 🟢 C1·C2·G2 완료, C3·C4 **live**(플래그 `False`) · G1 배선 버그 7건 전부 해소 | **켜는 결정**. 단 통과율 75%는 재측정 필요(사전 등록 선행) |
+| **G. 그래프 계약·검증** | 🟢 C1·C2·G2 완료, C3·C4 **live**(플래그 `False`) · G1 배선 버그 7건 전부 해소 | **켜는 결정**. 단 통과율 75%는 재측정 필요(사전 등록 선행) — **트랙 I의 GS0 선행이기도 하다** |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 **코드 완료, 켜지 않음** | H2(선행 W9) · H4 · H5 |
+| **I. 서브에이전트 노드 그래프** | 🟡 **설계만** — [GRAPH_SUBAGENT_INTEGRATION_DESIGN.md](GRAPH_SUBAGENT_INTEGRATION_DESIGN.md) (2026-09-14). 코드 없음 | **GS0 결정**(K25 개정 + G 재측정 사전 등록) → GS1~GS6. 잠긴 결정을 되연다 — §8 |
 
-**기본 플래그 — 두 제품 표면이 아직 프로덕션 기본 경로에 없다.**
+**기본 플래그 — 두 제품 표면이 아직 프로덕션 기본 경로에 없다.** 줄 번호는 적지 않는다(커밋마다 움직인다).
 
 ```
-neos/config/schema.py:613    deep_analysis.enabled = False
-neos/config/schema.py:1074   sandbox.enabled       = False
-neos/config/schema.py:1094   coding_model.enabled  = False
+DeepAnalysisConfig.enabled         = False
+SandboxConfig.enabled              = False   (development 프로파일: true, provider memory)
+CodingModelConfig.enabled          = False   (development 프로파일: true)
+WorkflowConfig.graph_design_enabled = False
 ```
 
 ---
@@ -159,8 +161,9 @@ D95  🔴 새 키는 identity-linked 라 `anthropic-workspace-id` 가 필요.  [
 | ~~4~~ | ~~`6ec71567` (G3-m1)~~ | ~~인용 게이트 분모~~ | ✅ **백테스트(D87)로 무효화** — 실측상 비율 불변 |
 | 5 | BUDGET2 | 리덕션 클램프가 `available_for_reduction` 을 안다 | **리덕션 층 전부** |
 | 6 | D2 | fetch가 429·503·전송 오류를 재시도한다 | **확보한 증거의 양**과 그 하류 전부 |
+| 7 | `f9b6c261` | DA의 실제 LLM 호출이 코딩 하네스(`create_coding_model` + `collect_model_turn`)를 거친다. 사용량 추출·중단 사유 처리가 바뀌었다 | ⚠️ **경계 여부 미판정** (2026-09-14 발견, `DECISIONS`에 기록 없음). 녹화(cassette) 백테스트로 토큰 회계가 같음을 보이기 전까지 **조사 지출(L-1)** 계보를 가로질러 나란히 놓지 않는다 |
 
-**1·2는 "원래 맞았어야 할 수가 된 것"이라 방향이 예측 가능했다. 3·5·6은 아니다.**
+**1·2는 "원래 맞았어야 할 수가 된 것"이라 방향이 예측 가능했다. 3·5·6은 아니다. 7은 판정 전이다.**
 그리고 표본 #1~#21의 채점 수치를 새 표본과 나란히 놓지 않는다 — #21은 판정자 교체
 이전이라 조사 지출(L-1) 계보만 이어지고 채점 계열은 끊긴다.
 
@@ -280,7 +283,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 기다리는 것 | 항목 |
 |---|---|
 | **값 하나** | `ANTHROPIC_WORKSPACE_ID` — 표본 #23의 유일한 선행 |
-| **사람의 결정** | **D-14**(BUDGET2를 CITE1 판별과 한 표본에?) · **D-12**(동적 합성을 표본 경로에) · **E-S2**(코딩 에이전트 플래그) · **트랙 G/H 켜기** |
+| **사람의 결정** | **D-14**(BUDGET2를 CITE1 판별과 한 표본에?) · **D-12**(동적 합성을 표본 경로에) · **E-S2**(코딩 에이전트 플래그 — development 는 켜짐, staging·production 남음) · **트랙 G/H 켜기** · **K25′**(`ParentKind.WORKFLOW` — 트랙 I 착수 조건) |
 | **라이브 표본** | CITE1 후보 셋 판별 · BUDGET2 효과(P-1~P-3) · D2 효과(Q-1~Q-3) · **C1** discard recall · **S2를 두껍게** · A3·A4(thinking 몫 실측) |
 | **새 사전 등록** | D93 다시 쓰기 · 트랙 G 설계자 통과율 재측정 |
 | **새 스펙** | **트랙 F 재개** — 진단자가 표본을 구별하게 만드는 설계. **CE4**가 거기 편입 |
@@ -412,6 +415,35 @@ D2 스킬화 ──────────────────────�
 **이념과 규율이 부딪히는 다섯 갈래 중 넷은 설계로 닫혔다. ㉰만 남았고 그것은 통계 문제다:**
 같은 사전 등록 아래 두 런이 다른 도구를 지으면 층화가 필요한데 **run당 6개로는 층 하나에 3개**다.
 표본 20회가 쌓은 귀속 가능성이 거기서 끊긴다. → §7 **D-12**
+
+### I. 서브에이전트 노드 그래프  <sub>신규, 2026-09-14</sub>
+
+**설계 정본:** [GRAPH_SUBAGENT_INTEGRATION_DESIGN.md](GRAPH_SUBAGENT_INTEGRATION_DESIGN.md). 코드는 아직 없다.
+
+지금 두 시스템이 서로를 모른다 — 그래프 설계자(트랙 G)는 정해진 노드 31개에서 **고르기만** 하고,
+`SubagentRuntime`의 부모는 코딩과 DA **둘뿐**이다(`neos.subagent`를 import하는 곳에 `neos/workflow/graph*` 없음).
+
+- **잠긴 결정을 되연다.** `PARENT_MEDIATED_COLLABORATION_DESIGN.md` K25("`ParentKind.WORKFLOW` 없음")의
+  개정 K25′가 착수 조건이다. Approach W(노드 = 페르소나)는 **여전히 기각** — 노드는 도구로 남고
+  정체성은 노드 실행 한 번이 갖는다
+- **1-step 법을 그래프에서도 지킨다.** 노드 한 번 = `advance` 한 번. 계속은 빌더가 계약에서 파생한
+  자기 루프 + `loop_bounds`로 표현한다. 설계자는 정적 엣지만 낸다
+- **checkpointer 없는 경로(챗)에서는 조립하지 않는다** — 승인 게이트 노드와 같은 방어
+- **첫 `node_costs`.** 템플릿의 `max_turns`·모델 pin으로 비용 상한을 **계산**한다. 정적 노드는 실측 전까지
+  비용 미선언 — 규칙 이름을 `subagent_budget_exceeded`로 분리해 섞지 않는다
+- **폴드는 unverified.** 템플릿 노드에서 END까지 모든 경로에 사실 검증 노드를 요구하는 규칙을 더한다
+
+| 단계 | 내용 | 선행 |
+|---|---|---|
+| **GS0** | K25′ 결정 기록 · 트랙 G 통과율 재측정 **사전 등록** | — |
+| GS1 | 템플릿 계약 · `ParentKind.WORKFLOW` · 검증 규칙 3종(변이 테스트 쌍) | GS0 |
+| GS2 | 빌더 전개(자기 루프) · checkpointer 필수 · 노드 핸들러 | GS1 |
+| GS3 | 설계자 카탈로그·프롬프트 v3 · 템플릿 예산 강제 | GS2 |
+| GS4 | 병렬 가지 · `subagent_max_active` · `concurrent_write_conflict` · 취소 전파 | GS2 |
+| GS5 | 이벤트 + FE 라벨 짝 | GS2 |
+| GS6 | 사전 등록된 라이브 표본(기준선 재측정과 **다른 표본**) | GS3·GS5 |
+
+> ⚠️ 모든 단계는 플래그 기본 off로 병합한다. 켜는 것은 GS6 판정 뒤의 별도 결정이다.
 
 ---
 

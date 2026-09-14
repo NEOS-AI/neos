@@ -90,6 +90,7 @@ async def test_delivery_binds_lesson_store_to_worker_database(
             return await super().run(**kwargs)
 
     runner = BindingRunner(CodingTaskOutcome.COMPLETED)
+    _pin_fake_loop_path(monkeypatch)
     monkeypatch.setattr(celery_runtime, "_build_runner", lambda manager: runner)
 
     await celery_runtime.run_coding_delivery(
@@ -103,11 +104,23 @@ async def test_delivery_binds_lesson_store_to_worker_database(
     assert resolve_lesson_session_factory() is None
 
 
+def _pin_fake_loop_path(monkeypatch) -> None:
+    """These tests drive the `_build_runner` (fake loop) branch.
+
+    The development profile enables the real coding loop, which would route
+    the delivery to the real-loop branch instead of the patched runner.
+    """
+    monkeypatch.setattr(
+        celery_runtime.settings.config.coding_model, "enabled", False
+    )
+
+
 async def test_delivery_initializes_and_closes_its_database_manager(
     monkeypatch,
 ) -> None:
     manager = RecordingDatabaseManager()
     runner = RecordingRunner(CodingTaskOutcome.COMPLETED)
+    _pin_fake_loop_path(monkeypatch)
     monkeypatch.setattr(celery_runtime, "_build_runner", lambda manager: runner)
 
     outcome = await celery_runtime.run_coding_delivery(
