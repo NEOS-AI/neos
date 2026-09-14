@@ -354,3 +354,414 @@ def _default_model_for_role(provider: str, role: str) -> str:
     return resolve_model(
         config=settings.config.model_routing, provider=provider, role=role
     ).model
+
+
+# -- 실행 (GS2 · GS4) --------------------------------------------------------
+
+
+_ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "gemini", "ollama"})
+
+
+def _defer_join_nodes(
+    topology: GraphTopology, template_nodes: frozenset[str]
+) -> frozenset[str]:
+    """템플릿의 후손 중 선행 노드가 둘 이상인 노드 -- `defer=True` 로 조립한다 (GS-K7″).
+
+    길이가 다른 자기 루프 두 가지가 합류하면 LangGraph 는 조인 노드를 가지마다 한
+    번씩 돌린다(그 하류까지). `defer` 는 대기 중인 작업이 없을 때만 그 노드를 돌린다.
+    """
+    if not template_nodes:
+        return frozenset()
+    forward: dict[str, set[str]] = {}
+    predecessors: dict[str, set[str]] = {}
+    for source, target in topology.edges:
+        if source == target:
+            continue
+        forward.setdefault(source, set()).add(target)
+        predecessors.setdefault(target, set()).add(source)
+    descendants: set[str] = set()
+    stack = [succ for node in template_nodes for succ in forward.get(node, ())]
+    while stack:
+        current = stack.pop()
+        if current in descendants:
+            continue
+        descendants.add(current)
+        stack.extend(forward.get(current, ()))
+    return frozenset(
+        node
+        for node in descendants
+        if node in topology.nodes
+        and node not in template_nodes
+        and len(predecessors.get(node, ())) >= 2
+    )
+
+
+class SubagentNodeHost:
+    """조립된 그래프 하나(=실행 하나)가 쓰는 자식 구동 경계.
+
+    - 노드 한 번 = `advance` 한 번 (K25′ b). 계속은 그래프의 자기 루프가 한다.
+    - 동시 `advance` 수는 이 호스트의 세마포어가 묶는다 (GS-K7) -- 실행당이지
+      프로세스 전역이 아니다. LangGraph `max_concurrency` 는 정적 노드까지 묶는다.
+    - 모델은 첫 걸음에서 한 번 해석해 `subagent_runs[node].pin` 에 고정한다.
+    """
+
+    def __init__(
+        self,
+        *,
+        runtime: Any,
+        provider: str,
+        max_active: int = 1,
+        templates: Mapping[str, SubagentNodeTemplate] | None = None,
+        model_for_role: Any = None,
+        emit: Any = None,
+    ) -> None:
+        import asyncio
+
+        if not 1 <= max_active <= 4:
+            raise ValueError("max_active must be 1-4")
+        self._runtime = runtime
+        self._provider = provider
+        self._templates = dict(
+            SUBAGENT_NODE_TEMPLATES if templates is None else templates
+        )
+        self._semaphore = asyncio.Semaphore(max_active)
+        self._model_for_role = model_for_role or _default_model_for_role
+        self._emit = emit or (lambda kind, payload: None)
+        self.max_active = max_active
+
+    @property
+    def template_names(self) -> frozenset[str]:
+        return frozenset(self._templates)
+
+    @staticmethod
+    def new_scope() -> str:
+        from uuid import uuid4
+
+        return f"wf_{uuid4().hex}"
+
+    def extra_steps(self, topology: GraphTopology) -> int:
+        """자기 루프가 더하는 슈퍼스텝 수의 상한 -- `recursion_limit` 계산용 (GS-K2′)."""
+        return sum(
+            int(topology.loop_bounds.get(node, self._templates[node].max_advances)) - 1
+            for node in topology.nodes
+            if node in self._templates
+        )
+
+    def defer_nodes(self, topology: GraphTopology) -> frozenset[str]:
+        present = frozenset(template_nodes_in(topology.nodes, self._templates))
+        return _defer_join_nodes(topology, present)
+
+    def handler_for(self, node: str) -> Any:
+        template = self._templates[node]
+
+        async def run(state: Mapping[str, Any]) -> dict[str, Any]:
+            return await self._run(template, state)
+
+        run.__name__ = f"subagent_node_{node}"
+        return run
+
+    def route_for(self, node: str, done_targets: Iterable[str]) -> Any:
+        done = list(done_targets)
+
+        def route(state: Mapping[str, Any]) -> list[str]:
+            ref = (state.get("subagent_runs") or {}).get(node)
+            if (
+                isinstance(ref, Mapping)
+                and ref.get("terminal") is False
+                and ref.get("scope") == state.get("subagent_scope")
+            ):
+                return [node]
+            return done
+
+        route.__name__ = f"route_subagent_node_{node}"
+        return route
+
+    async def cancel_scope(self, scope: str | None, reason: str) -> tuple[Any, ...]:
+        """GS-K8. 이 실행 스코프의 살아 있는 자식을 전부 끝낸다."""
+        from neos.subagent.types import ParentKind
+
+        if not scope:
+            return ()
+        return await self._runtime.cancel_for_parent(ParentKind.WORKFLOW, scope, reason)
+
+    # -- 한 걸음 ------------------------------------------------------------
+
+    def _pin(self, template: SubagentNodeTemplate) -> dict[str, Any]:
+        from neos.config.model_config import resolve_coding_rate_micros
+
+        if self._provider not in _ALLOWED_PROVIDERS:
+            raise ValueError(f"provider '{self._provider}' cannot run a subagent child")
+        model = self._model_for_role(self._provider, template.model_role)
+        rates = resolve_coding_rate_micros(
+            provider=self._provider,
+            model=model,
+            input_cost_micros_per_million=0,
+            output_cost_micros_per_million=0,
+        )
+        return {
+            "spec": template.spec,
+            "max_turns": template.max_turns,
+            "max_advances": template.max_advances,
+            "provider": self._provider,
+            "model": model,
+            "input_ppm": rates.input,
+            "output_ppm": rates.output,
+        }
+
+    async def _run(
+        self, template: SubagentNodeTemplate, state: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        from neos.subagent.types import (
+            ModelPin,
+            ParentKind,
+            SandboxMode,
+            StepKind,
+            SubagentStatus,
+            SubagentTicket,
+        )
+
+        node = template.name
+        scope = state.get("subagent_scope")
+        if not scope:
+            return self._failure(template, None, None, 0, "subagent_scope_missing")
+        ref = (state.get("subagent_runs") or {}).get(node)
+        if not isinstance(ref, Mapping) or ref.get("scope") != scope:
+            # 다른 턴(같은 대화 스레드에서 이월된 값)의 포인터다 -- 잇지 않는다.
+            ref = None
+        if ref is not None and ref.get("terminal"):
+            return {}
+        steps = (int(ref.get("steps") or 0) if ref is not None else 0) + 1
+
+        try:
+            pin = dict(ref["pin"]) if ref is not None else self._pin(template)
+            briefing = ParentBriefing(
+                **{
+                    field_name: str(state.get(key) or "")
+                    for field_name, key in template.briefing_from.items()
+                }
+            )
+            ticket = SubagentTicket(
+                parent_kind=ParentKind.WORKFLOW,
+                parent_id=str(scope),
+                parent_run_id=str(scope),
+                parent_tool_call_id=f"node:{node}",
+                spec=str(pin["spec"]),
+                briefing=briefing,
+                model=ModelPin(provider=pin["provider"], model=str(pin["model"])),
+                max_turns=int(pin["max_turns"]),
+                sandbox_mode=SandboxMode.NONE,
+                run_id=ref.get("run_id") if ref is not None else None,
+                expected_checkpoint_id=(
+                    ref.get("checkpoint_id") if ref is not None else None
+                ),
+                input_cost_micros_per_million=int(pin["input_ppm"]),
+                output_cost_micros_per_million=int(pin["output_ppm"]),
+                # K25′ (a) 의 호스트 층 보증. `explore` 는 `can_spawn=True` 이고
+                # 스테퍼는 depth 0 에서 `spawn_agent.v1` 을 허용한다 -- ToolPort 가
+                # 그 이름을 정의하면 자식에게 보인다. depth 1 은 `may_spawn` 이
+                # 거짓이라 ToolPort 모양과 무관하게 스폰이 닫힌다(테스트가 날 포트로 확인).
+                spawn_depth=1,
+            )
+        except Exception as exc:  # noqa: BLE001 -- 조용히 흐르지 않고 보고로 끝낸다
+            return self._failure(
+                template, scope, ref, steps,
+                f"subagent_ticket_invalid: {type(exc).__name__}: {exc}",
+            )
+
+        try:
+            async with self._semaphore:
+                outcome = await self._runtime.advance(ticket)  # 정확히 한 번 (K25′ b)
+        except Exception as exc:  # noqa: BLE001 -- 재시도하지 않는다
+            return self._failure(
+                template, scope, ref, steps, f"subagent_advance_error: {type(exc).__name__}"
+            )
+
+        max_advances = int(pin.get("max_advances") or template.max_advances)
+        new_ref = {
+            "scope": scope,
+            "run_id": outcome.run_id,
+            "checkpoint_id": outcome.checkpoint_id,
+            "steps": steps,
+            "terminal": False,
+            "pin": pin,
+        }
+        self._emit(
+            "graph_subagent_step",
+            {
+                "node": node,
+                "run_id": outcome.run_id,
+                "step_kind": outcome.kind.value,
+                "steps": steps,
+                "max_advances": max_advances,
+                "turn_count": outcome.turn_count,
+                "tokens_delta": outcome.tokens_delta,
+            },
+        )
+        capped = False
+        if outcome.kind is StepKind.CONTINUING:
+            if steps < max_advances:
+                return {"subagent_runs": {node: new_ref}}
+            capped = True
+            try:
+                await self._runtime.cancel(outcome.run_id, "graph_step_cap")
+            except Exception:  # noqa: BLE001 -- 폴드가 상태를 말한다
+                pass
+
+        try:
+            folded = await self._runtime.fold(outcome.run_id)
+        except Exception as exc:  # noqa: BLE001
+            return self._failure(
+                template, scope, new_ref, steps, f"subagent_fold_error: {type(exc).__name__}"
+            )
+
+        report = {
+            "run_id": folded.run_id,
+            "status": folded.status.value,
+            "exit_reason": "graph_step_cap" if capped else folded.exit_reason,
+            "error_code": outcome.error_code,
+            "truncated": folded.truncated,
+            "steps": steps,
+            "turn_count": folded.turn_count,
+            "input_tokens": folded.input_tokens,
+            "output_tokens": folded.output_tokens,
+            "cost_micros": folded.cost_micros,
+            "unverified": True,
+        }
+        results: list[Any] = []
+        if (
+            folded.status is SubagentStatus.COMPLETED
+            and not capped
+            and folded.summary.strip()
+        ):
+            from neos.workflow.state import SearchResult
+
+            results.append(
+                SearchResult(
+                    source=f"subagent:{node}",
+                    title=template.label,
+                    content=folded.summary,
+                    url=None,
+                    score=0.0,
+                    metadata={
+                        "unverified": True,
+                        "node": node,
+                        "run_id": folded.run_id,
+                        "citations": list(folded.citations),
+                        "truncated": folded.truncated,
+                    },
+                )
+            )
+        # 요약 본문은 이벤트에 싣지 않는다 -- 본문은 unverified 검색 결과로만 간다.
+        self._emit("graph_subagent_folded", {"node": node, **report})
+        return {
+            "subagent_runs": {node: {**new_ref, "terminal": True}},
+            "subagent_reports": {node: report},
+            "search_results": results,
+        }
+
+    def _failure(
+        self,
+        template: SubagentNodeTemplate,
+        scope: Any,
+        ref: Mapping[str, Any] | None,
+        steps: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        """자식 없이(또는 자식을 읽지 못한 채) 끝나는 걸음. 계약의 writes 를 전부 반환한다."""
+        node = template.name
+        run_id = ref.get("run_id") if ref is not None else None
+        report = {
+            "run_id": run_id,
+            "status": "failed",
+            "exit_reason": reason.split(":", 1)[0],
+            "error_code": reason,
+            "truncated": False,
+            "steps": steps,
+            "turn_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_micros": 0,
+            "unverified": True,
+        }
+        self._emit("graph_subagent_folded", {"node": node, **report})
+        return {
+            "subagent_runs": {
+                node: {
+                    **(dict(ref) if ref is not None else {}),
+                    "scope": scope,
+                    "run_id": run_id,
+                    "steps": steps,
+                    "terminal": True,
+                }
+            },
+            "subagent_reports": {node: report},
+            "search_results": [],
+        }
+
+
+class _TemplateToolPort:
+    """템플릿 도구 집합만 정의하고 실행한다. 자식이 보는 도구 = 이것 ∩ 명세 허용."""
+
+    def __init__(self, inner: Any, allowed: frozenset[str]) -> None:
+        self._inner = inner
+        self._allowed = allowed
+
+    def definitions(self) -> tuple[Any, ...]:
+        return tuple(
+            item
+            for item in self._inner.definitions()
+            if (item if isinstance(item, str) else getattr(item, "name", ""))
+            in self._allowed
+        )
+
+    async def execute(self, name: str, input: Mapping[str, object]) -> Mapping[str, Any]:
+        if name not in self._allowed:
+            return {"error": "tool_not_allowed"}
+        return await self._inner.execute(name, input)
+
+
+class _LoggingSink:
+    async def emit(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        import logging
+
+        logging.getLogger(__name__).info(
+            "[SubagentNode] %s %s", event_type, dict(payload)
+        )
+
+
+def build_workflow_subagent_host(
+    *, provider: str, max_active: int, emit: Any = None
+) -> SubagentNodeHost:
+    """프로덕션 호스트. 저장소는 Postgres, 도구는 DA 의 `search`/`fetch` 를 재사용한다.
+
+    `NestedSpawnHost` 를 주입하지 않는다 -- 워크플로 자식은 스폰하지 않는다 (K25′ a).
+    """
+    from neos.database.connection import db_manager
+    from neos.observability.metrics import get_metrics_collector
+    from neos.subagent.catalog import SpecRegistry
+    from neos.subagent.metrics import MetricsEventSink
+    from neos.subagent.ports import SystemClock
+    from neos.subagent.postgres import PostgresSubagentStore
+    from neos.subagent.runtime import SubagentRuntime
+    from neos.subagent.stepper import ChildStepper
+    from neos.utils.llm_factory import create_coding_model
+    from neos.workflow.deep_analysis.fetch import fetch_url
+    from neos.workflow.deep_analysis.service import web_search
+    from neos.workflow.deep_analysis.subagent_adapter import DAToolPort
+
+    allowed = frozenset().union(
+        *(template.tools for template in SUBAGENT_NODE_TEMPLATES.values())
+    )
+    runtime = SubagentRuntime(
+        store=PostgresSubagentStore(db_manager.get_session),
+        catalog=SpecRegistry(),
+        stepper=ChildStepper(
+            model=create_coding_model(provider=provider),
+            tools=_TemplateToolPort(DAToolPort(web_search, fetch_url), allowed),
+        ),
+        events=MetricsEventSink(_LoggingSink(), get_metrics_collector()),
+        clock=SystemClock(),
+    )
+    return SubagentNodeHost(
+        runtime=runtime, provider=provider, max_active=max_active, emit=emit
+    )

@@ -65,6 +65,10 @@ class ExecutionGraph:
     # 그리고 정적 run 에 정적 토폴로지를 실지 않는 이유는, 재개가 정적 run 마다
     # 그래프를 새로 짓게 되어 지금 동작을 바꾸기 때문이다.
     topology: "GraphTopology | None" = None
+    # 트랙 I: 이 실행의 서브에이전트 템플릿 노드를 구동하는 호스트
+    # (`neos.workflow.subagent_nodes.SubagentNodeHost`). 템플릿이 없으면 None.
+    # 실행 스코프를 발급하고, 끝날 때 살아 있는 자식을 취소하는 자리다.
+    subagent_host: Any = None
 
 
 def current_static_flags() -> dict[str, bool]:
