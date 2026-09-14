@@ -200,12 +200,15 @@ async def test_resume_refuses_a_template_topology_when_the_flag_is_off(monkeypat
     from neos.workflow.subagent_nodes import expand_subagent_nodes
 
     payload = topology_to_payload(expand_subagent_nodes(_DESIGN))
-    with pytest.raises(ResumeGraphUnavailable, match="subagent_nodes_enabled"):
+    # 플래그가 꺼지면 템플릿 계약을 합치지 않으므로, 템플릿 노드는 배포에서 사라진
+    # 노드와 같은 드리프트 사유로 거부된다 -- 플래그 전용 사유가 따로 없다.
+    with pytest.raises(ResumeGraphUnavailable, match="no longer valid") as caught:
         await resume_graph_for(
             {"execution_topology": payload},
             workflow=MultiAgentWorkflow(),
             checkpointer=MemorySaver(),
         )
+    assert NODE in caught.value.reason
 
 
 @pytest.mark.asyncio

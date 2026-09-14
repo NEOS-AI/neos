@@ -79,21 +79,17 @@ async def resume_graph_for(
     # 이 재검증이 존재하는 유일한 이유(배포 드리프트 탐지)를 흐린다. 다음
     # 사람이 "이 인자 없어도 되지 않나" 하고 지우지 않도록 이유를 남긴다.
     # 트랙 I: 정적 계약에 없는 노드가 있으면 서브에이전트 템플릿 노드일 수 있다.
-    # 플래그가 꺼졌으면 재개하지 않는다 -- 템플릿을 정적 노드처럼 지으면 자리표시
-    # 핸들러가 터지고, 빼고 지으면 다른 그래프로 재개한다. 켜져 있으면 템플릿
-    # 계약을 합쳐 재검증한다(템플릿이 사라졌으면 `missing_contract` 로 503).
-    # 저장된 페이로드는 이미 전개돼 있다 -- 다시 전개하지 않는다.
+    # 플래그가 켜져 있을 때만 템플릿 계약을 합쳐 재검증한다(템플릿이 사라졌으면
+    # `missing_contract` 로 503). 꺼져 있으면 정적 계약 그대로 검증한다 -- 템플릿
+    # 노드도 없어진 노드와 똑같이 위반으로 거부된다. 여기서 "플래그 off" 로 먼저
+    # 거부하면 진짜 배포 드리프트(노드 삭제)까지 플래그 사유로 보고돼 이 재검증의
+    # 존재 이유를 흐린다. 저장된 페이로드는 이미 전개돼 있다 -- 다시 전개하지 않는다.
     contracts = NODE_CONTRACTS
     subagent_host = None
     extra_nodes = sorted(set(topology.nodes) - set(NODE_CONTRACTS))
-    if extra_nodes:
-        from neos.config.settings import settings
+    from neos.config.settings import settings
 
-        if not settings.config.workflow.subagent_nodes_enabled:
-            raise ResumeGraphUnavailable(
-                f"stored topology has nodes outside the static contracts {extra_nodes} "
-                "and workflow.subagent_nodes_enabled is off"
-            )
+    if extra_nodes and settings.config.workflow.subagent_nodes_enabled:
         try:
             from neos.workflow.subagent_nodes import merged_contracts
 
