@@ -137,6 +137,12 @@ def init_worker(**kwargs):
     LLMFactory.clear_cache()
     logger.info("LLM cache cleared after fork")
 
+    # import 시점 카탈로그 로드는 live overlay 를 동기화하지 않는다(순환 import).
+    from neos.config.model_config import model_config
+    from neos.config.model_discovery import sync_live_overlay
+
+    sync_live_overlay(model_config.catalog)
+
     logger.info("Celery worker ready")
 
 

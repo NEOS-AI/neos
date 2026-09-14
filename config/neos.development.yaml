@@ -1,6 +1,11 @@
 environment: development
 coding_model:
-  enabled: false
+  # development 에서만 실제 코딩 루프를 기본으로 켠다. 스키마·default·staging·
+  # production 은 여전히 false 다. 켜진 루프는 AppConfig.validate_coding_model_policy
+  # 가 요구하는 셋(켜진 샌드박스 · 프로바이더 크리덴셜 · 양수 가격)을 기동 시
+  # 확인한다 -- 크리덴셜이 없으면 기동이 멈춘다(fail-closed). 키 없이 띄우려면
+  # coding_model.enabled 를 false 로 덮는다.
+  enabled: true
   provider: anthropic
   model_timeout_sec: 120
   tool_timeout_sec: 30
@@ -10,11 +15,17 @@ coding_model:
   max_output_tokens: 8192
   max_transcript_bytes: 1048576
   max_cost_usd: 5.0
-  input_cost_micros_per_million: 0
-  output_cost_micros_per_million: 0
+  # everyday 역할(claude-sonnet-5)의 카탈로그 가격 $3 / $15 per 1M tokens.
+  # 모델을 바꾸면 neos/config/models.yaml 과 함께 맞춘다.
+  input_cost_micros_per_million: 3000000
+  output_cost_micros_per_million: 15000000
   command_enabled: true
   command_allowlist: [pytest, ruff, mypy, pnpm, git]
   mutation_snapshot_interval: 5
+sandbox:
+  # 실제 코딩 루프가 요구하는 샌드박스. development 는 로컬 디렉터리 기반 memory.
+  enabled: true
+  provider: memory
 api:
   debug: false
   cors:

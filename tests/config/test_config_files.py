@@ -41,7 +41,15 @@ def walk_yaml(value: Any, path: tuple[str, ...] = ()):
 def test_committed_config_profiles_exist_and_validate():
     for path in PROFILE_FILES:
         assert path.exists(), f"missing config profile: {path}"
-        config = AppConfig.model_validate(load_yaml_file(path))
+        data = load_yaml_file(path)
+        # development 만 실제 코딩 루프를 켠다. 켜진 루프는 기동 시 크리덴셜을
+        # 요구하므로(fail-closed) 검증용 자리표시자를 준다 -- 프로파일 파일
+        # 자체에는 시크릿을 두지 않는다(아래 테스트가 그것을 지킨다).
+        data.setdefault("secrets", {})["anthropic_api_key"] = "sk-ant-test-placeholder"
+        config = AppConfig.model_validate(data)
+        assert config.coding_model.enabled is (
+            path.name == "neos.development.yaml"
+        ), f"{path.name}: only development enables the real coding loop"
         assert config.model_routing.anthropic.everyday == "sonnet-5"
         assert config.model_routing.openai.powerful == "gpt-5.6-sol"
         assert config.coding_model.model is None

@@ -154,6 +154,13 @@ async def lifespan(app: FastAPI):
         warn_unknown_routed_models(settings.config.model_routing)
         warn_coding_model_price_drift(settings.config.coding_model)
 
+        # import 시점 카탈로그 로드는 live overlay 를 동기화하지 않는다(순환 import).
+        # settings 와 카탈로그가 둘 다 선 지금 명시적으로 한다.
+        from neos.config.model_config import model_config
+        from neos.config.model_discovery import sync_live_overlay
+
+        sync_live_overlay(model_config.catalog)
+
         # 데이터베이스 연결 초기화
         logger.info("📊 Initializing database connection...")
         await db_manager.initialize()
