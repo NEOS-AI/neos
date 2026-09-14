@@ -87,7 +87,8 @@ def test_real_loop_accepts_explicit_prices() -> None:
 
 @pytest.mark.parametrize("environment", ["staging", "production"])
 def test_real_loop_requires_docker_in_deployed_environments(environment) -> None:
-    with pytest.raises(ValidationError, match="Docker sandbox"):
+    # memory 는 여전히 거부된다. 허용되는 것은 docker 와 managed 둘이다.
+    with pytest.raises(ValidationError, match="Docker or managed sandbox"):
         AppConfig.model_validate(priced_real_config(environment=environment))
 
 

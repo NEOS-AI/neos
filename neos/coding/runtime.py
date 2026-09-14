@@ -241,9 +241,15 @@ def _managed_adapter_registry(
     managed = config.sandbox.managed
     if not managed.enabled:
         return {}
+    # `sandbox.provider: managed` 이면 factory 가 `ManagedSandboxProvider` 를 준다.
+    # 섀도 어댑터는 그 뒤의 로컬 Docker provider 위에서만 돈다 -- 원격 백엔드
+    # (e2b·modal)에는 로컬 Docker 가 없으므로 섀도 어댑터를 등록하지 않는다.
+    local = getattr(sandboxes, "local_provider", sandboxes)
+    if local is None:
+        return {}
     return {
         "docker": DockerShadowManagedAdapter(
-            provider=sandboxes,
+            provider=local,
             claim_lease_seconds=managed.claim_lease_seconds,
         )
     }

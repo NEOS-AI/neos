@@ -1574,7 +1574,10 @@ class ManagedSandboxConfig(StrictConfigModel):
 
 class SandboxConfig(StrictConfigModel):
     enabled: bool = False
-    provider: Literal["memory", "docker"] = "memory"
+    # memory | docker | managed. `managed` runs the coding loop on the managed
+    # adapter plane (`sandbox.managed.provider`: docker | e2b | modal) and
+    # requires `sandbox.managed.enabled`.
+    provider: Literal["memory", "docker", "managed"] = "memory"
     lifecycle: SandboxLifecycleConfig = Field(
         default_factory=SandboxLifecycleConfig
     )
@@ -1897,6 +1900,12 @@ class AppConfig(StrictConfigModel):
         유출되면 provider 세션을 바로 조작당한다. `validate_coding_model_policy`
         옆에 같은 fail-closed 형태로 둔다.
         """
+        if self.sandbox.provider == "managed" and not self.sandbox.managed.enabled:
+            # 관리형 provider 는 킬 스위치·쿼터·정리가 사는 관리형 평면 위에서만
+            # 돈다. 평면이 꺼진 채 provider 만 managed 로 두면 그 셋이 없다.
+            raise ValueError(
+                "sandbox.provider=managed requires sandbox.managed.enabled"
+            )
         if not self.sandbox.managed.enabled:
             return self
         secret = self.secrets.managed_provider_reference_key
@@ -1942,10 +1951,11 @@ class AppConfig(StrictConfigModel):
             )
         if (
             self.environment in {"staging", "production"}
-            and self.sandbox.provider != "docker"
+            and self.sandbox.provider not in {"docker", "managed"}
         ):
             raise ValueError(
-                "coding real loop requires a Docker sandbox in staging and production"
+                "coding real loop requires a Docker or managed sandbox in "
+                "staging and production"
             )
         return self
 
