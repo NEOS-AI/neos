@@ -1,6 +1,6 @@
 """Python helper scripts executed at `/workspace` inside a coding sandbox.
 
-Pure strings shared by every helper-script session (Docker, managed remote).
+Pure strings used by the helper-script session (Docker).
 """
 
 from __future__ import annotations

@@ -24,8 +24,10 @@ def create_sandbox_provider(
     Docker is refused; there is no silent memory/host fallback.
 
     ``provider: managed`` builds a `ManagedSandboxProvider` for
-    ``sandbox.managed.provider``. Remote providers (e2b, modal) need a bound
-    `ManagedBackend` in ``managed_backends``; without one they are refused.
+    ``sandbox.managed.provider`` (e2b | modal). It needs a `ManagedBackend` in
+    ``managed_backends`` -- provider client, durable ledger, pinned image, and
+    ownership key; without one it is refused. Nothing falls back to memory or
+    Docker.
     """
     streams = config.streams
     if config.provider == "memory":
@@ -45,7 +47,6 @@ def create_sandbox_provider(
         return create_managed_sandbox_provider(
             config,
             backends=managed_backends,  # type: ignore[arg-type]
-            docker_provider_factory=lambda: _docker_provider(config),
         )
 
     return _docker_provider(config)

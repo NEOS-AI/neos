@@ -90,3 +90,4 @@ db/migrations/053_add_channel_inbound_idempotency.sql
 db/migrations/054_allow_delegated_tool_executions.sql
 db/migrations/055_add_subagent_tables.sql
 db/migrations/056_llm_pricing_claude5.sql
+db/migrations/057_add_coding_sandbox_ledger.sql

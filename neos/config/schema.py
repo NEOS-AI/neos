@@ -1554,6 +1554,26 @@ class ManagedSandboxConfig(StrictConfigModel):
         ge=1,
         description="provider 참조 봉인에 쓰는 키 버전.",
     )
+    coding_profile: str = Field(
+        default="offline-v1",
+        pattern=r"^[a-z0-9][a-z0-9-]*-v[0-9]+$",
+        description=(
+            "코딩 샌드박스(`sandbox.provider: managed`)의 named profile. 코드 "
+            "레지스트리(`neos/coding/sandbox/managed/profiles.py`)에 없거나 provider "
+            "capability probe 가 정확히 만족하지 않으면 create 전에 "
+            "`profile_unsupported` 로 거절한다. 기본 `offline-v1` 은 outbound/inbound "
+            "모두 deny."
+        ),
+    )
+    sandboxd_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description=(
+            "이미지에 bake 된 `neos-sandboxd` 의 bundle digest 고정값. 비우면 이 "
+            "소스 트리의 guest 모듈 digest 를 요구한다. handshake 가 다르면 세션을 "
+            "열지 않는다."
+        ),
+    )
 
     @field_validator("cleanup_retry_backoff_seconds")
     @classmethod
@@ -1574,9 +1594,10 @@ class ManagedSandboxConfig(StrictConfigModel):
 
 class SandboxConfig(StrictConfigModel):
     enabled: bool = False
-    # memory | docker | managed. `managed` runs the coding loop on the managed
-    # adapter plane (`sandbox.managed.provider`: docker | e2b | modal) and
-    # requires `sandbox.managed.enabled`.
+    # memory | docker | managed. `managed` runs the coding loop on a managed
+    # coding sandbox (`sandbox.managed.provider`: e2b | modal) through a provider
+    # client, the durable sandbox ledger, and the guest `neos-sandboxd`. It
+    # requires `sandbox.managed.enabled` and an injected backend.
     provider: Literal["memory", "docker", "managed"] = "memory"
     lifecycle: SandboxLifecycleConfig = Field(
         default_factory=SandboxLifecycleConfig
