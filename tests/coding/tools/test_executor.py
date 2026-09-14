@@ -63,12 +63,14 @@ class FakeSession:
             self.modified.get(path, NOW),
         )
 
-    async def read_file(self, path: str, **kwargs: Any) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        # No offset/limit: this double models a legacy session so the executor
+        # takes its TypeError fallback and slices lines itself.
         self._raise()
         if path not in self.files:
             raise FileNotFoundError(path)
         self.called = ("read_file", path)
-        cap = kwargs.get("max_bytes")
+        cap = max_bytes
         data = self.files[path]
         if isinstance(cap, int) and cap < 1:
             raise SandboxPolicyViolation("invalid_read_request")
