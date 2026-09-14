@@ -792,6 +792,44 @@ async def test_implement_tool_port_allows_workspace_writes() -> None:
     assert executor.calls == ["write_file.v1"]
 
 
+def test_child_native_expose_ignores_parent_revealed_and_phase() -> None:
+    from neos.coding.subagent_port import CodingToolPort
+
+    registry = CodingToolRegistry.default(command_allowlist=frozenset({"pytest"}))
+    explore = CodingToolPort(registry=registry, executor=object(), spec="explore")
+    explore.bind(
+        session=object(),
+        phase="explore",
+        revealed=frozenset(
+            {
+                "search_tools.v1",
+                "web_fetch.v1",
+                "mcp__server__tool",
+                "write_file.v1",
+            }
+        ),
+    )
+    explore_names = {item.name for item in explore.definitions()}
+    assert "search_tools.v1" not in explore_names
+    assert "web_fetch.v1" not in explore_names
+    assert "mcp__server__tool" not in explore_names
+    assert "write_file.v1" not in explore_names
+    assert "read_file.v1" in explore_names
+    assert "git_status.v1" in explore_names
+    assert "spawn_agent.v1" in explore_names
+
+    implement = CodingToolPort(
+        registry=registry, executor=object(), spec="implement"
+    )
+    implement.bind(session=object(), phase="explore", revealed=frozenset())
+    implement_names = {item.name for item in implement.definitions()}
+    assert "search_tools.v1" not in implement_names
+    assert "spawn_agent.v1" not in implement_names
+    assert "write_file.v1" in implement_names
+    assert "execute.v1" in implement_names
+    assert "git_status.v1" in implement_names
+
+
 @pytest.mark.asyncio
 async def test_max_active_2_allows_two_different_tool_call_ids() -> None:
     runtime, _child = _make_runtime([_child_tool(), _child_tool()])

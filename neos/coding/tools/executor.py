@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import errno
 import hashlib
 import http.client
@@ -32,7 +33,24 @@ from neos.coding.sandbox.base import (
 )
 from neos.coding.sandbox.observability import bounded_executable_category
 from neos.coding.sandbox.paths import normalize_workspace_path
-from neos.coding.tools.registry import CodingToolRegistry, ValidatedToolCall
+from neos.coding.tools.media import (
+    MediaError,
+    extract_pdf_text,
+    is_image_path,
+    is_pdf_path,
+    sniff_image_type,
+)
+from neos.coding.tools.notebook import (
+    NotebookError,
+    apply_notebook_edit,
+    is_notebook_path,
+)
+from neos.coding.tools.registry import (
+    CodingToolRegistry,
+    ValidatedToolCall,
+    optional_tool_enabled,
+)
+from neos.coding.tools.web_search import WebSearchError, tavily_search
 
 _WEB_FETCH_TIMEOUT_SEC = 15
 _WEB_FETCH_MAX_BYTES = 200_000
@@ -155,6 +173,19 @@ _FS_FIX_NOTES = {
     "policy_secret_path_denied": "secret paths are not readable",
     "policy_protected_git_path": "do not mutate .git",
     "policy_binary_file": "binary files cannot be read as text",
+    "policy_use_read_image": "use read_image.v1 for images",
+    "policy_use_read_pdf": "use read_pdf.v1 for PDFs",
+    "policy_notebook_required": "use notebook_edit.v1 for .ipynb",
+    "policy_media_tool_disabled": "this optional tool is not enabled",
+    "policy_image_unsupported": "only jpeg/png/gif/webp are readable",
+    "policy_image_too_large": "image exceeds the configured byte cap",
+    "policy_pdf_invalid": "the PDF could not be parsed",
+    "policy_pdf_encrypted": "encrypted PDFs are not readable",
+    "policy_pdf_too_large": "request fewer pages (max 20)",
+    "policy_notebook_invalid": "path must be a valid .ipynb notebook",
+    "policy_notebook_cell_missing": "cell_id was not found",
+    "policy_web_search_unconfigured": "web search is not configured",
+    "web_search_failed": "the search provider failed; change the query",
     "precondition_read_required": "read the file first",
     "precondition_stale_read": "re-read the file, then retry",
     "sandbox_policy_violation": "request violates sandbox policy",
@@ -172,6 +203,12 @@ def _passthrough_policy_reason(error: SandboxPolicyViolation) -> str:
 
 def _policy_fix_note(reason: str) -> str | None:
     return _FS_FIX_NOTES.get(reason)
+
+
+def _coding_model():
+    from neos.config.settings import settings
+
+    return settings.config.coding_model
 
 
 def _write_accepts_parents(write_file: Any) -> bool:
@@ -638,6 +675,10 @@ class SandboxToolExecutor:
         offset = int(call.input.get("offset", 1))
         raw_limit = call.input.get("limit")
         limit = int(raw_limit) if raw_limit is not None else None
+        if is_image_path(path):
+            return await self._denied(session, "policy_use_read_image")
+        if is_pdf_path(path):
+            return await self._denied(session, "policy_use_read_pdf")
         if _is_binary_path(path):
             return await self._denied(session, "policy_binary_file")
         ranged = False
@@ -717,6 +758,8 @@ class SandboxToolExecutor:
         known_reads: frozenset[str],
     ) -> ToolResult:
         path = str(call.input["path"])
+        if is_notebook_path(path):
+            return await self._denied(session, "policy_notebook_required")
         denied = await self._deny_unread_existing(
             session, path, known_reads=known_reads
         )
@@ -795,6 +838,8 @@ class SandboxToolExecutor:
         known_reads: frozenset[str],
     ) -> ToolResult:
         path = str(call.input["path"])
+        if is_notebook_path(path):
+            return await self._denied(session, "policy_notebook_required")
         old_string = str(call.input["old_string"])
         new_string = str(call.input["new_string"])
         replace_all = bool(call.input.get("replace_all", False))
@@ -1021,6 +1066,14 @@ class SandboxToolExecutor:
             return self._subagent_steer()
         if call.name == "web_fetch.v1":
             return await self._web_fetch(session, call)
+        if call.name == "web_search.v1":
+            return await self._web_search(session, call)
+        if call.name == "read_image.v1":
+            return await self._read_image(session, call)
+        if call.name == "read_pdf.v1":
+            return await self._read_pdf(session, call)
+        if call.name == "notebook_edit.v1":
+            return await self._notebook_edit(session, call)
         if call.name == "glob_files.v1":
             limit = int(call.input.get("limit", 100))
             kwargs: dict[str, Any] = {"limit": limit + 1}
@@ -1285,6 +1338,200 @@ class SandboxToolExecutor:
                 },
             ),
         )
+
+    async def _web_search(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        if not optional_tool_enabled("web_search.v1"):
+            return await self._denied(session, "policy_media_tool_disabled")
+        from neos.config.settings import settings
+
+        api_key = str(getattr(settings, "TAVILY_API_KEY", "") or "").strip()
+        if not api_key:
+            return await self._denied(session, "policy_web_search_unconfigured")
+        configured = int(settings.config.coding_model.web_search_max_results)
+        requested = call.input.get("max_results")
+        limit = min(int(requested) if requested is not None else configured, configured)
+        try:
+            hits = await asyncio.to_thread(
+                tavily_search,
+                str(call.input["query"]),
+                api_key=api_key,
+                max_results=limit,
+            )
+        except WebSearchError as error:
+            if error.reason == "policy_web_search_unconfigured":
+                return await self._denied(session, error.reason)
+            return self._failure("error", error.reason)
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=f"{len(hits)} results",
+            original_bytes=None,
+            truncated=False,
+            checksum=None,
+            workspace_revision=await self._revision(session),
+            entries=hits,
+        )
+
+    async def _read_image(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        if not optional_tool_enabled("read_image.v1"):
+            return await self._denied(session, "policy_media_tool_disabled")
+        path = str(call.input["path"])
+        if not is_image_path(path):
+            return await self._denied(session, "policy_image_unsupported")
+        cap = int(_coding_model().image_max_bytes)
+        data = await self._read_capped_bytes(
+            session, path, cap, too_large="policy_image_too_large"
+        )
+        if isinstance(data, ToolResult):
+            return data
+        try:
+            media_type = sniff_image_type(data)
+        except MediaError as error:
+            return await self._denied(session, error.reason)
+        encoded = base64.b64encode(data).decode("ascii")
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=f"{media_type} {len(data)} bytes",
+            original_bytes=len(data),
+            truncated=False,
+            checksum=hashlib.sha256(data).hexdigest(),
+            workspace_revision=await self._revision(session),
+            entries=(
+                {
+                    "path": path,
+                    "kind": "image",
+                    "media_type": media_type,
+                    "data_b64": encoded,
+                },
+            ),
+        )
+
+    async def _read_pdf(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        if not optional_tool_enabled("read_pdf.v1"):
+            return await self._denied(session, "policy_media_tool_disabled")
+        path = str(call.input["path"])
+        if not is_pdf_path(path):
+            return await self._denied(session, "policy_pdf_invalid")
+        config = _coding_model()
+        cap = int(config.pdf_max_bytes)
+        data = await self._read_capped_bytes(
+            session, path, cap, too_large="policy_pdf_too_large"
+        )
+        if isinstance(data, ToolResult):
+            return data
+        pages = call.input.get("pages")
+        try:
+            extracted, page_count = extract_pdf_text(
+                data,
+                pages=str(pages) if pages is not None else None,
+                max_pages=int(config.pdf_max_pages),
+            )
+        except MediaError as error:
+            return await self._denied(session, error.reason)
+        except ValueError:
+            return await self._denied(session, "policy_pdf_invalid")
+        text = "\n\n".join(
+            f"Page {item['page']}:\n{item['text']}" for item in extracted
+        )
+        bounded = self._bytes_mapping(text.encode("utf-8"))
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=str(bounded["preview"]),
+            original_bytes=len(data),
+            truncated=bool(bounded["truncated"]),
+            checksum=str(bounded["checksum"]),
+            workspace_revision=await self._revision(session),
+            entries=(
+                {
+                    "path": path,
+                    "kind": "pdf",
+                    "page_count": page_count,
+                    "pages": list(extracted),
+                },
+            ),
+        )
+
+    async def _notebook_edit(
+        self, session: SandboxSession, call: ValidatedToolCall
+    ) -> ToolResult:
+        if not optional_tool_enabled("notebook_edit.v1"):
+            return await self._denied(session, "policy_media_tool_disabled")
+        path = str(call.input["path"])
+        if not is_notebook_path(path):
+            return await self._denied(session, "policy_notebook_invalid")
+        exists = await self._path_exists(session, path)
+        raw: bytes | None
+        if exists:
+            raw = await self._read_for_edit(session, path)
+        else:
+            raw = None
+        try:
+            payload, meta = apply_notebook_edit(
+                raw,
+                edit_mode=str(call.input.get("edit_mode") or "replace"),  # type: ignore[arg-type]
+                new_source=str(call.input.get("new_source") or ""),
+                cell_id=call.input.get("cell_id"),
+                cell_type=call.input.get("cell_type"),
+            )
+        except NotebookError as error:
+            return await self._denied(session, error.reason)
+        try:
+            revision = await session.write_file(
+                path,
+                payload,
+                **_write_file_kwargs(session.write_file, call),
+            )
+        except (FileNotFoundError, OSError, SandboxPolicyViolation) as error:
+            if _is_missing_parent_error(error):
+                return _missing_parent_result()
+            raise
+        await self._mark_read(
+            session,
+            path,
+            payload,
+            full=True,
+            modified=datetime.now(UTC),
+        )
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=str(meta.get("cell_id") or ""),
+            original_bytes=len(payload),
+            truncated=False,
+            checksum=hashlib.sha256(payload).hexdigest(),
+            workspace_revision=str(revision),
+            entries=(meta,),
+        )
+
+    async def _read_capped_bytes(
+        self,
+        session: SandboxSession,
+        path: str,
+        cap: int,
+        *,
+        too_large: str,
+    ) -> bytes | ToolResult:
+        if cap < 1:
+            return await self._denied(session, too_large)
+        try:
+            data = await session.read_file(path, max_bytes=cap)
+        except TypeError:
+            data = await session.read_file(path)
+        except SandboxPolicyViolation as error:
+            if str(error) == "file_read_limit_exceeded":
+                return await self._denied(session, too_large)
+            raise
+        if len(data) > cap:
+            return await self._denied(session, too_large)
+        return data
 
     def _bounded_bytes(
         self,

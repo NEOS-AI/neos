@@ -17,6 +17,7 @@ from neos.coding.sandbox.base import (
     CommandRequest,
     CommandResult,
     FileEntry,
+    read_byte_cap,
     SearchMatch,
     Sandbox,
     SandboxError,
@@ -1252,24 +1253,25 @@ class DockerSandboxSession:
         *,
         offset: int = 1,
         limit: int | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
         relative = normalize_workspace_path(path)
         if offset < 1 or (limit is not None and limit < 1):
             raise SandboxPolicyViolation("invalid_read_request")
-        max_bytes = self._record.sandbox.limits.max_output_bytes
+        cap = read_byte_cap(self._record.sandbox.limits.max_output_bytes, max_bytes)
         try:
             result = await self._run_helper(
                 _READ_FILE_HELPER,
                 relative.as_posix(),
                 str(offset),
                 "" if limit is None else str(limit),
-                str(max_bytes),
+                str(cap),
             )
         except SandboxUnavailable as error:
             if str(error) == "docker_command_failed:3":
                 raise SandboxPolicyViolation("file_read_limit_exceeded") from error
             raise
-        return result.stdout[:max_bytes]
+        return result.stdout[:cap]
 
     async def write_file(
         self, path: str, content: bytes, *, parents: bool = True

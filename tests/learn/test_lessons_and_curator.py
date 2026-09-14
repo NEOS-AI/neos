@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -106,3 +107,161 @@ def test_curator_archives_stale_staged_but_skips_pin_and_builtin() -> None:
         for item in store.list()
     )
     assert any(item.title == "pinned" and item.pinned for item in store.list())
+
+
+def _approve(store, lesson):
+    store.update(replace(lesson, status=LessonStatus.APPROVED))
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    return loaded
+
+
+def test_curator_keeps_old_approved_lesson_that_was_recently_injected() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    created = now - timedelta(days=120)
+    lesson = _approve(
+        store, store.add(new_lesson(namespace="owner:u1", title="used", body="keep", now=created))
+    )
+    store.record_inject((lesson.lesson_id,), now=now - timedelta(days=2))
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 0
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    assert loaded.status is LessonStatus.APPROVED
+    assert loaded.inject_count == 1
+    assert loaded.last_injected_at == now - timedelta(days=2)
+
+
+def test_curator_archives_approved_lesson_idle_past_archive_days() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    created = now - timedelta(days=200)
+    lesson = _approve(
+        store, store.add(new_lesson(namespace="owner:u1", title="idle", body="drop", now=created))
+    )
+    store.record_inject((lesson.lesson_id,), now=now - timedelta(days=100))
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 1
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    assert loaded.status is LessonStatus.ARCHIVED
+
+
+def test_curator_does_not_archive_never_injected_lesson_younger_than_stale() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    store.add(
+        new_lesson(
+            namespace="owner:u1",
+            title="fresh",
+            body="wait",
+            now=now - timedelta(days=10),
+        )
+    )
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 0
+    assert store.list()[0].status is LessonStatus.STAGED
+    assert store.list()[0].inject_count == 0
+
+
+def test_curator_archives_never_injected_staged_after_stale_days() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    store.add(
+        new_lesson(
+            namespace="owner:u1",
+            title="unused-staged",
+            body="old staged",
+            now=now - timedelta(days=40),
+        )
+    )
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 1
+    assert store.list()[0].status is LessonStatus.ARCHIVED
+
+
+def test_curator_archives_never_injected_approved_after_archive_days() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    lesson = _approve(
+        store,
+        store.add(
+            new_lesson(
+                namespace="owner:u1",
+                title="unused-approved",
+                body="never used",
+                now=now - timedelta(days=100),
+            )
+        ),
+    )
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 1
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    assert loaded.status is LessonStatus.ARCHIVED
+    assert loaded.inject_count == 0
+
+
+def test_curator_keeps_never_injected_approved_before_archive_days() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13, tzinfo=UTC)
+    lesson = _approve(
+        store,
+        store.add(
+            new_lesson(
+                namespace="owner:u1",
+                title="unused-approved-mid",
+                body="wait for archive window",
+                now=now - timedelta(days=40),
+            )
+        ),
+    )
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 0
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    assert loaded.status is LessonStatus.APPROVED
+
+
+def test_curator_compares_naive_activity_stamps_against_naive_now() -> None:
+    store = reset_lesson_store()
+    now = datetime(2026, 9, 13)
+    created = now - timedelta(days=120)
+    lesson = _approve(
+        store,
+        store.add(
+            new_lesson(
+                namespace="owner:u1",
+                title="naive-used",
+                body="keep",
+                now=created,
+            )
+        ),
+    )
+    store.update(
+        replace(
+            lesson,
+            last_injected_at=now - timedelta(days=2),
+            inject_count=1,
+        )
+    )
+
+    result = curate_lessons(store, now=now, stale_days=30, archive_days=90)
+
+    assert result["archived"] == 0
+    loaded = store.get(lesson.lesson_id)
+    assert loaded is not None
+    assert loaded.status is LessonStatus.APPROVED

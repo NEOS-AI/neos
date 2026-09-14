@@ -79,6 +79,13 @@ class SandboxLimits:
         )
 
 
+def read_byte_cap(default_max_bytes: int, override: int | None) -> int:
+    cap = default_max_bytes if override is None else int(override)
+    if cap < 1:
+        raise SandboxPolicyViolation("invalid_read_request")
+    return cap
+
+
 @dataclass(frozen=True, slots=True)
 class Sandbox:
     sandbox_id: str
@@ -239,6 +246,7 @@ class SandboxSession(Protocol):
         *,
         offset: int = 1,
         limit: int | None = None,
+        max_bytes: int | None = None,
     ) -> bytes: ...
 
     async def write_file(

@@ -1621,11 +1621,26 @@ class CodingModelConfig(StrictConfigModel):
     approval_allow_tools: list[str] = Field(default_factory=list)
     approval_always_allow: list[str] = Field(default_factory=list)
     web_fetch_hosts: list[str] = Field(default_factory=list)
-    deferred_tools_threshold: int = Field(default=20, ge=1, le=100)
+    notebook_edit: bool = False
+    image_tool: bool = False
+    pdf_tool: bool = False
+    web_search: bool = False
+    image_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, le=20 * 1024 * 1024)
+    pdf_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0, le=20 * 1024 * 1024)
+    pdf_max_pages: int = Field(default=20, ge=1, le=20)
+    web_search_max_results: int = Field(default=5, ge=1, le=10)
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
     subagent_max_active: int = Field(default=1, ge=1, le=4)
     file_watch: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_unused_deferred_tools_threshold(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "deferred_tools_threshold" in value:
+            value = dict(value)
+            value.pop("deferred_tools_threshold", None)
+        return value
 
     @model_validator(mode="after")
     def validate_command_policy(self) -> "CodingModelConfig":

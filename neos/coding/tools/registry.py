@@ -16,7 +16,6 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 
-_DEFAULT_DEFERRED_TOOLS_THRESHOLD = 20
 _CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
 _STEER_TEXT_MAX = 2000
 _DEDICATED_EXECUTE_DENY = frozenset(
@@ -85,6 +84,10 @@ _POLICY_FIX_NOTES = {
     "policy_protected_git_path": "do not mutate .git",
     "policy_workspace_path_escape": "use a workspace-relative path",
     "policy_workspace_secret_path": "secret paths are not readable",
+    "policy_media_tool_disabled": "this optional tool is not enabled",
+    "policy_notebook_required": "use notebook_edit.v1 for .ipynb",
+    "policy_use_read_image": "use read_image.v1 for images",
+    "policy_use_read_pdf": "use read_pdf.v1 for PDFs",
 }
 _EXECUTE_WRAPPERS = frozenset(
     {
@@ -308,13 +311,12 @@ def _search_query_terms(query: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return tuple(required), tuple(optional)
 
 
-def _deferred_tools_threshold() -> int:
-    try:
-        from neos.config.settings import settings
-
-        return int(settings.config.coding_model.deferred_tools_threshold)
-    except Exception:
-        return _DEFAULT_DEFERRED_TOOLS_THRESHOLD
+_OPTIONAL_TOOL_FLAGS = {
+    "notebook_edit.v1": "notebook_edit",
+    "read_image.v1": "image_tool",
+    "read_pdf.v1": "pdf_tool",
+    "web_search.v1": "web_search",
+}
 
 
 def _subagent_tools_enabled() -> bool:
@@ -322,6 +324,18 @@ def _subagent_tools_enabled() -> bool:
         from neos.config.settings import settings
 
         return bool(settings.config.coding_model.subagent_enabled)
+    except Exception:
+        return False
+
+
+def optional_tool_enabled(name: str) -> bool:
+    field = _OPTIONAL_TOOL_FLAGS.get(name)
+    if field is None:
+        return False
+    try:
+        from neos.config.settings import settings
+
+        return bool(getattr(settings.config.coding_model, field, False))
     except Exception:
         return False
 
@@ -391,6 +405,26 @@ class _GlobFilesInput(_ToolInput):
 
 class _WebFetchInput(_ToolInput):
     url: str = Field(min_length=1)
+
+
+class _WebSearchInput(_ToolInput):
+    query: str = Field(min_length=2, max_length=500)
+    max_results: int | None = Field(default=None, ge=1, le=10)
+
+
+class _ReadImageInput(_PathInput):
+    pass
+
+
+class _ReadPdfInput(_PathInput):
+    pages: str | None = None
+
+
+class _NotebookEditInput(_PathInput):
+    new_source: str = ""
+    cell_id: str | None = None
+    cell_type: Literal["code", "markdown"] | None = None
+    edit_mode: Literal["replace", "insert", "delete"] = "replace"
 
 
 class _SearchToolsInput(_ToolInput):
@@ -619,6 +653,49 @@ class CodingToolRegistry:
             ),
             ToolRisk.READ_ONLY,
             _WebFetchInput,
+        ),
+        _RegisteredTool(
+            "web_search.v1",
+            (
+                "Search the public web for current pages. "
+                "Returns titles, URLs, and untrusted snippets. "
+                "Do not use execute.v1 curl. Prefer web_fetch.v1 to read one URL. "
+                "On policy_* denial, do not retry the same query."
+            ),
+            ToolRisk.READ_ONLY,
+            _WebSearchInput,
+        ),
+        _RegisteredTool(
+            "read_image.v1",
+            (
+                "Read a workspace jpeg/png/gif/webp image. "
+                "Do not use read_file.v1 or execute.v1 for images. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ReadImageInput,
+        ),
+        _RegisteredTool(
+            "read_pdf.v1",
+            (
+                "Extract text from a workspace PDF. "
+                "pages is 1-based, e.g. 1-5. At most 20 pages per call. "
+                "Do not use read_file.v1 or execute.v1 for PDFs. "
+                "On policy_* denial, do not retry the same path."
+            ),
+            ToolRisk.READ_ONLY,
+            _ReadPdfInput,
+        ),
+        _RegisteredTool(
+            "notebook_edit.v1",
+            (
+                "Edit one Jupyter notebook cell (replace, insert, or delete). "
+                "Path must be .ipynb. Do not use edit_file.v1 on notebooks. "
+                "Does not execute cells. "
+                "On policy_* denial, do not retry the same cell."
+            ),
+            ToolRisk.WORKSPACE_WRITE,
+            _NotebookEditInput,
         ),
         _RegisteredTool(
             "edit_file.v1",
@@ -861,11 +938,17 @@ class CodingToolRegistry:
             for tool in self._TOOL_SPECS
             if tool.name not in hidden
             and (
+                tool.name not in _OPTIONAL_TOOL_FLAGS
+                or optional_tool_enabled(tool.name)
+            )
+            and (
                 tool.name in self._CORE_TOOL_NAMES
+                or optional_tool_enabled(tool.name)
                 or tool.name in revealed_names
             )
             and (
                 tool.name in self._CORE_TOOL_NAMES
+                or optional_tool_enabled(tool.name)
                 or tool.name in deferred
                 or tool.name in revealed_names
             )
@@ -889,6 +972,8 @@ class CodingToolRegistry:
         names: list[str] = []
         for tool in cls._TOOL_SPECS:
             if tool.name in cls._CORE_TOOL_NAMES or tool.name in hidden:
+                continue
+            if tool.name in _OPTIONAL_TOOL_FLAGS:
                 continue
             if tool.name in _CONTROL_PLANE_TOOLS and not advertised:
                 continue
@@ -961,6 +1046,8 @@ class CodingToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             raise ToolValidationError("policy_unknown_tool")
+        if name in _OPTIONAL_TOOL_FLAGS and not optional_tool_enabled(name):
+            raise ToolValidationError("policy_media_tool_disabled")
         candidate = dict(input)
         if name == "execute.v1":
             candidate.setdefault(
@@ -1012,6 +1099,7 @@ class CodingToolRegistry:
                     in {
                         "write_file.v1",
                         "edit_file.v1",
+                        "notebook_edit.v1",
                         "mkdir.v1",
                         "rm.v1",
                         "chmod.v1",

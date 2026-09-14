@@ -252,11 +252,7 @@ def test_implement_spawn_is_workspace_write() -> None:
     assert spawn.input["spec"] == "implement"
 
 
-def test_definitions_defer_non_core_until_revealed(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "neos.coding.tools.registry._deferred_tools_threshold",
-        lambda: 1,
-    )
+def test_definitions_defer_non_core_until_revealed() -> None:
     tools = registry()
     names = [item.name for item in tools.definitions()]
 

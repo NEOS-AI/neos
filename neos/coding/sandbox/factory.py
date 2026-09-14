@@ -1,13 +1,23 @@
+import shutil
 from pathlib import Path
 
+from neos.coding.sandbox.base import SandboxUnavailable
 from neos.coding.sandbox.command import DockerCommandRunner
 from neos.coding.sandbox.docker import DockerSandboxConfig, DockerSandboxProvider
 from neos.coding.sandbox.memory import MemorySandboxProvider
 from neos.config.schema import SandboxConfig
 
 
+def _docker_cli_available() -> bool:
+    return shutil.which("docker") is not None
+
+
 def create_sandbox_provider(config: SandboxConfig):
-    """Construct the configured provider without starting sandbox resources."""
+    """Construct the configured provider without starting sandbox resources.
+
+    When ``sandbox.enabled`` is true the named provider is required. Missing
+    Docker is refused; there is no silent memory/host fallback.
+    """
     streams = config.streams
     if config.provider == "memory":
         return MemorySandboxProvider(
@@ -20,6 +30,12 @@ def create_sandbox_provider(config: SandboxConfig):
             watcher_replay_events=streams.replay_events,
         )
 
+    if (
+        config.provider == "docker"
+        and config.enabled
+        and not _docker_cli_available()
+    ):
+        raise SandboxUnavailable("sandbox_required_unavailable")
     docker = config.docker
     resources = config.resources
     return DockerSandboxProvider(

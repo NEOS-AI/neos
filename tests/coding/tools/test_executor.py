@@ -63,12 +63,20 @@ class FakeSession:
             self.modified.get(path, NOW),
         )
 
-    async def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str, *, max_bytes: int | None = None) -> bytes:
+        # No offset/limit: this double models a legacy session so the executor
+        # takes its TypeError fallback and slices lines itself.
         self._raise()
         if path not in self.files:
             raise FileNotFoundError(path)
         self.called = ("read_file", path)
-        return self.files[path]
+        cap = max_bytes
+        data = self.files[path]
+        if isinstance(cap, int) and cap < 1:
+            raise SandboxPolicyViolation("invalid_read_request")
+        if isinstance(cap, int) and len(data) > cap:
+            raise SandboxPolicyViolation("file_read_limit_exceeded")
+        return data
 
     async def write_file(
         self, path: str, content: bytes, *, parents: bool = False
@@ -273,7 +281,12 @@ async def test_read_file_denies_binary_extension_and_nul() -> None:
     nul = await executor.execute(session, call("read_file.v1", {"path": "blob"}))
 
     assert image.status in {"denied", "error"}
-    assert image.reason_code in {"policy_binary_file", "error/binary_file", "binary_file"}
+    assert image.reason_code in {
+        "policy_use_read_image",
+        "policy_binary_file",
+        "error/binary_file",
+        "binary_file",
+    }
     assert nul.status in {"denied", "error"}
     assert nul.reason_code in {"policy_binary_file", "error/binary_file", "binary_file"}
 

@@ -964,6 +964,8 @@ CI의 10k acceptance fixture는 wall-clock 시간 대신 scheduler 1회, notific
 
 ### Phase 5 — Managed sandbox pilot
 
+잔여 작업의 실행 기준은 [`docs/PLAN_260913.md`](PLAN_260913.md) 다 (2026-09-13 3-repo 최종 분석 포함). 이 절은 제품 목표만 적는다.
+
 **목표:** production multi-tenant 실행환경을 선택하고 제한된 사용자에게 개방.
 
 - E2B/Modal/Daytona 후보 adapter 또는 최소 2개 benchmark adapter 작성

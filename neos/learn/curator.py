@@ -16,6 +16,36 @@ class AsyncLessonStore(Protocol):
     async def update(self, lesson: Lesson) -> None: ...
 
 
+def _as_utc(stamp: datetime) -> datetime:
+    if stamp.tzinfo is None:
+        return stamp.replace(tzinfo=UTC)
+    return stamp
+
+
+def _activity_anchor(lesson: Lesson) -> datetime:
+    return _as_utc(lesson.last_injected_at or lesson.created_at)
+
+
+def _never_used(lesson: Lesson) -> bool:
+    return lesson.inject_count <= 0 and lesson.last_injected_at is None
+
+
+def _should_archive(
+    lesson: Lesson,
+    *,
+    stale_before: datetime,
+    archive_before: datetime,
+) -> bool:
+    if lesson.status is LessonStatus.ARCHIVED:
+        return False
+    anchor = _activity_anchor(lesson)
+    if _never_used(lesson) and anchor > stale_before:
+        return False
+    if anchor <= archive_before:
+        return True
+    return lesson.status is LessonStatus.STAGED and anchor <= stale_before
+
+
 def _curation_updates(
     lessons: tuple[Lesson, ...],
     *,
@@ -23,6 +53,7 @@ def _curation_updates(
     stale_days: int,
     archive_days: int,
 ) -> tuple[tuple[Lesson, ...], dict[str, int]]:
+    now = _as_utc(now)
     stale_before = now - timedelta(days=stale_days)
     archive_before = now - timedelta(days=archive_days)
     archived = 0
@@ -32,10 +63,8 @@ def _curation_updates(
         if lesson.pinned or is_protected_name(lesson.title):
             skipped += 1
             continue
-        if lesson.status is LessonStatus.ARCHIVED:
-            continue
-        if lesson.created_at <= archive_before or (
-            lesson.status is LessonStatus.STAGED and lesson.created_at <= stale_before
+        if _should_archive(
+            lesson, stale_before=stale_before, archive_before=archive_before
         ):
             updates.append(replace(lesson, status=LessonStatus.ARCHIVED))
             archived += 1

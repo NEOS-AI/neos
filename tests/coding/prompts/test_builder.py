@@ -91,7 +91,7 @@ def test_prompt_lists_catalog_skill_names_not_bodies() -> None:
     assert "load_skill.v1" in prompt
     assert "verify" in prompt
     assert "commit" in prompt
-    assert "pdf" not in prompt
+    assert "- pdf:" not in prompt
     assert "from pypdf import PdfReader" not in prompt
 
 
