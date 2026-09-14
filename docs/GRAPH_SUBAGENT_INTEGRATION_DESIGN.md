@@ -3,7 +3,7 @@
 | 항목 | 값 |
 |---|---|
 | 작성일 | 2026-09-14 · **코드 대조 리뷰 2026-09-14** (§13) |
-| 상태 | **결정됨 — K25′ 승인(2026-09-14, 사용자)**. GS1·GS2·GS4·GS5 코드 착수, 전부 플래그 기본 off |
+| 상태 | **결정됨 — K25′ 승인(2026-09-14, 사용자)**. GS0·GS1·GS2·GS4·GS5 완료, GS3 은 **어휘만**(프롬프트 v3 는 M-1 과 함께), GS6 표본 전. 전부 플래그 기본 off |
 | 트랙 | 로드맵 트랙 **I** ([DEEP_ANALYSIS_HARNESS_ROADMAP.md](DEEP_ANALYSIS_HARNESS_ROADMAP.md) §1·§8) |
 | 선행 설계 | [SUBAGENT_RUNTIME_DESIGN.md](SUBAGENT_RUNTIME_DESIGN.md) (K1–K16) · [PARENT_MEDIATED_COLLABORATION_DESIGN.md](PARENT_MEDIATED_COLLABORATION_DESIGN.md) (K17–K28) · [graph_design_passrate_preregistration.md](graph_design_passrate_preregistration.md) |
 | 결정 기록 | K25 행 개정: `PARENT_MEDIATED_COLLABORATION_DESIGN.md` Key Decisions 표 · 판정 원장: `neos/workflow/deep_analysis/DECISIONS.md` **D97** |
