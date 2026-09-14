@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from pathlib import Path
 
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.text_parts import TextPartConflict
@@ -1996,8 +1997,6 @@ class DurableCodingLoop:
         workspace = getattr(getattr(session, "_record", None), "workspace", None)
         if workspace is not None:
             try:
-                from pathlib import Path
-
                 root = Path(workspace)
                 raw_start = getattr(session, "cwd", None)
                 if raw_start in {None, ""}:
