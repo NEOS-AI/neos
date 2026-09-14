@@ -93,6 +93,31 @@ class GraphTopology:
 
 
 @dataclass(frozen=True, slots=True)
+class SubagentRuleInputs:
+    """서브에이전트 템플릿 노드(트랙 I)에만 걸리는 규칙 셋의 재료.
+
+    이 모듈이 `neos.subagent` 도 템플릿 레지스트리도 import 하지 않도록 필요한
+    사실만 값으로 받는다 -- `_ContractLike` 가 계약 레지스트리를 import 하지
+    않는 것과 같은 이유다. 채우는 곳은 `neos.workflow.subagent_nodes`.
+
+    `validate_topology(subagent=None)` (기본)이면 규칙 셋은 **아예 돌지 않는다.**
+    넘겨도 토폴로지에 템플릿 노드가 하나도 없으면 돌지 않는다(GS-K9′) --
+    템플릿을 고르지 않은 설계의 판정이 플래그를 켜기 전과 같아야 M-1 이 M-0 과
+    같은 규칙으로 그 설계들을 셀 수 있다.
+    """
+
+    template_nodes: frozenset[str]
+    # 보고를 검사하는 노드. 설계 GS-K5 는 `fact_check` 하나만 인정한다.
+    check_nodes: frozenset[str]
+    # 리듀서가 붙은 `AgentState` 키. 병렬 가지가 같이 써도 안전하다.
+    reducer_keys: frozenset[str]
+    # 템플릿 노드 -> 계산 비용 상한(micros). `None` 은 미가격(fail closed).
+    cost_ceilings_micros: Mapping[str, int | None] = field(default_factory=dict)
+    # 템플릿 비용 상한 합의 예산. `None` 이면 예산이 없다는 위반이다(fail closed).
+    budget_micros: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TopologyViolation:
     """토폴로지 규칙 위반 하나. `rule` 은 안정적인 snake_case 식별자다.
 
@@ -124,8 +149,12 @@ def validate_topology(
     must_write: frozenset[str] = frozenset(),
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
+    subagent: SubagentRuleInputs | None = None,
 ) -> tuple[TopologyViolation, ...]:
-    """여덟 가지 규칙을 검사한다. 빈 튜플이면 유효.
+    """규칙 열 가지(+ 템플릿 노드가 있으면 셋)를 검사한다. 빈 튜플이면 유효.
+
+    (아래 서술은 태스크 순서대로 쌓인 것이다. `missing_contract` 와
+    `no_writer_for_required_key` 가 그 뒤에 더해져 기본 규칙은 열이다.)
 
     구조 규칙 넷(`unknown_node`, `unreachable_node`, `dead_end`,
     `unbounded_cycle`) 은 Task 3 그대로다. Task 4 가 더한 셋:
@@ -352,7 +381,127 @@ def validate_topology(
                     )
                 )
 
+    if subagent is not None:
+        violations.extend(
+            _subagent_violations(topology, contracts, subagent, forward)
+        )
+
     return tuple(violations)
+
+
+def _subagent_violations(
+    topology: GraphTopology,
+    contracts: Mapping[str, _ContractLike],
+    inputs: SubagentRuleInputs,
+    forward: Mapping[str, set[str]],
+) -> list[TopologyViolation]:
+    """템플릿 노드 규칙 셋. 토폴로지에 템플릿이 없으면 빈 목록(GS-K9′)."""
+
+    present = [node for node in topology.nodes if node in inputs.template_nodes]
+    if not present:
+        return []
+    violations: list[TopologyViolation] = []
+
+    # -- unchecked_subagent_report ------------------------------------------
+    # 기존 `_guaranteed_keys` 는 START -> N 방향이라 여기 쓸 수 없다. 묻는 것은
+    # "검사 노드를 지운 그래프에서 S 의 후속으로부터 END 에 닿는가" 다 -- 닿는
+    # 경로가 하나라도 있으면 그 경로의 보고는 검사 없이 응답까지 간다.
+    for node in present:
+        stack = [
+            succ
+            for succ in forward.get(node, ())
+            if succ != node and succ not in inputs.check_nodes
+        ]
+        seen = set(stack)
+        leaks = False
+        while stack:
+            current = stack.pop()
+            if current == END:
+                leaks = True
+                break
+            for succ in forward.get(current, ()):
+                if succ in inputs.check_nodes or succ in seen:
+                    continue
+                seen.add(succ)
+                stack.append(succ)
+        if leaks:
+            violations.append(
+                TopologyViolation(
+                    rule="unchecked_subagent_report",
+                    node=node,
+                    detail=(
+                        f"'{node}' 의 보고가 {sorted(inputs.check_nodes)} 를 거치지 않고 "
+                        "END 에 닿는 경로가 있다 -- 검증되지 않은 보고가 응답에 섞인다"
+                    ),
+                )
+            )
+
+    # -- subagent_budget_exceeded -------------------------------------------
+    unpriced = [
+        node for node in present if inputs.cost_ceilings_micros.get(node) is None
+    ]
+    for node in unpriced:
+        violations.append(
+            TopologyViolation(
+                rule="subagent_budget_exceeded",
+                node=node,
+                detail=f"'{node}' 의 비용 상한을 계산할 수 없다(가격 또는 모델 창 미상)",
+            )
+        )
+    if inputs.budget_micros is None:
+        violations.append(
+            TopologyViolation(
+                rule="subagent_budget_exceeded",
+                node=None,
+                detail="템플릿 노드가 있는데 subagent_budget_micros 가 없다",
+            )
+        )
+    elif not unpriced:
+        total = sum(int(inputs.cost_ceilings_micros[node] or 0) for node in present)
+        if total > inputs.budget_micros:
+            violations.append(
+                TopologyViolation(
+                    rule="subagent_budget_exceeded",
+                    node=None,
+                    detail=(
+                        f"템플릿 노드 비용 상한 합계 {total} micros 가 예산 "
+                        f"{inputs.budget_micros} 을 초과했다"
+                    ),
+                )
+            )
+
+    # -- concurrent_write_conflict ------------------------------------------
+    # 설계된 그래프의 엣지는 전부 정적이라 한 노드의 후속은 **모두** 같은
+    # 슈퍼스텝에 뜬다. 서로에게 닿지 않는 두 노드는 같은 슈퍼스텝에 설 수 있고,
+    # 둘이 리듀서 없는 키를 같이 쓰면 LangGraph 1.2 가 `InvalidUpdateError` 로
+    # run 을 죽인다. 깊이가 달라 실제로는 겹치지 않는 쌍도 거부한다(보수적).
+    reach = {node: _bfs(node, forward) for node in topology.nodes}
+    ordered = sorted(set(topology.nodes))
+    for index, left in enumerate(ordered):
+        for right in ordered[index + 1 :]:
+            if right in reach[left] or left in reach[right]:
+                continue
+            left_contract = contracts.get(left)
+            right_contract = contracts.get(right)
+            if left_contract is None or right_contract is None:
+                continue
+            shared = (
+                left_contract.writes & right_contract.writes
+            ) - inputs.reducer_keys
+            for key in sorted(shared):
+                violations.append(
+                    TopologyViolation(
+                        rule="concurrent_write_conflict",
+                        node=left,
+                        detail=(
+                            f"'{left}' 와 '{right}' 는 병렬로 설 수 있는데 리듀서 없는 "
+                            f"키 '{key}' 를 같이 쓴다"
+                        ),
+                        key=key,
+                        via=right,
+                    )
+                )
+    return violations
 
 
 def _conditional_violations(

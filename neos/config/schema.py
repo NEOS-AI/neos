@@ -304,6 +304,47 @@ class WorkflowConfig(StrictConfigModel):
         gt=0,
         description="설계 프롬프트에 박히는 참고용 노드 비용 상한. 검증기가 강제하지 않는다.",
     )
+    # 트랙 I (K25′, docs/GRAPH_SUBAGENT_INTEGRATION_DESIGN.md GS-K9). 설계된
+    # 그래프가 서브에이전트 템플릿 노드를 쓸 수 있는가. 꺼져 있으면 템플릿은
+    # 카탈로그에도 검증기에도 조립기에도 나타나지 않는다 -- 기존 31개 계약의
+    # 검증 결과가 구성상 그대로다.
+    subagent_nodes_enabled: bool = Field(
+        default=False,
+        description="설계된 그래프에 서브에이전트 템플릿 노드를 허용할지. graph_design_enabled 와 subagent_budget_micros 를 요구한다.",
+    )
+    # 한 실행(=조립된 그래프 하나) 안에서 동시에 advance 하는 자식 수.
+    # K18 과 같은 기본 1 · 상한 4. 프로세스 전역이 아니다.
+    subagent_max_active: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+        description="한 설계 실행 안에서 동시에 한 걸음을 가는 서브에이전트 자식 수.",
+    )
+    # 템플릿 노드 비용 상한 합의 예산(micros). 기본값을 지어내지 않는다 --
+    # 근거 없는 수는 근거 없는 거부·승인을 만든다(`graph_design_budget_hint`
+    # 주석). 켜는 사람이 적는다.
+    subagent_budget_micros: int | None = Field(
+        default=None,
+        gt=0,
+        description="템플릿 노드 계산 비용 상한 합의 예산(micros). subagent_nodes_enabled 이면 필수.",
+    )
+
+    @model_validator(mode="after")
+    def _subagent_nodes_need_design_and_budget(self) -> "WorkflowConfig":
+        if not self.subagent_nodes_enabled:
+            return self
+        missing = []
+        if not self.graph_design_enabled:
+            missing.append("graph_design_enabled")
+        if self.subagent_budget_micros is None:
+            missing.append("subagent_budget_micros")
+        if missing:
+            raise ValueError(
+                "workflow.subagent_nodes_enabled 는 "
+                + ", ".join(missing)
+                + " 를 요구한다"
+            )
+        return self
 
 
 class ResearchHarnessModelChecksConfig(StrictConfigModel):

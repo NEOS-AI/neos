@@ -48,6 +48,9 @@ REFUSED_TOOLS = frozenset(
         "search_tools.v1",
     }
 )
+#: Output ceiling of one child model turn. Public because the workflow cost
+#: ceiling (GS-K6) multiplies by it -- two copies of this number would drift.
+CHILD_MAX_OUTPUT_TOKENS = 4096
 _MAX_TOOL_BATCH = 10
 _MAX_TRANSCRIPT_BYTES = 1024 * 1024
 _MAX_TOOL_BODY = 32 * 1024
@@ -110,7 +113,9 @@ class ChildStepper:
             messages=_canonical_messages(state),
             tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),
             model=ticket.model.alias or ticket.model.model,
-            limits=ModelLimits(max_output_tokens=4096, timeout_sec=120),
+            limits=ModelLimits(
+                max_output_tokens=CHILD_MAX_OUTPUT_TOKENS, timeout_sec=120
+            ),
             task_id=run_id,
             run_id=run_id,
             turn_id=f"sat_{uuid4().hex}",

@@ -8,6 +8,13 @@ from neos.workflow.errors import WorkflowError
 from neos.workflow.metrics import PerformanceMetrics
 
 
+def merge_node_dict(
+    left: Optional[Dict[str, Any]], right: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """노드 이름을 키로 갖는 dict 의 리듀서. 오른쪽(새 쓰기)이 같은 노드 키를 이긴다."""
+    return {**(left or {}), **(right or {})}
+
+
 @dataclass
 class SearchResult:
     """검색 결과"""
@@ -250,6 +257,20 @@ class AgentState(TypedDict):
     # 표현하려는 것과 정반대 방향의 결합이다. 승인 재개가 "이 스레드가 어떤
     # 토폴로지로 멈췄는가" 를 복원하는 데만 쓴다.
     execution_topology: NotRequired[dict[str, Any] | None]
+
+    # 트랙 I 서브에이전트 템플릿 노드 (docs/GRAPH_SUBAGENT_INTEGRATION_DESIGN.md).
+    #
+    # `subagent_scope`: 이 `execute_workflow` 호출의 자식 부모 id(`wf_<hex>`).
+    # 오케스트레이터가 템플릿이 있는 설계에서만 발급한다. 대화 스레드는 턴마다
+    # 재사용되므로 thread_id 를 부모 id 로 쓰면 둘째 턴이 첫 턴 자식을 되찾는다.
+    subagent_scope: NotRequired[Optional[str]]
+    # 노드 -> 자식 포인터(scope·run_id·checkpoint_id·steps·terminal·고정 핀).
+    # 병렬 가지가 서로 다른 노드 키를 동시에 쓰므로 키 병합 리듀서가 필요하다 --
+    # 리듀서 없는 dict 는 같은 슈퍼스텝의 두 쓰기에서 InvalidUpdateError 다.
+    subagent_runs: NotRequired[Annotated[Dict[str, Any], merge_node_dict]]
+    # 노드 -> 감사 메타데이터(status·exit_reason·토큰·비용). 요약 본문은 없다 --
+    # 본문은 unverified `SearchResult` 로 `search_results` 에 간다.
+    subagent_reports: NotRequired[Annotated[Dict[str, Any], merge_node_dict]]
 
 
 class WorkflowConfig:
