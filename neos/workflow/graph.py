@@ -918,7 +918,11 @@ class MultiAgentWorkflow:
             designer=designer,
             request=DesignRequest(
                 query=user_input["query"],
-                catalog=tuple(NODE_CONTRACTS.values()),
+                # GS3: 템플릿 어휘는 플래그가 켜졌을 때만 카탈로그에 선다. 꺼져 있으면
+                # `design_contracts is NODE_CONTRACTS` 라 카탈로그와 렌더된 프롬프트가
+                # 바이트 단위로 같다(`test_subagent_node_catalog.py`). 켜지면 정적 31개
+                # 뒤에 템플릿 줄이 붙는다 -- 프롬프트 파일(v2)은 바꾸지 않는다.
+                catalog=tuple(design_contracts.values()),
                 budget=settings.config.workflow.graph_design_budget_hint,
             ),
             contracts=design_contracts,
