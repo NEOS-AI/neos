@@ -424,6 +424,10 @@ class SecretsConfig(StrictConfigModel):
     # 관리형 샌드박스 provider 참조 봉인 키 (base64). 평문 값은 여기 두지
     # 않는다 -- .env.template 에도 이름만 남긴다.
     managed_provider_reference_key: str | None = Field(default=None, repr=False)
+    # 관리형 코딩 샌드박스의 물리 ownership HMAC 키 (base64, 정확히 32바이트).
+    # 참조 봉인 키와 **다른** 키여야 한다 -- 한 키가 새면 봉인과 소유권 증명이
+    # 함께 무너지지 않게 한다 (neos/coding/sandbox/managed/identity.py).
+    managed_coding_ownership_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -1986,6 +1990,28 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "managed_provider_reference_key must decode to 16, 24, or 32 bytes"
             )
+        if self.sandbox.provider == "managed":
+            # 코딩 provider 는 vendor object 에 붙기 전에 키 있는 물리 digest 를
+            # 검증한다. 키가 없으면 소유권을 증명할 수단이 없다.
+            ownership = self.secrets.managed_coding_ownership_key
+            if not ownership:
+                raise ValueError(
+                    "sandbox.provider=managed requires "
+                    "secrets.managed_coding_ownership_key"
+                )
+            try:
+                ownership_bytes = base64.b64decode(ownership, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise ValueError(
+                    "managed_coding_ownership_key must be valid base64"
+                ) from error
+            if len(ownership_bytes) != 32:
+                raise ValueError("managed_coding_ownership_key must decode to 32 bytes")
+            if ownership_bytes == key_bytes:
+                raise ValueError(
+                    "managed_coding_ownership_key must differ from "
+                    "managed_provider_reference_key"
+                )
         return self
 
     @model_validator(mode="after")

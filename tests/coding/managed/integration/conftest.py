@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 # `coding_tasks`/`coding_runs`는 다른 스위트 소유이므로 정리 대상에서 뺀다.
 # 자식 -> 부모 순서를 지켜야 FK 제약을 건드리지 않고 지울 수 있다.
 _OWNED_TABLES_CHILD_FIRST = (
+    # 057. 코딩 런타임은 할당 행을 참조하므로 할당보다 먼저 지운다.
+    "coding_managed_physical_objects",
+    "coding_managed_runtime_snapshots",
+    "coding_managed_runtime",
     "coding_sandbox_cleanup_attempts",
     "coding_managed_sandboxes",
     "coding_sandbox_admissions",
@@ -25,6 +29,7 @@ _OWNED_TABLES_CHILD_FIRST = (
 _OWNED_MIGRATIONS = (
     "db/migrations/045_add_coding_managed_sandboxes.sql",
     "db/migrations/046_add_coding_sandbox_provider_health.sql",
+    "db/migrations/057_add_coding_sandbox_ledger.sql",
 )
 
 

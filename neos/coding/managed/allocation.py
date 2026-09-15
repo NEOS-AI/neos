@@ -206,9 +206,19 @@ def _ownership_digest_for(allocation: ManagedSandboxAllocation) -> str:
     확인해야 하기 때문이다(난수였다면 매번 다른 값이 나와 그 확인 자체가
     불가능하다).
     """
-    digest = hashlib.sha256(
-        f"{allocation.tenant_id}:{allocation.allocation_id}".encode()
-    ).hexdigest()
+    return legacy_ownership_digest(
+        tenant_id=allocation.tenant_id, allocation_id=allocation.allocation_id
+    )
+
+
+def legacy_ownership_digest(*, tenant_id: str, allocation_id: str) -> str:
+    """할당 층 ownership digest. 정리 서비스가 destroy 허가에 이 값을 쓴다.
+
+    관리형 코딩 provider(`neos.coding.sandbox.managed`)는 vendor object 에 붙기
+    전에 이 값과 키 있는 물리 digest 를 **둘 다** 검증한다 -- 이 값은 키가 없어
+    혼자서는 소유권 증거가 되지 못한다.
+    """
+    digest = hashlib.sha256(f"{tenant_id}:{allocation_id}".encode()).hexdigest()
     return f"sha256:{digest}"
 
 

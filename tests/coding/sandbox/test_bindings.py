@@ -221,6 +221,35 @@ def service(repository: Repository, provider: Provider, *, cadence: int = 2):
     )
 
 
+class LeaseAwareProvider(Provider):
+    """A provider that hands out lease views, like the managed coding provider."""
+
+    def __init__(self, sandboxes: dict[str, Sandbox] | None = None) -> None:
+        super().__init__(sandboxes)
+        self.views: list[tuple[str, int]] = []
+
+    def for_lease(self, value: ExecutionLease) -> "LeaseAwareProvider":
+        self.views.append((value.run_id, value.fencing_token))
+        view = LeaseAwareProvider.__new__(LeaseAwareProvider)
+        view.__dict__ = self.__dict__
+        view.calls = self.calls
+        view.lease_run_id = value.run_id  # type: ignore[attr-defined]
+        return view
+
+
+async def test_lease_paths_use_the_lease_view_and_admin_paths_do_not() -> None:
+    repository = Repository(binding(snapshot_id=None, mutation_count=1))
+    provider = LeaseAwareProvider({"sb_old": sandbox("sb_old")})
+    bindings = service(repository, provider)
+
+    await bindings.resolve(lease("cr_2", token=7))
+    await bindings.record_mutation(lease("cr_2", token=7), workspace_revision=1)
+    assert provider.views == [("cr_2", 7), ("cr_2", 7)]
+
+    await bindings.open_existing_admin("ct_1")
+    assert provider.views == [("cr_2", 7), ("cr_2", 7)]
+
+
 async def test_new_creation_is_persisted_before_session_open() -> None:
     repository = Repository()
     provider = Provider()

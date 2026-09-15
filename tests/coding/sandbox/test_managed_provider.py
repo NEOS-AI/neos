@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import base64
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
+from neos.coding.managed.allocation import legacy_ownership_digest
 from neos.coding.sandbox.base import SandboxLimits, SandboxUnavailable
 from neos.coding.sandbox.factory import create_sandbox_provider
-from neos.coding.sandbox.managed import ManagedBackend, ManagedSandboxProvider
+from neos.coding.sandbox.managed import (
+    ManagedBackend,
+    ManagedCodingAllocationAdapter,
+    ManagedSandboxProvider,
+    create_managed_coding_adapter,
+)
 from neos.coding.sandbox.managed.clients.base import (
     ProviderClientError,
     ProviderCreateSpec,
@@ -22,11 +28,12 @@ from neos.coding.sandbox.managed.clients.base import (
 )
 from neos.coding.sandbox.managed.clients.modal import ModalProviderClient
 from neos.coding.sandbox.managed.identity import (
-    SandboxIdentity,
-    derive_ownership_key,
-    ownership_key_from_secret,
+    DIGEST_PREFIX,
+    ManagedCodingIdentity,
+    PhysicalIdentity,
+    decode_ownership_key,
 )
-from neos.coding.sandbox.managed.ledger import InMemorySandboxLedger
+from neos.coding.sandbox.managed.ledger import InMemoryCodingRuntimeLedger
 from neos.coding.sandbox.managed.profiles import (
     DENY_ALL,
     OFFLINE_V1,
@@ -36,24 +43,28 @@ from neos.coding.sandbox.managed.profiles import (
     get_profile,
     negotiate_profile,
 )
-from neos.coding.sandboxd import guest
 from neos.config.schema import AppConfig, ManagedSandboxConfig, SandboxConfig
 from tests.coding.sandbox.managed_fakes import (
     IMAGE,
-    KEY,
     LEAKED_TOKEN,
+    OWNERSHIP_KEY,
+    REFERENCE_KEY,
     AlreadyExistsError,
     FakeModalSdk,
     FakeVendor,
     NotFoundError,
     ServiceBusy,
     VendorHTTPError,
+    allocation_cipher,
     build_client,
+    create,
+    managed_stack,
 )
 
 pytestmark = pytest.mark.no_db
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+NOW = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
 
 
 def _config(**managed) -> SandboxConfig:
@@ -65,12 +76,17 @@ def _config(**managed) -> SandboxConfig:
 def _backend(tmp_path: Path, kind: str = "e2b", **changes) -> ManagedBackend:
     values = {
         "client": build_client(kind, FakeVendor(root=tmp_path)),
-        "ledger": InMemorySandboxLedger(),
+        "ledger": InMemoryCodingRuntimeLedger(),
         "image_digest": IMAGE,
-        "ownership_key": KEY,
+        "ownership_key": OWNERSHIP_KEY,
+        "allocation_cipher": allocation_cipher,
     }
     values.update(changes)
     return ManagedBackend(**values)
+
+
+def _secret(key: bytes) -> str:
+    return base64.b64encode(key).decode()
 
 
 # ---- factory and config ----------------------------------------------------------
@@ -80,6 +96,7 @@ def test_defaults_stay_off_and_memory() -> None:
     config = AppConfig()
     assert config.sandbox.provider == "memory"
     assert config.sandbox.managed.enabled is False
+    assert config.secrets.managed_coding_ownership_key is None
     assert ManagedSandboxConfig().coding_profile == "offline-v1"
     assert ManagedSandboxConfig().sandboxd_digest is None
 
@@ -106,13 +123,19 @@ def test_factory_refuses_providers_without_a_guest_daemon(tmp_path, name: str) -
         create_sandbox_provider(_config(provider=name), managed_backends={name: _backend(tmp_path)})
 
 
-def test_factory_builds_the_provider_from_an_injected_backend(tmp_path) -> None:
-    provider = create_sandbox_provider(_config(), managed_backends={"e2b": _backend(tmp_path)})
+def test_factory_builds_the_provider_and_its_adapter_from_one_backend(tmp_path) -> None:
+    backend = _backend(tmp_path)
+    provider = create_sandbox_provider(_config(), managed_backends={"e2b": backend})
     assert isinstance(provider, ManagedSandboxProvider)
     assert provider.provider_name == "managed:e2b"
     assert provider.image_identity == IMAGE
     assert provider.local_provider is None
     assert provider.profile is OFFLINE_V1
+    assert provider.fence is None
+    adapter = create_managed_coding_adapter(_config(), backends={"e2b": backend})
+    assert isinstance(adapter, ManagedCodingAllocationAdapter)
+    assert adapter.provider == "e2b"
+    assert adapter.capabilities.pause_resume is False
 
 
 def test_factory_refuses_a_backend_for_another_provider(tmp_path) -> None:
@@ -122,10 +145,13 @@ def test_factory_refuses_a_backend_for_another_provider(tmp_path) -> None:
         )
 
 
-def test_factory_refuses_an_unpinned_image(tmp_path) -> None:
-    backend = _backend(tmp_path, image_digest="registry.example/neos-sandbox:latest")
+def test_factory_refuses_an_unpinned_image_and_a_short_ownership_key(tmp_path) -> None:
+    unpinned = _backend(tmp_path, image_digest="registry.example/neos-sandbox:latest")
     with pytest.raises(SandboxUnavailable, match="managed_image_unpinned"):
-        create_sandbox_provider(_config(), managed_backends={"e2b": backend})
+        create_sandbox_provider(_config(), managed_backends={"e2b": unpinned})
+    short = _backend(tmp_path, ownership_key=b"k" * 16)
+    with pytest.raises(SandboxUnavailable, match="managed_coding_ownership_key_invalid"):
+        create_sandbox_provider(_config(), managed_backends={"e2b": short})
 
 
 def test_factory_refuses_an_unregistered_profile(tmp_path) -> None:
@@ -144,27 +170,48 @@ def test_config_rejects_malformed_profile_and_digest(changes) -> None:
         _config(**changes)
 
 
-async def test_configured_sandboxd_digest_is_what_the_handshake_must_match(tmp_path) -> None:
-    backend = _backend(tmp_path)
-    provider = create_sandbox_provider(
-        _config(sandboxd_digest="sha256:" + "2" * 64), managed_backends={"e2b": backend}
-    )
-    try:
-        with pytest.raises(SandboxUnavailable, match="sandboxd_digest_mismatch"):
-            await provider.create(owner_id="ct_1", limits=SandboxLimits.safe_defaults())
-    finally:
-        await provider.close()
-    bundled = create_sandbox_provider(_config(), managed_backends={"e2b": backend})
-    assert bundled._expectation.bundle_digest == guest.bundle_digest()
-
-
 def test_backend_repr_never_contains_the_key(tmp_path) -> None:
-    assert "kkkk" not in repr(_backend(tmp_path))
+    assert "oooo" not in repr(_backend(tmp_path))
 
 
 def test_managed_provider_requires_the_managed_plane() -> None:
     with pytest.raises(ValueError, match="requires sandbox.managed.enabled"):
         AppConfig.model_validate({"sandbox": {"provider": "managed"}})
+
+
+def _managed_app(**secrets) -> dict:
+    return {
+        "sandbox": {"provider": "managed", "managed": {"enabled": True, "provider": "e2b"}},
+        "secrets": {"managed_provider_reference_key": _secret(REFERENCE_KEY), **secrets},
+    }
+
+
+@pytest.mark.parametrize(
+    ("secrets", "message"),
+    (
+        ({}, "requires secrets.managed_coding_ownership_key"),
+        ({"managed_coding_ownership_key": "not base64!"}, "must be valid base64"),
+        ({"managed_coding_ownership_key": _secret(b"o" * 16)}, "must decode to 32 bytes"),
+        ({"managed_coding_ownership_key": _secret(REFERENCE_KEY)}, "must differ"),
+    ),
+)
+def test_managed_provider_requires_a_separate_32_byte_ownership_key(secrets, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        AppConfig.model_validate(_managed_app(**secrets))
+    config = AppConfig.model_validate(
+        _managed_app(managed_coding_ownership_key=_secret(OWNERSHIP_KEY))
+    )
+    assert _secret(OWNERSHIP_KEY) not in repr(config)
+
+
+def test_the_managed_plane_alone_does_not_need_the_coding_ownership_key() -> None:
+    config = AppConfig.model_validate(
+        {
+            "sandbox": {"managed": {"enabled": True}},
+            "secrets": {"managed_provider_reference_key": _secret(REFERENCE_KEY)},
+        }
+    )
+    assert config.sandbox.provider == "memory"
 
 
 def test_staging_real_loop_accepts_a_managed_sandbox() -> None:
@@ -183,57 +230,118 @@ def test_staging_real_loop_accepts_a_managed_sandbox() -> None:
             },
             "secrets": {
                 "anthropic_api_key": "sk-ant-test-placeholder",
-                "managed_provider_reference_key": base64.b64encode(b"k" * 32).decode(),
+                "managed_provider_reference_key": _secret(REFERENCE_KEY),
+                "managed_coding_ownership_key": _secret(OWNERSHIP_KEY),
             },
         }
     )
     assert config.sandbox.provider == "managed"
 
 
-def test_migration_057_is_in_the_canonical_bootstrap_order() -> None:
+def test_the_ownership_key_is_loaded_from_its_own_environment_variable() -> None:
+    from neos.config.loader import SECRET_ENV_MAPPING
+
+    assert SECRET_ENV_MAPPING["MANAGED_CODING_OWNERSHIP_KEY"] == "secrets.managed_coding_ownership_key"
+    template = (REPO_ROOT / ".env.template").read_text()
+    assert "\nMANAGED_CODING_OWNERSHIP_KEY=\n" in template
+
+
+def test_migration_057_attaches_the_runtime_to_the_allocation_plane() -> None:
     order = (REPO_ROOT / "db" / "BOOTSTRAP_ORDER.txt").read_text().splitlines()
     assert "db/migrations/057_add_coding_sandbox_ledger.sql" in order
     sql = (REPO_ROOT / "db" / "migrations" / "057_add_coding_sandbox_ledger.sql").read_text()
-    assert "CREATE TABLE IF NOT EXISTS coding_sandbox_ledger (" in sql
-    assert "'destroy_pending'" in sql
+    assert "CREATE TABLE IF NOT EXISTS coding_managed_runtime (" in sql
+    assert "REFERENCES coding_managed_sandboxes(allocation_id)" in sql
+    assert "CREATE TABLE IF NOT EXISTS coding_managed_physical_objects (" in sql
+    assert "idx_coding_managed_physical_active" in sql
+    assert "coding_sandbox_ledger (" not in sql  # no second allocation ledger
+
+
+async def test_configured_sandboxd_digest_is_what_the_handshake_must_match(tmp_path) -> None:
+    from neos.coding.sandboxd.client import SandboxdExpectation
+
+    pinned = SandboxdExpectation(bundle_digest="sha256:" + "2" * 64)
+    async with managed_stack(tmp_path, "e2b", expectation=pinned) as stack:
+        with pytest.raises(SandboxUnavailable, match="sandboxd_digest_mismatch"):
+            await create(stack)
 
 
 # ---- identity --------------------------------------------------------------------
 
 
+def _identity_fields(**changes) -> PhysicalIdentity:
+    values = dict(
+        tenant_id="tenant_1",
+        task_id="ct_1",
+        allocation_id="msa_1",
+        allocation_generation=1,
+        sandbox_id="sbx_1",
+        incarnation=1,
+        profile="offline-v1",
+        image_digest=IMAGE,
+        region="local",
+        expires_at=NOW,
+    )
+    values.update(changes)
+    return PhysicalIdentity(**values)
+
+
 def test_identifiers_are_deterministic_and_unambiguous() -> None:
-    identity = SandboxIdentity(KEY)
-    first = identity.sandbox_id(owner_id="ct_1", task_id="ct_1", ordinal=1)
-    assert first == SandboxIdentity(KEY).sandbox_id(owner_id="ct_1", task_id="ct_1", ordinal=1)
-    assert first != identity.sandbox_id(owner_id="ct_1", task_id="ct_1", ordinal=2)
-    assert identity.sandbox_id(owner_id="a:b", task_id="c", ordinal=1) != identity.sandbox_id(
-        owner_id="a", task_id="b:c", ordinal=1
+    identity = ManagedCodingIdentity(OWNERSHIP_KEY)
+    first = identity.sandbox_id(allocation_id="msa_1")
+    assert first == ManagedCodingIdentity(OWNERSHIP_KEY).sandbox_id(allocation_id="msa_1")
+    assert first != identity.sandbox_id(allocation_id="msa_2")
+    assert identity.replacement_idempotency_key(sandbox_id=first, incarnation=2).endswith(f"{first}:2")
+    with pytest.raises(ValueError, match="start at 2"):
+        identity.replacement_idempotency_key(sandbox_id=first, incarnation=1)
+    assert identity.provider_name(sandbox_id=first, incarnation=3).endswith("-i3")
+    assert identity.ref_index(provider="e2b", provider_ref="a:b") != identity.ref_index(
+        provider="e2b:a", provider_ref="b"
     )
-    allocation = identity.allocation_id(sandbox_id=first, generation=1)
-    assert identity.idempotency_key(allocation).endswith(allocation)
-    assert identity.provider_name(allocation).startswith("neos-alc-")
 
 
-def test_ownership_digest_is_keyed() -> None:
-    identity = SandboxIdentity(KEY)
-    digest = identity.ownership_digest(allocation_id="alc_1", owner_id="ct_1", generation=1)
-    assert digest.startswith("hmac-sha256:")
-    assert identity.verify_ownership(digest, allocation_id="alc_1", owner_id="ct_1", generation=1)
-    assert not identity.verify_ownership(digest, allocation_id="alc_1", owner_id="ct_2", generation=1)
-    assert not identity.verify_ownership(digest, allocation_id="alc_1", owner_id="ct_1", generation=2)
-    assert not SandboxIdentity(b"z" * 32).verify_ownership(
-        digest, allocation_id="alc_1", owner_id="ct_1", generation=1
-    )
-    assert "k" * 8 not in repr(identity)
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"tenant_id": "tenant_2"},
+        {"task_id": "ct_2"},
+        {"allocation_id": "msa_2"},
+        {"allocation_generation": 2},
+        {"sandbox_id": "sbx_2"},
+        {"incarnation": 2},
+        {"profile": "strict-pids-v1"},
+        {"image_digest": "other@sha256:" + "1" * 64},
+        {"region": "eu"},
+        {"expires_at": NOW + timedelta(seconds=1)},
+    ),
+)
+def test_physical_digest_is_keyed_and_binds_every_fact(change) -> None:
+    identity = ManagedCodingIdentity(OWNERSHIP_KEY)
+    digest = identity.physical_digest(_identity_fields())
+    assert digest.startswith(DIGEST_PREFIX)
+    assert identity.verify_physical(digest, _identity_fields())
+    assert not identity.verify_physical(digest, _identity_fields(**change))
+    assert not ManagedCodingIdentity(b"z" * 32).verify_physical(digest, _identity_fields())
+    assert "o" * 8 not in repr(identity)
 
 
-def test_ownership_key_is_derived_from_the_reference_secret() -> None:
-    secret = base64.b64encode(KEY).decode()
-    derived = ownership_key_from_secret(secret)
-    assert derived == derive_ownership_key(KEY)
-    assert derived != KEY
+def test_metadata_carries_both_the_legacy_and_the_keyed_digest() -> None:
+    identity = ManagedCodingIdentity(OWNERSHIP_KEY)
+    legacy = legacy_ownership_digest(tenant_id="tenant_1", allocation_id="msa_1")
+    metadata = identity.metadata(_identity_fields(), idempotency_key="idem_1", legacy_ownership_digest=legacy)
+    assert metadata["neos_ownership_digest"] == legacy
+    assert metadata["neos_coding_ownership"] == identity.physical_digest(_identity_fields())
+    assert metadata["neos_incarnation"] == "1"
+
+
+def test_ownership_key_must_decode_to_exactly_32_bytes() -> None:
+    assert decode_ownership_key(_secret(OWNERSHIP_KEY)) == OWNERSHIP_KEY
+    with pytest.raises(ValueError, match="32_bytes"):
+        decode_ownership_key(_secret(b"k" * 24))
+    with pytest.raises(ValueError, match="invalid_encoding"):
+        decode_ownership_key("%%%")
     with pytest.raises(ValueError):
-        derive_ownership_key(b"short")
+        ManagedCodingIdentity(b"short")
 
 
 # ---- profiles --------------------------------------------------------------------
@@ -321,9 +429,9 @@ async def test_sanitize_keeps_only_provider_operation_and_kind() -> None:
 
 def _spec(**changes) -> ProviderCreateSpec:
     values = dict(
-        allocation_id="alc_1",
-        idempotency_key="neos-coding-sbx:v1:alc_1",
-        provider_name="neos-alc-1",
+        allocation_id="msa_1",
+        idempotency_key="idem_msa_1",
+        provider_name="neos-sbx-1-i1",
         metadata={},
         image=IMAGE,
         region="local",
