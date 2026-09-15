@@ -44,7 +44,7 @@
 | **B. 역할 기반 모델 라우팅** | ✅ 완료 · 안정 | 유지보수. 카탈로그 불변식 지키기 |
 | **C. 프론트엔드** | ✅ **인벤토리 비었다** (FE1~FE17 전부 종결) | `deep_analysis.enabled` — 트랙 A의 관문이다 |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2(멀티홉 스킬화) · D4(SDK 전환) · D3b(langgraph 교체 → **별도 문서로 분리 결정**) |
-| **E. 코딩 에이전트** | 🟢 **플랜 14개 전부 완료** · CA1~CA12 전부 종결 · **development 프로파일은 실제 루프 기본 on**(2026-09-14) | E-S2(staging·production 배포 결정) · 잔여 스트림은 [PLAN_260913.md](PLAN_260913.md) A~H가 정본. `sandbox.provider: managed` 브리지는 코드에 있으나 **B2 게이트([재검토 §8.2](MANAGED_SANDBOX_PROVIDER_REVIEW_260914.md)) 미충족** — `neos-sandboxd`·durable ledger·named profile 없음, e2b/modal은 클라이언트 미바인딩으로 거부 |
+| **E. 코딩 에이전트** | 🟢 **플랜 14개 전부 완료** · CA1~CA12 전부 종결 · **development 프로파일은 실제 루프 기본 on**(2026-09-14) | E-S2(staging·production 배포 결정) · 잔여 스트림은 [PLAN_260913.md](PLAN_260913.md) A~H가 정본. `sandbox.provider: managed`는 관리형 할당 평면 위에 붙는다(`neos-sandboxd`·057 runtime ledger·named profile·HMAC ownership·실행 lease fence). **B2 게이트([재검토 §8.2](MANAGED_SANDBOX_PROVIDER_REVIEW_260914.md)) 미충족** — fake에서만 검증, 실 SDK·실계정·보안 검토·런타임 배선 없음, e2b/modal은 클라이언트 미바인딩으로 거부 |
 | **F. 개선 루프 서브에이전트화** | 🔴 **F1 닫힘** (세 번 측정, 전부 미달) | 이 설계로는 진행 안 함. 재개하려면 **새 스펙 + 새 사전 등록** |
 | **G. 그래프 계약·검증** | 🟢 C1·C2·G2 완료, C3·C4 **live**(플래그 `False`) · G1 배선 버그 7건 전부 해소 | **켜는 결정**. 단 통과율 75%는 같은 조건의 수가 아니다 — 재측정 **사전 등록 완료**([M-0](graph_design_passrate_remeasure_preregistration.md), 표본 전). 측정 스크립트가 프로덕션이 버린 `mandatory` 로 재던 것을 같이 고쳤다 |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 **코드 완료, 켜지 않음** | H2(선행 W9) · H4 · H5 |
