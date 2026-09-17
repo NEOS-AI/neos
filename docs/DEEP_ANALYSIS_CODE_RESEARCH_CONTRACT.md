@@ -33,7 +33,7 @@
 | 스펙 | 하는 일 | 도구 | `can_spawn` | 역할(모델 라우팅) |
 |---|---|---|---|---|
 | `research` | 질문 하나를 조사해 quote 클레임·서브질문·막다른 길을 제안 | `search.v1` `fetch.v1` `list_tree.v1` `read_file.v1` `search_text.v1` `write_file.v1` `execute.v1` `load_skill.v1` `check_claims.v1` `submit.v1` | ❌ | `dig` |
-| `analyze` | 이미 verified인 클레임들을 입력으로 계산 클레임을 제안 | `research`에서 `search.v1`·`fetch.v1` 제외 | ❌ | `dig` |
+| `analyze` | **같은 질문의** verified 클레임만 입력으로 계산 클레임을 제안 (2026-09-17 결정) | `research`에서 `search.v1`·`fetch.v1` 제외 | ❌ | `dig` |
 | `compose` | 클레임 파일을 읽어 리포트를 워크스페이스에 쓰고 제출 | `list_tree.v1` `read_file.v1` `search_text.v1` `write_file.v1` `edit_file.v1` `check_claims.v1` `submit.v1` | ❌ | `synth` |
 
 - **judge는 스펙이 아니다.** 판정자는 지금처럼 오케스트레이터가 부르고, worker와 같은 인스턴스일 수 없다.
@@ -66,6 +66,7 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 | 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) |
 | argv allowlist | `python3` 만. 셸 없음 |
 | 이미지 | digest 고정. digest가 매니페스트 구성 지문에 들어간다 |
+| 이미지 내용물 | 파이썬 + **분석 번들**: pandas · numpy · pypdf · beautifulsoup4 (2026-09-17 결정). 목록은 잠금 파일로 고정한다 — 버전이 움직이면 재실행이 재현되지 않는다 |
 | 한도 | CPU 초·메모리·출력 바이트·프로세스 수 — 전부 settings |
 | 등록 | B2와 **같은 named profile 체계**. DA 전용 경로를 만들지 않는다 |
 
@@ -172,9 +173,18 @@ deep_analysis:
 - `specs_enabled`에 스펙을 하나 더하는 커밋마다 경계다. 한 표본에 스펙 둘을 새로 넣지 않는다.
 - J3 섀도는 표본이 아니다 — 저장된 blob·카세트만 쓰고 원장에 쓰지 않는다.
 
-## 9. 열린 질문 (J1 착수 전 결정)
+## 9. 결정과 남은 질문
 
-1. **분석 스킬 번들:** 샌드박스 이미지에 넣을 파이썬 패키지 목록(pandas·pdf 파서 등). 이미지 digest가 표본 경계이므로 한 번에 정한다
-2. **`/evidence` 크기 상한:** 질문별 blob 합계가 한도를 넘으면 가장 오래된 것부터 빼는가, 거절하는가
-3. **compose의 리포트 형식:** 기존 `final_compose` 출력 계약(마크다운 + `[C:claimid]`)을 그대로 파일로 쓰는가
-4. **analyze의 입력 범위:** 같은 루트 질문의 verified 클레임 전부인가, 형제 질문까지인가
+**결정 (2026-09-17, 사용자):**
+
+1. **분석 번들을 이미지에 넣는다** — pandas · numpy · pypdf · beautifulsoup4. 계산 클레임의 주 사용처(표 추출, 수치 비교)가 바로 돌아간다.
+   대가는 명시한다: **패키지를 더하는 커밋은 새 image digest이고 곧 새 표본 경계다.** 버전은 잠금 파일로 고정한다
+2. **compose는 기존 `final_compose` 계약을 그대로 파일로 쓴다** — 마크다운 + `[C:claimid]`.
+   게이트·채점기·프론트가 이미 그 형식을 읽으므로, §7 인용 생산 사슬의 계보가 끊기지 않는다
+3. **analyze는 같은 질문의 verified 클레임만 본다** — 귀속이 분명한 가장 좁은 범위.
+   질문 경계를 넘는 비교가 필요하면 **부모가 그 질문을 만든다**(서브질문 제안 경로). 형제·루트 범위는 열지 않는다
+
+**남은 질문 (J1 착수 전):**
+
+- **`/evidence` 크기 상한:** 질문별 blob 합계가 한도를 넘으면 오래된 것부터 빼는가, 거절하는가.
+  빼면 워커가 "있던 증거가 사라지는" 상태를 만나고, 거절하면 조사가 그 지점에서 멈춘다. **둘 다 이벤트를 남겨야 한다**(§9 fallback 규칙)

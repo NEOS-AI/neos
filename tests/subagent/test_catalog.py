@@ -16,7 +16,6 @@ def test_lookup_explore_returns_p1_spec() -> None:
     assert spec.description == "Read-only investigation. Report only. Do not edit."
     assert spec.can_spawn is True
     assert spec.can_approve is False
-    assert spec.thinking == "off"
     assert spec.load_project_instructions is False
     assert spec.one_shot is True
     assert spec.sandbox_mode is SandboxMode.PARENT_RO
@@ -77,10 +76,19 @@ def test_lookup_implement_returns_write_spec() -> None:
     assert spec.name == "implement"
     assert spec.can_spawn is False
     assert spec.can_approve is False
-    assert spec.thinking == "off"
     assert spec.load_project_instructions is False
     assert spec.one_shot is True
     assert spec.sandbox_mode is SandboxMode.WORKTREE
+
+
+def test_specs_do_not_claim_a_thinking_setting_nothing_enforces() -> None:
+    """K1d: the field said "off" and no code ever sent it.
+
+    Fable 5.1 cannot disable thinking at all, and Sonnet 5 / Opus 5 think by
+    default, so the claim was false on every model a child can run on.
+    """
+    assert not hasattr(lookup_spec("explore"), "thinking")
+    assert not hasattr(lookup_spec("implement"), "thinking")
 
 
 def test_implement_allowed_tools_include_writes_not_spawn() -> None:

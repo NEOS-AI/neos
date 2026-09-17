@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from neos.subagent.types import SandboxMode
 
@@ -21,7 +20,9 @@ class SubagentSpec:
     allowed_tools: frozenset[str]
     sandbox_mode: SandboxMode
     load_project_instructions: bool
-    thinking: Literal["off"]
+    # No thinking setting lives here. It said "off", nothing ever sent it, and
+    # it is false on every model a child runs on: Fable 5.1 cannot disable
+    # thinking, and Sonnet 5 / Opus 5 think by default (roadmap K1d).
     can_spawn: bool
     can_approve: bool
     one_shot: bool  # no parent follow-up on the same sa_…; fold is the end
@@ -48,7 +49,6 @@ EXPLORE = SubagentSpec(
     ),
     sandbox_mode=SandboxMode.PARENT_RO,
     load_project_instructions=False,
-    thinking="off",
     can_spawn=True,
     can_approve=False,
     one_shot=True,
@@ -79,7 +79,6 @@ IMPLEMENT = SubagentSpec(
     ),
     sandbox_mode=SandboxMode.WORKTREE,
     load_project_instructions=False,
-    thinking="off",
     can_spawn=False,
     can_approve=False,
     one_shot=True,
