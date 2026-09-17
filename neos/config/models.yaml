@@ -12,6 +12,9 @@
 #   pricing      USD / 1M 토큰. 없으면 "가격 미상" — 비용 집계 시 경고 후 0
 #   vision       이미지·PDF 입력을 받는가 (기본 false). 유일한 독자는
 #                supports_vision() — 첨부 게이트가 부른다.
+#   mid_conversation_system  대화 중간 role:"system" 메시지를 받는가 (기본 false).
+#                유일한 독자는 supports_mid_conversation_system() — 코딩 Anthropic
+#                어댑터가 system 노트를 네이티브로 보낼지 텍스트로 보낼지 정한다.
 #   role_alias   role_aliases: 키. advisor family 가 아니다
 #   gateway_id   피커/쿠키 id. provider/키 로 추론하지 않는다
 #   picker       채팅 피커 노출. 없으면 selectable 이어도 피커에 안 오른다
@@ -50,6 +53,7 @@ models:
     max_tokens: 8192
     context_window: 200000
     vision: true
+    mid_conversation_system: true
     role_alias: opus-5
     gateway_id: anthropic/claude-opus-5
     picker:
@@ -57,6 +61,24 @@ models:
       description: "Most capable Anthropic model"
       group: anthropic
     pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
+
+  # Claude Fable 5.1 (K0, 2026-09-15). 사실의 출처는 Anthropic claude-api 레퍼런스의
+  # "Migrating to Claude Fable 5.1" 절이다: 1M 창(기본=최대) · 최대 출력 128K ·
+  # thinking 항상 켜짐(adaptive 외 설정은 400) · $10/$50 · 5분 캐시 쓰기 $12.50 ·
+  # 캐시 읽기 $0.25(0.025x) · 대화 중간 system 메시지 지원. 피커에 올리지 않는다 —
+  # 기능 오버라이드로만 쓴다.
+  # ⚠️ 강제 tool_choice(any/tool)를 400 으로 거절한다. thinking 블록은 만든 대화의
+  # 앞부분에 묶인다 — 이력을 고치면 400 이다(코딩 루프 `_guard_thinking_prefix`).
+  claude-fable-5-1:
+    provider: anthropic
+    selectable: false
+    thinking: adaptive
+    description: "Anthropic Claude Fable 5.1"
+    max_tokens: 128000
+    context_window: 1000000
+    vision: true
+    mid_conversation_system: true
+    pricing: {input: 10.00, output: 50.00, cache_creation: 12.50, cache_read: 0.25}
 
   # 심층분석 판정자 전용 (E3, 2026-08-30). 피커에 올리지 않으므로 tiers 없이
   # `selectable: false` 다 -- `deep_analysis.models.judge` 기능 오버라이드로만
@@ -82,6 +104,7 @@ models:
     max_tokens: 8192
     context_window: 200000
     vision: true
+    mid_conversation_system: true
     pricing: {input: 5.00, output: 25.00, cache_creation: 6.25, cache_read: 0.50}
 
   claude-haiku-4-5-20251001:

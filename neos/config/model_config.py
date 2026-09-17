@@ -112,6 +112,10 @@ class ModelSpec(StrictConfigModel):
     # (neos/services/attachment_blocks.py) — 읽는 곳 없이 스키마만
     # 늘리지 않기 위해 게이트와 같은 변경으로 들어왔다.
     vision: bool = False
+    # 대화 중간 `role: "system"` 메시지를 받는가. 유일한 독자는 코딩
+    # Anthropic 어댑터의 system 노트 렌더링이다. 모르면 false — 폴백(텍스트
+    # 블록)은 모든 모델에서 유효하지만 네이티브 형태는 미지원 모델에서 400 이다.
+    mid_conversation_system: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
     # role_aliases: 키만. anthropic_families[].family 가 아니다.
@@ -701,6 +705,15 @@ def supports_vision(model: str) -> bool:
     """
     spec = model_config.catalog.get_model_spec(model)
     return bool(spec and spec.vision)
+
+
+def supports_mid_conversation_system(model: str) -> bool:
+    """대화 중간 system 메시지를 네이티브로 보낼 수 있는가. 카탈로그만 본다.
+
+    미등록 모델은 False -- 폴백은 어디서나 유효하고 네이티브 형태는 틀리면 400 이다.
+    """
+    spec = model_config.catalog.get_model_spec(model)
+    return bool(spec and spec.mid_conversation_system)
 
 
 def models_for_provider(provider: str) -> list[str]:
