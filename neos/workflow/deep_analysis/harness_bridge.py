@@ -16,6 +16,7 @@ from neos.coding.model.base import (
     ModelLimits,
     ModelRequest,
     TextContent,
+    ThinkingContent,
     ToolDefinition,
     ToolResultContent,
     ToolUseContent,
@@ -82,12 +83,21 @@ def messages_to_canonical(
                 )
             )
             continue
-        parts: list[TextContent | ToolUseContent] = []
+        parts: list[TextContent | ToolUseContent | ThinkingContent] = []
         for item in blocks:
             if not isinstance(item, dict):
                 parts.append(_text_content(item))
                 continue
             kind = item.get("type")
+            if kind == "thinking":
+                # Replayed verbatim when signed; an unsigned block cannot be
+                # replayed at all, and must not become prose.
+                signature = str(item.get("signature") or "")
+                if signature:
+                    parts.append(
+                        ThinkingContent(str(item.get("thinking") or ""), signature)
+                    )
+                continue
             if kind == "tool_use":
                 parts.append(
                     ToolUseContent(
@@ -100,7 +110,7 @@ def messages_to_canonical(
                 parts.append(_text_content(item.get("text") or " "))
             else:
                 parts.append(_text_content(item))
-        if not parts:
+        if all(isinstance(item, ThinkingContent) for item in parts):
             parts.append(_text_content(" "))
         converted.append(
             CanonicalMessage(
@@ -133,7 +143,14 @@ def turn_to_llm_response(model: str, turn):
     from neos.workflow.deep_analysis.llm import LLMResponse
 
     text = "".join(turn.text_parts)
-    blocks: list[dict[str, Any]] = []
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "thinking",
+            "thinking": block.thinking,
+            "signature": block.signature,
+        }
+        for block in getattr(turn, "thinking", ())
+    ]
     if text:
         blocks.append({"type": "text", "text": text})
     for call in turn.tool_calls:

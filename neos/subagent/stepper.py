@@ -14,6 +14,7 @@ from neos.coding.model.base import (
     ModelLimits,
     ModelRequest,
     TextContent,
+    ThinkingContent,
     ToolDefinition,
     ToolResultContent,
     ToolUseContent,
@@ -103,7 +104,6 @@ class ChildStepper:
     ) -> CheckpointWrite:
         run_id = reservation.run.run_id
         _apply_pending_steer(state)
-        request_kwargs = _thinking_off_kwargs()
         request = ModelRequest(
             system=(
                 build_implement_system_prompt()
@@ -119,14 +119,17 @@ class ChildStepper:
             task_id=run_id,
             run_id=run_id,
             turn_id=f"sat_{uuid4().hex}",
-            **request_kwargs,
         )
         text_parts: list[str] = []
         tool_calls: list[Any] = []
+        thinking: list[Any] = []
         try:
             async for event in iter_model_turn(self._model, request):
                 completed = fold_model_event(
-                    event, text_parts=text_parts, tool_calls=tool_calls
+                    event,
+                    text_parts=text_parts,
+                    tool_calls=tool_calls,
+                    thinking=thinking,
                 )
                 if completed is not None and completed.usage is not None:
                     state["input_tokens"] = int(state["input_tokens"]) + (
@@ -154,7 +157,15 @@ class ChildStepper:
             recorded_calls.append(recorded)
             pending.append(recorded)
         state["messages"].append(
-            {"role": "assistant", "text": text, "tool_calls": recorded_calls}
+            {
+                "role": "assistant",
+                "text": text,
+                "tool_calls": recorded_calls,
+                "thinking": [
+                    {"thinking": block.thinking, "signature": block.signature}
+                    for block in thinking
+                ],
+            }
         )
         if not pending:
             return self._write(ticket, state, SubagentStatus.COMPLETED)
@@ -355,22 +366,24 @@ def _canonical_messages(state: Mapping[str, Any]) -> tuple[CanonicalMessage, ...
             text = str(raw.get("text") or ".")
             messages.append(CanonicalMessage("user", (TextContent(text),)))
         elif role == "assistant":
-            parts: list[Any] = []
+            body: list[Any] = []
             text = str(raw.get("text") or "")
             if text:
-                parts.append(TextContent(text))
+                body.append(TextContent(text))
             for call in raw.get("tool_calls") or ():
                 if not isinstance(call, Mapping):
                     continue
-                parts.append(
+                body.append(
                     ToolUseContent(
                         tool_call_id=str(call.get("tool_call_id") or ""),
                         name=str(call.get("name") or ""),
                         input=dict(call.get("input") or {}),
                     )
                 )
-            if not parts:
-                parts.append(TextContent("."))
+            if body:
+                parts = _thinking_parts(raw) + body
+            else:
+                parts = [TextContent(".")]
             messages.append(CanonicalMessage("assistant", tuple(parts)))
         elif role == "tool":
             content = raw.get("content") or {}
@@ -394,6 +407,17 @@ def _canonical_messages(state: Mapping[str, Any]) -> tuple[CanonicalMessage, ...
     return tuple(messages)
 
 
+def _thinking_parts(raw: Mapping[str, Any]) -> list[Any]:
+    parts: list[Any] = []
+    for block in raw.get("thinking") or ():
+        if not isinstance(block, Mapping):
+            continue
+        signature = str(block.get("signature") or "")
+        if signature:
+            parts.append(ThinkingContent(str(block.get("thinking") or ""), signature))
+    return parts
+
+
 def _collect_citations(state: dict[str, Any], result: Mapping[str, Any]) -> None:
     cites = [str(item) for item in state.get("citations") or ()]
     for key in ("path", "url"):
@@ -401,15 +425,6 @@ def _collect_citations(state: dict[str, Any], result: Mapping[str, Any]) -> None
         if value and str(value) not in cites:
             cites.append(str(value))
     state["citations"] = cites
-
-
-def _thinking_off_kwargs() -> dict[str, Any]:
-    fields = getattr(ModelRequest, "__dataclass_fields__", {})
-    if "thinking" in fields:
-        return {"thinking": False}
-    if "thinking_enabled" in fields:
-        return {"thinking_enabled": False}
-    return {}
 
 
 def _steer_remainder(snapshot: str, applied: str) -> str:
@@ -452,6 +467,7 @@ def _should_compact(state: Mapping[str, Any]) -> bool:
 def _compact(state: dict[str, Any]) -> None:
     if not _should_compact(state):
         return
+    edited = False
     for message in state.get("messages") or ():
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
@@ -461,6 +477,13 @@ def _compact(state: dict[str, Any]) -> None:
         blob = json.dumps(content, default=str)
         if len(blob) > _MAX_TOOL_BODY:
             message["content"] = {"_ref": "dropped", "bytes": len(blob)}
+            edited = True
+    if edited:
+        # Rewriting a tool body changes the prefix every later thinking block
+        # is bound to. Dropping them all is the documented recovery.
+        for message in state.get("messages") or ():
+            if isinstance(message, dict) and message.get("thinking"):
+                message["thinking"] = []
 
 
 def _transcript_bytes(state: Mapping[str, Any]) -> int:
