@@ -45,8 +45,8 @@
 | **G. 그래프 계약·검증** | 🟢 C3·C4 live(플래그 off) | 켜는 결정 · M-0 재측정(사전 등록 완료) |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료(꺼짐) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
-| **J. 코딩 루프 조사** 🆕 | 🔵 **설계** — 이 개편의 중심(§4) | J0 계약 문서 → J1~J6. **플래그 off로 착지, 표본은 새 계보** |
-| **K. Fable 5.1 적응** 🆕 | 🔵 **갭 분석 완료**(§5.2) — 코드 없음 | K1(이력 불변) · K2(턴 한정 system) · K7(컴팩션 형태)이 P0. **K3(비동기 spawn) 채택 결정**(2026-09-15) — PLAN_260913 §2.1 개정됨 |
+| **J. 코딩 루프 조사** 🆕 | 🔵 **J0 계약 완료**([계약 문서](DEEP_ANALYSIS_CODE_RESEARCH_CONTRACT.md)) — 코드 없음 | J1~J6. **플래그 off로 착지, 표본은 새 계보**. 계약 §9 열린 질문 넷이 J1 선행 |
+| **K. Fable 5.1 적응** 🆕 | 🟢 **P0 착지**(K0·K1·K2·K7, 2026-09-15) — 코딩 루프 한정 | 실계정 3단계 검사(K1b) · 자식·DA 경로(K1c) · K3·K5·K9. **K3(비동기 spawn) 채택 결정** — PLAN_260913 §2.1 개정됨 |
 
 **기본 플래그** — 두 제품 표면이 아직 프로덕션 기본 경로에 없다. 줄 번호는 적지 않는다.
 
@@ -237,7 +237,7 @@ ComputedEvidence
 
 | 단계 | 내용 | 선행 | 표본 필요 |
 |---|---|---|---|
-| **J0** | 계약 문서: `research/analyze/compose` 스펙, `ComputedEvidence`, 새 거절 코드, 이벤트 kind, 샌드박스 프로파일 `research-offline-v1` | — | 없음 |
+| ~~**J0**~~ | ✅ [계약 문서](DEEP_ANALYSIS_CODE_RESEARCH_CONTRACT.md) (2026-09-15): 스펙 셋 · 도구 넷 · `ComputedEvidence` · 거절 코드 다섯 · 이벤트 kind 여섯 · `research-offline-v1` · 불변식 I1~I7 | — | 없음 |
 | **J1** | 도구 경계: `fetch.v1`→`fetch.py`, blob 읽기 전용 마운트, `submit.v1`, 카탈로그 fail-closed 셋째 타입. **S9 바이트 동일 테스트** | J0 | 없음 |
 | **J2** | 계산 클레임 채점기 + 재실행 + 이벤트 짝(fixture 양방향) | J1 | 없음(합성 fixture·변이 테스트) |
 | **J3** | **오프라인 섀도**: 저장된 blob·카세트로 코딩 워커를 돌려 제안만 비교. 원장에 쓰지 않는다 | J2 | 없음(카세트) |
@@ -262,9 +262,19 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 이 스펙은 **Anthropic 공식 문서 "Prompting Claude Fable 5.1"을 바탕으로 한다.** 프롬프트 블록은
 공식 권장 문구를 **그대로** 쓴다(§10.5).
 
-> ⚠️ **카탈로그에 `claude-fable-5-1`의 사실이 없다** (2026-09-15). `models.yaml`의 `claude-fable-5`
-> 접두사가 가장 긴 일치로 먹을 뿐이다. context window·thinking 바인딩·effort 지원을
-> **지어내서 적지 않는다** — 확인 못 한 모델 사실은 추측하지 않는다(메모리 규칙). K0이 첫 일이다.
+> ✅ **K0 착지 (2026-09-15).** `models.yaml`에 `claude-fable-5-1`을 등재했다 — 출처는 Anthropic claude-api
+> 레퍼런스의 "Migrating to Claude Fable 5.1" 절이고, 거기 적힌 사실만 적었다(1M 창 · 128K 출력 ·
+> thinking 항상 켜짐 · $10/$50 · 캐시 읽기 $0.25 · 대화 중간 system 지원). `selectable: false` — 기능
+> 오버라이드로만 쓴다. 카탈로그에 `mid_conversation_system` 필드를 더했다(opus-5 · opus-4-8 · fable-5-1 = true,
+> **sonnet-5 = false**). `tests/config/test_model_catalog_fable.py`가 고정한다.
+>
+> 📌 **원문에서 새로 알게 된 것 셋 — 스펙 문서에 없던 것:**
+> - **thinking은 끌 수 없다.** Fable 5.1은 요청에 thinking 필드가 없어도 생각하고 블록을 돌려준다.
+>   "thinking을 켜는 커밋"이 따로 없다 — **Fable 5.1로 라우팅하는 순간이 켜는 순간이다**
+> - **강제 `tool_choice`(any/tool)가 400이다.** 코딩 루프는 쓰지 않는다. `ui_frame_generator.py`가 쓰지만 Fable로 가지 않는다
+> - **최근 턴을 남기는 컴팩션도 허용된다** — 남긴 턴의 thinking만 떼면 된다. §5.2 R-07 정정 참조
+>
+> ⚠️ 원문 대조 중 발견: 카탈로그 `claude-sonnet-5` 가격(3/15)이 레퍼런스(2/10)와 다르다. 범위 밖이라 고치지 않았다 — 별건
 
 ### 5.1 NEOS 프롬프트 전략 — 일곱 원칙
 
@@ -289,13 +299,13 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 
 | ID | 스펙 | NEOS 지금 | 갭 | K 티켓 |
 |---|---|---|---|---|
-| **R-01** | 이력 append-only, 원본 그대로 재전송 | 공통 메시지 형식(`coding/model/base.py`)에 **thinking 블록 타입이 없다.** `_to_anthropic_request`는 model·system·messages·tools·max_tokens만 보낸다 — `ModelLimits.thinking_budget`은 **와이어에 닿지 않는다** | 지금은 thinking을 재전송하지 않아서 400이 안 날 뿐이다. 켜는 순간 깨진다. 요청 prefix 바이트 동일 테스트 없음 | **K1** P0 |
-| **R-02** | 턴 한정 system message (`clear_at`) | 경로 없음. 공통 형식에 mid-conversation system 역할 없음 | 공통 형식 확장 + 미지원 프로바이더 폴백(tool_result 뒤 text 블록) | **K2** P0 |
+| **R-01** | 이력 append-only, 원본 그대로 재전송 | ✅ **K1 착지.** `ThinkingContent`·`ThinkingCompleted`가 공통 형식에 있고, 어댑터가 서명째 받아 그대로 돌려보낸다. 체크포인트가 왕복한다. **durable 루프의 `_guard_thinking_prefix` 한 곳**이 직전 요청의 system·tools·메시지 digest와 비교해, 다르면 그 경계에서 thinking을 **전부** 뗀다 — 컴팩션 셋·헤드 드롭·결과 축소·도구 공개·system 재구성을 경로별로 고치지 않았다 | **K1b** 실계정 3단계 검사(`drop_block` + `input_transformations` 로깅) — 키가 필요하다. **K1c** 자식(`subagent/stepper.py`)·DA 브리지는 여전히 thinking을 싣지 않는다(전부 떼기 = 유효하지만 추론 손실) | ~~K1~~ · K1b · K1c |
+| **R-02** | 턴 한정 system message (`clear_at`) | ✅ **K2 착지.** `CanonicalMessage("system", (SystemNoteContent,))`. Anthropic 어댑터가 카탈로그 `mid_conversation_system`과 **배치 규칙**(user 뒤 · 마지막이거나 assistant 앞)을 둘 다 만족할 때만 네이티브 + beta 헤더, 아니면 tool_result 뒤 text 블록. OpenAI·Gemini·Ollama는 user 텍스트. **pre_generate 훅의 system 노트가 system 프롬프트를 매 턴 다시 쓰던 것을 이 경로로 옮겼다** | 도구 공개를 `tool_addition` 블록(beta `mid-conversation-tool-changes-2026-07-01`)으로 바꾸면 가드가 thinking을 떼는 빈도가 줄어든다 — **K2b** | ~~K2~~ · K2b |
 | **R-03** | 서브에이전트 즉시 반환 + `await` 도구 | **park/fold** — 부모가 자식을 기다린다(`_durable/spawn.py`) | park/fold를 즉시 반환 + 다음 safe point append + `await_subagent.v1`로 교체. PLAN_260913 §2.1 금지는 **2026-09-15 개정** | **K3** P1 |
 | **R-04** | progress thinking 렌더 | 없음 | Code UI 상태 라인 + 이벤트 kind(C 짝 규칙) | **K4** P1 |
 | **R-05** | effort 역할별 외부화, 중간 변경 | 코딩/채팅에 effort 필드 없음. G10 OPEN | G10을 K5로 흡수. DA 역할 scout/dig/synth/judge 각각 | **K5** P1 |
 | **R-06** | `refusal` 정상 분기, base64 필터 | `normalize_stop_reason`(`coding/model/stop.py`)은 세 결과만 알고 **`refusal`은 `"unknown"`으로 뭉개진다.** tool_result base64 필터 없음 | 넷째 결과 `refusal` → 분기 → 원장 이벤트(무재시도). `unknown`과 섞이면 거절이 조용한 실패가 된다 | **K6** P1 |
-| **R-07** | 클라이언트 compaction = 요약 1건 + 새 user 턴 | **정확히 금지된 형태다** — `(head,) + transcript[tail_start:]`로 최근 이력 일부를 붙이고, 요약은 `inject_previous_summary`로 **system을 다시 쓴다**(G2) | 형태 교체. **G2 CLOSED를 재개한다** | **K7** P0 |
+| **R-07** | 클라이언트 compaction = 요약 1건 + 새 user 턴 | ✅ **K7 착지(가드로).** ~~정확히 금지된 형태다~~ → **정정:** 원문은 최근 턴을 남기는 컴팩션을 "남긴 턴의 thinking을 떼면" 허용한다. 요약을 system에 두는 G2도 **컴팩션 경계에서 thinking을 떼면** 유효하다 — ~~G2 CLOSED를 재개한다~~는 과잉 처방이었다. 컴팩션이 만드는 모든 비-append 편집을 R-01의 가드가 잡는다. 요약 프롬프트에는 서명을 싣지 않는다 | P-05(요약 6항목 보존 지시)는 남았다 — 가드는 **유효성**을 지키지 **요약 품질**을 지키지 않는다 | ~~K7~~ · P-05 |
 | **R-08** | `max_tokens` = 사고 + 응답 | `ModelLimits.thinking_budget` 필드는 있음 | 긴 산출물(compose)의 한도 산식 + 예산 노트 | **K8** P2 |
 | **P-01** | 자율 완수 블록 | 코딩 프롬프트 `_tasks`에 "비가역·워크스페이스 밖이면 멈춰라"만 있음 | 자율 오버레이. DA 워커는 **항상 자율 모드** | **K9** P0 |
 | **P-02** | 변경·테스트 범위 제한 | `_tasks`에 범위 한 줄 | 코딩: 확장. 조사: "질문을 넓히지 않는다"로 번역(`worker_brief`의 범위 규칙과 합친다) | **K9** |
@@ -342,18 +352,23 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 ### 5.5 K 순서
 
 ```
-K0 카탈로그: fable-5-1 사실 확인(공식 문서) — 확인 못 하면 적지 않는다
- ├─ K1 이력 불변 + prefix 바이트 동일 테스트 ──┐
- ├─ K7 컴팩션 형태 교체 (G2 재개) ─────────────┼─> thinking 켜기 (§8 경계 9)
- └─ K2 턴 한정 system ─> K10 배칭 넛지         │
-K5 effort 필드 + 벤치 러너 ─> 모델별 스윕 ──────┘
+✅ K0 · K1 · K2 · K7  (2026-09-15, 코딩 루프)
+ ├─ K1b 실계정 3단계 검사 ───────────────────────┐
+ ├─ K1c 자식·DA 경로가 thinking을 싣는다          ├─> 워커를 Fable 5.1로 라우팅 (§8 경계 9)
+ └─ K2 ─> K2b 도구 공개를 tool_addition으로 · K10 배칭 넛지
+K5 effort 필드 + 벤치 러너 ─> 모델별 스윕 ────────┘
 K9 자율/대면 오버레이 (G11) ─> K11 억제 문구 감사
 K6 refusal · K4 progress · K8 max_tokens        (독립)
 K1 ─> K3 비동기 spawn + await_subagent.v1       (채택. 기본 on은 A1·A2 숫자 뒤)
 ```
 
-**K1·K7이 thinking을 켜는 선행이다.** 순서를 뒤집으면 첫 tool 루프가 400으로 전멸하고,
-preflight가 "키가 있다"만 보고 통과했던 D94와 같은 모양으로 실패한다.
+**K1b가 Fable 5.1로 옮기는 선행이다.** 가드와 바이트 동일 테스트는 **가짜 모델**에서 초록이다 —
+실제 API가 서명을 어떻게 검사하는지는 `drop_block` 진단으로 한 세션을 돌려 `input_transformations`가
+비어 있음을 봐야 안다. 그것 없이 옮기면 preflight가 "키가 있다"만 보고 통과했던 D94와 같은 모양으로 실패한다.
+
+> ⚠️ **가짜로 확인하지 못한 가정 하나:** assistant 턴 안에서 thinking 블록을 **맨 앞에** 모은다(`_completed_turn`).
+> 스트림에서는 진행 업데이트 thinking이 도구 호출 바로 앞에 끼어 올 수 있다. 원문은 서명이 **메시지** 단위
+> 앞부분에 묶인다고 적었지 블록 순서를 적지 않았다. K1b가 이것을 확인한다 — 틀리면 스트림 순서를 보존하도록 고친다.
 
 ---
 
@@ -435,7 +450,8 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 | 6 | D2 | fetch가 429·503·전송 오류를 재시도한다 | **확보한 증거의 양**과 하류 전부 |
 | 7 | `f9b6c261` | DA 호출이 코딩 하네스를 거친다(사용량 추출·중단 사유) | ⚠️ **경계 여부 미판정.** 카세트 백테스트로 토큰 회계가 같음을 보이기 전까지 조사 지출(L-1) 계보를 가로질러 놓지 않는다 |
 | **8** 🆕 | J 플래그를 켜는 커밋 | 워커가 코딩 루프가 된다 | **경계가 아니라 새 계보(C-계열)다.** #1~#23과 어떤 수치도 나란히 놓지 않는다. C-계열 안에서도 research/analyze/compose를 켜는 커밋이 각각 경계다 |
-| **9** 🆕 | K: thinking을 켜는 커밋 | 워커·판정자가 thinking을 쓴다 | 채점 결과 · 토큰 지출 · 벽시계 |
+| **9** 🆕 | K: 워커·판정자를 Fable 5.1로 라우팅하는 커밋 | thinking이 항상 켜진다(끌 수 없다) | 채점 결과 · 토큰 지출 · 벽시계 |
+| **12** 🆕 | K0·K1·K2·K7 착지 (2026-09-15) | **코딩 루프**가 thinking 블록을 돌려보낸다(sonnet-5·opus-5는 adaptive가 기본이라 이미 블록이 오고 있었다) · pre_generate 훅의 system 노트가 system 프롬프트에서 메시지로 옮겼다 · 편집 경계에서 thinking을 뗀다 | **코딩 에이전트 지표(A1 베이스라인)** — 토큰·캐시 적중·완료율. **심층분석은 가로지르지 않는다**: DA 브리지(`harness_bridge.py`)는 thinking을 싣지 않고 system 노트를 쓰지 않는다 |
 | **10** 🆕 | K5: effort 기본값을 정하는 커밋 | 역할별 사고량 | 채점 결과 · 토큰 지출. **effort 변경마다 행을 더한다** |
 | **11** 🆕 | K9·K11: 오버레이·억제 문구 제거 | 워커 행동 기본값 | 채점 결과. 문구 하나 = 행 하나 |
 
@@ -557,12 +573,13 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | **결정됨** 🆕 (2026-09-15) | **K3** 비동기 spawn 채택(§5.3) · **J production 샌드박스는 B2 게이트에 묶는다**(§4.5) · **Fable 5.1 공식 문구 그대로 사용**(§10.5) |
 | **라이브 표본** | CITE1 후보 판별(#23) · BUDGET2 효과 · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · 🆕 **C-계열**(J5) · 🆕 effort 스윕(K5) |
 | **새 사전 등록** | D93 다시 쓰기 · M-1 · 🆕 **J4**(점진 공개 조립) · 🆕 **C-계열 첫 표본** |
-| **새 스펙** | 트랙 F 재개 · 🆕 **J0 계약 문서** |
-| **표본 없이 되는 코드** 🆕 | **J1·J2·J3**(플래그 off, S9) · **K0·K1·K2·K7**(thinking을 켜기 전까지 행동 불변) · K6 · K4 |
-| **측정 없이 못 정함** | `claude-opus-5` 세대 사실(CA12) · 🆕 `claude-fable-5-1` 세대 사실(K0) |
+| **새 스펙** | 트랙 F 재개 |
+| **표본 없이 되는 코드** 🆕 | **J1·J2·J3**(플래그 off, S9 — 계약 §9 열린 질문 넷 선행) · **K1c · K2b** · K6 · K4 |
+| **키 하나로 되는 검사** 🆕 | **K1b** — 실계정에서 `drop_block` 진단 세션 한 번. `ANTHROPIC_WORKSPACE_ID`와 같은 값에 걸린다 |
+| **측정 없이 못 정함** | `claude-opus-5` 세대 사실(CA12) |
 | **규모가 큰 별건** | D3b · D2 · D4 — 전부 W6 이후. **D4는 J가 수요를 만든다** |
 
-> **읽는 법:** 이번 개편으로 **표본 없이 할 수 있는 코드**가 다시 생겼다(J1~J3, K0~K2·K7).
+> **읽는 법:** 이번 개편으로 **표본 없이 할 수 있는 코드**가 다시 생겼다(J1~J3, K1c·K2b). K0~K2·K7은 2026-09-15에 착지했다.
 > 그러나 트랙 A의 병목은 여전히 `.env` 한 줄이고, J4는 그 뒤다. **새 일이 생겼다고 옛 병목이 사라지지 않았다.**
 
 ### 미해결 인벤토리 (트랙 A 잔여)
@@ -579,11 +596,10 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 
 | 우선 | ID | 내용 | 선행 |
 |---|---|---|---|
-| 🔴 P0 | **J0** | 계약 문서(스펙 셋 · `ComputedEvidence` · 거절 코드 · 이벤트 kind · 프로파일) | — |
-| 🔴 P0 | **K0** | `claude-fable-5-1` 카탈로그 사실 — 공식 문서 확인 | — |
-| 🔴 P0 | **K1** | thinking 블록을 공통 형식에 추가, 원본 보존, prefix 바이트 동일 테스트 | K0 |
-| 🔴 P0 | **K7** | 컴팩션 = 요약 1건 + 새 user 턴. G2 재개 | K1 |
-| 🔴 P0 | **K2** | 턴 한정 system message + 폴백 | K1 |
+| 🔴 P0 | **K1b** | 실계정 3단계 검사 — `thinking-binding-controls-2026-08-01` + `drop_block`, 매 응답 `input_transformations` 로깅. thinking 블록 순서 가정(맨 앞 모음)도 여기서 확인 | 키 |
+| 🟠 P1 | **K1c** | `subagent/stepper.py`·`harness_bridge.py`가 thinking을 싣고 가드를 거친다 — 지금은 전부 떼는 쪽(유효, 손실) | — |
+| 🟡 P2 | **K2b** | 도구 공개를 `tool_addition` 시스템 메시지로 — 가드가 thinking을 떼는 빈도를 줄인다 | — |
+| 🟡 P2 | **J1 선행** | 계약 §9 열린 질문 넷(이미지 패키지 · `/evidence` 상한 · compose 형식 · analyze 입력 범위) | 사람의 결정 |
 | 🟠 P1 | **J1·J2** | 도구 경계 · 계산 클레임 채점기 | J0 |
 | 🟠 P1 | **K5** | effort 카탈로그 필드(G10 흡수) + 역할별 설정 + 벤치 러너 | K0 |
 | 🟠 P1 | **K9** | 자율/대면 오버레이(G11) | — |
