@@ -13,6 +13,7 @@ from neos.coding.model.base import (
     ModelEvent,
     ModelRequest,
     ModelUsage,
+    SystemNoteContent,
     TextContent,
     TextDelta,
     ToolInputDelta,
@@ -190,6 +191,17 @@ def _to_openai_request(request: ModelRequest) -> dict[str, object]:
 
 
 def _message_to_openai(message: CanonicalMessage) -> list[dict[str, object]]:
+    if message.role == "system":
+        return [
+            {
+                "role": "user",
+                "content": "".join(
+                    item.text
+                    for item in message.content
+                    if isinstance(item, SystemNoteContent)
+                ),
+            }
+        ]
     if message.role == "tool":
         return [
             {

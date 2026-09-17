@@ -201,6 +201,8 @@ class CheckpointMixin:
             output_token_escalations=int(raw.get("output_token_escalations", 0)),
             llm_compact_attempts=int(raw.get("llm_compact_attempts", 0)),
             summary=str(raw.get("summary") or ""),
+            sent_prefix_count=int(raw.get("sent_prefix_count", 0)),
+            sent_prefix_digest=str(raw.get("sent_prefix_digest") or ""),
             revealed_tools=frozenset(str(name) for name in raw.get("revealed_tools") or ())
             | pre_revealed,
             allowed_tools=frozenset(str(name) for name in raw.get("allowed_tools") or ()),
@@ -411,6 +413,8 @@ class CheckpointMixin:
             "output_token_escalations": state.output_token_escalations,
             "llm_compact_attempts": state.llm_compact_attempts,
             "summary": state.summary,
+            "sent_prefix_count": state.sent_prefix_count,
+            "sent_prefix_digest": state.sent_prefix_digest,
             "revealed_tools": sorted(state.revealed_tools),
             "allowed_tools": sorted(state.allowed_tools),
             "approved_always": sorted(state.approved_always),

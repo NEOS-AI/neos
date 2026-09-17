@@ -89,10 +89,22 @@ async def test_pre_generate_appends_user_and_system_note_before_model() -> None:
     ]
     assert any("Fix it" in text for text in request_texts)
     assert any("Remember the auth plan." in text for text in request_texts)
-    assert "Prefer pytest." in request.system
-    persisted = _user_texts(h.repository.checkpoints[-1].loop_state["transcript"])
+    # The system note is a turn-scoped system message appended to the
+    # transcript, never an edit of the top-level system prompt (roadmap K2).
+    assert "Prefer pytest." not in request.system
+    assert request.messages[-1].role == "system"
+    note = request.messages[-1].content[0]
+    assert note.text == "Prefer pytest."
+    assert note.clear_at == "next_user_message"
+    persisted_transcript = h.repository.checkpoints[-1].loop_state["transcript"]
+    persisted = _user_texts(persisted_transcript)
     assert any("Fix it" in text for text in persisted)
     assert any("Remember the auth plan." in text for text in persisted)
+    assert any(
+        message["role"] == "system"
+        and message["content"][0]["text"] == "Prefer pytest."
+        for message in persisted_transcript
+    )
 
 
 @pytest.mark.asyncio

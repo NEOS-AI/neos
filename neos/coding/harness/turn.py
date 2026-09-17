@@ -12,6 +12,7 @@ from neos.coding.model.base import (
     ModelEvent,
     ModelRequest,
     TextDelta,
+    ThinkingCompleted,
     ToolCallCompleted,
 )
 
@@ -21,6 +22,7 @@ class ModelTurn:
     text_parts: tuple[str, ...]
     tool_calls: tuple[ToolCallCompleted, ...]
     completion: ModelCompleted | None
+    thinking: tuple[ThinkingCompleted, ...] = ()
 
 
 async def iter_model_turn(
@@ -43,9 +45,14 @@ def fold_model_event(
     *,
     text_parts: list[str],
     tool_calls: list[ToolCallCompleted],
+    thinking: list[ThinkingCompleted] | None = None,
 ) -> ModelCompleted | None:
     if isinstance(event, TextDelta):
         text_parts.append(event.text)
+        return None
+    if isinstance(event, ThinkingCompleted):
+        if thinking is not None:
+            thinking.append(event)
         return None
     if isinstance(event, ToolCallCompleted):
         tool_calls.append(event)
@@ -69,6 +76,7 @@ async def collect_model_turn(
     """
     text_parts: list[str] = []
     tool_calls: list[ToolCallCompleted] = []
+    thinking: list[ThinkingCompleted] = []
     completion: ModelCompleted | None = None
     async for event in iter_model_turn(model, request):
         if on_event is not None:
@@ -76,7 +84,7 @@ async def collect_model_turn(
             if inspect.isawaitable(result):
                 await result
         folded = fold_model_event(
-            event, text_parts=text_parts, tool_calls=tool_calls
+            event, text_parts=text_parts, tool_calls=tool_calls, thinking=thinking
         )
         if folded is not None:
             completion = folded
@@ -84,4 +92,5 @@ async def collect_model_turn(
         text_parts=tuple(text_parts),
         tool_calls=tuple(tool_calls),
         completion=completion,
+        thinking=tuple(thinking),
     )

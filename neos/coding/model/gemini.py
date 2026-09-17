@@ -11,6 +11,7 @@ from neos.coding.model.base import (
     ModelEvent,
     ModelRequest,
     ModelUsage,
+    SystemNoteContent,
     TextContent,
     TextDelta,
     ToolInputDelta,
@@ -177,6 +178,18 @@ def _messages_to_gemini(
                         }
                         for item in message.content
                         if isinstance(item, ToolResultContent)
+                    ],
+                }
+            )
+            continue
+        if message.role == "system":
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": item.text}
+                        for item in message.content
+                        if isinstance(item, SystemNoteContent)
                     ],
                 }
             )

@@ -15,7 +15,9 @@ from pathlib import Path
 from neos.coding.model.base import (
     CanonicalMessage,
     ModelCompleted,
+    SystemNoteContent,
     TextContent,
+    ThinkingContent,
     ToolCallCompleted,
     ToolResultContent,
     ToolUseContent,
@@ -536,6 +538,18 @@ def _message_to_mapping(message: CanonicalMessage) -> dict[str, Any]:
                     "input": dict(item.input),
                 }
             )
+        elif isinstance(item, ThinkingContent):
+            content.append(
+                {
+                    "type": "thinking",
+                    "thinking": item.thinking,
+                    "signature": item.signature,
+                }
+            )
+        elif isinstance(item, SystemNoteContent):
+            content.append(
+                {"type": "system_note", "text": item.text, "clear_at": item.clear_at}
+            )
         else:
             content.append(
                 {
@@ -557,6 +571,10 @@ def _message_from_mapping(value: Mapping[str, Any]) -> CanonicalMessage:
             content.append(
                 ToolUseContent(item["tool_call_id"], item["name"], item["input"])
             )
+        elif item["type"] == "thinking":
+            content.append(ThinkingContent(item["thinking"], item["signature"]))
+        elif item["type"] == "system_note":
+            content.append(SystemNoteContent(item["text"], item["clear_at"]))
         else:
             content.append(
                 ToolResultContent(item["tool_call_id"], item["status"], item["content"])

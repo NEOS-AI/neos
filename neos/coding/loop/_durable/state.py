@@ -199,6 +199,10 @@ class AgentLoopState:
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
     last_prompt_tokens: int = 0
+    # What the last model request carried: message count, and a digest of
+    # system + tools + those messages. See `_guard_thinking_prefix`.
+    sent_prefix_count: int = 0
+    sent_prefix_digest: str = ""
 
     @property
     def has_pending_tool(self) -> bool:

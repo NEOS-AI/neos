@@ -17,6 +17,7 @@ from neos.coding.model.base import (
     TextDelta,
     ToolResultContent,
     ToolUseContent,
+    strip_thinking,
 )
 from neos.coding.loop.hooks import (
     invoke_post_compact,
@@ -174,8 +175,9 @@ class CompactionMixin:
         prefix = transcript[1:tail_start]
         if not prefix:
             return transcript, attempts, previous
+        # Signatures are opaque base64-like bytes: no value to the summarizer.
         blob = json.dumps(
-            [_message_to_mapping(item) for item in prefix],
+            [_message_to_mapping(item) for item in strip_thinking(prefix)],
             ensure_ascii=False,
         )[:12_000]
         prompt = f"Summarize this transcript prefix:\n{blob}"
