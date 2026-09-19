@@ -164,6 +164,9 @@ logger = logging.getLogger(__name__)
 # Read by `_pre_tool_decision` and `_execute_validated` on the core class.
 # Keep both readers in this module: tests monkeypatch it on this module object.
 PRE_TOOL_HOOK_TIMEOUT_SEC = 5.0
+# One status line's worth. `max_text_delta_bytes` governs durable model text
+# and is three orders of magnitude too large for this.
+THINKING_PREVIEW_CHARS = 200
 
 
 def _request_fingerprint(system: str, tools: Sequence[ToolDefinition]) -> str:
@@ -363,6 +366,27 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                         raise CodingLoopFailure(str(error), retryable=False) from error
                     persisted_stream = True
                     yield committed.event
+                elif isinstance(model_event, ThinkingCompleted):
+                    # A status line, not the block. The signature is opaque
+                    # provenance and never belongs in a display event.
+                    #
+                    # This deliberately does not set `persisted_stream`:
+                    # thinking arrives at the head of a turn, so treating it as
+                    # durable output would make almost every turn unretryable
+                    # after a transient error. A retry repeats a status line,
+                    # which the next turn overwrites anyway.
+                    preview = model_event.thinking[:THINKING_PREVIEW_CHARS]
+                    yield await deps.events.append(
+                        task_id=input.task_id,
+                        event_type="model.thinking",
+                        payload={
+                            "preview": preview,
+                            "chars": len(model_event.thinking),
+                            "truncated": len(model_event.thinking) > len(preview),
+                        },
+                        run_id=input.run_id,
+                        turn_id=request.turn_id,
+                    )
                 elif isinstance(model_event, ToolInputDelta):
                     persisted_stream = True
                     yield await deps.events.append(

@@ -29,6 +29,7 @@ export const emptyProjection = (taskId: string): CodingProjectionState => ({
   maxCostMicros: null,
   gap: null,
   projectionIssue: null,
+  thinkingStatus: null,
 });
 
 export function reduceSnapshot(
@@ -70,6 +71,8 @@ export function reduceSnapshot(
     ...usageFromSnapshot(snapshot),
     gap: null,
     projectionIssue: null,
+    // A checkpoint is a fresh basis: no thinking is in flight to show.
+    thinkingStatus: null,
   };
 }
 
@@ -85,9 +88,21 @@ export function reduceProjectionEvent(
     return { ...state, gap: { expected, received: event.seq } };
   }
   const base = { ...state, appliedSeq: event.seq, gap: null };
+  if (event.type === "model.thinking") {
+    const preview = event.payload.preview;
+    // A non-string preview is a malformed event, not a status line. Advance
+    // the cursor and render nothing rather than stringify junk.
+    if (typeof preview !== "string") return base;
+    return { ...base, thinkingStatus: preview };
+  }
   if (event.type === "model.text_part.started") {
     const partId = event.payload.part_id;
     if (typeof partId !== "string" || !event.run_id || !event.turn_id) return base;
+    // Speech has begun, so the running note stops competing with it. Defined
+    // once because this branch has two more exits below, and a clear applied
+    // to only one of them is the copy that goes stale.
+    // The malformed exit above keeps the line: nothing actually started.
+    const speaking = { ...base, thinkingStatus: null };
     const interrupted = Array.isArray(event.payload.interrupted_part_ids)
       ? event.payload.interrupted_part_ids.filter((id): id is string => typeof id === "string")
       : [];
@@ -96,7 +111,7 @@ export function reduceProjectionEvent(
       const previous = textPartsById[id];
       if (previous) textPartsById[id] = { ...previous, status: "interrupted", last_seq: event.seq };
     }
-    if (textPartsById[partId]) return { ...base, textPartsById };
+    if (textPartsById[partId]) return { ...speaking, textPartsById };
     const part: CodingTextPartView = {
       part_id: partId,
       run_id: event.run_id,
@@ -107,7 +122,7 @@ export function reduceProjectionEvent(
       last_seq: event.seq,
     };
     return {
-      ...base,
+      ...speaking,
       textPartsById: { ...textPartsById, [partId]: part },
       orderedTextPartIds: [...state.orderedTextPartIds, partId],
     };
