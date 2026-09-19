@@ -849,6 +849,34 @@ class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
     over_discard_lower_bound: float = 0.40
 
 
+class CodeResearchReexecutionConfig(StrictConfigModel):
+    """채점기가 계산 클레임을 다시 돌릴 때의 한도 (계약 §7)."""
+
+    cpu_sec: float = Field(default=30.0, gt=0)
+    memory_mb: int = Field(default=512, gt=0)
+    stdout_bytes: int = Field(default=1_048_576, gt=0)
+
+
+class CodeResearchConfig(StrictConfigModel):
+    """트랙 J. 전부 기본 off·보수값이고, 값을 바꾸는 커밋은 표본 경계다 (계약 §7)."""
+
+    # analyze·compose 는 표본 경계마다 **하나씩** 연다(계약 §8).
+    specs_enabled: list[str] = Field(default_factory=lambda: ["research"])
+    sandbox_profile: str = "research-offline-v1"
+    # `/evidence` 의 질문별 blob 합계 상한. 한도에 닿으면 **새 fetch 를 거절한다**
+    # -- 오래된 blob 을 빼지 않는다(결정 2026-09-20, 계약 §9).
+    # 축출하면 이미 제출된 계산 클레임의 입력이 사라져 채점 때
+    # `E_COMPUTE_INPUT_UNFETCHED` 로 **나중에 조용히** 죽는다.
+    evidence_bytes_cap: int = Field(default=32 * 1024 * 1024, gt=0)
+    # 2*max_turns+1 걸음 상한. 티켓의 max_turns 상한이 8 이다.
+    max_steps: int = Field(default=17, ge=1)
+    # dig 의 wall_clock_cap(600)과 같은 크기에서 시작한다.
+    wall_clock_sec: float = Field(default=600.0, gt=0)
+    reexecution: CodeResearchReexecutionConfig = Field(
+        default_factory=CodeResearchReexecutionConfig
+    )
+
+
 class DeepAnalysisConfig(StrictConfigModel):
     enabled: bool = False
     complexity_threshold: float = 0.5
@@ -1017,6 +1045,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
     # that deliberately ask for less (the report judge asks 800) are unaffected.
     min_viable_output_tokens: int = Field(default=2048, ge=1)
+
+    # 트랙 J. 켜면 워커가 샌드박스에서 코드를 짜고 돌린다. 기본 off 이고,
+    # development 밖에서 켜려면 관리형 평면이 필요하다(I7).
+    code_research_enabled: bool = False
+    code_research: CodeResearchConfig = Field(default_factory=CodeResearchConfig)
 
     # Input allowances for the finalization stages, expressed as multiples of
     # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
@@ -1956,6 +1989,27 @@ class AppConfig(StrictConfigModel):
                 or docker.allow_unpinned_image
             ):
                 raise ValueError("Unsafe production Docker sandbox configuration.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_code_research_gate(self) -> "AppConfig":
+        """I7. development 밖에서 트랙 J 를 켜려면 관리형 평면이 있어야 한다.
+
+        설정에 `b2` 라는 값이 없으므로 게이트를 **관리형 평면**으로 읽는다
+        (계약 §1 의 I7 주석, 2026-09-20). Docker 는 배포 경계가 아니다 --
+        바로 위 "production + docker 거절" 과 같은 판단이고, 같은 fail-closed
+        형태로 둔다.
+        """
+        if not self.deep_analysis.code_research_enabled:
+            return self
+        if self.environment == "development":
+            return self
+        if self.sandbox.provider != "managed" or not self.sandbox.managed.enabled:
+            raise ValueError(
+                "code research outside development requires the managed "
+                "sandbox plane (sandbox.provider=managed and "
+                "sandbox.managed.enabled). Docker is not a deployment boundary."
+            )
         return self
 
     @model_validator(mode="after")

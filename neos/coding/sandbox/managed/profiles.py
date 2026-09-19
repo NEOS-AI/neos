@@ -91,10 +91,22 @@ STRICT_WORKSPACE_QUOTA_V1 = SandboxProfile(
     requires_hard_workspace_quota=True,
 )
 
+# 트랙 J 의 조사 워커가 도는 프로파일. 요구는 "네트워크 없음" 하나뿐이다 --
+# retrieval 은 `fetch.py` 한 곳만 하고, 샌드박스 안의 바이트는 오케스트레이터가
+# 원장에 기록한 blob 뿐이다(계약 I3·I4). 이름을 따로 두는 이유는 프로파일이
+# 매니페스트 구성 지문에 들어가서, 조사 실행과 코딩 실행을 원장에서 구별할 수
+# 있어야 하기 때문이다. DA 전용 레지스트리를 만들지 않는다(계약 §3.2).
+RESEARCH_OFFLINE_V1 = SandboxProfile(name="research-offline-v1", network=DENY_ALL)
+
 PROFILES = MappingProxyType(
     {
         profile.name: profile
-        for profile in (OFFLINE_V1, STRICT_PIDS_V1, STRICT_WORKSPACE_QUOTA_V1)
+        for profile in (
+            OFFLINE_V1,
+            STRICT_PIDS_V1,
+            STRICT_WORKSPACE_QUOTA_V1,
+            RESEARCH_OFFLINE_V1,
+        )
     }
 )
 
