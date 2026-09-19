@@ -121,6 +121,41 @@ def test_enabling_outside_development_is_allowed_on_the_managed_plane() -> None:
     assert config.deep_analysis.code_research_enabled is True
 
 
+def test_code_research_on_docker_requires_no_network() -> None:
+    """I3 을 development 경로에서 **실제로** 강제한다.
+
+    프로파일은 레지스트리에서 `DENY_ALL` 이지만, Docker provider 는
+    `profile` 이라는 단어를 모른다(확인함 — `docker.py` 에 한 번도 나오지
+    않는다). 그 경로의 격리는 오로지 `sandbox.docker.network_mode` 에서 오고,
+    그 필드는 제약 없는 문자열이다. 그래서 둘을 여기서 묶는다 -- 묶지 않으면
+    프로파일이 "네트워크 없음" 이라고 적혀 있는 채로 컨테이너에는 네트워크가
+    붙는다. 낡은 면제 플래그가 가드를 조용히 끄는 것과 같은 모양이다.
+    """
+    from pydantic import ValidationError
+
+    from neos.config.schema import AppConfig
+
+    with pytest.raises(ValidationError) as raised:
+        AppConfig.model_validate(
+            _config(sandbox={"provider": "docker", "docker": {"network_mode": "bridge"}})
+        )
+
+    message = str(raised.value)
+    assert "network_mode" in message
+    assert "extra_forbidden" not in message
+
+
+def test_code_research_on_docker_with_no_network_is_accepted() -> None:
+    """가드는 양방향이다."""
+    from neos.config.schema import AppConfig
+
+    config = AppConfig.model_validate(
+        _config(sandbox={"provider": "docker", "docker": {"network_mode": "none"}})
+    )
+
+    assert config.deep_analysis.code_research_enabled is True
+
+
 def test_enabling_in_development_needs_no_managed_plane() -> None:
     """development 는 Docker(`network=none`)로 충분하다(로드맵 §4.5)."""
     from neos.config.schema import AppConfig

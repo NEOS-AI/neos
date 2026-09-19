@@ -2002,6 +2002,22 @@ class AppConfig(StrictConfigModel):
         """
         if not self.deep_analysis.code_research_enabled:
             return self
+        # `research-offline-v1` 은 레지스트리에서 DENY_ALL 이지만 Docker
+        # provider 는 profile 을 **읽지 않는다**(`docker.py` 에 그 단어가 없다).
+        # 그 경로의 격리는 오직 이 설정에서 오고, 필드는 제약 없는 문자열이다.
+        # 묶어 두지 않으면 프로파일에 "네트워크 없음" 이라고 적힌 채 컨테이너에
+        # 네트워크가 붙는다. development 에서도 적용된다 -- 조사 워커가 도는
+        # 곳이 바로 거기다.
+        if (
+            self.sandbox.provider == "docker"
+            and self.sandbox.docker.network_mode != "none"
+        ):
+            raise ValueError(
+                "code research on docker requires "
+                "sandbox.docker.network_mode=none: the research-offline-v1 "
+                "profile denies all network, but the Docker provider never "
+                "reads profiles, so the container would still get one."
+            )
         if self.environment == "development":
             return self
         if self.sandbox.provider != "managed" or not self.sandbox.managed.enabled:
