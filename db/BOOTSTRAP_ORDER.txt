@@ -92,3 +92,4 @@ db/migrations/055_add_subagent_tables.sql
 db/migrations/056_llm_pricing_claude5.sql
 db/migrations/057_add_coding_sandbox_ledger.sql
 db/migrations/058_allow_workflow_subagent_parent.sql
+db/migrations/059_add_question_evidence_bytes.sql

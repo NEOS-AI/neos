@@ -90,6 +90,11 @@ class DAQuestion(Base):
     spent_tokens = Column(Integer, nullable=False, default=0)
     cap_tokens = Column(Integer, nullable=False)
     fail_streak = Column(Integer, nullable=False, default=0)
+    # 트랙 J. 이 질문이 `/evidence` 에 들인 blob 바이트 합계. `spent_tokens` 와
+    # 같은 모양인 이유는 같은 일을 하기 때문이다 -- 한도가 있는 자원을 질문
+    # 단위로 세고, 남은 양을 빼서 본다. run 이 재개되어도 잊지 않아야 하므로
+    # 메모리가 아니라 행에 둔다.
+    evidence_bytes = Column(Integer, nullable=False, default=0)
 
 
 class DAClaim(Base):
