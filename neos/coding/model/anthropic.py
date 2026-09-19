@@ -17,6 +17,8 @@ from neos.coding.model.base import (
     TextDelta,
     ThinkingCompleted,
     ThinkingContent,
+    ToolAdditionContent,
+    ToolDefinition,
     ToolInputDelta,
     ToolResultContent,
     ToolUseContent,
@@ -29,6 +31,7 @@ from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 __all__ = ["AnthropicCodingModel", "CodingModelError"]
 
 CLEAR_AT_BETA = "mid-conversation-system-clear-at-2026-08-21"
+TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01"
 
 
 class AnthropicCodingModel:
@@ -184,22 +187,31 @@ class AnthropicCodingModel:
             ) from error
 
 
+def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
+    rendered: dict[str, object] = {
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": dict(tool.input_schema),
+    }
+    if tool.deferred:
+        # Declared but not offered until a tool_addition names it. The key
+        # is omitted entirely when false so the payload is byte-identical
+        # to what providers without tool changes receive.
+        rendered["defer_loading"] = True
+    return rendered
+
+
 def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
     messages, betas = _messages_to_anthropic(request.model, request.messages)
     payload: dict[str, object] = {
         "model": request.model,
         "system": _system_to_anthropic(request.system),
         "messages": messages,
-        "tools": [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": dict(tool.input_schema),
-            }
-            for tool in request.tools
-        ],
+        "tools": [_tool_to_anthropic(tool) for tool in request.tools],
         "max_tokens": request.limits.max_output_tokens,
     }
+    if any(tool.deferred for tool in request.tools):
+        betas.add(TOOL_CHANGES_BETA)
     if betas:
         payload["extra_headers"] = {"anthropic-beta": ",".join(sorted(betas))}
     return payload
@@ -224,6 +236,24 @@ def _messages_to_anthropic(
     for index, message in enumerate(messages):
         if message.role != "system":
             rendered.append(_message_to_anthropic(message))
+            continue
+        if all(isinstance(item, ToolAdditionContent) for item in message.content):
+            # A reveal never degrades to prose. A tool announced as text is
+            # a tool the model was never actually offered, so the reveal
+            # would silently not happen -- worse than failing loudly.
+            rendered.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "tool_addition",
+                            "tool": {"type": "tool_reference", "name": item.name},
+                        }
+                        for item in message.content
+                    ],
+                }
+            )
+            betas.add(TOOL_CHANGES_BETA)
             continue
         note = message.content[0]
         previous = messages[index - 1] if index > 0 else None

@@ -117,12 +117,28 @@ class SystemNoteContent:
             raise ValueError("invalid system note clear_at")
 
 
+@dataclass(frozen=True, slots=True)
+class ToolAdditionContent:
+    """Announces that a declared-but-deferred tool is now offered.
+
+    The reveal travels as an appended message instead of a rewritten tool
+    array, which is what keeps earlier thinking blocks valid (roadmap K2b).
+    """
+
+    name: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("tool addition requires a tool name")
+
+
 CanonicalContent: TypeAlias = (
     TextContent
     | ToolUseContent
     | ToolResultContent
     | ThinkingContent
     | SystemNoteContent
+    | ToolAdditionContent
 )
 
 
@@ -136,12 +152,23 @@ class CanonicalMessage:
             raise ValueError("invalid canonical message role")
         if not self.content:
             raise ValueError("completed transcript messages require content")
-        if self.role == "system" and not (
-            len(self.content) == 1 and isinstance(self.content[0], SystemNoteContent)
-        ):
-            raise ValueError("system messages hold exactly one system note")
+        # A system message is either one note, or one or more tool reveals.
+        # Never both: a note is turn-scoped and may be cleared, while a
+        # reveal must persist for the rest of the conversation.
+        if self.role == "system":
+            one_note = len(self.content) == 1 and isinstance(
+                self.content[0], SystemNoteContent
+            )
+            all_additions = all(
+                isinstance(item, ToolAdditionContent) for item in self.content
+            )
+            if not (one_note or all_additions):
+                raise ValueError(
+                    "system messages hold one note or only tool additions"
+                )
         if self.role != "system" and any(
-            isinstance(item, SystemNoteContent) for item in self.content
+            isinstance(item, (SystemNoteContent, ToolAdditionContent))
+            for item in self.content
         ):
             raise ValueError("system notes require the system role")
         if self.role == "tool" and not all(
@@ -159,6 +186,13 @@ class ToolDefinition:
     name: str
     description: str
     input_schema: Mapping[str, object]
+    # Declared but not offered until a tool_addition announces it (roadmap
+    # K2b). This is a static property of the tool: if it flipped when the
+    # tool was revealed, the tool array would change again and every
+    # replayed thinking block would be invalidated -- the exact bug this
+    # flag exists to remove. `_request_fingerprint` ignores it for the same
+    # reason: it is not part of what the model is offered.
+    deferred: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or not self.description:

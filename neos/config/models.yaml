@@ -12,6 +12,10 @@
 #   pricing      USD / 1M 토큰. 없으면 "가격 미상" — 비용 집계 시 경고 후 0
 #   vision       이미지·PDF 입력을 받는가 (기본 false). 유일한 독자는
 #                supports_vision() — 첨부 게이트가 부른다.
+#   mid_conversation_tools   대화 중간 tool_addition 으로 도구를 공개할 수 있는가
+#                (기본 false). 유일한 독자는 supports_mid_conversation_tools() —
+#                true 면 코딩 루프가 deferred 도구까지 tools[] 에 항상 선언하고
+#                공개는 메시지로 알린다. false 면 예전처럼 배열에서 걸러낸다.
 #   mid_conversation_system  대화 중간 role:"system" 메시지를 받는가 (기본 false).
 #                유일한 독자는 supports_mid_conversation_system() — 코딩 Anthropic
 #                어댑터가 system 노트를 네이티브로 보낼지 텍스트로 보낼지 정한다.
@@ -78,6 +82,10 @@ models:
     context_window: 1000000
     vision: true
     mid_conversation_system: true
+    # K2b. 이 트랙이 겨누는 모델이라 여기에만 켠다. 다른 모델이 받는지는
+    # 로컬에서 확인할 수 없으므로 켜지 않는다 -- 꺼져 있으면 배열에서
+    # 걸러내는 옛 경로가 그대로 맞다.
+    mid_conversation_tools: true
     pricing: {input: 10.00, output: 50.00, cache_creation: 12.50, cache_read: 0.25}
 
   # 심층분석 판정자 전용 (E3, 2026-08-30). 피커에 올리지 않으므로 tiers 없이

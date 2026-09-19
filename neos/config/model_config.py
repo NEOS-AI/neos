@@ -116,6 +116,7 @@ class ModelSpec(StrictConfigModel):
     # Anthropic 어댑터의 system 노트 렌더링이다. 모르면 false — 폴백(텍스트
     # 블록)은 모든 모델에서 유효하지만 네이티브 형태는 미지원 모델에서 400 이다.
     mid_conversation_system: bool = False
+    mid_conversation_tools: bool = False
     dimension: int | None = None
     pricing: ModelPricing | None = None
     # role_aliases: 키만. anthropic_families[].family 가 아니다.
@@ -714,6 +715,16 @@ def supports_mid_conversation_system(model: str) -> bool:
     """
     spec = model_config.catalog.get_model_spec(model)
     return bool(spec and spec.mid_conversation_system)
+
+
+def supports_mid_conversation_tools(model: str) -> bool:
+    """도구를 tool_addition 으로 공개할 수 있는가. 카탈로그만 본다.
+
+    미등록 모델은 False -- 그 경우 배열에서 걸러내는 옛 경로가 그대로 맞고,
+    tool_addition 을 모르는 모델에 보내면 400 이다.
+    """
+    spec = model_config.catalog.get_model_spec(model)
+    return bool(spec and spec.mid_conversation_tools)
 
 
 def models_for_provider(provider: str) -> list[str]:

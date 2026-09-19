@@ -180,16 +180,14 @@ def _to_ollama_request(request: ModelRequest) -> dict[str, object]:
 
 def _message_to_ollama(message: CanonicalMessage) -> list[dict[str, object]]:
     if message.role == "system":
-        return [
-            {
-                "role": "user",
-                "content": "".join(
-                    item.text
-                    for item in message.content
-                    if isinstance(item, SystemNoteContent)
-                ),
-            }
-        ]
+        # See the OpenAI adapter: a reveal-only message has no text form
+        # here, and an empty user turn is worse than no turn at all.
+        text = "".join(
+            item.text
+            for item in message.content
+            if isinstance(item, SystemNoteContent)
+        )
+        return [{"role": "user", "content": text}] if text else []
     if message.role == "tool":
         return [
             {

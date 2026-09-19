@@ -12,6 +12,7 @@ from neos.config.model_config import (
     ThinkingContract,
     load_catalog,
     supports_mid_conversation_system,
+    supports_mid_conversation_tools,
 )
 
 pytestmark = pytest.mark.no_db
@@ -42,3 +43,17 @@ def test_mid_conversation_system_support_follows_the_catalog() -> None:
     assert supports_mid_conversation_system("claude-opus-4-8")
     assert not supports_mid_conversation_system("claude-sonnet-5")
     assert not supports_mid_conversation_system("claude-from-the-future")
+
+
+def test_mid_conversation_tools_is_enabled_only_where_it_was_verified() -> None:
+    """K2b is on for the model this track targets, and nowhere else.
+
+    The SDK confirms the beta and `defer_loading` exist, but nothing local
+    says which models accept them. Every model left false keeps the old
+    path, which is correct rather than merely safe.
+    """
+    assert supports_mid_conversation_tools("claude-fable-5-1")
+    assert not supports_mid_conversation_tools("claude-opus-5")
+    assert not supports_mid_conversation_tools("claude-opus-4-8")
+    assert not supports_mid_conversation_tools("claude-sonnet-5")
+    assert not supports_mid_conversation_tools("claude-from-the-future")

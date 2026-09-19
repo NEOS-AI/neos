@@ -41,6 +41,7 @@ from neos.coding.model.base import (
     TextContent,
     TextDelta,
     ThinkingCompleted,
+    ToolAdditionContent,
     ThinkingContent,
     ToolCallCompleted,
     ToolDefinition,
@@ -49,6 +50,7 @@ from neos.coding.model.base import (
     ToolUseContent,
     strip_thinking,
 )
+from neos.config.model_config import supports_mid_conversation_tools
 from neos.config.model_identity import usable_window_tokens
 from neos.coding.phases import (
     CodingAgentPhase,
@@ -663,6 +665,24 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             sent_prefix_digest=self._prefix_digest(fingerprint, transcript),
         )
 
+    def _announce_reveals(self, transcript, before, after):
+        """Append newly revealed tools instead of growing the tool array.
+
+        Defined once because two call sites widen `revealed_tools`, and a
+        reveal announced at only one of them is the stale copy this
+        repository keeps rediscovering.
+        """
+        if not supports_mid_conversation_tools(self._config.model):
+            return transcript
+        names = sorted(frozenset(after) - frozenset(before))
+        if not names:
+            return transcript
+        return transcript + (
+            CanonicalMessage(
+                "system", tuple(ToolAdditionContent(name) for name in names)
+            ),
+        )
+
     def _prefix_digest(
         self, fingerprint: str, messages: tuple[CanonicalMessage, ...]
     ) -> str:
@@ -827,6 +847,12 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         revealed = state.revealed_tools | self._revealed_from_transcript(
             before_compact
         )
+        # Catches a reveal re-derived from the transcript, which is what a
+        # resume does. Announcing only the delta keeps this from repeating
+        # what the tool-result path already announced.
+        transcript = self._announce_reveals(
+            transcript, state.revealed_tools, revealed
+        )
         in_tokens, out_tokens = _usage_tokens(completion)
         cache_read, cache_write, reasoning = _usage_window(completion)
         cost = state.cost_micros + self._price_tokens(
@@ -938,6 +964,9 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                 if isinstance(item, Mapping) and item.get("name")
             }
             revealed = revealed | names
+        # The primary path: the search result that revealed the tool has
+        # just been appended, so the announcement follows it directly.
+        transcript = self._announce_reveals(transcript, state.revealed_tools, revealed)
         allowed = state.allowed_tools
         if tool_name == "load_skill.v1" and result.status == "ok":
             allowed = self._union_skill_allowed_tools(allowed, result.content)
@@ -1069,6 +1098,10 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             kwargs["phase"] = state.phase
         if "revealed" in parameters:
             kwargs["revealed"] = state.revealed_tools
+        if "declare_deferred" in parameters:
+            kwargs["declare_deferred"] = supports_mid_conversation_tools(
+                self._config.model
+            )
         if kwargs:
             definitions = method(**kwargs)
         else:

@@ -548,11 +548,12 @@ class _RegisteredTool:
     risk: ToolRisk
     schema: type[_ToolInput]
 
-    def definition(self) -> ToolDefinition:
+    def definition(self, *, deferred: bool = False) -> ToolDefinition:
         return ToolDefinition(
             name=self.name,
             description=self.description,
             input_schema=self.schema.model_json_schema(),
+            deferred=deferred,
         )
 
 
@@ -927,12 +928,34 @@ class CodingToolRegistry:
         *,
         phase: str = "implement",
         revealed: frozenset[str] | None = None,
+        declare_deferred: bool = False,
     ) -> tuple[ToolDefinition, ...]:
         from neos.coding.phases import hidden_tools_for_phase
 
         hidden = hidden_tools_for_phase(phase)
         revealed_names = revealed or frozenset()
         deferred = frozenset(self.deferred_tool_names(phase=phase))
+        if declare_deferred:
+            # Every tool is declared once, so the array stops changing. A
+            # deferred tool is hidden by `defer_loading` rather than by
+            # absence, and revealing it appends a message instead of
+            # rewriting `tools[]` -- which is what keeps replayed thinking
+            # valid (K2b). `revealed` deliberately does not appear here:
+            # if it did, the array would churn again on the first reveal.
+            return tuple(
+                tool.definition(deferred=tool.name in deferred)
+                for tool in self._TOOL_SPECS
+                if tool.name not in hidden
+                and (
+                    tool.name not in _OPTIONAL_TOOL_FLAGS
+                    or optional_tool_enabled(tool.name)
+                )
+                and (
+                    tool.name in self._CORE_TOOL_NAMES
+                    or optional_tool_enabled(tool.name)
+                    or tool.name in deferred
+                )
+            )
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
