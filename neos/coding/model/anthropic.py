@@ -136,8 +136,16 @@ class AnthropicCodingModel:
                                 getattr(usage, "output_tokens", 0)
                             )
                             stop_reason = getattr(raw.delta, "stop_reason", None)
+                            normalized = normalize_stop_reason(stop_reason)
+                            details = getattr(raw.delta, "stop_details", None)
+                            category = getattr(details, "category", None)
                             yield ModelCompleted(
-                                stop_reason=normalize_stop_reason(stop_reason),
+                                stop_reason=normalized,
+                                stop_category=(
+                                    str(category)
+                                    if normalized == "refusal" and category
+                                    else ""
+                                ),
                                 usage=ModelUsage(
                                     input_tokens=input_tokens,
                                     output_tokens=output_tokens,

@@ -12,6 +12,11 @@ from neos.coding.model.stop import normalize_stop_reason
         ("length", False, "max_tokens"),
         ("max_tokens", False, "max_tokens"),
         ("stop", True, "tool_use"),
+        # A refusal is its own outcome, not an unknown one (roadmap K6).
+        ("refusal", False, "refusal"),
+        # Fail closed: a refused turn never executes tools, even if the
+        # adapter saw tool blocks before the refusal arrived.
+        ("refusal", True, "refusal"),
         (None, False, "unknown"),
         ("content_filter", False, "unknown"),
         ("SAFETY", False, "unknown"),

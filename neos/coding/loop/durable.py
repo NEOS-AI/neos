@@ -65,7 +65,7 @@ from neos.coding.loop.hooks import (
     invoke_post_generate,
     invoke_pre_generate,
 )
-from neos.coding.redact import redact_sensitive
+from neos.coding.redact import redact_sensitive, strip_binary_payloads
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
     CodingToolAuditEvent,
@@ -427,7 +427,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         if self._metrics is not None:
             outcome = (
                 completion.stop_reason
-                if completion.stop_reason in {"tool_use", "end_turn", "max_tokens"}
+                if completion.stop_reason
+                in {"tool_use", "end_turn", "max_tokens", "refusal"}
                 else "other"
             )
             self._metrics.coding_model_turn_total.labels(
@@ -477,6 +478,21 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         )
         self._check_usage_budgets(next_state)
         prefetch = await self._await_prefetch(prefetch_tasks)
+        if completion.stop_reason == "refusal":
+            # A refusal is an answer, not a truncated turn. It gets its own
+            # code and its own event so it never reads as a transport fault,
+            # and it is never retried: the same request refuses again.
+            await deps.events.append(
+                task_id=input.task_id,
+                event_type="model.refused",
+                payload={
+                    "stop_reason": "refusal",
+                    "stop_category": completion.stop_category,
+                },
+                run_id=input.run_id,
+                turn_id=request.turn_id,
+            )
+            raise CodingLoopFailure("model_refused", retryable=False)
         if not calls:
             public_text = _scrub_think_blocks("".join(text_parts))
             if completion.stop_reason not in {"end_turn", "unknown"}:
@@ -743,7 +759,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             raise CodingLoopFailure(
                 code, retryable=validated.risk is ToolRisk.READ_ONLY
             ) from error
-        result = dict(executed.to_mapping())
+        result = strip_binary_payloads(dict(executed.to_mapping()))
         rewritten = None
         try:
             rewritten = await asyncio.wait_for(

@@ -223,10 +223,14 @@ class ToolCallCompleted:
 class ModelCompleted:
     stop_reason: str
     usage: ModelUsage | None = None
+    # Set only on a refusal: the policy category the vendor named.
+    stop_category: str = ""
 
     def __post_init__(self) -> None:
         if not self.stop_reason:
             raise ValueError("model stop reason is required")
+        if self.stop_category and self.stop_reason != "refusal":
+            raise ValueError("stop category belongs to a refusal")
 
 
 @dataclass(frozen=True, slots=True)
