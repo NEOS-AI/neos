@@ -56,6 +56,9 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 - 구현은 `neos/workflow/deep_analysis/fetch.py` **하나**다. 도구는 얇은 어댑터다.
 - 성공한 fetch는 오케스트레이터가 blob을 원장에 기록한 **뒤에** 샌드박스의 `/evidence/`에 읽기 전용으로 나타난다.
 - 본문은 도구 결과에 싣지 않는다. 경로만 준다(점진 공개, CE ③). base64 본문은 절대 결과에 넣지 않는다(R-06).
+  이 줄은 이제 **규칙이 아니라 강제된다** — `neos/coding/redact.py`의 `strip_binary_payloads`가
+  도구 결과 매핑이 만들어지는 **두 자리**(`loop/durable.py`·`subagent_port.py`)에서 `data_b64`를 떼고
+  `data_b64_omitted: true`만 남긴다(K6, 2026-09-19). 지키는지 확인하지 않는 규칙은 규칙이 아니다.
 - 웹 원문은 적대적 입력이다 — 설계 부록 A4의 untrusted 경계를 그대로 쓴다.
 
 ### 3.2 `execute.v1` — `research-offline-v1` 프로파일
