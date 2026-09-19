@@ -79,12 +79,27 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 | 항목 | 값 |
 |---|---|
 | 네트워크 | 없음 |
-| 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) |
+| 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) — ⚠️ **development 에서는 읽기 전용이 아니다**, 아래 참조 |
 | argv allowlist | `python3` 만. 셸 없음 |
 | 이미지 | digest 고정. digest가 매니페스트 구성 지문에 들어간다 |
 | 이미지 내용물 | 파이썬 + **분석 번들**: pandas · numpy · pypdf · beautifulsoup4 (2026-09-17 결정). 목록은 잠금 파일로 고정한다 — 버전이 움직이면 재실행이 재현되지 않는다 |
 | 한도 | CPU 초·메모리·출력 바이트·프로세스 수 — 전부 settings |
 | 등록 | B2와 **같은 named profile 체계**. DA 전용 경로를 만들지 않는다 |
+
+> ⚠️ **development 경로의 두 가지 downgrade (2026-09-20, 구현 확인).** 위 표는 관리형 provider 를
+> 전제로 적혀 있다. Docker provider 에서는 둘이 성립하지 않는다:
+>
+> 1. **읽기 전용 마운트가 없다.** Docker provider 에는 바인드 마운트 기능이 없다(볼륨 + tmpfs 뿐).
+>    그래서 `open_question_sandbox` 는 증거를 **워크스페이스 안에 쓴다**(`evidence/<raw_ref>.txt`).
+>    워커가 그 파일을 고쳐 쓰는 것을 막는 장치는 **없다.** 막는 것은 파일시스템이 아니라 채점기다 —
+>    `ComputedEvidence.inputs` 가 원장 blob 이 아니면 `E_COMPUTE_INPUT_UNFETCHED`(I4)
+> 2. **Docker provider 는 profile 을 읽지 않는다.** `docker.py` 에 `profile` 이라는 단어가 한 번도
+>    나오지 않는다(확인함). `research-offline-v1` 이 `DENY_ALL` 인 것은 레지스트리의 사실일 뿐이고,
+>    그 경로의 실제 격리는 `sandbox.docker.network_mode` 하나에서 온다. 그래서 **설정 검증이 둘을
+>    묶는다** — code research 가 켜진 채 provider 가 docker 이면 `network_mode=none` 이 아니면 거절한다.
+>    묶지 않으면 "네트워크 없음" 이라고 적힌 프로파일 아래에서 컨테이너에 네트워크가 붙는다
+>
+> 진짜 읽기 전용과 profile 강제는 관리형 provider 에만 있고, 그것은 **B2 게이트 뒤**다(§4.5).
 
 ### 3.3 `check_claims.v1` — 채점기를 읽기 전용으로
 
