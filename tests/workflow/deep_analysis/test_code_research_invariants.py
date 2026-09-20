@@ -4,8 +4,13 @@
 것이 **샌드박스에서 임의 코드를 돌리는 워커**이기 때문이다. 경계를 나중에
 테스트로 덮으면, 덮는 시점에는 이미 그 경계를 넘는 코드가 있다.
 
-여기 있는 것은 I3·I7 과 §7 설정 기본값이다. I1(바이트 동일)·I2(원장 미주입)·
+여기 있는 것은 I3·I7 과 §7 설정 기본값, 그리고 **I1·I2** 다. I1·I2 는 대상
+코드(`research_tools.py` · `submission.py`)가 생긴 2026-09-20 에 붙였다.
 I4~I6 은 각각 대상 코드가 생기는 단계에서 같은 자리에 붙인다.
+
+I1 을 **분기보다 먼저** 쓴 이유는 위 문단 그대로다. `_run_worker` 에
+`code_research_enabled` 분기를 넣은 **뒤에** 이 테스트를 쓰면, 쓰는 시점에는
+이미 플래그 off 경로를 바꿨는지 알 수 없다.
 """
 
 from __future__ import annotations
@@ -108,12 +113,12 @@ def test_enabling_outside_development_is_allowed_on_the_managed_plane() -> None:
             environment="staging",
             sandbox={"provider": "managed", "managed": {"enabled": True}},
             secrets={
-                "managed_provider_reference_key": base64.b64encode(
-                    bytes(32)
-                ).decode("ascii"),
-                "managed_coding_ownership_key": base64.b64encode(
-                    b"\x01" * 32
-                ).decode("ascii"),
+                "managed_provider_reference_key": base64.b64encode(bytes(32)).decode(
+                    "ascii"
+                ),
+                "managed_coding_ownership_key": base64.b64encode(b"\x01" * 32).decode(
+                    "ascii"
+                ),
             },
         )
     )
@@ -137,7 +142,9 @@ def test_code_research_on_docker_requires_no_network() -> None:
 
     with pytest.raises(ValidationError) as raised:
         AppConfig.model_validate(
-            _config(sandbox={"provider": "docker", "docker": {"network_mode": "bridge"}})
+            _config(
+                sandbox={"provider": "docker", "docker": {"network_mode": "bridge"}}
+            )
         )
 
     message = str(raised.value)
@@ -163,3 +170,110 @@ def test_enabling_in_development_needs_no_managed_plane() -> None:
     config = AppConfig.model_validate(_config())
 
     assert config.deep_analysis.code_research_enabled is True
+
+
+# ---- I1: 플래그가 꺼져 있으면 이전과 바이트 단위로 같다 (S9) -----------------
+
+
+def _repo_file(relative: str) -> str:
+    import pathlib
+
+    return (pathlib.Path(__file__).resolve().parents[3] / relative).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_flag_off_worker_tools_are_exactly_search_and_fetch() -> None:
+    """I1 (도구 목록). 플래그 off 경로의 포트는 `DAToolPort` 하나다.
+
+    `ResearchToolPort` 가 기본 경로로 새면 워커의 도구 목록이 플래그와 무관
+    하게 달라진다. 이름을 **정확히** 대조하는 이유는 개수만 보면 하나가
+    바뀌어도 통과하기 때문이다.
+    """
+    from neos.workflow.deep_analysis.subagent_adapter import DAToolPort
+
+    async def _unused(*args, **kwargs):
+        return []
+
+    port = DAToolPort(_unused, _unused)
+
+    assert tuple(item.name for item in port.definitions()) == ("search", "fetch")
+
+
+def test_flag_off_worker_prompt_never_names_the_code_research_tools() -> None:
+    """I1 (프롬프트). 기존 워커 프롬프트는 J 도구를 모른다.
+
+    프롬프트 전체를 해시로 고정하지 않는 이유: 프롬프트 수정은 표본 경계에서
+    **정상적으로** 일어나는 일이라 해시는 J 와 무관한 커밋마다 빨개진다.
+    여기서 지키려는 것은 "프롬프트가 안 변한다" 가 아니라 "플래그 off 인데
+    J 도구가 이름을 내민다" 가 없다는 것이다.
+    """
+    prompt = _repo_file("neos/workflow/deep_analysis/prompts/worker_brief.md")
+
+    # 먼저 이 파일을 **정말로 읽었는지** 본다. "없다" 를 단언하는 테스트는 빈
+    # 문자열에도 통과한다 -- 경로가 틀리면 `_repo_file` 이 터지지만, 프롬프트가
+    # 다른 곳으로 옮겨가고 껍데기만 남으면 조용히 초록이 된다.
+    assert "proposed_subquestions" in prompt
+
+    for name in ("fetch.v1", "submit.v1", "check_claims.v1", "execute.v1"):
+        assert name not in prompt
+
+
+# ---- I2: 워커는 원장 쓰기 경로를 갖지 않는다 --------------------------------
+
+
+#: 워커의 도구가 지나는 모듈. 원장이 여기로 들어오면 자식이 원장을 쓸 수 있고,
+#: 그러면 단일 기록자(P2)가 깨진다.
+_WORKER_FACING = (
+    "neos/workflow/deep_analysis/research_tools.py",
+    "neos/workflow/deep_analysis/submission.py",
+)
+
+_LEDGER_IMPORTS = (
+    "from .ledger import",
+    "from neos.workflow.deep_analysis.ledger import",
+    "import neos.workflow.deep_analysis.ledger",
+)
+
+
+def _ledger_importers(relatives) -> list[str]:
+    found: list[str] = []
+    for relative in relatives:
+        text = _repo_file(relative)
+        for needle in _LEDGER_IMPORTS:
+            if needle in text:
+                found.append(f"{relative}: {needle}")
+    return found
+
+
+def test_worker_facing_modules_do_not_import_the_ledger() -> None:
+    """I2 (import 쪽). `tests/subagent/test_import_law.py` 와 같은 규율이다."""
+    assert _ledger_importers(_WORKER_FACING) == []
+
+
+def test_the_ledger_detector_would_actually_catch_an_import() -> None:
+    """가드는 양방향이다 -- 잡지 못하는 검출기는 초록이어도 아무 말을 안 한다.
+
+    위 테스트는 **찾지 못할 문자열을 찾는** 모양이라, 검출기가 고장 나도
+    영원히 초록이다. 그래서 원장을 실제로 쓰는 층에 같은 검출기를 겨눠
+    걸리는 것을 본다. `orchestrator.py` 가 원장을 임포트하지 않게 되는 날이
+    오면 이 테스트가 빨개지고, 그때는 위 목록이 아니라 이 앵커를 고친다.
+    """
+    caught = _ledger_importers(("neos/workflow/deep_analysis/orchestrator.py",))
+
+    assert caught != []
+
+
+def test_the_research_port_is_not_given_a_ledger() -> None:
+    """I2 (주입 쪽). 포트는 `EvidenceStore` 프로토콜만 받는다.
+
+    집합을 **정확히** 대조한다: 인자가 하나 늘면 그것이 원장으로 가는 문인지
+    여기서 한 번 생각하게 된다.
+    """
+    import inspect
+
+    from neos.workflow.deep_analysis.research_tools import ResearchToolPort
+
+    parameters = set(inspect.signature(ResearchToolPort.__init__).parameters)
+
+    assert parameters == {"self", "fetch_fn", "store", "sandbox", "cap_bytes"}
