@@ -106,6 +106,8 @@ class EvidenceStore(Protocol):
 
     async def commit(self, blob: Any, *, bytes_charged: int) -> None: ...
 
+    async def record_fetched(self, raw_ref: str, path: str) -> None: ...
+
 
 class QuestionWorkspace(Protocol):
     """`QuestionSandbox` 가 만족한다."""
@@ -191,6 +193,9 @@ class ResearchToolPort:
         # 클레임은 채점에서 `E_COMPUTE_INPUT_UNFETCHED` 로 뒤늦게 죽는다.
         await self._store.commit(blob, bytes_charged=admission.bytes_charged)
         path = await self._sandbox.materialize_evidence(blob.content_hash, text)
+        # 경로가 생긴 **뒤에** 적는다. 원장은 실제로 워커가 열 수 있는 자리를
+        # 가리켜야 한다.
+        await self._store.record_fetched(blob.content_hash, path)
 
         return {
             "raw_ref": blob.content_hash,

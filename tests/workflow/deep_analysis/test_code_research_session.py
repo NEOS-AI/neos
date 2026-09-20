@@ -51,7 +51,11 @@ class _FakeLedger:
         self.db = _FakeDb()
         self.question = question
         self.committed: list[_Blob] = []
+        self.events: list[tuple[str, str, dict]] = []
         self._stored: set[str] = set()
+
+    async def log(self, kind: str, qid: str, payload: dict) -> None:
+        self.events.append((kind, qid, payload))
 
     async def get_question(self, question_id: str):
         return self.question

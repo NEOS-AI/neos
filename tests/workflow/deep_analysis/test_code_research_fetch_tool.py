@@ -51,6 +51,7 @@ class _RecordingStore:
         self._spent = spent
         self._stored = set(stored)
         self.commits: list[tuple[str, int]] = []
+        self.recorded: list[tuple[str, str]] = []
         self.calls: list[str] = []
 
     async def spent_bytes(self) -> int:
@@ -64,6 +65,10 @@ class _RecordingStore:
         self.commits.append((blob.content_hash, bytes_charged))
         self._stored.add(blob.content_hash)
         self._spent += bytes_charged
+
+    async def record_fetched(self, raw_ref: str, path: str) -> None:
+        self.calls.append("record")
+        self.recorded.append((raw_ref, path))
 
 
 class _RecordingSandbox:
@@ -153,8 +158,11 @@ async def test_the_blob_reaches_the_ledger_before_the_path_exists() -> None:
 
     await port.execute("fetch.v1", {"url": "https://example.com/doc"})
 
-    assert store.calls == ["commit", "materialize"]
+    # 원장 기록은 경로가 생긴 **뒤**다 -- 원장이 가리키는 자리는 워커가
+    # 실제로 열 수 있어야 한다.
+    assert store.calls == ["commit", "materialize", "record"]
     assert sandbox.written == [("abc123def456ffff", "hello evidence")]
+    assert store.recorded == [("abc123def456ffff", "/evidence/abc123def456ffff.txt")]
 
 
 @pytest.mark.asyncio

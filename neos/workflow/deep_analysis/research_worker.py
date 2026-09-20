@@ -114,6 +114,7 @@ async def run_research_worker(
             proposed_subquestions=list(submission.proposed_subquestions),
             dead_ends=list(submission.dead_ends),
             self_assessment=submission.self_assessment,
+            report_path=submission.report_path,
             model=ticket.model.model,
             **pointers,
         )

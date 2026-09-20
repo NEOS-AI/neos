@@ -121,6 +121,21 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "claim_verified") {
     return "클레임 검증됨";
   }
+  if (kind === "code_worker_started") {
+    return "코드 조사 시작";
+  }
+  if (kind === "code_worker_submitted") {
+    const claims = asCount(payload.claims);
+    return claims === undefined
+      ? "코드 조사 제출"
+      : `코드 조사 제출 · 클레임 ${claims}건`;
+  }
+  if (kind === "code_worker_unsubmitted") {
+    // 이유를 그대로 보여준다. "제출 안 함"만 뜨면 turn cap 인지 거절인지
+    // 화면에서 구별되지 않는다.
+    const reason = asString(payload.reason);
+    return reason ? `코드 조사 미제출 · ${reason}` : "코드 조사 미제출";
+  }
   if (kind === "claim_rejected") {
     return "클레임 기각됨";
   }

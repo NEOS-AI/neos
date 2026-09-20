@@ -186,6 +186,10 @@ class WorkerResult:
     subagent_run_id: str = ""
     subagent_checkpoint_id: str = ""
     subagent_step_kind: str = ""
+    # 트랙 J. compose 자식이 워크스페이스에 쓴 리포트 경로 (계약 §3.4).
+    # `code_worker_submitted` 가 "report_path 여부" 를 싣는데, 그 값이 결과에
+    # 없으면 있지도 않은 것을 없다고 적게 된다. research·analyze 에서는 None.
+    report_path: str | None = None
 
 
 @dataclass

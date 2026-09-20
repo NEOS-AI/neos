@@ -30,6 +30,9 @@ class _FakeLedger:
         self.run_id = "run00001"
         self.events: list[Any] = []
 
+    async def log(self, kind: str, qid: str, payload: dict) -> None:
+        self.events.append((kind, qid, payload))
+
     async def get_question(self, question_id: str):
         return None
 

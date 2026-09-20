@@ -9,6 +9,7 @@ from dataclasses import replace
 from neos.config.settings import settings
 
 from neos.coding.sandbox.base import SandboxLimits
+from neos.subagent.types import StepKind
 
 from .budgeter import Budgeter
 from .citation import CitationRenderer, OrphanCitationError
@@ -715,7 +716,17 @@ class Orchestrator:
                     fail_reason="research_runtime_factory_missing",
                 )
             research = settings.config.deep_analysis.code_research
-            return await run_research_worker(
+            await self.ledger.log(
+                "code_worker_started",
+                assignment.question_id,
+                {
+                    "spec": "research",
+                    "profile": research.sandbox_profile,
+                    # 재개면 이어받는 자식, 처음이면 빈 문자열.
+                    "run_id": child_run_id or "",
+                },
+            )
+            result = await run_research_worker(
                 assignment,
                 ledger=self.ledger,
                 provider=self.sandbox_provider,
@@ -728,6 +739,8 @@ class Orchestrator:
                 run_id=child_run_id,
                 expected_checkpoint_id=child_checkpoint_id,
             )
+            await self._log_code_worker_outcome(assignment.question_id, result)
+            return result
         if settings.config.deep_analysis.subagent_enabled:
             if self.subagent_runtime is None:
                 return WorkerResult(
@@ -743,6 +756,37 @@ class Orchestrator:
                 expected_checkpoint_id=child_checkpoint_id,
             )
         return await self._run_legacy_worker(assignment)
+
+    async def _log_code_worker_outcome(
+        self, question_id: str, result: WorkerResult
+    ) -> None:
+        """제출됐는가, 아니면 왜 아닌가 (계약 §6).
+
+        **아직 끝나지 않은 턴은 둘 중 어느 것도 아니다.** `continuing` 을
+        미제출로 적으면 다음 라운드가 이어받을 작업이 원장에서는 실패한
+        것처럼 보인다.
+        """
+        if result.subagent_step_kind == StepKind.CONTINUING.value:
+            return
+        if result.fail_reason:
+            await self.ledger.log(
+                "code_worker_unsubmitted",
+                question_id,
+                {"reason": result.fail_reason},
+            )
+            return
+        by_kind: dict[str, int] = {}
+        for claim in result.claims:
+            by_kind[claim.kind] = by_kind.get(claim.kind, 0) + 1
+        await self.ledger.log(
+            "code_worker_submitted",
+            question_id,
+            {
+                "claims": len(result.claims),
+                "by_kind": by_kind,
+                "report_path": result.report_path is not None,
+            },
+        )
 
     async def _run_legacy_worker(self, assignment: Assignment) -> WorkerResult:
         worker = self.worker_factory()  # A1: fresh instance per assignment

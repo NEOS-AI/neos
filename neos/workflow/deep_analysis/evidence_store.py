@@ -103,3 +103,17 @@ class LedgerEvidenceStore:
         question = await self._question()
         question.evidence_bytes = int(question.evidence_bytes) + bytes_charged
         await self._ledger.db.flush()
+
+    async def record_fetched(self, raw_ref: str, path: str) -> None:
+        """증거가 샌드박스에 나타났다고 원장에 적는다 (계약 §6).
+
+        커밋과 따로인 이유는 **경로가 그때 생기기 때문**이다 -- blob 이
+        원장에 들어간 뒤에야 샌드박스에 놓이고, 그 순서가 계약이다.
+
+        포트가 아니라 여기서 적는 이유는 I2 다. 포트는 원장을 모른다.
+        """
+        await self._ledger.log(
+            "evidence_fetched_for_sandbox",
+            self._question_id,
+            {"raw_ref": raw_ref, "path": path},
+        )
