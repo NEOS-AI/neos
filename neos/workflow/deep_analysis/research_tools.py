@@ -17,11 +17,13 @@ from typing import Any, Mapping, Protocol
 from neos.coding.model.base import ToolDefinition
 
 from .evidence_store import CAP_REACHED, decide_fetch_admission
+from .submission import Submission, parse_submission
 
 #: 계약 §3.1. `_RESEARCH_TOOLS` 와 **같은 이름이어야 한다** --
 #: `CodingToolPort.definitions()` 가 `allowed_tools` 로 교집합을 뜨므로
 #: 어긋나면 도구는 오류 없이 조용히 사라진다.
 FETCH_TOOL = "fetch.v1"
+SUBMIT_TOOL = "submit.v1"
 
 _FETCH = ToolDefinition(
     name=FETCH_TOOL,
@@ -34,6 +36,31 @@ _FETCH = ToolDefinition(
         "type": "object",
         "properties": {"url": {"type": "string"}},
         "required": ["url"],
+    },
+)
+
+_SUBMIT = ToolDefinition(
+    name=SUBMIT_TOOL,
+    description=(
+        "Submit this question's findings and end the turn. Call it once. "
+        "Claims are proposals -- the orchestrator grades them, so do not "
+        "raise confidence to make one pass."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": ["completed", "partial"]},
+            "claims": {"type": "array", "items": {"type": "object"}},
+            "self_assessment": {"type": "number"},
+            "proposed_subquestions": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "dead_ends": {"type": "array", "items": {"type": "string"}},
+            "repairs": {"type": "array", "items": {"type": "object"}},
+            "report_path": {"type": ["string", "null"]},
+        },
+        "required": ["status", "claims"],
     },
 )
 
@@ -74,13 +101,25 @@ class ResearchToolPort:
         self._store = store
         self._sandbox = sandbox
         self._cap_bytes = cap_bytes
+        self._submission: Submission | None = None
+
+    @property
+    def submission(self) -> Submission | None:
+        """제출이 있었는가. 없으면 오케스트레이터가 `partial` 로 처리한다.
+
+        계약 §3.4: "`submit.v1` 을 부르지 않고 턴이 끝나면 `partial` 로
+        처리하고 원장에 이유를 남긴다 -- 조용한 degrade 금지."
+        """
+        return self._submission
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
-        return (_FETCH,)
+        return (_FETCH, _SUBMIT)
 
     async def execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
+        if name == SUBMIT_TOOL:
+            return self._submit(input)
         if name != FETCH_TOOL:
             return {"error": "tool_not_allowed"}
         payload = dict(input) if isinstance(input, Mapping) else {}
@@ -121,3 +160,13 @@ class ResearchToolPort:
             # 자르는 경로가 아예 없다. 계약의 출력 모양을 맞추는 자리다.
             "truncated": False,
         }
+
+    def _submit(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        # 둘째 제출을 조용히 덮으면 첫 제출이 사라진다. 계약이 정하지 않은
+        # 자리라 거절을 고른다 -- 한 턴에 제출은 하나다.
+        if self._submission is not None:
+            return {"error": "already_submitted"}
+        self._submission = parse_submission(
+            payload if isinstance(payload, Mapping) else {}
+        )
+        return {"status": "recorded", "claims": len(self._submission.claims)}
