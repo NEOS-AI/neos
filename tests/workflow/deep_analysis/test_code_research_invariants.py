@@ -276,4 +276,15 @@ def test_the_research_port_is_not_given_a_ledger() -> None:
 
     parameters = set(inspect.signature(ResearchToolPort.__init__).parameters)
 
-    assert parameters == {"self", "fetch_fn", "store", "sandbox", "cap_bytes"}
+    # `grader` 는 2026-09-20 에 `check_claims.v1` 과 함께 늘었고, 이 단언이
+    # 빨개져서 한 번 멈춰 세웠다 -- 가드가 노린 그 순간이다. 채점기는 원장을
+    # **읽기만** 한다(`deterministic.py` 의 유일한 원장 호출은 `get_blob`),
+    # 그리고 포트는 채점기를 받지 원장을 받지 않는다.
+    assert parameters == {
+        "self",
+        "fetch_fn",
+        "store",
+        "sandbox",
+        "cap_bytes",
+        "grader",
+    }

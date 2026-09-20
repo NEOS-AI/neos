@@ -17,13 +17,23 @@ from typing import Any, Mapping, Protocol
 from neos.coding.model.base import ToolDefinition
 
 from .evidence_store import CAP_REACHED, decide_fetch_admission
-from .submission import Submission, parse_submission
+from .submission import Submission, parse_claims, parse_submission
 
 #: 계약 §3.1. `_RESEARCH_TOOLS` 와 **같은 이름이어야 한다** --
 #: `CodingToolPort.definitions()` 가 `allowed_tools` 로 교집합을 뜨므로
 #: 어긋나면 도구는 오류 없이 조용히 사라진다.
 FETCH_TOOL = "fetch.v1"
 SUBMIT_TOOL = "submit.v1"
+CHECK_TOOL = "check_claims.v1"
+
+#: 계산 클레임을 여기서 판별하지 못한다는 도구 수준 사유.
+#:
+#: 계약 §3.3 은 "계산 클레임은 재실행까지 한다" 고 적지만 재실행은 J2 다.
+#: 지금 계산 클레임을 결정론 채점기에 넘기면 quote 규칙이 돌아
+#: `E_NO_EVIDENCE` 가 나온다 -- 증거가 `computation` 에 있는데 "근거 없음"
+#: 이라고 **자신 있게 틀린 답**을 주는 모양이다. §5 의 `E_*` 어휘를 쓰지
+#: 않는 이유도 그것이다: 이것은 판정이 아니라 "판정하지 않았다" 이다.
+COMPUTE_CHECK_UNAVAILABLE = "compute_check_unavailable"
 
 _FETCH = ToolDefinition(
     name=FETCH_TOOL,
@@ -65,6 +75,28 @@ _SUBMIT = ToolDefinition(
 )
 
 
+_CHECK = ToolDefinition(
+    name=CHECK_TOOL,
+    description=(
+        "Check claims against the deterministic grader without submitting "
+        "them. Nothing is recorded -- the orchestrator grades again, so a "
+        "green answer here is not a verdict. Computed claims are not "
+        "checked yet."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"claims": {"type": "array", "items": {"type": "object"}}},
+        "required": ["claims"],
+    },
+)
+
+
+class ClaimGrader(Protocol):
+    """`DeterministicGrader` 가 만족한다. 원장을 **읽기만** 한다."""
+
+    async def grade(self, claim: Any) -> Any: ...
+
+
 class EvidenceStore(Protocol):
     """한도 회계와 **건별** 커밋. 오케스트레이터가 원장 위에 구현한다 (P2)."""
 
@@ -96,11 +128,13 @@ class ResearchToolPort:
         store: EvidenceStore,
         sandbox: QuestionWorkspace,
         cap_bytes: int,
+        grader: ClaimGrader | None = None,
     ) -> None:
         self._fetch_fn = fetch_fn
         self._store = store
         self._sandbox = sandbox
         self._cap_bytes = cap_bytes
+        self._grader = grader
         self._submission: Submission | None = None
 
     @property
@@ -113,13 +147,19 @@ class ResearchToolPort:
         return self._submission
 
     def definitions(self) -> tuple[ToolDefinition, ...]:
-        return (_FETCH, _SUBMIT)
+        # 채점기가 없으면 내밀지 않는다 -- 부를 수 없는 도구를 목록에 두면
+        # 모델은 그것을 부르고 매번 거절을 받는다.
+        if self._grader is None:
+            return (_FETCH, _SUBMIT)
+        return (_FETCH, _SUBMIT, _CHECK)
 
     async def execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
         if name == SUBMIT_TOOL:
             return self._submit(input)
+        if name == CHECK_TOOL:
+            return await self._check_claims(input)
         if name != FETCH_TOOL:
             return {"error": "tool_not_allowed"}
         payload = dict(input) if isinstance(input, Mapping) else {}
@@ -160,6 +200,40 @@ class ResearchToolPort:
             # 자르는 경로가 아예 없다. 계약의 출력 모양을 맞추는 자리다.
             "truncated": False,
         }
+
+    async def _check_claims(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        """채점기를 원장에 쓰지 않고 돌린다 (계약 §3.3).
+
+        결과를 어디에도 기록하지 않는다 -- 확인은 제출이 아니고, 워커가
+        초록을 봤다는 사실은 증거가 아니다. 판정은 오케스트레이터가 다시
+        한다.
+        """
+        if self._grader is None:
+            return {"error": "tool_not_allowed"}
+        data = dict(payload) if isinstance(payload, Mapping) else {}
+        results: list[dict[str, Any]] = []
+        for index, claim in enumerate(parse_claims(data.get("claims"))):
+            if claim.kind == "computed":
+                # 채점기에 **닿지 않는다.** 닿으면 quote 규칙이 돈다.
+                results.append(
+                    {
+                        "index": index,
+                        "ok": False,
+                        "codes": [COMPUTE_CHECK_UNAVAILABLE],
+                    }
+                )
+                continue
+            verdict = await self._grader.grade(claim)
+            ok = bool(getattr(verdict, "ok", False))
+            code = str(getattr(verdict, "code", "") or "")
+            results.append(
+                {
+                    "index": index,
+                    "ok": ok,
+                    "codes": [] if ok or not code else [code],
+                }
+            )
+        return {"results": results}
 
     def _submit(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
         # 둘째 제출을 조용히 덮으면 첫 제출이 사라진다. 계약이 정하지 않은

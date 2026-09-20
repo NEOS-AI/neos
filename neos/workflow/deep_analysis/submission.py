@@ -99,7 +99,8 @@ def _computation(raw: object) -> ComputedEvidence | None:
     )
 
 
-def _claims(raw: object) -> list[ProposedClaim]:
+def parse_claims(raw: object) -> list[ProposedClaim]:
+    """`check_claims.v1` 도 같은 모양을 받는다 (계약 §3.3), 그래서 공개다."""
     if not isinstance(raw, list):
         return []
     parsed: list[ProposedClaim] = []
@@ -186,7 +187,7 @@ def parse_submission(payload: Mapping[str, Any]) -> Submission:
     report_path = data.get("report_path")
     return Submission(
         status="completed" if data.get("status") == "completed" else DEFAULT_STATUS,
-        claims=_claims(data.get("claims")),
+        claims=parse_claims(data.get("claims")),
         self_assessment=_float(data.get("self_assessment")),
         proposed_subquestions=_subquestions(data.get("proposed_subquestions")),
         dead_ends=_str_list(data.get("dead_ends")),
