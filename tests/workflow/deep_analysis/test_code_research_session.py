@@ -80,6 +80,7 @@ async def _open(
     ledger: _FakeLedger,
     blob: _Blob | None = None,
     cap_bytes: int = 1000,
+    grader=None,
 ):
     from neos.workflow.deep_analysis.research_session import open_research_session
 
@@ -96,6 +97,7 @@ async def _open(
         cap_bytes=cap_bytes,
         fetch_fn=fetch_fn,
         limits=SandboxLimits.safe_defaults(),
+        grader=grader,
     )
     return session, provider
 
@@ -190,6 +192,43 @@ async def test_closing_destroys_the_question_sandbox(tmp_path) -> None:
 
     with pytest.raises(SandboxNotFound):
         await provider.get(sandbox_id)
+
+
+@pytest.mark.asyncio
+async def test_without_a_grader_the_assembled_port_omits_check_claims(
+    tmp_path,
+) -> None:
+    """채점기는 선택이다 -- 없으면 도구도 없다.
+
+    오케스트레이터가 채점기를 갖고 있으므로 프로덕션에서는 늘 있지만,
+    없을 때 조용히 부를 수 없는 도구를 내미는 쪽으로 기울지 않는다.
+    """
+    ledger = _FakeLedger(_FakeQuestion())
+    session, _ = await _open(tmp_path, ledger=ledger)
+
+    try:
+        names = {item.name for item in session.port.definitions()}
+        assert "check_claims.v1" not in names
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_grader_reaches_the_assembled_port(tmp_path) -> None:
+    """조립이 채점기를 통과시켜야 `check_claims.v1` 이 열린다."""
+
+    class _Grader:
+        async def grade(self, claim):  # pragma: no cover - 호출되지 않는다
+            raise AssertionError("이 테스트는 채점기를 부르지 않는다")
+
+    ledger = _FakeLedger(_FakeQuestion())
+    session, _ = await _open(tmp_path, ledger=ledger, grader=_Grader())
+
+    try:
+        names = {item.name for item in session.port.definitions()}
+        assert names == {"fetch.v1", "submit.v1", "check_claims.v1"}
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio

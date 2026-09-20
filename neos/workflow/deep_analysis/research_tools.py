@@ -114,11 +114,13 @@ class QuestionWorkspace(Protocol):
 
 
 class ResearchToolPort:
-    """`fetch.v1` 하나를 내주는 포트.
+    """조사 워커가 보는 DA 도구들 -- `fetch.v1` · `submit.v1` · `check_claims.v1`.
 
     `fetch_fn` 은 `neos.workflow.deep_analysis.fetch.fetch_url` 이다. 여기서
     HTTP 를 다시 부르지 않는 것이 핵심이다 -- 재시도 정책과 blob 해시가
     갈라지면 원장의 blob 과 워커가 읽은 본문이 달라질 수 있다.
+
+    `check_claims.v1` 은 채점기가 주입됐을 때만 열린다.
     """
 
     def __init__(

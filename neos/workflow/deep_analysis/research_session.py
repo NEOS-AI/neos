@@ -50,12 +50,17 @@ async def open_research_session(
     cap_bytes: int,
     fetch_fn: Any,
     limits: Any,
+    grader: Any = None,
 ) -> ResearchSession:
     """이 질문의 샌드박스를 열고 도구를 묶는다.
 
     `fetch_fn` 은 `neos.workflow.deep_analysis.fetch.fetch_url` 이다. 주입
     으로 받는 이유는 카세트 재생(J3 오프라인 섀도)이 같은 자리를 갈아끼우기
     때문이고, 그때도 구현은 여전히 하나다.
+
+    `grader` 는 오케스트레이터가 이미 들고 있는 결정론 채점기다
+    (`Orchestrator.__init__` 의 네 번째 인자). 없으면 `check_claims.v1` 이
+    목록에서 빠진다 -- 부를 수 없는 도구를 내밀지 않는다.
     """
     sandbox = await open_question_sandbox(
         provider, question_id=question_id, limits=limits
@@ -65,5 +70,6 @@ async def open_research_session(
         store=LedgerEvidenceStore(ledger, question_id=question_id),
         sandbox=sandbox,
         cap_bytes=cap_bytes,
+        grader=grader,
     )
     return ResearchSession(port=port, sandbox=sandbox)
