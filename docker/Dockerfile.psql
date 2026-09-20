@@ -5,52 +5,60 @@ FROM paradedb/paradedb:latest-pg17
 USER root
 
 # 필요한 종속성 설치
+#
+# 예전 목록은 build-essential·gcc·clang·llvm-dev·postgresql-server-dev-17·
+# libclang-dev·pkg-config·jq·git 까지 끌어왔는데, 그것들은 전부 아래에서
+# 걷어낸 pgvectorscale 을 **소스에서 컴파일하기 위한** 것이었다. 컴파일할 것이
+# 없어졌으므로 남길 이유도 없다. 실제로 필요한 것은 pgvector 패키지 하나다
+# (db/init.sql 의 `CREATE EXTENSION vector`).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
-      build-essential \
-      git \
-      curl \
-      make \
-      gcc \
-      jq \
       ca-certificates \
-      libssl-dev \
-      pkg-config \
-      postgresql-server-dev-17 \
-      postgresql-17-pgvector \
-      libopenblas-dev \
-      libclang-dev \
-      clang \
-      llvm-dev && \
+      postgresql-17-pgvector && \
     rm -rf /var/lib/apt/lists/*
 
 
-# Rust 설치
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# pgvectorscale 설치
-WORKDIR /tmp
-RUN git clone https://github.com/timescale/pgvectorscale
-RUN cd pgvectorscale/pgvectorscale && \
-    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version') && \
-    cargo pgrx init --pg17 pg_config && \
-    cargo pgrx install --release
-
-
-# # PostgreSQL 확장 설정 파일 생성
-# RUN mkdir -p /docker-entrypoint-initdb.d
-# COPY <<EOF /docker-entrypoint-initdb.d/init-extensions.sql
-# CREATE EXTENSION IF NOT EXISTS vectorscale;
-# EOF
+# pgvectorscale 은 두지 않는다 (2026-09-20).
+#   `CREATE EXTENSION vectorscale` 이 db/**/*.sql 어디에도 없고, DiskANN 인덱스를
+#   만드는 SQL 도 저장소에 없다. 3072차원 임베딩 인덱스는 028 처럼 pgvector 의
+#   `hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)` 로 만든다. 쓰지 않는
+#   확장 하나 때문에 전체 Rust 툴체인 + cargo-pgrx 빌드를 이미지가 짊어지고
+#   있었다. 실제로 DiskANN 이 필요해지면 이 블록을 되살리고 preload 목록에
+#   `vectorscale` 을 더하면 된다.
 
 
 # postgresql.conf에 필요한 설정 추가하는 스크립트
+# 이 스크립트가 예전에는 이렇게 끝났다:
+#   echo "shared_preload_libraries = 'pg_search,vectorscale,\${shared_preload_libraries}'"
+# 이름과 달리 append 가 아니었다. `\${shared_preload_libraries}` 는 **빌드 시점의
+# 셸 변수**라 빈 문자열로 펼쳐졌고, 결과는 `'pg_search,vectorscale,'` 한 줄이었다.
+# postgresql.conf 는 나중 줄이 이기므로 베이스 이미지가 깔아둔
+# `'pg_search,pg_cron,pg_stat_statements'` 를 **덮어써서** pg_cron 과
+# pg_stat_statements 를 떨어뜨렸고(pg_cron launcher 가 안 뜬다), 남은 후행 쉼표는
+# 매 기동마다 `invalid list syntax in parameter "shared_preload_libraries"` 를
+# 찍었다. 그 로그가 진짜 설정 오류를 가린다.
+#
+# 이제는 기존 값을 postgres 자신에게 물어 **없을 때만** 덧붙인다 -- initdb
+# 스크립트는 임시 서버가 뜬 상태에서 돌므로 psql 로 현재 값을 읽을 수 있다.
+#
+# 지금의 paradedb 베이스는 이미 pg_search 를 preload 하므로 이 스크립트는
+# 사실상 no-op 이다. 그래도 남기는 이유는 pg_search 가 선택이 아니기 때문이다 --
+# 009·web_search_log.sql 의 BM25 인덱스와 hybrid_search_engine.py 계열 네 모듈이
+# 이것에 달려 있다. 베이스 이미지가 언젠가 목록을 바꾸면 이 가드가 대신 붙인다.
 COPY <<EOF /docker-entrypoint-initdb.d/00-configure-postgres.sh
 #!/bin/bash
 set -e
 
-echo "shared_preload_libraries = 'pg_search,vectorscale,\$\{shared_preload_libraries\}'" >> \$PGDATA/postgresql.conf
+current=\$(psql -U "\${POSTGRES_USER:-postgres}" -d postgres -Atc 'SHOW shared_preload_libraries')
+want=pg_search
+
+for lib in \$want; do
+  if [[ ",\$current," != *",\$lib,"* ]]; then
+    current="\${current:+\$current,}\$lib"
+  fi
+done
+
+echo "shared_preload_libraries = '\$current'" >> \$PGDATA/postgresql.conf
 EOF
 
 RUN chmod +x /docker-entrypoint-initdb.d/00-configure-postgres.sh

@@ -34,13 +34,22 @@ db/migrations/004_add_auth_tables.sql
 db/migrations/005_add_oauth_and_enterprise.sql
 db/migrations/006_upgrade_to_hnsw.sql
 
-# 예외 -- 028·029 를 앞당긴다.
+# 예외 -- 028·029·060 을 앞당긴다.
 #   020 과 027 이 `document_chunks` 를 참조하는데 그 테이블을 만드는 것은 028 이다.
 #   번호순으로 적용하면 두 파일이 `relation "document_chunks" does not exist` 로
 #   죽는다 (2026-08-25 실측). 번호를 다시 매기지 않는 이유는 이미 적용된 DB 와
 #   어긋나기 때문이고, 그래서 순서 쪽을 정본으로 삼는다.
+#
+#   060 이 같은 이유로 여기 있다 (2026-09-20). 007 과 027 이 `knowledge_graphs` 를
+#   `IF EXISTS` 로 감싸 패치하는데 -- 007 은 embedding_provider/embedding_model 을
+#   더하고, 027 은 entity_embedding 에 halfvec HNSW 를 만든다 -- 그 테이블을
+#   만드는 것은 060 이다. 번호순대로 060 을 맨 뒤에 두면 두 가드가 모두 거짓이
+#   되어 **조용히 건너뛴다**. 에러가 아니라 침묵이라서 더 나쁘다: 1회 적용에는
+#   인덱스가 없고 2회 적용에는 생겨, 적용 횟수가 스키마를 바꾼다.
+#   060 은 `documents` 를 참조하므로 029 **뒤**여야 한다.
 db/migrations/028_create_document_chunks.sql
 db/migrations/029_create_documents.sql
+db/migrations/060_add_knowledge_graphs.sql
 
 db/migrations/007_add_embedding_provider_metadata.sql
 db/migrations/008_add_visibility_to_conversations.sql

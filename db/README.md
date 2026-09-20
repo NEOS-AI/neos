@@ -3,14 +3,22 @@
 ## Docker setup
 
 ```bash
-cd ..
-
-# 이미지 빌드
-docker build --network=host -t neos-paradedb -f docker/Dockerfile.psql .
-
-# 컨테이너 실행
-docker run --name neos-paradedb -e POSTGRES_PASSWORD=password -p 5432:5432 -d neos-paradedb
+make image-build    # docker build --network=host -t neos-paradedb -f docker/Dockerfile.psql .
+make db-up          # 컨테이너 기동 후 pg_isready 까지 기다린다
 ```
+
+> **`sudo docker build` 가 필요했던 이유**는 docker 가 아니라 한 디렉터리의
+> 소유권이다. 과거에 한 번 `sudo docker build` 를 돌린 탓에
+> `~/.docker/buildx/refs/orbstack/` 이 root 소유로 남았고, 그래서 그 뒤로는
+> 일반 사용자 빌드가 `permission denied` 로 죽는다 -- sudo 로 도는 것이 다시
+> root 소유 파일을 남기므로 스스로를 유지하는 고리다. 한 번 끊으면 된다:
+>
+> ```bash
+> sudo chown -R "$USER" ~/.docker/buildx
+> ```
+>
+> 이후로는 sudo 없이 빌드된다. `make release` 가 sudo 를 요구하지 않으려면
+> 이 정리가 필요하다.
 
 Running valkey:
 ```bash
@@ -42,6 +50,18 @@ psql postgres --host localhost --port 5432 --user postgres
 ## Publish the database image to docker hub
 
 ```bash
+# 빌드 -> 스키마 검증 -> push 를 한 타깃으로 (검증에 실패하면 push 에 못 간다)
+make release
+```
+
+`release` 는 `image-build` -> `db-verify` -> `image-push` 순서로 묶여 있다.
+가운데 단계가 방금 빌드한 **그 이미지**로 빈 DB 를 만들어 69개를 전부 적용하고,
+한 번 더 적용해 멱등성까지 본다. 여태 빌드와 스키마 검증 사이에 아무 연결이
+없었고, 그래서 스키마가 재현되지 않는 이미지도 그냥 push 됐다.
+
+손으로 하려면:
+
+```bash
 # ParadeDB
 docker tag neos-paradedb neos960518/neos-paradedb:latest
 docker push neos960518/neos-paradedb:latest
@@ -53,153 +73,58 @@ docker push neos960518/neos-valkey:latest
 
 ## Migrate database schema
 
-Pre-requisite: `CREATE DATABASE neos;` in PostgreSQL
-
-> ⚠️ **적용 순서의 정본은 이 절이 아니라 [`db/BOOTSTRAP_ORDER.txt`](BOOTSTRAP_ORDER.txt)다**
-> (2026-08-25, SCHEMA1). 아래 명령 나열은 사람이 읽는 사본이고, 둘이 어긋나면
-> 정본이 이긴다. 산문에만 있던 시절 `046` 이 목록에서 빠져 있었고 — 그대로
-> 배포하면 `coding_sandbox_provider_health` 가 없다 — 순서가 번호순이 아닌
-> **이유**도 어디에도 적혀 있지 않았다.
->
-> 검증: `python scripts/verify_schema_bootstrap.py`
-> (목록 완전성만 보려면 `--check-list-only`, Docker 불필요)
+적용 순서의 **정본은 [`db/BOOTSTRAP_ORDER.txt`](BOOTSTRAP_ORDER.txt)** 다 (SCHEMA1).
+여기 있던 psql 명령 138줄은 걷어냈다 -- 사람이 손으로 옮겨 적는 사본은 낡는다는
+것이 증명됐기 때문이다. 그 목록은 `048` 에서 멈춰 있었고 `049`~`060` 이 빠져
+있었으며, 그 이전에는 `046` 이 통째로 누락돼 배포하면
+`coding_sandbox_provider_health` 가 없었다.
 
 ```bash
-# add schemas for initial setup
-psql -U postgres -d neos --port 5432 --host localhost -f db/init.sql
+# 컨테이너 기동 + 스키마 전량 적용 (DB 가 없으면 만든다)
+make db-up
+make db-bootstrap
 
-# add schemas for hyper-deep-research
-psql -U postgres -d neos --port 5432 --host localhost -f db/hyper_deep_research.sql
+# 처음부터 다시
+make db-reset
+```
 
-# add schemas for web search logging
-psql -U postgres -d neos --port 5432 --host localhost -f db/web_search_log.sql
-# add schemas for web search analytics
-psql -U postgres -d neos --port 5432 --host localhost -f db/web_search_analytics.sql
+`make db-bootstrap` 은 `scripts/apply_schema.py` 를 부르고, 그 스크립트는 순서를
+`BOOTSTRAP_ORDER.txt` 에서 **읽는다**. 순서가 적힌 곳은 한 군데뿐이다.
 
-# add schemas for workflow builder
-psql -U postgres -d neos --port 5432 --host localhost -f db/add_workflow_tables.sql
+기본값은 `postgres@localhost:5432/neos` 이고 변수로 바꾼다:
 
-# add schemas for chat system
-psql -U postgres -d neos --port 5432 --host localhost -f db/chat_system.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/chat_similarity_search.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/chat_cost_tracking.sql
+```bash
+make db-bootstrap PGDATABASE=neos_db PGHOST=db.internal PGUSER=neos_user
+```
 
-# add anonymous user for web interface
-psql -U postgres -d neos --port 5432 --host localhost -f db/add_anonymous_user.sql
+### 검증
 
-# Migrate conversation to deep research workflow
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/001_add_conversation_to_deep_research.sql
+```bash
+make db-check    # 목록 완전성만 (Docker 불필요, CI 가 도는 것과 같은 검사)
+make db-verify   # 일회용 컨테이너의 빈 DB 에 전량 적용 + 재적용 멱등성
+```
 
-# Add deep research events table for real-time progress tracking
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/002_add_deep_research_events.sql
+`db-check` 는 `db/**/*.sql` 중 정본 목록에 없는 파일을 잡는다. **새 마이그레이션을
+더하면 `BOOTSTRAP_ORDER.txt` 에도 반드시 한 줄 적어야 한다** -- 적지 않으면 CI 의
+`Schema bootstrap list is complete` 에서 걸린다. 테스트는 이것을 못 잡는다:
+`tests/conftest.py` 는 정본 순서가 아니라 ORM `create_all()` + 번호순으로 따로
+스키마를 세우므로, 목록에서 빠진 파일이 있어도 초록이다.
 
-# Add smart cache table
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/003_add_smart_cache_tables.sql
+`db-verify` 는 **재적용 멱등성**까지 본다. 같은 순서를 두 번 적용해도 실패가
+없어야 하고, 1회 적용과 2회 적용의 스키마 모양이 같아야 한다. 2026-09-20 에
+`060` 을 넣으며 실제로 걸린 사례가 있다 -- `007` 이 `knowledge_graphs` 를
+`IF EXISTS` 로 감싸 패치하는데 그 테이블을 만드는 `060` 이 순서상 뒤라, 1회
+적용에서는 컬럼이 안 붙고 2회부터 붙었다. 적용 횟수가 스키마를 바꾸면 안 된다.
 
-# Add migrations for Google OAuth2 and enterprise users
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/004_add_auth_tables.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/005_add_oauth_and_enterprise.sql
+## 테스트 DB 는 따로 쓰는 것이 좋다
 
-# Add migrations for changing index type
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/006_upgrade_to_hnsw.sql
+`tests/conftest.py` 는 **ORM `create_all()` + 마이그레이션 번호순**으로, 배포는
+**`BOOTSTRAP_ORDER.txt` 순서**로 같은 스키마를 세운다. 두 경로를 같은 데이터베이스에
+겨누면 먼저 도착한 쪽이 이기고, 진 쪽은 `CREATE TABLE IF NOT EXISTS` 때문에
+**에러 없이 조용히 no-op** 한다. 2026-09-20 에 실측했다: 배포용 부트스트랩을 도는
+중에 pytest 가 같은 `neos` DB 에 ORM 테이블을 만들어, `document_chunks` 가 ORM
+모양(`embedding_provider` 없음)으로 자리를 차지했고 `028` 이 그 뒤에서 죽었다.
 
-# Add document_chunk table
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/028_create_document_chunks.sql
-
-# Add documents table
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/029_create_documents.sql
-
-
-# Add migrations for Google Gemini API support
-psql -U postgres -d neos -h localhost -f db/migrations/007_add_embedding_provider_metadata.sql
-
-# Add visibility column to conversations
-psql -U postgres -d neos -h localhost -f db/migrations/008_add_visibility_to_conversations.sql
-
-# Add support for hybrid search
-psql -U postgres -d neos -h localhost -f db/migrations/009_add_knowledge_hybrid_search.sql
-
-# Add support for research sessions
-psql -U postgres -d neos -h localhost -f db/migrations/010_add_research_session_branches.sql
-psql -U postgres -d neos -h localhost -f db/migrations/011_add_research_sessions.sql
-
-# Add 3-tier memory architecture tables
-psql -U postgres -d neos -h localhost -f db/migrations/012_add_memory_tables.sql
-
-# Add feedback system
-psql -U postgres -d neos -h localhost -f db/migrations/013_add_feedback_system.sql
-
-# Add parent chunk support for better context retrieval
-psql -U postgres -d neos -h localhost -f db/migrations/014_add_parent_chunk_support.sql
-
-# Add knowledge graph support
-psql -U postgres -d neos -h localhost -f db/migrations/015_add_knowledge_graph.sql
-psql -U postgres -d neos -h localhost -f db/migrations/016_add_evidence_graph.sql
-psql -U postgres -d neos -h localhost -f db/migrations/017_add_refinement_tables.sql
-
-# Active Contradiction Resolution
-psql -U postgres -d neos -h localhost -f db/migrations/018_add_contradiction_resolution.sql
-
-# Add Tool Registry tables
-psql -U postgres -d neos -h localhost -f db/migrations/019_add_tool_registry.sql
-
-# Add contextual retrieval tables
-psql -U postgres -d neos -h localhost -f db/migrations/020_add_contextual_retrieval.sql
-
-# Add channel source columns to query_history
-psql -U postgres -d neos -h localhost -f db/migrations/021_add_channel_source.sql
-
-# Add tool approval allowlist table
-psql -U postgres -d neos -h localhost -f db/migrations/022_add_tool_approval_allowlist.sql
-
-# Add scheduled_tasks table
-psql -U postgres -d neos -h localhost -f db/migrations/023_add_scheduled_tasks.sql
-
-# UI 폼 세션 저장 테이블
-# UIFrameGenerator가 생성한 frame_id → (original_query, conversation_id) 매핑
-# POST /api/v1/ui/submit 수신 시 원본 쿼리 복원에 사용
-psql -U postgres -d neos -h localhost -f db/migrations/024_add_ui_frame_sessions.sql
-psql -U postgres -d neos -h localhost -f db/migrations/025_add_submitted_at.sql
-
-# Execution Approval 타임아웃 추적 테이블 추가
-psql -U postgres -d neos -h localhost -f db/migrations/026_add_pending_approvals.sql
-
-# Add gemini embedding dimension support
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/027_gemini_embedding_dimension.sql
-
-# Add support for agent control slider
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/030_add_autonomy_preferences.sql
-
-# Add Mission Runtime audit tables
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/031_add_mission_runtime_tables.sql
-
-# Add research harness tables
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/032_add_research_harness_tables.sql
-
-# Features for thinking engine and reasoning items
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/033_add_thinking_engine_tables.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/034_add_bitemporal_evidence_claims.sql
-
-# Align API key metadata column with the current SQLAlchemy model
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/035_add_api_key_metadata_column.sql
-
-# Add deep analysis tables for advanced research workflows
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/036_add_deep_analysis_tables.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/037_add_deep_analysis_reports.sql
-
-# Tables for coding agent workflow loops
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/038_add_coding_phase0.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/039_add_coding_runs_checkpoints.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/040_add_coding_execution_leases.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/041_add_coding_sandbox_bindings.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/042_add_coding_approvals.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/043_add_coding_text_parts.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/044_add_coding_workspace_edits.sql
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/045_add_coding_managed_sandboxes.sql
-
-# Provider health / drain 을 프로세스 밖으로 (CA8·CA11)
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/046_add_coding_sandbox_provider_health.sql
-
-# 쓰이지 않는 부분 인덱스 제거 (CA9)
-psql -U postgres -d neos --port 5432 --host localhost -f db/migrations/047_drop_unused_cleanup_attempts_index.sql
+```bash
+make db-bootstrap PGDATABASE=neos_test   # 테스트용은 이름을 나눠라
 ```
