@@ -706,7 +706,6 @@ GS3 어휘만 · GS6 표본 전. ⚠️ 템플릿 없는 설계도 병렬 가지
 
 ## 14. 참조
 
-- **직전 판본:** `git show 31b37111:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md` · 전임본 `c071585a`
 - **설계 정본:** [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md)
 - **결정 원장:** `neos/workflow/deep_analysis/DECISIONS.md` (D1~D97) · `DECISIONS_ARCHIVE_2026-08.md`
 - **방향의 근거:** [DIRECTION_260717.md](DIRECTION_260717.md) §2.1 (discovery 자유 / 검증 좁게)
