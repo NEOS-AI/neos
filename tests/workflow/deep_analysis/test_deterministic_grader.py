@@ -191,7 +191,7 @@ def _computed_claim(confidence=0.5):
         confidence=confidence,
         kind="computed",
         computation=ComputedEvidence(
-            script_ref="f" * 64,
+            script_ref="f" * 16,
             inputs=["blob1"],
             premises=["c1"],
             runtime={"profile": "research-offline-v1", "image_digest": "sha256:x"},
@@ -237,7 +237,7 @@ async def test_a_reproduced_computed_claim_passes_through_the_grader():
         # 스크립트도 원장 blob 이어야 한다 -- 재실행이 읽을 바이트다 (규칙 1).
         {
             "blob1": Blob(http_status=200, raw_text="body"),
-            "f" * 64: Blob(http_status=200, raw_text="print(42.5)"),
+            "f" * 16: Blob(http_status=200, raw_text="print(42.5)"),
         },
         claims={"c1": _StoredClaim("c1")},
         sources={"c1": ["https://a"]},

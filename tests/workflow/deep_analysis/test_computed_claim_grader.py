@@ -70,7 +70,7 @@ class _FakeLedger:
     def __init__(
         self,
         *,
-        blobs: frozenset[str] = frozenset({"aaaaaaaaaaaaaaaa", "f" * 64}),
+        blobs: frozenset[str] = frozenset({"aaaaaaaaaaaaaaaa", "f" * 16}),
         claims: dict[str, _Claim] | None = None,
         sources: dict[str, list[str]] | None = None,
     ) -> None:
@@ -90,7 +90,7 @@ class _FakeLedger:
 
 def _computation(**overrides) -> ComputedEvidence:
     values: dict[str, Any] = {
-        "script_ref": "f" * 64,
+        "script_ref": "f" * 16,
         "inputs": ["aaaaaaaaaaaaaaaa"],
         "premises": ["c1"],
         "runtime": {
@@ -174,7 +174,7 @@ async def test_a_script_that_is_not_a_ledger_blob_is_refused() -> None:
     "재현 안 됨" 은 돌려 보고 다른 답이 나왔다는 뜻이어야 한다. 같은 규칙,
     같은 코드로 막는다: 재실행이 필요로 하는 바이트가 원장에 없다.
     """
-    verdict = await _grade(_claim(script_ref="z" * 64))
+    verdict = await _grade(_claim(script_ref="z" * 16))
 
     assert verdict.ok is False
     assert verdict.code == "E_COMPUTE_INPUT_UNFETCHED"
@@ -185,7 +185,7 @@ async def test_a_missing_script_never_reaches_re_execution() -> None:
     """규칙 1 의 자리이므로 샌드박스는 돌지 않는다."""
     reexecutor = _FakeReexecutor(_twice())
 
-    await _grade(_claim(script_ref="z" * 64), reexecutor=reexecutor)
+    await _grade(_claim(script_ref="z" * 16), reexecutor=reexecutor)
 
     assert reexecutor.calls == []
 

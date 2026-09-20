@@ -136,7 +136,9 @@ ComputedClaim = {"kind": "computed", "text", "confidence", "computation": Comput
 ## 4. 계산 증거 `ComputedEvidence`
 
 ```
-script_ref       blob 저장소의 스크립트 바이트 (sha256)
+script_ref       blob 저장소의 스크립트 바이트 — **blob 주소이지 full sha256이 아니다**
+                 (`fetch._content_hash` = `sha256(...)[:16]`, `deep_analysis_blobs.content_hash`
+                 가 VARCHAR(16)). `inputs`의 raw_ref와 같은 폭이다.
 inputs           [raw_ref, ...]            — 전부 원장 fetch blob
 premises         [claim_id, ...]           — 입력 수치 각각의 verified quote 클레임
 runtime          {"profile": "research-offline-v1", "image_digest": str}

@@ -68,7 +68,7 @@ def _computed() -> dict:
         "text": "평균은 42.5 다",
         "confidence": 0.7,
         "computation": {
-            "script_ref": "f" * 64,
+            "script_ref": "f" * 16,
             "inputs": ["abc123def456ffff"],
             "premises": ["claim_1"],
             "runtime": {"profile": "research-offline-v1", "image_digest": "sha256:x"},

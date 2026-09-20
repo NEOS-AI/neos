@@ -30,8 +30,22 @@ from neos.workflow.deep_analysis.models import ComputedEvidence
 
 pytestmark = pytest.mark.no_db
 
-SCRIPT_REF = "f" * 64
-INPUT_REF = "a" * 64
+def _blob_ref(text: str) -> str:
+    """원장이 **실제로 만드는** blob 주소.
+
+    상수를 손으로 적지 않는 이유가 있다. 계약 §4 가 `script_ref` 를 "sha256"
+    이라고 적어 처음에는 64자를 썼는데, 원장의 주소는 `sha256(...)[:16]` 이고
+    `deep_analysis_blobs.content_hash` 는 VARCHAR(16) 이다 -- 픽스처가 만들어
+    낼 수 없는 값을 쓰면 테스트는 초록인데 프로덕션에서는 `get_blob` 이 영원히
+    None 을 돌려준다. 폭 자체는 `test_fetch.py` 가 따로 못 박는다.
+    """
+    from neos.workflow.deep_analysis.fetch import _content_hash
+
+    return _content_hash(text)
+
+
+SCRIPT_REF = _blob_ref("script")
+INPUT_REF = _blob_ref("input")
 
 
 @dataclass
