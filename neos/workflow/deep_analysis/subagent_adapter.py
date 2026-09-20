@@ -307,6 +307,24 @@ def _empty_result(
 
 def build_da_subagent_runtime(*, search_fn, fetch_fn, session_factory, model=None):
     """Production host. Caller supplies a session factory."""
+    return _build_runtime(
+        DAToolPort(search_fn, fetch_fn),
+        session_factory=session_factory,
+        model=model,
+    )
+
+
+def build_research_runtime(port, *, session_factory, model=None):
+    """트랙 J. 포트만 다르고 나머지는 `build_da_subagent_runtime` 과 같다.
+
+    **질문마다 새로 짓는다.** 포트가 질문마다 다르기 때문에 공유할 수 없고,
+    `SubagentRuntime.__init__` 이 순수 대입이라 질문마다 지어도 싸다.
+    """
+    return _build_runtime(port, session_factory=session_factory, model=model)
+
+
+def _build_runtime(port, *, session_factory, model=None):
+    """런타임 조립은 한 곳이다 -- 두 벌이면 한쪽만 고쳐지는 날이 온다."""
 
     from neos.observability.metrics import get_metrics_collector
     from neos.subagent.catalog import SpecRegistry
@@ -326,7 +344,7 @@ def build_da_subagent_runtime(*, search_fn, fetch_fn, session_factory, model=Non
     return SubagentRuntime(
         store=PostgresSubagentStore(session_factory),
         catalog=SpecRegistry(),
-        stepper=ChildStepper(model=model, tools=DAToolPort(search_fn, fetch_fn)),
+        stepper=ChildStepper(model=model, tools=port),
         events=MetricsEventSink(_NullSink(), get_metrics_collector()),
         clock=SystemClock(),
     )

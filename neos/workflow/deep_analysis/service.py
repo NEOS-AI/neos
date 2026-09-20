@@ -34,9 +34,7 @@ async def web_search(query: str, k: int, *, tool_factory=None) -> list[dict]:
     if not initialized:
         return []
     try:
-        result = await tool.execute(
-            {"query": query, "max_results": k}
-        )
+        result = await tool.execute({"query": query, "max_results": k})
         if not result.success or not isinstance(result.data, list):
             return []
         return [
@@ -115,9 +113,7 @@ async def build_orchestrator(
         if profile == "dev"
         else config.parallel_workers
     )
-    max_depth = (
-        config.dev_profile.max_depth if profile == "dev" else config.max_depth
-    )
+    max_depth = config.dev_profile.max_depth if profile == "dev" else config.max_depth
     synthesis_max_tokens = (
         config.dev_profile.synthesis_max_tokens
         if profile == "dev"
@@ -132,9 +128,7 @@ async def build_orchestrator(
     # `DeepAnalysisConfig` so `neos/config/loader.py`'s
     # `warn_finalization_floor_ratio` can never describe a floor that is not
     # the one enforced here.
-    finalization_floor_tokens = config.finalization_floor_tokens(
-        synthesis_max_tokens
-    )
+    finalization_floor_tokens = config.finalization_floor_tokens(synthesis_max_tokens)
     report_floor_tokens = config.report_floor_tokens(synthesis_max_tokens)
     grading_floor_tokens = config.grading_floor_tokens(synthesis_max_tokens)
 
@@ -227,6 +221,40 @@ async def build_orchestrator(
         except Exception:
             subagent_runtime = None
 
+    # 트랙 J. 둘 다 플래그가 켜졌을 때만 만든다 -- 꺼져 있으면 이 블록은
+    # 통째로 건너뛰고, 오케스트레이터는 `None` 둘을 받는다 (I1).
+    sandbox_provider = None
+    research_runtime_factory = None
+    if config.code_research_enabled:
+        try:
+            from neos.coding.sandbox.factory import create_sandbox_provider
+            from neos.database.connection import db_manager
+
+            from .subagent_adapter import build_research_runtime
+
+            sandbox_provider = create_sandbox_provider(settings.config.sandbox)
+
+            def research_runtime_factory(port):
+                # 질문마다 불린다. 포트가 질문마다 다르기 때문이다.
+                return build_research_runtime(
+                    port, session_factory=db_manager.get_session
+                )
+
+        except Exception:
+            # 여기서 터뜨리지 않는 이유: 조사와 무관한 단계까지 같이 죽는다.
+            # 빠진 조각은 `_run_worker` 가 질문마다 `sandbox_provider_missing`
+            # 으로 시끄럽게 보고한다. 다만 **원인은 남긴다** -- 조용히 삼키면
+            # "왜 조사 모드가 안 도는가" 에 답할 근거가 사라진다.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "code research is enabled but its sandbox could not be built; "
+                "questions will fail with sandbox_provider_missing",
+                exc_info=True,
+            )
+            sandbox_provider = None
+            research_runtime_factory = None
+
     return Orchestrator(
         session,
         run_id,
@@ -248,4 +276,6 @@ async def build_orchestrator(
         max_depth=max_depth,
         synthesis_max_tokens=synthesis_max_tokens,
         subagent_runtime=subagent_runtime,
+        sandbox_provider=sandbox_provider,
+        research_runtime_factory=research_runtime_factory,
     )
