@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..models import ProposedClaim, Verdict
 from ..text_norm import excerpt_match_score
+from .computed import grade_computed
 
 
 class DeterministicGrader:
@@ -13,10 +14,14 @@ class DeterministicGrader:
         *,
         quote_threshold: float,
         confidence_cap: dict[int, float],
+        reexecutor=None,
     ) -> None:
         self.ledger = ledger
         self.quote_threshold = quote_threshold
         self.confidence_cap = confidence_cap
+        # 계산 클레임에만 쓰인다. quote 만 오는 배포에서는 None 이어도 되고,
+        # 계산 클레임이 도착하면 `grade_computed` 가 배선 실수로 터뜨린다.
+        self.reexecutor = reexecutor
 
     def _confidence_limit(self, source_count: int) -> float:
         if source_count >= 3:
@@ -24,6 +29,15 @@ class DeterministicGrader:
         return self.confidence_cap[source_count]
 
     async def grade(self, claim: ProposedClaim) -> Verdict:
+        # 계산 클레임의 증거는 `evidence` 가 아니라 `computation` 에 있다.
+        # 아래 quote 규칙을 그대로 돌리면 "근거 없음" 이라고 답하게 된다.
+        if claim.kind == "computed":
+            return await grade_computed(
+                claim,
+                ledger=self.ledger,
+                confidence_cap=self.confidence_cap,
+                reexecutor=self.reexecutor,
+            )
         source_urls = {evidence.source_url for evidence in claim.evidence}
         diagnostics = {
             "deterministic": "rejected",
@@ -32,9 +46,7 @@ class DeterministicGrader:
             "source_count": len(source_urls),
             "fetched_source_count": 0,
             "dead_source_count": 0,
-            "excerpt_chars": sum(
-                len(evidence.excerpt) for evidence in claim.evidence
-            ),
+            "excerpt_chars": sum(len(evidence.excerpt) for evidence in claim.evidence),
             "best_quote_score": None,
             "quote_threshold": self.quote_threshold,
         }
@@ -64,9 +76,7 @@ class DeterministicGrader:
                     self.quote_threshold,
                 )
                 best_quote_score = (
-                    score
-                    if best_quote_score is None
-                    else max(best_quote_score, score)
+                    score if best_quote_score is None else max(best_quote_score, score)
                 )
             else:
                 dead_urls.add(evidence.source_url)
