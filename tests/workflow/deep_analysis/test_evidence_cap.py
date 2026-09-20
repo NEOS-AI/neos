@@ -99,11 +99,10 @@ def test_migration_059_adds_the_question_evidence_counter() -> None:
 
 def test_migration_059_is_in_the_canonical_bootstrap_order() -> None:
     """정본은 산문이 아니라 `BOOTSTRAP_ORDER.txt` 다."""
-    lines = [
-        line.strip()
-        for line in (_REPO / "db/BOOTSTRAP_ORDER.txt").read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # 순서는 BOOTSTRAP_ORDER.txt 의 규칙에서 유도된다 (2026-09-20) -- 본문 대신 유도 결과.
+    from scripts.verify_schema_bootstrap import bootstrap_order
+
+    lines = bootstrap_order()
 
     previous = lines.index("db/migrations/058_allow_workflow_subagent_parent.sql")
     added = lines.index("db/migrations/059_add_question_evidence_bytes.sql")

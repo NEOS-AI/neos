@@ -247,7 +247,10 @@ def test_the_ownership_key_is_loaded_from_its_own_environment_variable() -> None
 
 
 def test_migration_057_attaches_the_runtime_to_the_allocation_plane() -> None:
-    order = (REPO_ROOT / "db" / "BOOTSTRAP_ORDER.txt").read_text().splitlines()
+    # 순서는 BOOTSTRAP_ORDER.txt 의 규칙에서 유도된다 (2026-09-20) -- 본문 대신 유도 결과.
+    from scripts.verify_schema_bootstrap import bootstrap_order
+
+    order = bootstrap_order()
     assert "db/migrations/057_add_coding_sandbox_ledger.sql" in order
     sql = (REPO_ROOT / "db" / "migrations" / "057_add_coding_sandbox_ledger.sql").read_text()
     assert "CREATE TABLE IF NOT EXISTS coding_managed_runtime (" in sql

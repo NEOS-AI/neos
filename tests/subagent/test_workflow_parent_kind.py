@@ -52,11 +52,10 @@ def test_the_migration_widens_the_parent_kind_check_to_every_enum_value() -> Non
 
 
 def test_the_migration_is_in_the_canonical_bootstrap_order_after_055() -> None:
-    lines = [
-        line.strip()
-        for line in (_REPO / "db/BOOTSTRAP_ORDER.txt").read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # 순서는 BOOTSTRAP_ORDER.txt 의 규칙에서 유도된다 (2026-09-20) -- 본문 대신 유도 결과.
+    from scripts.verify_schema_bootstrap import bootstrap_order
+
+    lines = bootstrap_order()
     created = lines.index("db/migrations/055_add_subagent_tables.sql")
     widened = lines.index("db/migrations/058_allow_workflow_subagent_parent.sql")
     assert widened > created

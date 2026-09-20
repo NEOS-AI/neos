@@ -61,17 +61,21 @@ jobs:
       # 저장소 전체는 아직 343건이 남아 있어 게이트로 세울 수 없다. 여기 적힌
       # 세 디렉터리는 **현재 0건**이며, 이 트랙이 실제로 작업하는 표면이다.
       # 나머지는 정리되는 대로 추가한다.
-      # 새 마이그레이션을 더하고 BOOTSTRAP_ORDER.txt 에 적지 않으면, 그 파일은
-      # 배포 DB 에서만 조용히 빠진다. 테스트는 안 걸린다 -- tests/conftest.py 는
-      # 정본 순서가 아니라 ORM create_all() + 번호순으로 따로 스키마를 세우므로
-      # 목록과 무관하게 초록이다. 2026-09-20 에 그 틈으로 `knowledge_graphs` 가
-      # 발견됐다: 문서 파이프라인이 쓰는데 db/**/*.sql 중 만드는 파일이 없었고,
-      # ORM 이 테스트에서만 대신 만들어 주고 있었다.
+      # 배포 스키마 선언이 저장소와 맞는지 본다. 테스트는 이것을 못 잡는다 --
+      # tests/conftest.py 는 정본 순서가 아니라 ORM create_all() + 번호순으로 따로
+      # 스키마를 세우므로 선언이 어긋나도 초록이다. 2026-09-20 에 그 틈으로
+      # `knowledge_graphs` 가 발견됐다: 문서 파이프라인이 쓰는데 db/**/*.sql 중
+      # 만드는 파일이 없었고, ORM 이 테스트에서만 대신 만들어 주고 있었다.
       #
-      # 여기서는 목록 완전성만 본다(Docker 불필요). 전량 적용 검증은
-      # neos-paradedb 이미지가 필요해 이 잡의 pgvector 서비스로는 돌릴 수 없고,
-      # `make db-verify` 로 로컬·배포 전에 돈다.
-      - name: Schema bootstrap list is complete
+      # 셋을 본다: [base] 양방향 일치, 마이그레이션 이름 규칙, 그리고 **가드 자리**.
+      # 마지막 것이 자동 유도의 안전망이다 -- `IF EXISTS (... information_schema.tables
+      # ... 'X')` 로 감싼 블록은 X 가 없으면 에러 없이 통째로 건너뛰므로, 적용이
+      # 초록인데 컬럼·인덱스가 빠진다. 순서를 사람이 손으로 들 때는 "어디에 넣을까" 가
+      # 그 판단이었다.
+      #
+      # 전량 적용 검증은 neos-paradedb 이미지가 필요해 이 잡의 pgvector 서비스로는
+      # 돌릴 수 없고, `make db-verify` 로 로컬·배포 전에 돈다.
+      - name: Schema bootstrap declaration is consistent
         run: uv run --frozen python scripts/verify_schema_bootstrap.py --check-list-only
       - name: Ruff
         run: >-
