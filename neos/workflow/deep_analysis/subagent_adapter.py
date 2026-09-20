@@ -123,12 +123,40 @@ class DAToolPort:
 
 
 def _model_pin(assignment: Assignment) -> ModelPin:
-    role = assignment.effort.value if assignment.effort.value in _HARNESS_ROLES else "scout"
+    role = (
+        assignment.effort.value
+        if assignment.effort.value in _HARNESS_ROLES
+        else "scout"
+    )
     resolved = resolve_harness_model(role)
     provider = da_provider_for_model(resolved.model)
     if provider not in _PROVIDERS:
         provider = resolved.provider if resolved.provider in _PROVIDERS else "anthropic"
     return ModelPin(provider=provider, model=resolved.model)
+
+
+def _build_ticket(
+    assignment: Assignment,
+    *,
+    spec: str,
+    parent_id: str,
+    run_id: str | None = None,
+    expected_checkpoint_id: str | None = None,
+) -> SubagentTicket:
+    """스펙만 다르고 나머지는 같다 -- 티켓을 두 벌 적으면 둘이 갈라진다."""
+    goal = (assignment.question_text or assignment.brief or "").strip()
+    return SubagentTicket(
+        parent_kind=ParentKind.DEEP_ANALYSIS,
+        parent_id=parent_id,
+        parent_run_id=parent_id,
+        parent_tool_call_id=assignment.question_id,
+        spec=spec,
+        briefing=ParentBriefing(goal=goal),
+        model=_model_pin(assignment),
+        sandbox_mode=SandboxMode.NONE,
+        run_id=run_id,
+        expected_checkpoint_id=expected_checkpoint_id,
+    )
 
 
 def build_explore_ticket(
@@ -138,16 +166,32 @@ def build_explore_ticket(
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
 ) -> SubagentTicket:
-    goal = (assignment.question_text or assignment.brief or "").strip()
-    return SubagentTicket(
-        parent_kind=ParentKind.DEEP_ANALYSIS,
-        parent_id=parent_id,
-        parent_run_id=parent_id,
-        parent_tool_call_id=assignment.question_id,
+    return _build_ticket(
+        assignment,
         spec="explore",
-        briefing=ParentBriefing(goal=goal),
-        model=_model_pin(assignment),
-        sandbox_mode=SandboxMode.NONE,
+        parent_id=parent_id,
+        run_id=run_id,
+        expected_checkpoint_id=expected_checkpoint_id,
+    )
+
+
+def build_research_ticket(
+    assignment: Assignment,
+    *,
+    parent_id: str,
+    run_id: str | None = None,
+    expected_checkpoint_id: str | None = None,
+) -> SubagentTicket:
+    """트랙 J. `research` 스펙이 도구 목록을 정한다 (계약 §2).
+
+    `sandbox_mode` 가 explore 와 같은 `NONE` 인 것은 우연이 아니다 -- 조사
+    자식의 샌드박스는 서브에이전트 런타임이 아니라 오케스트레이터가
+    `research-offline-v1` 로 띄운다.
+    """
+    return _build_ticket(
+        assignment,
+        spec="research",
+        parent_id=parent_id,
         run_id=run_id,
         expected_checkpoint_id=expected_checkpoint_id,
     )
@@ -282,9 +326,7 @@ def build_da_subagent_runtime(*, search_fn, fetch_fn, session_factory, model=Non
     return SubagentRuntime(
         store=PostgresSubagentStore(session_factory),
         catalog=SpecRegistry(),
-        stepper=ChildStepper(
-            model=model, tools=DAToolPort(search_fn, fetch_fn)
-        ),
+        stepper=ChildStepper(model=model, tools=DAToolPort(search_fn, fetch_fn)),
         events=MetricsEventSink(_NullSink(), get_metrics_collector()),
         clock=SystemClock(),
     )
