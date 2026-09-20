@@ -44,13 +44,16 @@ class _Claim:
 class _Reexecution:
     """한 번 돌린 결과.
 
-    한도 초과(계약 §5 의 **별도 이벤트**)는 여기 없다 -- 그 이벤트가 생기는
-    J2b 에서 같이 들어온다. 구현하지 않을 것을 가짜에 미리 그려 두면 이미
-    지원하는 것처럼 보인다.
+    `capped` 는 **넘은 한도의 이름**이다 (`""` 면 정상 종료). 불리언이 아닌
+    이유는 계약 §6 의 `compute_reexecution_capped` payload 가 "넘은 한도" 를
+    요구하기 때문이다 -- 어느 한도인지 잃으면 워커는 무엇을 줄여야 하는지
+    모른다.
     """
 
     digest: str
     stdout: str
+    capped: str = ""
+    duration_sec: float = 0.0
 
 
 class _FakeReexecutor:
@@ -260,6 +263,116 @@ async def test_a_reproduced_computation_passes() -> None:
 
     assert verdict.ok is True
     assert verdict.code == ""
+
+
+# ---- 한도 초과 (계약 §5) ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_capped_run_is_not_a_reproduction_failure() -> None:
+    """비용 문제와 재현성 문제를 섞지 않는다 (계약 §5).
+
+    `E_COMPUTE_NOT_REPRODUCED` 는 **돌려 봤더니 다른 답이 나왔다**는 뜻이다.
+    한도에 걸린 실행은 답을 내지 못했으므로 그 말을 할 수 없다. 코드를 나누는
+    것은 회계가 아니라 **수선 지시**다 -- 워커가 받는 피드백이 "결정론을
+    고쳐라" 와 "계산을 줄여라" 로 갈린다.
+    """
+    runs = [_Reexecution(digest="", stdout="", capped="cpu_sec")]
+
+    verdict = await _grade(_claim(), runs=runs)
+
+    assert verdict.ok is False
+    assert verdict.code == "E_COMPUTE_CAPPED"
+    assert "cpu_sec" in verdict.detail
+
+
+@pytest.mark.asyncio
+async def test_the_second_run_is_skipped_once_the_first_is_capped() -> None:
+    """한도에 걸린 계산을 한 번 더 돌릴 이유가 없다 -- 샌드박스는 비싸다."""
+    reexecutor = _FakeReexecutor(
+        [_Reexecution(digest="", stdout="", capped="stdout_bytes")]
+    )
+
+    await _grade(_claim(), reexecutor=reexecutor)
+
+    assert len(reexecutor.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cap_on_the_second_run_is_also_a_cap() -> None:
+    """첫 실행이 멀쩡해도 둘째가 걸리면 두 digest 를 비교할 수 없다.
+
+    여기서 `E_COMPUTE_NONDETERMINISTIC` 을 내면 -- 실제로 둘째 digest 가 `""`
+    라 다르다 -- 멀쩡한 계산에 "비결정적" 이라는 낙인을 찍는다.
+    """
+    runs = [
+        _Reexecution(digest=_DIGEST, stdout="평균: 42.5\n"),
+        _Reexecution(digest="", stdout="", capped="cpu_sec"),
+    ]
+
+    verdict = await _grade(_claim(), runs=runs)
+
+    assert verdict.code == "E_COMPUTE_CAPPED"
+
+
+# ---- 진단 (원장 이벤트의 원료) -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_reproduced_run_reports_what_it_cost() -> None:
+    """이벤트는 원장이 낸다 -- 채점기는 **사실만** 진단에 싣는다.
+
+    claim_id 가 여기 없기 때문이다: `ProposedClaim` 은 아직 행이 아니고 id 를
+    갖지 않는다. 계약 §6 이 요구하는 claim_id 는 판정을 적용하는 자리
+    (`Ledger._apply_verdict`)에서만 존재하므로, 이벤트도 거기서 난다.
+    """
+    runs = [
+        _Reexecution(digest=_DIGEST, stdout="평균: 42.5\n", duration_sec=1.5),
+        _Reexecution(digest=_DIGEST, stdout="평균: 42.5\n", duration_sec=2.0),
+    ]
+
+    verdict = await _grade(_claim(), runs=runs)
+
+    assert verdict.diagnostics["reexecuted"] is True
+    assert verdict.diagnostics["reexec_matched"] is True
+    assert verdict.diagnostics["reexec_duration_sec"] == 3.5
+    assert verdict.diagnostics["reexec_capped"] == ""
+
+
+@pytest.mark.asyncio
+async def test_a_mismatch_is_reported_as_run_but_unmatched() -> None:
+    """돌긴 돌았다. 그 구별이 남아야 "재현 실패" 와 "못 돌렸다" 가 갈린다."""
+    verdict = await _grade(_claim(), runs=_twice(digest=_OTHER_DIGEST))
+
+    assert verdict.diagnostics["reexecuted"] is True
+    assert verdict.diagnostics["reexec_matched"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_capped_run_reports_the_limit_it_crossed() -> None:
+    runs = [_Reexecution(digest="", stdout="", capped="cpu_sec", duration_sec=30.0)]
+
+    verdict = await _grade(_claim(), runs=runs)
+
+    assert verdict.diagnostics["reexec_capped"] == "cpu_sec"
+    assert verdict.diagnostics["reexec_duration_sec"] == 30.0
+    # 돌리려고는 했다 -- 규칙 1·2 에서 막힌 것과 구별된다.
+    assert verdict.diagnostics["reexecuted"] is True
+    assert verdict.diagnostics["reexec_matched"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_claim_that_never_ran_says_so() -> None:
+    """규칙 1 에서 멈춘 클레임에는 재실행 사실이 없다.
+
+    `reexec_matched` 가 False 면 원장이 "재현 실패" 로 읽는다 -- 돌리지 않은
+    것을 그렇게 적으면 안 된다.
+    """
+    verdict = await _grade(_claim(), ledger=_FakeLedger(blobs=frozenset()))
+
+    assert verdict.diagnostics["reexecuted"] is False
+    assert verdict.diagnostics["reexec_matched"] is None
+    assert verdict.diagnostics["reexec_capped"] == ""
 
 
 # ---- 순서 --------------------------------------------------------------------

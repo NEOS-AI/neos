@@ -37,6 +37,27 @@ def _rejected(code: str, detail: str, diagnostics: dict[str, Any]) -> Verdict:
     return Verdict(ok=False, code=code, detail=detail, diagnostics=diagnostics)
 
 
+def _capped(limit: str, diagnostics: dict[str, Any]) -> Verdict:
+    """한도에 걸린 재실행 (계약 §5).
+
+    `E_COMPUTE_NOT_REPRODUCED` 를 쓰지 않는 이유는 회계가 아니라 **수선
+    지시**다. 그 코드는 `DAFeedback` 을 거쳐 워커에게 돌아가고, 워커는 그것을
+    읽고 무엇을 고칠지 고른다 -- "결정론을 고쳐라" 와 "계산을 줄여라" 는 다른
+    작업이다. 한도 초과에 재현 실패 코드를 붙이면 워커는 고칠 수 없는 것을
+    고치러 간다.
+
+    계약의 코드 표에는 없다. §5 가 "비용 문제와 재현성 문제를 섞지 않는다" 고
+    적으면서 별도 **이벤트**만 정했고, 판정에 쓸 코드는 정하지 않았다 --
+    같은 원칙을 코드에도 적용한 자리다(2026-09-20).
+    """
+    diagnostics["reexec_capped"] = limit
+    return _rejected(
+        "E_COMPUTE_CAPPED",
+        f"re-execution crossed the {limit} limit",
+        diagnostics,
+    )
+
+
 async def grade_computed(
     claim: ProposedClaim,
     *,
@@ -53,7 +74,17 @@ async def grade_computed(
     diagnostics: dict[str, Any] = {
         "deterministic": "rejected",
         "deterministic_code": "",
+        # 이 셋이 계약 §6 의 두 이벤트 원료다. 이벤트를 여기서 내지 않는
+        # 이유는 claim_id 다 -- `ProposedClaim` 은 아직 행이 아니라 id 가
+        # 없고, id 는 판정을 적용하는 `Ledger._apply_verdict` 에만 있다.
+        #
+        # `reexecuted` 와 `reexec_matched` 를 나누는 이유: 돌리지 않은 것과
+        # 돌렸는데 어긋난 것은 다른 사건이다. `matched=False` 하나로 뭉치면
+        # 규칙 1 에서 막힌 클레임이 원장에 "재현 실패" 로 남는다.
         "reexecuted": False,
+        "reexec_matched": None,
+        "reexec_capped": "",
+        "reexec_duration_sec": 0.0,
     }
 
     computation = claim.computation
@@ -106,9 +137,28 @@ async def grade_computed(
             )
 
     # 3~4. 두 번 돌린다. 먼저 서로 같은지, 그 다음 제출된 digest 와 같은지.
+    #
+    # 한도에 걸린 실행은 **답을 내지 못한 것**이라 비교에 넣지 않는다. 넣으면
+    # 빈 digest 가 "다른 digest" 로 읽혀 멀쩡한 계산이 비결정적이라는 낙인을
+    # 받는다. 계약 §5: 비용 문제와 재현성 문제를 섞지 않는다.
     first = await reexecutor.run(computation)
-    second = await reexecutor.run(computation)
     diagnostics["reexecuted"] = True
+    diagnostics["reexec_duration_sec"] = float(first.duration_sec)
+    if first.capped:
+        # 둘째는 돌리지 않는다 -- 같은 스크립트가 같은 한도에 다시 걸릴
+        # 뿐이고, 샌드박스는 비싸다.
+        return _capped(first.capped, diagnostics)
+
+    second = await reexecutor.run(computation)
+    diagnostics["reexec_duration_sec"] += float(second.duration_sec)
+    if second.capped:
+        return _capped(second.capped, diagnostics)
+
+    # 재현은 **두 실행이 서로 같고, 그것이 제출된 digest 와 같을 때**다.
+    # 첫 실행만 맞춰 보면 비결정적인 계산이 절반의 확률로 초록을 받는다.
+    diagnostics["reexec_matched"] = (
+        first.digest == second.digest == computation.output_digest
+    )
     if first.digest != second.digest:
         return _rejected(
             "E_COMPUTE_NONDETERMINISTIC",

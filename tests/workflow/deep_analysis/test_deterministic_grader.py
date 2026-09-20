@@ -148,6 +148,8 @@ async def test_valid_claim_passes_without_network_io():
 class _Reexecution:
     digest: str
     stdout: str
+    capped: str = ""
+    duration_sec: float = 0.0
 
 
 class _CountingReexecutor:
