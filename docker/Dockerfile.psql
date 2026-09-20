@@ -42,9 +42,18 @@ RUN apt-get update && \
 # 스크립트는 임시 서버가 뜬 상태에서 돌므로 psql 로 현재 값을 읽을 수 있다.
 #
 # 지금의 paradedb 베이스는 이미 pg_search 를 preload 하므로 이 스크립트는
-# 사실상 no-op 이다. 그래도 남기는 이유는 pg_search 가 선택이 아니기 때문이다 --
-# 009·web_search_log.sql 의 BM25 인덱스와 hybrid_search_engine.py 계열 네 모듈이
-# 이것에 달려 있다. 베이스 이미지가 언젠가 목록을 바꾸면 이 가드가 대신 붙인다.
+# **현재 완전한 no-op** 이다(실측: 전후 모두 `pg_search,pg_cron,pg_stat_statements`).
+#
+# 정확히 해 둔다 -- pg_search 는 아직 **쓰이지 않는다**. 저장소의 "BM25" 는 전부
+# 네이티브 PostgreSQL FTS 다(`ts_rank_cd` + `websearch_to_tsquery`); hybrid_search_engine.py
+# 와 similarity_search_service.py 의 `bm25_rank` 는 RRF 의 어휘 축을 가리키는 변수명이고,
+# web_search_log.sql 의 `CREATE EXTENSION pg_search` 와 `paradedb.create_bm25(...)` 는
+# 주석 처리돼 있으며, `@@@` 연산자는 어디에도 없다.
+# `knowledge_search.py` 에 `TODO pg_search 등 paradedb 기능 도입!` 이 남아 있다 -- 도입 전이다.
+#
+# 그래서 이 블록은 "지금 필요해서" 가 아니라 **도입하는 날을 위한 자리**로 남긴다.
+# 비용이 0 이고(no-op), 그때 `want` 에 이름을 더하는 것만으로 끝나기 때문이다.
+# 당장의 군더더기가 싫으면 이 블록과 아래 chmod 를 통째로 지워도 동작은 같다.
 COPY <<EOF /docker-entrypoint-initdb.d/00-configure-postgres.sh
 #!/bin/bash
 set -e
