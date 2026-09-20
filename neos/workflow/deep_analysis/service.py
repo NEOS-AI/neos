@@ -18,6 +18,7 @@ from .manifest import (
 )
 from .model_roles import resolve_all, resolve_harness_model
 from .orchestrator import Orchestrator
+from .reexecutor import SandboxReexecutor
 from .skill_selector import SkillSelector
 from .synthesizer import Synthesizer
 from .worker import Worker
@@ -67,10 +68,53 @@ async def build_orchestrator(
     config = settings.config.deep_analysis
     judge_model = resolve_harness_model("judge").model
     ledger = Ledger(session, run_id)
+
+    # 트랙 J. 플래그가 켜졌을 때만 만든다 -- 꺼져 있으면 이 블록은 통째로
+    # 건너뛰고 채점기·오케스트레이터는 `None` 을 받는다 (I1).
+    #
+    # 채점기보다 **앞에** 있는 이유는 재실행기가 provider 를 요구하기
+    # 때문이다. provider 생성은 자원을 잡지 않는다("Construct the configured
+    # provider without starting sandbox resources") 이므로 앞당겨도 비용이
+    # 늘지 않는다.
+    sandbox_provider = None
+    if config.code_research_enabled:
+        try:
+            from neos.coding.sandbox.factory import create_sandbox_provider
+
+            sandbox_provider = create_sandbox_provider(settings.config.sandbox)
+        except Exception:
+            # 여기서 터뜨리지 않는 이유: 조사와 무관한 단계까지 같이 죽는다.
+            # 빠진 조각은 `_run_worker` 가 질문마다 `sandbox_provider_missing`
+            # 으로 시끄럽게 보고한다. 다만 **원인은 남긴다** -- 조용히 삼키면
+            # "왜 조사 모드가 안 도는가" 에 답할 근거가 사라진다.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "code research is enabled but its sandbox could not be built; "
+                "questions will fail with sandbox_provider_missing",
+                exc_info=True,
+            )
+            sandbox_provider = None
+
+    reexecution = config.code_research.reexecution
     grader = DeterministicGrader(
         ledger,
         quote_threshold=config.quote_match_threshold,
         confidence_cap=config.confidence_cap,
+        # provider 가 없으면 재실행기도 없다. 부술 것이 없는 재실행기를 쥐면
+        # 계산 클레임이 채점 도중에 터진다 -- `grade_computed` 가 `None` 을
+        # 배선 실수로 다루는 것과 같은 편에 선다.
+        reexecutor=(
+            None
+            if sandbox_provider is None
+            else SandboxReexecutor(
+                ledger,
+                sandbox_provider,
+                cpu_sec=reexecution.cpu_sec,
+                memory_mb=reexecution.memory_mb,
+                stdout_bytes=reexecution.stdout_bytes,
+            )
+        ),
     )
     agentic_grader = AgenticGrader(
         judge_model=judge_model,
@@ -221,18 +265,14 @@ async def build_orchestrator(
         except Exception:
             subagent_runtime = None
 
-    # 트랙 J. 둘 다 플래그가 켜졌을 때만 만든다 -- 꺼져 있으면 이 블록은
-    # 통째로 건너뛰고, 오케스트레이터는 `None` 둘을 받는다 (I1).
-    sandbox_provider = None
+    # 런타임 팩토리는 provider 가 실제로 지어졌을 때만 만든다. 하나만 있으면
+    # `_run_worker` 가 질문마다 어느 쪽이 빠졌는지 이름을 달아 보고한다.
     research_runtime_factory = None
-    if config.code_research_enabled:
+    if sandbox_provider is not None:
         try:
-            from neos.coding.sandbox.factory import create_sandbox_provider
             from neos.database.connection import db_manager
 
             from .subagent_adapter import build_research_runtime
-
-            sandbox_provider = create_sandbox_provider(settings.config.sandbox)
 
             def research_runtime_factory(port):
                 # 질문마다 불린다. 포트가 질문마다 다르기 때문이다.
@@ -241,18 +281,14 @@ async def build_orchestrator(
                 )
 
         except Exception:
-            # 여기서 터뜨리지 않는 이유: 조사와 무관한 단계까지 같이 죽는다.
-            # 빠진 조각은 `_run_worker` 가 질문마다 `sandbox_provider_missing`
-            # 으로 시끄럽게 보고한다. 다만 **원인은 남긴다** -- 조용히 삼키면
-            # "왜 조사 모드가 안 도는가" 에 답할 근거가 사라진다.
             import logging
 
             logging.getLogger(__name__).warning(
-                "code research is enabled but its sandbox could not be built; "
-                "questions will fail with sandbox_provider_missing",
+                "code research is enabled but its subagent runtime could not "
+                "be built; questions will fail with "
+                "research_runtime_factory_missing",
                 exc_info=True,
             )
-            sandbox_provider = None
             research_runtime_factory = None
 
     return Orchestrator(
