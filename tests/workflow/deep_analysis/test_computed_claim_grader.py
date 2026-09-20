@@ -67,7 +67,7 @@ class _FakeLedger:
     def __init__(
         self,
         *,
-        blobs: frozenset[str] = frozenset({"aaaaaaaaaaaaaaaa"}),
+        blobs: frozenset[str] = frozenset({"aaaaaaaaaaaaaaaa", "f" * 64}),
         claims: dict[str, _Claim] | None = None,
         sources: dict[str, list[str]] | None = None,
     ) -> None:
@@ -160,6 +160,31 @@ async def test_an_input_that_is_not_a_ledger_blob_is_refused() -> None:
 
     assert verdict.ok is False
     assert verdict.code == "E_COMPUTE_INPUT_UNFETCHED"
+
+
+@pytest.mark.asyncio
+async def test_a_script_that_is_not_a_ledger_blob_is_refused() -> None:
+    """스크립트도 재실행의 재료다 (계약 §4: "blob 저장소의 스크립트 바이트").
+
+    §5 의 규칙 1 은 문자 그대로는 `inputs` 만 말하지만, 원장에 없는 스크립트를
+    통과시키면 재실행 단계에서 **돌리지도 못한 것에 판정을 붙이게 된다** --
+    "재현 안 됨" 은 돌려 보고 다른 답이 나왔다는 뜻이어야 한다. 같은 규칙,
+    같은 코드로 막는다: 재실행이 필요로 하는 바이트가 원장에 없다.
+    """
+    verdict = await _grade(_claim(script_ref="z" * 64))
+
+    assert verdict.ok is False
+    assert verdict.code == "E_COMPUTE_INPUT_UNFETCHED"
+
+
+@pytest.mark.asyncio
+async def test_a_missing_script_never_reaches_re_execution() -> None:
+    """규칙 1 의 자리이므로 샌드박스는 돌지 않는다."""
+    reexecutor = _FakeReexecutor(_twice())
+
+    await _grade(_claim(script_ref="z" * 64), reexecutor=reexecutor)
+
+    assert reexecutor.calls == []
 
 
 @pytest.mark.asyncio

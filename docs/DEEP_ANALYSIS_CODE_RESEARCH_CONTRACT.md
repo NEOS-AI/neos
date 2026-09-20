@@ -154,13 +154,17 @@ claimed_value    클레임 본문이 인용하는 값(문자열 그대로)
 
 | 코드 | 조건 |
 |---|---|
-| `E_COMPUTE_INPUT_UNFETCHED` | `inputs` 중 원장 blob이 아닌 것이 있다 |
+| `E_COMPUTE_INPUT_UNFETCHED` | `inputs` **또는 `script_ref`** 중 원장 blob이 아닌 것이 있다 |
 | `E_COMPUTE_PREMISE_UNVERIFIED` | `premises` 중 verified quote 클레임이 아닌 것이 있다 |
 | `E_COMPUTE_NONDETERMINISTIC` | 같은 입력으로 **두 번** 돌려 digest가 다르다 |
 | `E_COMPUTE_NOT_REPRODUCED` | 재실행 digest가 `output_digest`와 다르다 |
 | `E_COMPUTE_VALUE_MISMATCH` | `claimed_value`가 정규화된 stdout에 문자 그대로 없다 |
 | confidence 상한 | `premises` 클레임 상한의 **최소값** |
 
+- **규칙 1이 `script_ref`까지 보는 이유** (2026-09-20 구현 중 확인). §4가 `script_ref`를 "blob 저장소의 스크립트
+  바이트"로 적지만 §5의 규칙 1 문면은 `inputs`만 말했다. 그대로 두면 원장에 없는 스크립트가 재실행 단계까지 가고,
+  거기서 돌리지도 못한 것에 `E_COMPUTE_NOT_REPRODUCED`를 붙이게 된다 — **재현 실패는 돌려 보고 다른 답이 나왔다는
+  뜻이어야 한다.** 새 코드를 만들지 않고 같은 규칙에 넣는다.
 - **재실행은 커밋 경로 밖에서 한다**(설계 부록 A2와 같은 이유). 채점 단계의 사전 작업이고 결과만 원장에 온다.
 - 재실행 한도 초과는 `E_COMPUTE_NOT_REPRODUCED`가 아니라 **별도 이벤트**로 남긴다 — 비용 문제와 재현성 문제를 섞지 않는다.
 - 판정자(AgenticGrader)는 계산 클레임에서 **"이 계산이 이 질문에 대한 답인가"** 만 본다. 산술은 결정론 채점기의 몫이다.

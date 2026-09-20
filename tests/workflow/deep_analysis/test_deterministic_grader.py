@@ -232,7 +232,11 @@ async def test_a_quote_claim_still_takes_the_quote_rules():
 @pytest.mark.asyncio
 async def test_a_reproduced_computed_claim_passes_through_the_grader():
     ledger = _ComputedLedger(
-        {"blob1": Blob(http_status=200, raw_text="body")},
+        # 스크립트도 원장 blob 이어야 한다 -- 재실행이 읽을 바이트다 (규칙 1).
+        {
+            "blob1": Blob(http_status=200, raw_text="body"),
+            "f" * 64: Blob(http_status=200, raw_text="print(42.5)"),
+        },
         claims={"c1": _StoredClaim("c1")},
         sources={"c1": ["https://a"]},
     )

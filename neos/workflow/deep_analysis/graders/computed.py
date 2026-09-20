@@ -69,7 +69,19 @@ async def grade_computed(
         premise_count=len(computation.premises),
     )
 
-    # 1. 입력은 전부 원장의 blob 이어야 한다.
+    # 1. 재실행이 필요로 하는 바이트는 전부 원장에 있어야 한다.
+    #
+    # 계약 §5 의 규칙 1 은 문자 그대로는 `inputs` 만 말하지만, §4 가
+    # `script_ref` 를 "blob 저장소의 스크립트 바이트" 로 적는다. 스크립트를
+    # 여기서 막지 않으면 재실행 단계가 **돌리지도 못한 것에 판정을 붙인다**
+    # -- `E_COMPUTE_NOT_REPRODUCED` 는 돌려 보고 다른 답이 나왔다는 뜻이어야
+    # 한다. 같은 규칙이므로 같은 코드를 쓴다: 새 어휘를 만들지 않는다.
+    if await ledger.get_blob(computation.script_ref) is None:
+        return _rejected(
+            "E_COMPUTE_INPUT_UNFETCHED",
+            f"script {computation.script_ref} is not a ledger blob",
+            diagnostics,
+        )
     for raw_ref in computation.inputs:
         if await ledger.get_blob(raw_ref) is None:
             return _rejected(
