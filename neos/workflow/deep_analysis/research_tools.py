@@ -1,0 +1,123 @@
+"""조사 워커의 도구 포트 (계약 §3).
+
+여기 있는 것은 **DA 쪽 도구**다. 코딩 도구(`read_file.v1`·`execute.v1` 등)는
+`CodingToolRegistry` 가 그대로 갖고 있고 이 모듈은 건드리지 않는다 -- 그것이
+I1(플래그 off 면 워커 프롬프트·도구 목록이 바이트 단위로 이전과 같다)을
+구조적으로 지키는 방법이다. 레지스트리에 새 이름을 넣으면 플래그와 무관하게
+모든 코딩 워커의 도구 목록이 달라진다.
+
+`ToolPort` 는 `definitions()` 와 `execute()` 둘뿐이라(`subagent/types.py`)
+포트를 따로 두는 값이 싸다.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Protocol
+
+from neos.coding.model.base import ToolDefinition
+
+from .evidence_store import CAP_REACHED, decide_fetch_admission
+
+#: 계약 §3.1. `_RESEARCH_TOOLS` 와 **같은 이름이어야 한다** --
+#: `CodingToolPort.definitions()` 가 `allowed_tools` 로 교집합을 뜨므로
+#: 어긋나면 도구는 오류 없이 조용히 사라진다.
+FETCH_TOOL = "fetch.v1"
+
+_FETCH = ToolDefinition(
+    name=FETCH_TOOL,
+    description=(
+        "Fetch one http(s) URL as evidence. Returns a path under /evidence, "
+        "not the body -- read it with read_file.v1. "
+        "This is the only way to retrieve a URL; do not use execute.v1."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"url": {"type": "string"}},
+        "required": ["url"],
+    },
+)
+
+
+class EvidenceStore(Protocol):
+    """한도 회계와 **건별** 커밋. 오케스트레이터가 원장 위에 구현한다 (P2)."""
+
+    async def spent_bytes(self) -> int: ...
+
+    async def is_stored(self, content_hash: str) -> bool: ...
+
+    async def commit(self, blob: Any, *, bytes_charged: int) -> None: ...
+
+
+class QuestionWorkspace(Protocol):
+    """`QuestionSandbox` 가 만족한다."""
+
+    async def materialize_evidence(self, raw_ref: str, text: str) -> str: ...
+
+
+class ResearchToolPort:
+    """`fetch.v1` 하나를 내주는 포트.
+
+    `fetch_fn` 은 `neos.workflow.deep_analysis.fetch.fetch_url` 이다. 여기서
+    HTTP 를 다시 부르지 않는 것이 핵심이다 -- 재시도 정책과 blob 해시가
+    갈라지면 원장의 blob 과 워커가 읽은 본문이 달라질 수 있다.
+    """
+
+    def __init__(
+        self,
+        *,
+        fetch_fn,
+        store: EvidenceStore,
+        sandbox: QuestionWorkspace,
+        cap_bytes: int,
+    ) -> None:
+        self._fetch_fn = fetch_fn
+        self._store = store
+        self._sandbox = sandbox
+        self._cap_bytes = cap_bytes
+
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return (_FETCH,)
+
+    async def execute(
+        self, name: str, input: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        if name != FETCH_TOOL:
+            return {"error": "tool_not_allowed"}
+        payload = dict(input) if isinstance(input, Mapping) else {}
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            return {"error": "fetch_url_missing"}
+
+        blob = await self._fetch_fn(url)
+        # 404 도 blob 이다. `_blob_hash` 가 빈 본문에 상태·URL 을 섞어 별도
+        # 해시를 만드는 이유이기도 하다 -- 원장에 기록이 있어야 나중에
+        # `E_SOURCE_DEAD` 를 붙일 수 있다.
+        text = blob.raw_text or ""
+        incoming = len(text.encode("utf-8"))
+
+        admission = decide_fetch_admission(
+            cap_bytes=self._cap_bytes,
+            spent_bytes=await self._store.spent_bytes(),
+            incoming_bytes=incoming,
+            already_stored=await self._store.is_stored(blob.content_hash),
+        )
+        if not admission.admitted:
+            # 거절은 반쯤 들어가지 않는다: 커밋도 노출도 하지 않는다.
+            return {"error": admission.reason or CAP_REACHED}
+
+        # 순서가 계약이다 (§3.1): 원장에 들어간 **뒤에** `/evidence` 에
+        # 나타난다. 뒤집히면 워커가 원장에 없는 증거를 인용할 수 있고, 그
+        # 클레임은 채점에서 `E_COMPUTE_INPUT_UNFETCHED` 로 뒤늦게 죽는다.
+        await self._store.commit(blob, bytes_charged=admission.bytes_charged)
+        path = await self._sandbox.materialize_evidence(blob.content_hash, text)
+
+        return {
+            "raw_ref": blob.content_hash,
+            "status": int(blob.http_status),
+            "path": path,
+            "bytes": incoming,
+            # blob 은 통째로 있거나 없다 (I5). 잘린 본문은 재실행에서 같은
+            # digest 를 내지 못하므로 증거가 될 수 없고, `fetch.py` 에는
+            # 자르는 경로가 아예 없다. 계약의 출력 모양을 맞추는 자리다.
+            "truncated": False,
+        }
