@@ -163,6 +163,10 @@ claimed_value    클레임 본문이 인용하는 값(문자열 그대로)
 | `E_COMPUTE_VALUE_MISMATCH` | `claimed_value`가 정규화된 stdout에 문자 그대로 없다 |
 | confidence 상한 | `premises` 클레임 상한의 **최소값** |
 
+- **규칙 2의 "quote"는 마이그레이션 061부터 실제로 걸린다.** 그 전에는 `DAClaim`에 `kind`가 없어 채점기가
+  `status`만 봤다 — 저장되는 것이 전부 quote였으므로 그 사이에는 정확한 검사였다. quote를 요구하는 것이
+  **사슬을 원문에 못 박는 유일한 지점**이다: 계산 위에 계산을 쌓게 두면 그 사슬의 어느 고리도 fetch된 원문에
+  닿지 않은 채 전부 verified일 수 있다.
 - **규칙 1이 `script_ref`까지 보는 이유** (2026-09-20 구현 중 확인). §4가 `script_ref`를 "blob 저장소의 스크립트
   바이트"로 적지만 §5의 규칙 1 문면은 `inputs`만 말했다. 그대로 두면 원장에 없는 스크립트가 재실행 단계까지 가고,
   거기서 돌리지도 못한 것에 `E_COMPUTE_NOT_REPRODUCED`를 붙이게 된다 — **재현 실패는 돌려 보고 다른 답이 나왔다는

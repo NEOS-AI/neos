@@ -38,6 +38,7 @@ class _Blob:
 class _Claim:
     id: str
     status: str = "verified"
+    kind: str = "quote"
 
 
 @dataclass
@@ -193,6 +194,27 @@ async def test_a_missing_script_never_reaches_re_execution() -> None:
 @pytest.mark.asyncio
 async def test_a_premise_that_is_not_verified_is_refused() -> None:
     ledger = _FakeLedger(claims={"c1": _Claim("c1", status="pending")})
+
+    verdict = await _grade(_claim(), ledger=ledger)
+
+    assert verdict.ok is False
+    assert verdict.code == "E_COMPUTE_PREMISE_UNVERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_a_computed_premise_is_refused_even_when_verified() -> None:
+    """계약 §5 는 "verified **quote** 클레임" 이라고 적는다.
+
+    계산 위에 계산을 쌓게 두면 그 사슬의 **어느 고리도 fetch 된 원문에 닿지
+    않을 수 있다.** 각 고리는 앞 고리를 근거로 대고, 앞 고리는 또 그 앞을
+    댄다 -- 전부 verified 인데 전부 자기들끼리다. quote 를 요구하는 것이
+    사슬을 원문에 못 박는 유일한 지점이다.
+
+    `DAClaim.kind` 가 생기기 전에는 이 검사를 쓸 수 없었다(저장된 것이 전부
+    quote 라 `status` 만 봐도 정확했다). 컬럼이 생기는 마이그레이션 061 이
+    그 전제를 깨므로 검사도 같이 조인다.
+    """
+    ledger = _FakeLedger(claims={"c1": _Claim("c1", kind="computed")})
 
     verdict = await _grade(_claim(), ledger=ledger)
 

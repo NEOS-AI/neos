@@ -166,6 +166,8 @@ class _CountingReexecutor:
 class _StoredClaim:
     id: str
     status: str = "verified"
+    # 계약 §5 의 전제는 verified **quote** 여야 한다 (마이그레이션 061).
+    kind: str = "quote"
 
 
 class _ComputedLedger(FakeLedger):

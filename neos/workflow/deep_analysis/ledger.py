@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -112,6 +113,22 @@ def _degradation_kind(kind: str, payload: dict[str, Any]) -> str | None:
 
 def _hex_id() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def _computation_json(claim: ProposedClaim) -> str | None:
+    """계산 증거를 행에 실을 JSON (계약 §4, 마이그레이션 061).
+
+    `kind` 가 아니라 `computation` 의 존재로 판정한다 -- 계산이라고 주장하면서
+    계산을 싣지 않은 클레임은 채점기가 `E_NO_EVIDENCE` 로 거절하고, 여기서
+    `"null"` 같은 문자열을 만들어 두면 그 행은 "계산이 있다" 고 거짓말한다.
+
+    **재현에 필요한 전부를 넣는다.** 하나라도 빠지면 그 클레임은 다시 채점할
+    수 없고, 그 사실은 run 이 재개된 뒤에야 드러난다.
+    """
+    computation = claim.computation
+    if computation is None:
+        return None
+    return json.dumps(asdict(computation), ensure_ascii=False)
 
 
 async def create_run(
@@ -416,10 +433,16 @@ class Ledger:
                 hash=normalized_hash,
                 status="pending",
                 confidence=claim.confidence,
+                kind=claim.kind,
+                computation=_computation_json(claim),
             )
             self.db.add(stored)
             await self.db.flush()
         else:
+            # 병합은 **신뢰도 상승**이지 재정의가 아니다. 행의 정체성은 텍스트
+            # 해시이고(D3), `question_id` 와 `text` 를 첫 기록대로 두는 것과
+            # 같은 이유로 `kind` 와 `computation` 도 그대로 둔다 -- 이미 그
+            # 행을 전제로 인용한 계산의 발밑이 나중에 바뀌면 안 된다.
             stored.confidence = min(0.95, stored.confidence + 0.15)
             await self.db.flush()
 

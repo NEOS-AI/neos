@@ -121,15 +121,19 @@ async def grade_computed(
                 diagnostics,
             )
 
-    # 2. 전제는 전부 verified 여야 한다.
+    # 2. 전제는 전부 verified **quote** 클레임이어야 한다 (계약 §5).
     #
-    # 계약은 "verified **quote** 클레임" 이라고 적지만 `DAClaim` 에는 아직
-    # kind 컬럼이 없다. 지금은 계산 클레임을 저장할 수 없으므로 저장된 것은
-    # 전부 quote 이고, 이 검사는 그 사이 정확하다. 컬럼이 생기는 커밋에서
-    # kind 검사를 여기 더한다.
+    # quote 를 요구하는 것이 사슬을 원문에 못 박는 유일한 지점이다. 계산 위에
+    # 계산을 쌓게 두면 그 사슬의 **어느 고리도 fetch 된 원문에 닿지 않을 수
+    # 있다** -- 각 고리가 앞 고리를 근거로 대고, 전부 verified 인데 전부
+    # 자기들끼리다.
     for claim_id in computation.premises:
         premise = await ledger.get_claim(claim_id)
-        if premise is None or premise.status != "verified":
+        if (
+            premise is None
+            or premise.status != "verified"
+            or premise.kind != "quote"
+        ):
             return _rejected(
                 "E_COMPUTE_PREMISE_UNVERIFIED",
                 f"premise {claim_id} is not a verified claim",
