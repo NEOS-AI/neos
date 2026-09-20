@@ -15,9 +15,14 @@ from neos.coding.sandbox.memory import (
 async def test_watcher_coalesces_changes_and_carries_revision(
     tmp_path: Path,
 ) -> None:
+    # The hub opens a fixed window on the *first* change and flushes whatever
+    # accumulated when it closes -- it is not a quiet-period debounce. So the
+    # window has to outlast both writes, and a 10ms one only did when the
+    # runner was idle: a scheduler delay between the writes put them in
+    # separate batches and the batch arrived carrying revision 1.
     provider = MemorySandboxProvider(
         root=tmp_path,
-        watcher_debounce_sec=0.01,
+        watcher_debounce_sec=1.0,
     )
     sandbox = await provider.create(
         owner_id="u1",
@@ -28,7 +33,8 @@ async def test_watcher_coalesces_changes_and_carries_revision(
 
     await session.write_file("src/a.py", b"one")
     await session.write_file("src/a.py", b"two")
-    async with asyncio.timeout(1):
+    # The batch only lands once the window closes, so this must outlast it.
+    async with asyncio.timeout(5):
         batch = await anext(watcher)
 
     assert batch.value.workspace_revision == 2
