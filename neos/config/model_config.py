@@ -95,6 +95,16 @@ class RoleAlias(StrictConfigModel):
     current: str
 
 
+#: 모델 사고량 레벨. **SDK 가 정한 어휘이고 순서가 있다** (low < … < max).
+#:
+#: 손으로 적은 목록이 아니라 `anthropic.types.output_config_param.
+#: OutputConfigParam.effort` 의 Literal 과 같아야 하며, `tests/config/
+#: test_model_effort.py` 가 그 둘을 맞대 놓는다 -- 프로바이더가 정한 어휘는
+#: 프로바이더에게 묻는다(`id_forms` 의 "날짜 접미사를 지어내지 않는다" 와
+#: 같은 규율).
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
 class ModelSpec(StrictConfigModel):
     provider: CatalogProvider
     # 추천 티어. 비어 있으면 추천 목록에 등장하지 않는다(수동 선택 전용).
@@ -117,6 +127,14 @@ class ModelSpec(StrictConfigModel):
     # 블록)은 모든 모델에서 유효하지만 네이티브 형태는 미지원 모델에서 400 이다.
     mid_conversation_system: bool = False
     mid_conversation_tools: bool = False
+    # 모델의 **사고량**(Anthropic `output_config.effort`) 중 이 모델이 받는
+    # 레벨들. DA 의 `Effort`(조사 깊이)와 다른 축이다 -- 이름만 같다.
+    #
+    # 기본은 빈 목록 = **모른다**. 지원 여부를 말하는 것은
+    # `ModelCapabilities.effort`(models API)이고 그것은 키를 요구한다.
+    # 추측해 채우면 미지원 모델에서 매 요청이 400 이고, 지원하더라도 우리가
+    # 재 본 적 없는 사고량으로 도는 것이다 -- 비면 아무것도 보내지 않는다.
+    effort_levels: list[str] = Field(default_factory=list)
     dimension: int | None = None
     pricing: ModelPricing | None = None
     # role_aliases: 키만. anthropic_families[].family 가 아니다.
@@ -128,6 +146,23 @@ class ModelSpec(StrictConfigModel):
     # 추가로 받는 철자. 날짜 접미사를 지어내지 않는다.
     id_forms: list[str] = Field(default_factory=list)
     picker: PickerSpec | None = None
+
+    @field_validator("effort_levels")
+    @classmethod
+    def _effort_levels_known(cls, value: list[str]) -> list[str]:
+        """SDK 어휘 밖의 레벨은 설정 검증에서 멈춘다.
+
+        오타가 배포까지 가면 그 모델의 **매 요청이 400** 이다. 순서는 SDK
+        순서로 정렬한다 -- effort 는 순서가 있는 축이라(low < … < max)
+        선언 순서를 그대로 두면 "가장 낮은 레벨" 같은 질문이 틀린 답을 얻는다.
+        """
+        unknown = sorted(set(value) - set(EFFORT_LEVELS))
+        if unknown:
+            raise ValueError(
+                f"unknown effort levels {unknown}; "
+                f"the SDK defines {list(EFFORT_LEVELS)}"
+            )
+        return sorted(set(value), key=EFFORT_LEVELS.index)
 
     @field_validator("thinking_budgets")
     @classmethod
@@ -725,6 +760,25 @@ def supports_mid_conversation_tools(model: str) -> bool:
     """
     spec = model_config.catalog.get_model_spec(model)
     return bool(spec and spec.mid_conversation_tools)
+
+
+def supports_effort(model: str) -> bool:
+    """이 모델에 사고량(effort)을 보낼 수 있는가. 카탈로그만 본다.
+
+    미등록 모델도, 레벨을 선언하지 않은 모델도 False -- 모른다는 뜻이지 못
+    한다는 뜻이 아니다(`supports_vision` 과 같은 규율). 다만 여기서 안전한
+    쪽은 **보내지 않는 쪽**이다: 틀린 effort 는 400 이고, 맞더라도 우리가 재
+    본 적 없는 사고량으로 도는 것이다.
+    """
+    return bool(effort_levels_for(model))
+
+
+def effort_levels_for(model: str) -> tuple[str, ...]:
+    """이 모델이 받는 사고량 레벨들. SDK 순서(낮은 것부터)로 돌려준다."""
+    spec = model_config.catalog.get_model_spec(model)
+    if spec is None:
+        return ()
+    return tuple(spec.effort_levels)
 
 
 def models_for_provider(provider: str) -> list[str]:
