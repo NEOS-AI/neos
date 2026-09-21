@@ -29,10 +29,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
+
+from neos.database.deep_analysis_models import DABlob, DAClaim
+
 from .fetch import FetchUnavailable
+from .models import ProposedBlob
+from .text_norm import claim_hash
 
 __all__ = [
     "BlobArchive",
+    "RecordedClaim",
+    "ShadowComparison",
+    "compare_claims",
+    "load_blob_archive",
+    "load_recorded_claims",
+    "run_offline_shadow",
     "FetchUnavailable",
     "ShadowLedger",
     "ShadowLedgerEscape",
@@ -179,3 +191,157 @@ class BlobArchive:
             raise FetchUnavailable(f"{url} is not in the shadow archive")
         self.served.append(url)
         return blob
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedClaim:
+    """기록된 run 이 남긴 클레임 하나. 상태를 **그대로** 들고 다닌다."""
+
+    text: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowComparison:
+    """섀도 제안 대 기록된 run (로드맵 J3: "제안만 비교").
+
+    판정이 아니라 **세 갈래와 그것을 해석할 사실**이다. 조사 워커가 옛 워커와
+    다르게 탐색하는 것이 이 비교의 요점이므로, 다름 자체는 실패가 아니다.
+    """
+
+    shared: tuple[str, ...]
+    only_recorded: tuple[RecordedClaim, ...]
+    only_shadow: tuple[str, ...]
+    served_urls: tuple[str, ...]
+    missed_urls: tuple[str, ...]
+
+    @property
+    def evidence_was_complete(self) -> bool:
+        """섀도가 요구한 증거를 보관소가 전부 줬는가.
+
+        거짓이면 갈래만 보고 워커를 판단할 수 없다 -- 제안이 빈약한 이유가
+        증거가 없어서일 수 있다. 참이면 비교는 증거 차이가 아니라 **판단
+        차이**를 말한다. 그 구별이 J3 의 전부다.
+        """
+        return not self.missed_urls
+
+
+def compare_claims(
+    recorded: list[RecordedClaim],
+    proposed: list[Any],
+    *,
+    served_urls: list[str],
+    missed_urls: list[str],
+) -> ShadowComparison:
+    """같음의 정의를 **원장에서 빌려 온다**.
+
+    `claim_hash` 는 `_upsert_claim` 이 클레임을 병합할 때 쓰는 바로 그
+    함수다. 섀도가 자기만의 동일성 규칙을 쓰면 원장이 한 클레임으로 세는
+    둘을 여기서는 둘로 세고, 그 차이가 "조사 워커가 새 클레임을 냈다" 로
+    보고된다.
+
+    상태를 미리 거르지 않는다. verified 만 비교하면 놓친 것이 좁아 보이고,
+    전부 뭉치면 놓친 것의 무게를 알 수 없다 -- 거르는 것은 보고서를 읽는
+    쪽의 몫이다.
+    """
+    recorded_by_hash: dict[str, RecordedClaim] = {}
+    for claim in recorded:
+        recorded_by_hash.setdefault(claim_hash(claim.text), claim)
+
+    # 제안도 원장과 같은 규칙으로 뭉친다 -- 둘로 세면 "더 많이 냈다" 는
+    # 거짓 신호가 생긴다. 첫 등장의 표기를 남긴다.
+    proposed_by_hash: dict[str, str] = {}
+    for claim in proposed:
+        proposed_by_hash.setdefault(claim_hash(claim.text), claim.text)
+
+    shared = tuple(
+        text
+        for digest, text in proposed_by_hash.items()
+        if digest in recorded_by_hash
+    )
+    return ShadowComparison(
+        shared=shared,
+        only_recorded=tuple(
+            claim
+            for digest, claim in recorded_by_hash.items()
+            if digest not in proposed_by_hash
+        ),
+        only_shadow=tuple(
+            text
+            for digest, text in proposed_by_hash.items()
+            if digest not in recorded_by_hash
+        ),
+        served_urls=tuple(served_urls),
+        missed_urls=tuple(missed_urls),
+    )
+
+
+async def load_blob_archive(ledger: Any) -> BlobArchive:
+    """기록된 run 의 blob 을 URL 로 색인해 보관소를 만든다.
+
+    URL 로 색인하는 이유는 워커가 URL 로 묻기 때문이다(`fetch.v1`). 한 URL 이
+    여러 blob 을 가질 수는 없다 -- 같은 본문은 같은 주소로 dedup 되고, 다른
+    본문이면 마지막에 가져온 것이 그 URL 의 현재 모습이다.
+    """
+    rows = await ledger.db.execute(
+        select(DABlob)
+        .where(DABlob.run_id == ledger.run_id)
+        .order_by(DABlob.fetched_at)
+    )
+    pages: dict[str, ProposedBlob] = {}
+    for row in rows.scalars():
+        pages[row.url] = ProposedBlob(
+            content_hash=row.content_hash,
+            source_url=row.url,
+            http_status=int(row.http_status),
+            raw_text=row.raw_text or "",
+        )
+    return BlobArchive(pages)
+
+
+async def load_recorded_claims(ledger: Any, question_id: str) -> list[RecordedClaim]:
+    """그 질문에 대해 기록된 run 이 남긴 클레임들. 상태를 그대로 싣는다."""
+    rows = await ledger.db.execute(
+        select(DAClaim.text, DAClaim.status).where(
+            DAClaim.run_id == ledger.run_id,
+            DAClaim.question_id == question_id,
+        )
+    )
+    return [RecordedClaim(text=text, status=status) for text, status in rows]
+
+
+async def run_offline_shadow(
+    ledger: Any,
+    assignment: Any,
+    *,
+    worker: Any,
+) -> ShadowComparison:
+    """기록된 run 위에서 조사 워커를 돌리고 제안을 맞대 본다 (로드맵 J3).
+
+    `assignment` 를 **인자로 받는다.** 끝난 run 에서 brief 를 되짚는 것은 그
+    자체로 추측이고, 추측한 brief 를 주면 워커가 본 것이 프로덕션과 달라진다
+    -- 그러면 비교한 것은 두 워커가 아니라 두 프롬프트다.
+
+    `worker` 도 주입이다. 여기서 `run_research_worker` 를 직접 부르면 이
+    함수가 샌드박스 provider·런타임 팩토리·채점기까지 알아야 하고, 그것들은
+    전부 서비스가 조립하는 것들이다 -- 섀도의 일은 **격리와 재생과 비교**이지
+    조사 경로를 다시 조립하는 것이 아니다.
+
+    워커에게 가는 원장은 `ShadowLedger` 다. 진짜 원장을 주면 섀도 실행이
+    기록된 run 을 바꾸고, 그러면 그 run 은 더 이상 비교 **대상**이 아니다.
+    """
+    archive = await load_blob_archive(ledger)
+    recorded = await load_recorded_claims(ledger, assignment.question_id)
+
+    result = await worker(
+        assignment,
+        ledger=ShadowLedger(ledger),
+        fetch_fn=archive.fetch,
+    )
+
+    return compare_claims(
+        recorded,
+        list(getattr(result, "claims", []) or []),
+        served_urls=archive.served,
+        missed_urls=archive.missed,
+    )
