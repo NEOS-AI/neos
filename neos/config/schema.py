@@ -1772,6 +1772,15 @@ class CodingModelConfig(StrictConfigModel):
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
     subagent_max_active: int = Field(default=1, ge=1, le=4)
+    subagent_async_spawn: bool = Field(
+        default=False,
+        description=(
+            "spawn_agent.v1 이 자식을 기다리지 않고 즉시 run_id 를 돌려줄지 "
+            "(로드맵 K3). 끄면 park/fold -- 도구 결과가 곧 fold 다. 켜면 "
+            "보고서가 다음 safe point 에 user 메시지로 붙는다. 켜는 것은 코딩 "
+            "에이전트 지표의 표본 경계이므로 A1·A2 숫자 전에는 켜지 않는다."
+        ),
+    )
     file_watch: bool = False
 
     @model_validator(mode="before")

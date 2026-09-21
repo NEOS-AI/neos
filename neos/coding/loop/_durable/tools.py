@@ -553,16 +553,22 @@ class ToolExecutionMixin:
             )
         if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
-        still_live = self._child_ref(after, call.tool_call_id) is not None
+        ref = self._child_ref(after, call.tool_call_id)
+        still_live = ref is not None
+        # A parked child's tool result *is* its fold, so writing one means the
+        # child is done and the ref goes. A detached child (K3) already had its
+        # result written at spawn time -- dropping it here would strand a run
+        # nobody advances and lose the report.
         if ran_spawn or child_fold or still_live:
-            after = self._sync_active_children(
-                after,
-                tuple(
-                    child
-                    for child in after.active_children
-                    if child.tool_call_id != call.tool_call_id
-                ),
-            )
+            if ref is None or not ref.detached:
+                after = self._sync_active_children(
+                    after,
+                    tuple(
+                        child
+                        for child in after.active_children
+                        if child.tool_call_id != call.tool_call_id
+                    ),
+                )
             after = self._drain_completed_prefix(after)
             self._record_spawn_live_children(after, call)
         revision = str(result.get("workspace_revision") or "")

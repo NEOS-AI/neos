@@ -447,6 +447,7 @@ class CheckpointMixin:
                     "worktree_path": child.worktree_path,
                     "worktree_branch": child.worktree_branch,
                     "worktree_base_sha": child.worktree_base_sha,
+                    "delivery": child.delivery,
                 }
                 for child in state.active_children
             ],

@@ -369,6 +369,10 @@ def _select_spawn_work(state, *, max_active: int) -> SpawnWork | None:
     window = _spawn_window(state)
     live = list(state.active_children or _legacy_single(state))
     live_ids = {child.tool_call_id for child in live}
+    # Detached children (K3) have no pending call to resume through -- the
+    # parent's safe point advances them. They still count against `max_active`,
+    # which is a cap on live children, not on parked ones.
+    parked = [child for child in live if not child.detached]
     done = _tool_result_ids(state.transcript)
     unstarted = [
         call
@@ -377,8 +381,10 @@ def _select_spawn_work(state, *, max_active: int) -> SpawnWork | None:
     ]
     if len(live) < max_active and unstarted:
         return SpawnWork(kind="start", call=unstarted[0], child=None)
-    if live:
-        picked = min(live, key=lambda child: (child.last_advanced_at, child.tool_call_id))
+    if parked:
+        picked = min(
+            parked, key=lambda child: (child.last_advanced_at, child.tool_call_id)
+        )
         call = _pending_by_id(state, picked.tool_call_id)
         return SpawnWork(kind="resume", call=call, child=picked)
     return None
@@ -431,6 +437,13 @@ def _restore_active_children(raw: Mapping[str, Any]) -> tuple[ActiveChildRef, ..
                         worktree_path=str(item.get("worktree_path") or ""),
                         worktree_branch=str(item.get("worktree_branch") or ""),
                         worktree_base_sha=str(item.get("worktree_base_sha") or ""),
+                        # 모르는 값은 park 로 떨어뜨린다 -- 키가 없는 옛
+                        # 체크포인트가 전부 여기로 온다.
+                        delivery=(
+                            "user_message"
+                            if str(item.get("delivery") or "") == "user_message"
+                            else "tool_result"
+                        ),
                     )
                 )
         if len(children) > 1:

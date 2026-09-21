@@ -695,6 +695,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         approval_always_allow=frozenset(coding.approval_always_allow),
         subagent_enabled=coding.subagent_enabled,
         subagent_max_active=coding.subagent_max_active,
+        subagent_async_spawn=coding.subagent_async_spawn,
     )
     subagents = _build_subagent_runtime(
         model=model,

@@ -74,6 +74,11 @@ class CodingLoopConfig:
     approval_unattended: bool = False
     subagent_enabled: bool = False
     subagent_max_active: int = 1
+    # K3. Off is park/fold: `spawn_agent.v1` holds its tool result until the
+    # child folds. On is immediate return + safe-point append. Turning this on
+    # is a sample boundary for the coding agent's numbers (roadmap §5.3), so it
+    # stays off until A1/A2 say otherwise.
+    subagent_async_spawn: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -152,6 +157,20 @@ class ActiveChildRef:
     worktree_path: str = ""
     worktree_branch: str = ""
     worktree_base_sha: str = ""
+    #: 이 자식의 보고서가 부모에게 **어떻게** 도착하는가.
+    #:
+    #: ``"tool_result"`` (park, 기본값): `spawn_agent.v1` 호출이 아직 pending
+    #: 이고 fold 가 그 도구 결과가 된다. ``"user_message"`` (K3 비동기): 도구
+    #: 결과는 spawn 때 이미 썼고 fold 는 다음 safe point 에 user 메시지로
+    #: append 된다.
+    #:
+    #: 기본값이 park 인 것은 **옛 체크포인트를 위해서**다 -- 이 키가 없는
+    #: 체크포인트는 전부 park 로 복원되어야 한다.
+    delivery: str = "tool_result"
+
+    @property
+    def detached(self) -> bool:
+        return self.delivery == "user_message"
 
 
 @dataclass(frozen=True, slots=True)

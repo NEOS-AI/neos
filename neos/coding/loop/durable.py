@@ -276,6 +276,11 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
+        # The safe point (K3). Before anything is built for this turn, every
+        # detached child gets one step and every finished one hands its report
+        # to the transcript -- so the report is in the request this turn sends,
+        # and it lands as an append, ahead of the thinking guard below.
+        state = await self._advance_detached_children(state, bound, deps)
         if not state.instructions_loaded:
             state = await self._load_workspace_instructions(state, bound)
         note = await invoke_pre_generate(self._hooks, state.transcript)
@@ -524,6 +529,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             if completion.stop_reason not in {"end_turn", "unknown"}:
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
             held = self._hold_incomplete_phase(next_state, public_text)
+            if held is None:
+                held = self._hold_for_detached_children(next_state)
             if held is not None:
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
