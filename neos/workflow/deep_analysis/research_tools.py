@@ -17,6 +17,7 @@ from typing import Any, Mapping, Protocol
 from neos.coding.model.base import ToolDefinition
 
 from .evidence_store import CAP_REACHED, decide_fetch_admission
+from .fetch import FetchUnavailable
 from .submission import Submission, parse_claims, parse_submission
 
 #: 계약 §3.1. `_RESEARCH_TOOLS` 와 **같은 이름이어야 한다** --
@@ -34,6 +35,11 @@ CHECK_TOOL = "check_claims.v1"
 #: 이라고 **자신 있게 틀린 답**을 주는 모양이다. §5 의 `E_*` 어휘를 쓰지
 #: 않는 이유도 그것이다: 이것은 판정이 아니라 "판정하지 않았다" 이다.
 COMPUTE_CHECK_UNAVAILABLE = "compute_check_unavailable"
+
+#: 오프라인 섀도(J3)의 보관소에 그 URL 이 없다. **죽은 출처가 아니다** --
+#: `E_SOURCE_DEAD` 어휘를 쓰지 않는 이유가 그것이다. 한도 초과
+#: (`evidence_cap_reached`)와 같은 모양으로 워커에게 알리고 턴은 계속된다.
+FETCH_UNAVAILABLE = "fetch_unavailable_offline"
 
 _FETCH = ToolDefinition(
     name=FETCH_TOOL,
@@ -171,7 +177,16 @@ class ResearchToolPort:
         if not url:
             return {"error": "fetch_url_missing"}
 
-        blob = await self._fetch_fn(url)
+        try:
+            blob = await self._fetch_fn(url)
+        except FetchUnavailable:
+            # J3 오프라인 섀도에서만 난다. 라이브 `fetch_url` 은 이것을 던지지
+            # 않으므로 플래그 켜짐·꺼짐 어느 쪽 동작도 달라지지 않는다.
+            #
+            # **좁게 잡는 것이 요점이다.** 아무 예외나 삼키면 진짜 장애가
+            # "그 URL 은 없었다" 로 보고되고, 그 거짓말은 섀도가 아닌 경로
+            # 에서도 일어난다.
+            return {"error": FETCH_UNAVAILABLE}
         # 404 도 blob 이다. `_blob_hash` 가 빈 본문에 상태·URL 을 섞어 별도
         # 해시를 만드는 이유이기도 하다 -- 원장에 기록이 있어야 나중에
         # `E_SOURCE_DEAD` 를 붙일 수 있다.

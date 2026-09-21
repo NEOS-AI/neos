@@ -100,6 +100,21 @@ def extract_article_text(html: str) -> str:
     return html_to_text(html)
 
 
+class FetchUnavailable(LookupError):
+    """이 fetch 원천은 그 URL 을 줄 수 없다. **그 페이지가 죽었다는 뜻이 아니다.**
+
+    `fetch_url` 은 이것을 던지지 않는다 -- 라이브 HTTP 에는 "줄 수 없다" 가
+    없고 상태 코드가 있을 뿐이다. 던지는 것은 같은 자리에 갈아끼우는 재생
+    원천이다(J3 오프라인 섀도의 `shadow.BlobArchive`). 그래도 어휘가 여기
+    사는 이유는, 이것이 **`fetch_fn` 이 무엇을 던질 수 있는가**라는 계약이기
+    때문이다.
+
+    죽은 출처처럼 꾸미지 않는 것이 이 예외의 존재 이유다. `http_status=404`
+    짜리 blob 을 지어내면 워커도 채점기도 그것을 진짜 죽은 출처로 읽고
+    (`E_SOURCE_DEAD`), **재생의 한계가 그 출처에 대한 사실로 둔갑한다.**
+    """
+
+
 def _content_hash(raw_text: str) -> str:
     return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
 

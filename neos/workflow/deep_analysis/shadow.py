@@ -29,6 +29,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .fetch import FetchUnavailable
+
+__all__ = [
+    "BlobArchive",
+    "FetchUnavailable",
+    "ShadowLedger",
+    "ShadowLedgerEscape",
+    "ShadowQuestion",
+]
+
 
 class ShadowLedgerEscape(AttributeError):
     """섀도가 분류하지 않은 원장 표면에 손이 닿았다.
@@ -135,3 +145,37 @@ class ShadowLedger:
             f"위임하고 쓰기면 수집하도록 `ShadowLedger` 에 추가할 것. "
             "모르는 것을 통과시키면 섀도가 프로덕션 데이터를 바꾼다."
         )
+
+
+class BlobArchive:
+    """기록된 run 이 가져온 blob 들. 섀도의 `fetch_fn` 자리에 들어간다.
+
+    **원장이 저장한 blob 그대로**를 담는다. 본문에서 주소를 다시 계산하지
+    않는 이유는 빈 본문 때문이다 -- `fetch._blob_hash` 는 그때 상태와 URL 을
+    섞어 주소를 만든다(같은 `sha256("")` 로 뭉치면 죽은 404 하나가 다른
+    출처들의 상태를 물려받는다). 본문만으로 되짚으면 그 구별이 사라진다.
+
+    `served` 와 `missed` 는 비교 보고서의 재료다. 섀도가 프로덕션보다 적은
+    증거로 돌았다면 제안이 빈약한 것은 워커 탓이 아니고, 그 사실이 남지
+    않으면 비교가 워커를 잘못 나무란다.
+    """
+
+    def __init__(self, pages: dict[str, Any]) -> None:
+        self._pages = dict(pages)
+        self.served: list[str] = []
+        self.missed: list[str] = []
+
+    async def fetch(self, url: str, **_ignored: Any) -> Any:
+        """`fetch_url` 과 같은 자리. 네트워크에 닿지 않는다.
+
+        `fetch_url` 의 나머지 인자(`client`·`cassette`·`on_attempt`)는 받되
+        쓰지 않는다 -- 재생된 fetch 는 HTTP 요청을 한 적이 없으므로 시도
+        보고는 거짓말이 된다(`fetch_url` 이 카세트 경로에서 `on_attempt` 를
+        부르지 않는 것과 같은 이유다).
+        """
+        blob = self._pages.get(url)
+        if blob is None:
+            self.missed.append(url)
+            raise FetchUnavailable(f"{url} is not in the shadow archive")
+        self.served.append(url)
+        return blob
