@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from neos.subagent.catalog import SpecRegistry
@@ -11,6 +12,8 @@ from neos.subagent.stepper import ChildStepper
 from neos.subagent.store import RunRecord, SubagentStore
 from neos.subagent.types import (
     FoldedResult,
+    ModelPin,
+    ParentBriefing,
     ParentKind,
     StepKind,
     StepOutcome,
@@ -43,6 +46,25 @@ def _step_kind(status: SubagentStatus) -> StepKind:
     if status is SubagentStatus.KILLED:
         return StepKind.CANCELLED
     return StepKind.CONTINUING
+
+
+def _briefing_from_record(record: RunRecord) -> ParentBriefing:
+    raw = record.briefing if isinstance(record.briefing, Mapping) else {}
+    already = raw.get("already_tried") or ()
+    if isinstance(already, str):
+        already = (already,)
+    try:
+        budget = int(raw.get("report_budget_chars") or 4000)
+    except (TypeError, ValueError):
+        budget = 4000
+    return ParentBriefing(
+        goal=str(raw.get("goal") or ""),
+        why=str(raw.get("why") or ""),
+        already_tried=tuple(str(item) for item in already),
+        scope=str(raw.get("scope") or ""),
+        success=str(raw.get("success") or ""),
+        report_budget_chars=max(256, min(16_384, budget)),
+    )
 
 
 def _outcome(record: RunRecord, *, tokens_delta: int = 0) -> StepOutcome:
@@ -171,6 +193,57 @@ class SubagentRuntime:
                 },
             )
         return _outcome(committed, tokens_delta=tokens_delta)
+
+    async def resume(
+        self,
+        run_id: str,
+        *,
+        expected_checkpoint_id: str | None,
+        pending_steer: str = "",
+        spawn_depth: int = 0,
+    ) -> StepOutcome:
+        """Advance a run whose parent no longer holds a ticket (roadmap K3).
+
+        Async spawn writes the tool result at spawn time, so the parent has no
+        pending `spawn_agent.v1` call to rebuild a briefing from. The briefing
+        is rebuilt from the store's own record instead of being copied into the
+        parent checkpoint: one fact, one home.
+
+        The briefing is read in exactly one state: a run that exists but has
+        not committed a step. A child that has already stepped ignores it --
+        `ChildStepper._restore` prefers the checkpointed state -- so a broken
+        briefing here stays invisible until that one case shows up.
+
+        The caller must re-send `pending_steer` on every step until the child
+        applies it; an empty value clears a queued steer. That is the same
+        contract the park path has always had (`_steer_remainder`).
+
+        `spawn_depth` is the parent's budget, not a property of the run, so it
+        is not in the record and the caller must pass it back. Defaulting to 0
+        is the permissive direction, so callers that own a depth-1 child have
+        to say so -- see the durable loop's `ActiveChildRef.spawn_depth`.
+        """
+        record = await self._store.get(run_id)
+        if record.status in _TERMINAL:
+            return _outcome(record)
+        return await self.advance(
+            SubagentTicket(
+                parent_kind=record.parent_kind,
+                parent_id=record.parent_id,
+                parent_run_id=record.parent_run_id,
+                parent_tool_call_id=record.parent_tool_call_id,
+                spec=record.spec,
+                briefing=_briefing_from_record(record),
+                model=ModelPin(provider=record.provider, model=record.model),
+                max_turns=record.max_turns,
+                sandbox_mode=record.sandbox_mode,
+                expected_checkpoint_id=expected_checkpoint_id,
+                run_id=record.run_id,
+                lineage_kind=record.lineage_kind,
+                pending_steer=pending_steer,
+                spawn_depth=spawn_depth,
+            )
+        )
 
     async def status(self, run_id: str) -> SubagentSnapshot:
         return (await self._store.get(run_id)).snapshot()
