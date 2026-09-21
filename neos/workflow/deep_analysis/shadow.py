@@ -35,12 +35,14 @@ from neos.database.deep_analysis_models import DABlob, DAClaim
 
 from .fetch import FetchUnavailable
 from .models import ProposedBlob
+from .research_worker import run_research_worker
 from .text_norm import claim_hash
 
 __all__ = [
     "BlobArchive",
     "RecordedClaim",
     "ShadowComparison",
+    "build_shadow_worker",
     "compare_claims",
     "load_blob_archive",
     "load_recorded_claims",
@@ -345,3 +347,39 @@ async def run_offline_shadow(
         served_urls=archive.served,
         missed_urls=archive.missed,
     )
+
+
+def build_shadow_worker(
+    *,
+    provider: Any,
+    grader: Any,
+    runtime_factory: Any,
+    cap_bytes: int,
+    limits: Any,
+    parent_id: str,
+) -> Any:
+    """`run_offline_shadow` 의 `worker` 자리에 **진짜 조사 워커**를 꽂는다.
+
+    주입 지점만 있고 진짜를 꽂는 어댑터가 없으면 J3 는 테스트에서만 도는
+    기계로 남는다 -- 이 저장소가 K2b 에서 배운 그 모양이다.
+
+    `ledger` 와 `fetch_fn` 은 **러너가 준다.** 여기서 만들지 않는 이유는 그
+    둘이 섀도의 안전장치이기 때문이다: 진짜 원장이 가면 섀도 실행이 기록된
+    run 을 바꾸고, 라이브 `fetch_url` 이 가면 오프라인이 아니라 또 한 번의
+    라이브 실행이 된다. 만들 수 있는 자리를 주지 않으면 잘못 만들 수도 없다.
+    """
+
+    async def worker(assignment: Any, *, ledger: Any, fetch_fn: Any) -> Any:
+        return await run_research_worker(
+            assignment,
+            ledger=ledger,
+            provider=provider,
+            grader=grader,
+            cap_bytes=cap_bytes,
+            limits=limits,
+            fetch_fn=fetch_fn,
+            runtime_factory=runtime_factory,
+            parent_id=parent_id,
+        )
+
+    return worker
