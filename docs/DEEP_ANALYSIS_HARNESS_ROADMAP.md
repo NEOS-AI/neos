@@ -607,7 +607,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 🟠 P1 | **K5** | effort 카탈로그 필드(G10 흡수) + 역할별 설정 + 벤치 러너 | K0 |
 | 🟠 P1 | **K9** | 자율/대면 오버레이(G11) | — |
 | 🟠 P1 | **K10** | 배칭 넛지 | K2 |
-| 🟡 P2 | **J3** | 오프라인 섀도(카세트) — 🟡 **부품 착지**(2026-09-21): 섀도 원장(쓰기 수집·복사본 질문행) · blob 보관소(빗나감은 거절이지 죽은 출처 아님) · 제안 비교(`claim_hash` 동일성) · `run_offline_shadow`. **남은 것은 프로덕션 호출부** — 지금은 워커를 주입받으므로 실제 `run_research_worker` 와 LLM 카세트를 묶어 run 을 고르는 스크립트가 없다 | J2 |
+| 🟢 P2 | **J3** | 오프라인 섀도(카세트) — ✅ **착지**(2026-09-21): 섀도 원장 · blob 보관소 · 제안 비교 · LLM 카세트(`CassetteModel`) · `scripts/deep_analysis_offline_shadow.py`. brief 는 `assignment.build_assignment` 로 오케스트레이터와 **공유**한다(추출 시 바이트 동일성 측정 확인). ⚠️ brief 가 **지금** 원장 상태로 조립되므로 이 섀도는 "그때 그 패스"의 재현이 아니다 — 보고서가 그렇게 말한다 | J2 |
 | 🟡 P2 | **K8 · K11** | `max_tokens` 산식 · 억제 문구 감사 | — |
 | ⚪ | **J4 · J5 · J6** | 조립 · C-계열 표본 · staged 스킬 | #23 판정 · 사전 등록 |
 | 🟠 P1 | **K3** | 비동기 spawn(즉시 반환 · safe point append · `await_subagent.v1`) — 기본 off | K1. 켜기는 A1·A2 |
