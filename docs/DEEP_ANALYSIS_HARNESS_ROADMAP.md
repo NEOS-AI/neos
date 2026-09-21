@@ -46,7 +46,7 @@
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료(꺼짐) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
 | **J. 코딩 루프 조사** 🆕 | 🟡 **J1 절반 착지**(2026-09-20) — 프로파일·설정·I3·I7 게이트·스펙 셋·`/evidence` 한도·질문 샌드박스. **전부 플래그 off** | 남은 J1 은 **도구**(`fetch.v1`·`submit.v1`·`check_claims.v1`·건별 blob 커밋)와 **I1·I2**, 이벤트 kind 여섯. 그다음 J2·J3. ⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**(계약 §3.2 downgrade) |
-| **K. Fable 5.1 적응** 🆕 | 🟢 **표본 없이 되는 K는 다 썼다**(K0·K1·K2·K7·K1c·K1d·K6·K4a·K2b, 2026-09-15~19) — 코딩 루프 · 자식 · DA 세 경로 + 거절 분기 + 상태 줄 + 도구 공개 | **키가 있어야 하는 것이 둘이다 — K1b·K4b**(전엔 K1b 하나라고 적혀 있었다) · K3·K5·K9·K10·K11. **K3(비동기 spawn) 채택 결정** — PLAN_260913 §2.1 개정됨 |
+| **K. Fable 5.1 적응** 🆕 | 🟢 **표본 없이 되는 K는 다 썼다**(K0·K1·K2·K7·K1c·K1d·K6·K4a·K2b, 2026-09-15~19) — 코딩 루프 · 자식 · DA 세 경로 + 거절 분기 + 상태 줄 + 도구 공개 | **키가 있어야 하는 것이 둘이다 — K1b·K4b**(전엔 K1b 하나라고 적혀 있었다) · K5④⑤·K9·K10·K11. **K3 착지(2026-09-22, 기본 off)** — 켜는 것은 A1·A2 숫자 뒤 |
 
 **기본 플래그** — 두 제품 표면이 아직 프로덕션 기본 경로에 없다. 줄 번호는 적지 않는다.
 
@@ -301,7 +301,7 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 |---|---|---|---|---|
 | **R-01** | 이력 append-only, 원본 그대로 재전송 | ✅ **K1 착지.** `ThinkingContent`·`ThinkingCompleted`가 공통 형식에 있고, 어댑터가 서명째 받아 그대로 돌려보낸다. 체크포인트가 왕복한다. **durable 루프의 `_guard_thinking_prefix` 한 곳**이 직전 요청의 system·tools·메시지 digest와 비교해, 다르면 그 경계에서 thinking을 **전부** 뗀다 — 컴팩션 셋·헤드 드롭·결과 축소·도구 공개·system 재구성을 경로별로 고치지 않았다 ✅ **K1c 착지 (2026-09-17).** 자식(`subagent/stepper.py`)은 thinking을 상태에 기록·재생하고 **자기 컴팩션이 도구 본문을 다시 쓸 때만** 전부 뗀다. DA는 두 경로 모두 고쳤다 — 하네스 브리지(`turn_to_llm_response`·`messages_to_canonical`)와 주입 SDK 경로(`llm._blocks_to_dicts`). 서명 없는 블록은 재생 불가라 버린다(전에는 **JSON 텍스트로 대화에 섞였다**) | **K1b** 실계정 3단계 검사(`drop_block` + `input_transformations` 로깅) — 키가 필요하다 | ~~K1~~ · ~~K1c~~ · K1b |
 | **R-02** | 턴 한정 system message (`clear_at`) | ✅ **K2 착지.** `CanonicalMessage("system", (SystemNoteContent,))`. Anthropic 어댑터가 카탈로그 `mid_conversation_system`과 **배치 규칙**(user 뒤 · 마지막이거나 assistant 앞)을 둘 다 만족할 때만 네이티브 + beta 헤더, 아니면 tool_result 뒤 text 블록. OpenAI·Gemini·Ollama는 user 텍스트. **pre_generate 훅의 system 노트가 system 프롬프트를 매 턴 다시 쓰던 것을 이 경로로 옮겼다** | ✅ **K2b 착지 (2026-09-19).** 모든 도구를 한 번만 선언하고 deferred 는 `defer_loading` 으로 감춘다. 공개는 `tool_addition` 블록을 **덧붙여** 알린다 — `tools[]` 가 변하지 않으므로 공개가 append 가 되고 앞선 thinking 이 살아남는다(17→18 로 자라던 배열이 원인이었다). `deferred` 는 도구의 **정적** 속성이다: 공개 때 뒤집으면 배열이 다시 흔들려 **버그가 고침의 탈을 쓰고 돌아온다**. 카탈로그 `mid_conversation_tools` 로 게이트하고 **`claude-fable-5-1` 에만** 켰다 — 베타와 `defer_loading` 이 SDK 에 있다는 것만 확인됐고 **어느 모델이 받는지는 로컬에서 알 수 없다** | ~~K2~~ · ~~K2b~~ |
-| **R-03** | 서브에이전트 즉시 반환 + `await` 도구 | **park/fold** — 부모가 자식을 기다린다(`_durable/spawn.py`) | park/fold를 즉시 반환 + 다음 safe point append + `await_subagent.v1`로 교체. PLAN_260913 §2.1 금지는 **2026-09-15 개정** | **K3** P1 |
+| **R-03** | 서브에이전트 즉시 반환 + `await` 도구 | ✅ **K3 착지 (2026-09-22, 기본 off).** `subagent_async_spawn` 이 켜지면 `spawn_agent.v1` 이 run_id 가 생기는 즉시 도구 결과를 쓰고, 자식은 부모 lease 아래 계속 돈다. 부모의 매 모델 턴 앞(safe point)이 detached 자식을 한 칸씩 밀고, 끝난 자식의 보고서를 **user 메시지로 append** 한다 — K1 의 thinking 가드가 비-append 편집마다 사고 이력을 떼므로 append 가 유일한 자리다. `await_subagent.v1` 이 명시적 park 이고 그때는 보고서가 **그 호출의 도구 결과**가 된다(append 하지 않는다). 부모는 자기가 띄운 자식이 살아 있는 동안 끝낼 수 없다(`_hold_for_detached_children`) — park 은 닿을 수 없던 상태다. 붙잡기의 한계는 카운터가 아니라 **자식의 남은 턴**이다. 자식을 티켓 없이 미는 것은 `SubagentRuntime.resume` 이고 brief 는 store 의 `RunRecord` 에서 되짓는다(부모 체크포인트에 사본을 두지 않는다) | **켜는 것은 A1·A2 숫자 뒤**(§5.3, 표본 경계). ⚠️ `_CONTROL_PLANE_TOOLS` 사본이 둘이었고 루프 쪽이 낡을 뻔했다 — 레지스트리 한 곳으로 합쳤다 | ~~K3~~ |
 | **R-04** | progress thinking 렌더 | ✅ **K4a 착지 (2026-09-19).** 루프가 thinking 블록마다 `model.thinking` 을 낸다 — 200자 프리뷰·원본 길이·잘림 여부. **서명은 싣지 않는다**(불투명한 출처 증명이라 화면에 쓸모가 없다). 스트림을 persisted 로 표시하지 **않는다**: thinking 은 턴 앞머리에 오므로 durable 출력으로 취급하면 일시 오류 뒤 거의 모든 턴이 재시도 불가가 된다. Code UI 는 최신 노트를 상태 줄로 두고 모델이 말을 시작하면 지운다(오조립 start 는 지우지 않는다 — 말을 시작한 것이 아니다) | **K4b** `thinking.display="updates"` 는 설치된 SDK 타입에 없어 **로컬 확인 불가**(K1b 와 같은 관문). 프롬프트 절반은 **K9·K11 뒤** — 스펙이 자율 모드를 제외하는데 DA 워커는 항상 자율이다. ⚠️ 코딩엔 DA 같은 kind fixture 가 **없다**(그 fixture 는 `deep_analysis` 만 AST 로 훑는다) — 백엔드·프론트 테스트를 짝으로 걸었다 | ~~K4a~~ · K4b |
 | **R-05** | effort 역할별 외부화, 중간 변경 | 코딩/채팅에 effort 필드 없음. G10 OPEN | G10을 K5로 흡수. DA 역할 scout/dig/synth/judge 각각 | **K5** P1 |
 | **R-06** | `refusal` 정상 분기, base64 필터 | ✅ **K6 착지 (2026-09-19).** `normalize_stop_reason`이 넷째 결과 `refusal`을 알고 **`has_tool_calls`보다 우선한다**(거절한 턴의 도구는 실행하지 않는다 — fail closed). 어댑터가 `delta.stop_details.category`를 `ModelCompleted.stop_category`로 싣고, durable 루프가 `model.refused` 원장 이벤트를 남긴 뒤 **재시도 없이** `model_refused`로 끝낸다. 전에는 `unknown`으로 뭉개져 **텍스트가 있으면 `model_output_incomplete`**(원인 소실), **없으면 빈 텍스트 재시도**(거절을 그대로 다시 보냄)로 갈렸다. 메트릭 outcome도 `other`에서 분리했다. **base64는 전제가 틀렸다** — 부모는 `redact_sensitive`가 이미 401자로 자르고 있었고(쓸 수 없는 조각이 `truncated: False` 옆에 남았다), 자식 포트(`subagent_port.py`)는 **아무 축약도 없었다**. `strip_binary_payloads` 한 헬퍼를 **매핑이 만들어지는 두 곳**에 걸었다 | — | ~~K6~~ |
@@ -315,7 +315,7 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 | **P-06** | low effort 검색 유도 | — | **scout(everyday)가 직접 해당.** 1차 대응은 그 턴만 effort 상향(K5) | **K11** P2 |
 | **P-07** | 억제 문구 제거 | 코딩 `_tone` 미감사. DA 프롬프트는 JSON 계약이지 안티포매팅이 아니다 | grep 감사 → 제거. `final_compose`에는 "mannered prose" 한 줄 후보 | **K11** |
 
-### 5.3 K3 — 비동기 서브에이전트: 채택 (2026-09-15 결정)
+### 5.3 K3 — 비동기 서브에이전트: 채택 (2026-09-15 결정) · 착지 (2026-09-22, 기본 off)
 
 | | park/fold (지금) | 즉시 반환 + await (R-03) |
 |---|---|---|
@@ -358,7 +358,7 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 K5 effort 필드 + 벤치 러너 ─> 모델별 스윕 ────────┘
 K9 자율/대면 오버레이 (G11) ─> K11 억제 문구 감사
 ~~K6 refusal~~ · ~~K4a progress~~ · K4b(키) · K8 max_tokens (독립)
-K1 ─> K3 비동기 spawn + await_subagent.v1       (채택. 기본 on은 A1·A2 숫자 뒤)
+✅ K1 ─> ~~K3 비동기 spawn + await_subagent.v1~~  (착지 2026-09-22. 기본 on은 A1·A2 숫자 뒤)
 ```
 
 **K1b가 Fable 5.1로 옮기는 선행이다.** 가드와 바이트 동일 테스트는 **가짜 모델**에서 초록이다 —
@@ -610,7 +610,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 🟢 P2 | **J3** | 오프라인 섀도(카세트) — ✅ **착지**(2026-09-21): 섀도 원장 · blob 보관소 · 제안 비교 · LLM 카세트(`CassetteModel`) · `scripts/deep_analysis_offline_shadow.py`. brief 는 `assignment.build_assignment` 로 오케스트레이터와 **공유**한다(추출 시 바이트 동일성 측정 확인). ⚠️ brief 가 **지금** 원장 상태로 조립되므로 이 섀도는 "그때 그 패스"의 재현이 아니다 — 보고서가 그렇게 말한다 | J2 |
 | 🟡 P2 | **K8 · K11** | `max_tokens` 산식 · 억제 문구 감사 | — |
 | ⚪ | **J4 · J5 · J6** | 조립 · C-계열 표본 · staged 스킬 | #23 판정 · 사전 등록 |
-| 🟠 P1 | **K3** | 비동기 spawn(즉시 반환 · safe point append · `await_subagent.v1`) — 기본 off | K1. 켜기는 A1·A2 |
+| ✅ | ~~**K3**~~ | 비동기 spawn(즉시 반환 · safe point append · `await_subagent.v1`) — **착지, 기본 off** (2026-09-22) | 켜기는 A1·A2 |
 
 > ⚠️ **ID 충돌 주의.** 트랙 A의 D1·D2(검색·retrieval 결함)와 트랙 D의 D1~D4(프레임워크 이탈)는 다르다.
 > PLAN_260913의 G1~G12·A1~A5·B1~B5도 이 문서의 트랙 G·A·B와 다르다. **K5는 PLAN G10을, K9는 G11을 흡수한다.**

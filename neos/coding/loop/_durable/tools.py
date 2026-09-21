@@ -29,6 +29,7 @@ from neos.coding.sandbox.observability import (
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.orchestrator import partition_leading_readonly
 from neos.coding.tools.registry import (
+    _CONTROL_PLANE_TOOLS,
     ToolRisk,
     ToolValidationError,
     ValidatedToolCall,
@@ -39,7 +40,6 @@ from neos.coding.loop._durable.state import (
     CodingLoopFailure,
     CodingLoopWaitingApproval,
     DelegatedSpawn,
-    _CONTROL_PLANE_TOOLS,
 )
 from neos.coding.loop._durable.support import (
     _is_stall_denied,
@@ -338,6 +338,14 @@ class ToolExecutionMixin:
                     result = await self._run_subagent_list(
                         bound, state, input=input
                     )
+                elif call.name == "await_subagent.v1":
+                    result = await self._run_await_subagent(
+                        call, bound, state, input=input, deps=deps
+                    )
+                    if isinstance(result, dict):
+                        updated = result.pop("_loop_state", None)
+                        if updated is not None:
+                            state = updated
                 elif call.name == "subagent_steer.v1":
                     result = await self._run_subagent_steer(
                         call, bound, state, input=input
@@ -375,7 +383,8 @@ class ToolExecutionMixin:
                     ToolExecutionDisposition.RECLAIMED,
                 }:
                     await self._mark_spawn_delegated(deps, claim, result)
-                existing = self._child_ref(state, call.tool_call_id)
+                ref_call_id = result.tool_call_id or call.tool_call_id
+                existing = self._child_ref(state, ref_call_id)
                 in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
                     existing, result.input_tokens, result.output_tokens
                 )
@@ -384,7 +393,7 @@ class ToolExecutionMixin:
                     ActiveChildRef(
                         run_id=result.run_id,
                         checkpoint_id=result.checkpoint_id,
-                        tool_call_id=call.tool_call_id,
+                        tool_call_id=ref_call_id,
                         last_advanced_at=self._utc_stamp(),
                         rolled_input_tokens=rolled_in,
                         rolled_output_tokens=rolled_out,
@@ -403,6 +412,8 @@ class ToolExecutionMixin:
                         or (existing.worktree_branch if existing else ""),
                         worktree_base_sha=result.worktree_base_sha
                         or (existing.worktree_base_sha if existing else ""),
+                        # park 이 자식의 배달 방식을 바꾸지는 않는다.
+                        delivery=existing.delivery if existing else "tool_result",
                     ),
                 )
                 payload = {

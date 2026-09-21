@@ -16,7 +16,9 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 
-_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+_CONTROL_PLANE_TOOLS = frozenset(
+    {"subagent_list.v1", "subagent_steer.v1", "await_subagent.v1"}
+)
 _STEER_TEXT_MAX = 2000
 _DEDICATED_EXECUTE_DENY = frozenset(
     {
@@ -451,6 +453,10 @@ class _SubagentSteerInput(_ToolInput):
     text: str = Field(min_length=1, max_length=_STEER_TEXT_MAX)
 
 
+class _AwaitSubagentInput(_ToolInput):
+    run_id: str = Field(min_length=1)
+
+
 class _EmptyInput(_ToolInput):
     pass
 
@@ -858,6 +864,16 @@ class CodingToolRegistry:
             ),
             ToolRisk.READ_ONLY,
             _SubagentSteerInput,
+        ),
+        _RegisteredTool(
+            "await_subagent.v1",
+            (
+                "Block on a parent-owned child until it finishes and return "
+                "its report here. Without this the report arrives on its own "
+                "as a message. On policy_* denial, do not retry the same run."
+            ),
+            ToolRisk.READ_ONLY,
+            _AwaitSubagentInput,
         ),
     )
 

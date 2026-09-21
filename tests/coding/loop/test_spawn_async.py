@@ -193,6 +193,121 @@ async def test_the_hold_lets_go_once_the_report_arrives() -> None:
     assert final is not None
 
 
+# ---- await_subagent.v1 — 명시적 park -------------------------------------------
+
+
+def _spawn_then_await(call_id: str = "s1", await_id: str = "w1"):
+    """부모가 자식을 띄우고, 같은 턴이 아니라 **다음 턴에** 기다린다.
+
+    run_id 를 알아야 기다릴 수 있고, run_id 는 spawn 의 도구 결과에 있다.
+    """
+    return [
+        [tool_call(call_id, "spawn_agent.v1", {"prompt": "look", "max_turns": 4}), completed()],
+        [tool_call(await_id, "await_subagent.v1", {"run_id": "__spawned__"}), completed()],
+        [*_text("parent done")],
+    ]
+
+
+async def _await_the_spawned_child(h, *, limit: int = 8):
+    """`__spawned__` 자리표를 실제 run_id 로 바꿔 넣고 fold 까지 민다."""
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    run_id = _tool_results(state)[0]["content"]["run_id"]
+    for turn in h.model.turns:
+        for event in turn:
+            if getattr(event, "name", "") == "await_subagent.v1":
+                event.input["run_id"] = run_id
+    checkpoint = h.repository.checkpoints[-1]
+    for _ in range(limit):
+        await collect(h, checkpoint)
+        checkpoint = h.repository.checkpoints[-1]
+        results = {item["tool_call_id"] for item in _tool_results(checkpoint.loop_state)}
+        if "w1" in results:
+            return checkpoint.loop_state, run_id
+    raise AssertionError("await 가 끝나지 않았다")
+
+
+async def test_await_delivers_the_report_as_its_own_tool_result() -> None:
+    """이것이 append 와 다른 **명시적** 경로다 -- 모델이 기다리겠다고 말했으니
+    보고서는 그 호출의 답이 된다."""
+    runtime, _ = _make_runtime([_child_tool(), _text("handler lives in login.py")])
+    h = harness(_spawn_then_await(), config=_async_on(), subagents=runtime)
+
+    state, _ = await _await_the_spawned_child(h)
+
+    result = next(
+        item["content"] for item in _tool_results(state) if item["tool_call_id"] == "w1"
+    )
+    assert "login.py" in str(result.get("summary") or "")
+    assert result["child_status"] == "completed"
+
+
+async def test_an_awaited_child_leaves_by_exactly_one_door() -> None:
+    """보고서는 도구 결과로만 간다 -- user 메시지로 또 붙지 않는다.
+
+    그리고 ref 가 남으면 안 된다. 남으면 `_hold_for_detached_children` 이
+    이미 끝난 자식을 기다리며 부모를 영원히 붙잡는다.
+    """
+    runtime, _ = _make_runtime([_child_tool(), _text("handler lives in login.py")])
+    h = harness(_spawn_then_await(), config=_async_on(), subagents=runtime)
+
+    state, _ = await _await_the_spawned_child(h)
+
+    assert not any("login.py" in text for text in _user_texts(state))
+    assert _children(state) == []
+
+
+async def test_awaiting_keeps_one_ref_for_one_run() -> None:
+    """park 경로는 ref 를 **호출 id**로 꽂는다. await 의 호출 id 는 spawn 의 것과
+    다르므로, 그대로 두면 같은 run 에 ref 가 둘 생긴다."""
+    runtime, _ = _make_runtime(
+        [_child_tool(), _child_tool("b.py"), _text("handler lives in login.py")]
+    )
+    h = harness(_spawn_then_await(), config=_async_on(), subagents=runtime)
+    await collect(h)
+    state = h.repository.checkpoints[-1].loop_state
+    run_id = _tool_results(state)[0]["content"]["run_id"]
+    for turn in h.model.turns:
+        for event in turn:
+            if getattr(event, "name", "") == "await_subagent.v1":
+                event.input["run_id"] = run_id
+
+    await collect(h, h.repository.checkpoints[-1])
+
+    children = _children(h.repository.checkpoints[-1].loop_state)
+    assert [child["run_id"] for child in children] == [run_id]
+
+
+async def test_awaiting_a_child_that_already_reported_says_so() -> None:
+    """safe point 가 먼저 배달했을 수 있다. 그때 조용한 실패는 모델에게
+    '그런 자식 없음'처럼 보인다."""
+    runtime, _ = _make_runtime([_child_tool(), _text("handler lives in login.py")])
+    h = harness(
+        [
+            [tool_call("s1", "spawn_agent.v1", {"prompt": "look", "max_turns": 4}), completed()],
+            [*_text("thinking")],
+            [tool_call("w1", "await_subagent.v1", {"run_id": "sa_gone"}), completed()],
+            [*_text("parent done")],
+        ],
+        config=_async_on(),
+        subagents=runtime,
+    )
+
+    await _run_until_child_reports(h)
+    checkpoint = h.repository.checkpoints[-1]
+    for _ in range(4):
+        await collect(h, checkpoint)
+        checkpoint = h.repository.checkpoints[-1]
+        results = {
+            item["tool_call_id"]: item["content"]
+            for item in _tool_results(checkpoint.loop_state)
+        }
+        if "w1" in results:
+            assert results["w1"]["reason_code"] == "policy_not_live"
+            return
+    raise AssertionError("await 가 답을 내지 않았다")
+
+
 async def _run_until_child_reports(h, *, limit: int = 6):
     checkpoint = h.repository.checkpoints[-1] if h.repository.checkpoints else None
     for _ in range(limit):

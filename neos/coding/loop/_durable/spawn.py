@@ -888,6 +888,73 @@ class SubagentSpawnMixin:
         folded = await self._fold_child(outcome.run_id, state)
         return self._finish_implement_child(bound, folded, lease)
 
+    async def _run_await_subagent(
+        self, call, bound, state, *, input=None, deps=None
+    ) -> dict[str, Any] | DelegatedSpawn:
+        """The explicit park: wait for one child, take its report here.
+
+        Async spawn's default delivery is an append at the safe point, which
+        the model does not get to ask for. This is the other half of R-03 --
+        the model says it wants to wait, so the report becomes this call's
+        result instead of a message, and nothing is appended for it.
+
+        Parking reuses the machinery `spawn_agent.v1` already had: returning a
+        `DelegatedSpawn` ends the durable step with the claim still open, and
+        the next step re-enters this same call. What it does *not* reuse is the
+        ref identity -- `tool_call_id` points the update back at the ref this
+        child already has, or the run ends up with two.
+        """
+        if not self._async_spawn or self._subagents is None:
+            return self._spawn_tool_error(bound, "subagent_disabled")
+        from neos.subagent.types import StepKind
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        run_id = str(raw.get("run_id") or "")
+        if not run_id:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        ref = self._child_ref_by_run(state, run_id)
+        if ref is None or not ref.detached:
+            # The safe point may have delivered this child already, or it was
+            # never this parent's. Saying "not live" beats silence: the model
+            # can go look for the report it was handed.
+            return self._spawn_tool_error(bound, "policy_not_live")
+        await self._renew_parent_lease(deps)
+        outcome = await self._subagents.resume(
+            ref.run_id,
+            expected_checkpoint_id=ref.checkpoint_id,
+            pending_steer=ref.pending_steer,
+            spawn_depth=ref.spawn_depth,
+        )
+        await self._renew_parent_lease(deps)
+        if outcome.kind is StepKind.CONTINUING:
+            return DelegatedSpawn(
+                run_id=outcome.run_id,
+                checkpoint_id=outcome.checkpoint_id,
+                step_kind=outcome.kind.value,
+                input_tokens=int(outcome.input_tokens or 0),
+                output_tokens=int(outcome.output_tokens or 0),
+                spec=ref.spec,
+                spawn_depth=ref.spawn_depth,
+                worktree_repo=ref.worktree_repo,
+                worktree_path=ref.worktree_path,
+                worktree_branch=ref.worktree_branch,
+                worktree_base_sha=ref.worktree_base_sha,
+                tool_call_id=ref.tool_call_id,
+            )
+        folded = await self._fold_child(outcome.run_id, state)
+        result = self._finish_implement_child(
+            bound, folded, _lease_from_ref(ref)
+        )
+        result["_loop_state"] = self._sync_active_children(
+            state,
+            tuple(
+                child
+                for child in state.active_children
+                if child.tool_call_id != ref.tool_call_id
+            ),
+        )
+        return result
+
     def _hold_for_detached_children(self, state):
         """Don't let the parent walk away from a report it asked for.
 
@@ -939,6 +1006,9 @@ class SubagentSpawnMixin:
         """
         if self._subagents is None or not self._async_spawn:
             return state
+        # An awaited child never reaches here: parking leaves the tool call
+        # pending, so the loop re-enters the tool path and no model turn --
+        # and so no safe point -- happens until the await resolves.
         detached = [child for child in state.active_children if child.detached]
         if not detached:
             return state

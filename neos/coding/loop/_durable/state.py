@@ -139,7 +139,9 @@ class _AppliedPendingCommand:
     instructions_loaded: bool
 
 
-_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+# `_CONTROL_PLANE_TOOLS` 는 여기 없다 -- 레지스트리가 도구 정체성의 주인이고,
+# 사본을 두면 도구가 늘 때 한쪽만 고쳐진다(실제로 그럴 뻔했다: K3 가
+# `await_subagent.v1` 을 레지스트리에만 더했을 때 루프는 못 봤다).
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +235,12 @@ class DelegatedSpawn:
     run_id: str
     checkpoint_id: str | None
     step_kind: str
+    #: 이 park 이 갱신할 `ActiveChildRef` 의 호출 id. 비어 있으면 park 을 일으킨
+    #: 호출의 id 를 쓴다(기존 동작).
+    #:
+    #: `await_subagent.v1` 때문에 필요하다: 기다리는 호출의 id 는 자식을 띄운
+    #: spawn 호출의 id 와 **다르므로**, 그대로 두면 한 run 에 ref 가 둘 생긴다.
+    tool_call_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     spec: str = "explore"

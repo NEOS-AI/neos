@@ -76,6 +76,7 @@ from neos.coding.sandbox.observability import (
 from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import (
+    _CONTROL_PLANE_TOOLS as _CONTROL_PLANE_TOOLS,
     CodingToolRegistry,
     ToolRisk,
 )
@@ -94,7 +95,6 @@ from neos.coding.loop._durable.state import (
     SpawnWork as SpawnWork,
     _AppliedPendingCommand as _AppliedPendingCommand,
     _BRIEF_PLACEHOLDER_RE as _BRIEF_PLACEHOLDER_RE,
-    _CONTROL_PLANE_TOOLS as _CONTROL_PLANE_TOOLS,
     _EPOCH_STAMP as _EPOCH_STAMP,
     _STALE_SLACK_SEC as _STALE_SLACK_SEC,
     _STUB_GOALS as _STUB_GOALS,
