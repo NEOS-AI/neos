@@ -507,6 +507,43 @@ Resolution follows a strict precedence, and the winner is reported as
 The resolver itself never falls back across providers. An unknown provider or
 role, or a blank mapping entry, raises `ValueError` rather than guessing.
 
+#### Reasoning effort
+
+`output_config.effort` (Anthropic) is resolved through the **same chain** as the
+model, with the same precedence and the same `ResolutionSource` vocabulary — a
+second chain would reintroduce the "a fix lands in one caller only" failure.
+
+```yaml
+model_routing:
+  effort:            # role defaults; null means "do not ask"
+    everyday: null
+    powerful: null
+
+deep_analysis:
+  model_effort:      # per-harness-role, consumed as the feature override
+    scout: null
+    dig: null
+    synth: null
+    judge: null
+```
+
+Two things make effort different from the model:
+
+- **A capability gate.** The resolved level is only sent when the catalog says
+  the resolved model accepts it (`models.yaml` → `effort_levels`). A level the
+  model does not take is **refused, never downgraded** — silently sending the
+  nearest level would make the configured value and the value that actually ran
+  differ, with nothing recording the difference. `EffortResolution.refused`
+  carries the reason so an operator who set a level and saw nothing happen can
+  tell a config mistake from a code one.
+- **Every level is unset today.** No catalog model declares `effort_levels`,
+  because per-model support is reported by the models API (`ModelCapabilities.
+  effort`) and reading it needs a key. Nothing is sent until that is measured.
+
+⚠️ `deep_analysis.model_effort` and `deep_analysis.effort` are **different
+axes**. The latter is investigation depth (`token_cap`, `wall_clock_cap`); the
+former is how much the model thinks.
+
 Role assignments for automatic workloads:
 
 | Workload | Role |

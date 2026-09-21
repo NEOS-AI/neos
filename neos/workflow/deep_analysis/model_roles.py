@@ -10,7 +10,12 @@ here would put a lie in the one artifact that cannot be regenerated."
 
 from __future__ import annotations
 
-from neos.config.model_routing import ModelResolution, resolve_model
+from neos.config.model_routing import (
+    EffortResolution,
+    ModelResolution,
+    resolve_effort,
+    resolve_model,
+)
 from neos.config.settings import settings
 
 # 역할 기본값의 프로바이더. 이전 전 9개 호출 지점 전부가 anthropic 이었다.
@@ -76,3 +81,40 @@ def _provider_for(override: str | None) -> str:
 
 def resolve_all() -> dict[str, ModelResolution]:
     return {name: resolve_harness_model(name) for name in HARNESS_ROLES}
+
+
+def _supported_levels(model: str) -> tuple[str, ...]:
+    """이 모델이 받는 사고량 레벨. 카탈로그만 본다.
+
+    함수로 빼 둔 이유는 테스트가 **카탈로그를 고치지 않고** 게이트 뒤쪽을
+    볼 수 있게 하기 위해서다 -- 카탈로그는 모델 사실의 단일 원천이고,
+    테스트가 거기에 없는 사실을 심으면 그 사실이 진짜처럼 보인다.
+    """
+    from neos.config.model_config import effort_levels_for
+
+    return effort_levels_for(model)
+
+
+def resolve_harness_effort(name: str) -> EffortResolution:
+    """`name` 역할이 실제로 도는 **사고량** (로드맵 K5).
+
+    `resolve_harness_model` 과 짝이고, 같은 이유로 여기가 유일한 지점이다 --
+    사본이 생기면 매니페스트(H1)가 실제로 돈 것과 다른 값을 싣는다.
+
+    ⚠️ DA 의 `Effort`(scout·dig·synth, 조사 깊이)와 다른 축이다. 설정에서도
+    `deep_analysis.model_effort` 와 `deep_analysis.effort` 로 갈라 둔다.
+
+    모델을 여기서 다시 해석하는 이유는 게이트 때문이다 -- 어느 모델로 도는지
+    알아야 그 모델이 그 레벨을 받는지 물을 수 있다.
+    """
+    role = HARNESS_ROLES[name]
+    resolved = resolve_harness_model(name)
+    return resolve_effort(
+        model=resolved.model,
+        role=role,
+        supported_levels=_supported_levels(resolved.model),
+        feature_override=getattr(
+            settings.config.deep_analysis.model_effort, name
+        ),
+        role_default=getattr(settings.config.model_routing.effort, role),
+    )

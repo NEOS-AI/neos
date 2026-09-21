@@ -14,6 +14,13 @@ class ModelLimits:
     context_window: int | None = None
     input_limit: int | None = None
     thinking_budget: int = 0
+    #: 모델 사고량 (Anthropic `output_config.effort`). 빈 문자열 = 보내지 않는다.
+    #:
+    #: **여기서 검증하지 않는다.** "이 모델이 이 레벨을 받는가" 는
+    #: `neos.config.model_routing.resolve_effort` 가 이미 물었고, 같은 판단을
+    #: 두 곳에서 하면 한쪽만 고쳐지는 날이 온다. 이 필드는 그 판단의 **결과**를
+    #: 나른다.
+    effort: str = ""
 
     def __post_init__(self) -> None:
         if self.max_output_tokens < 1 or self.timeout_sec <= 0:

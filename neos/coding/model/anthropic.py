@@ -210,6 +210,12 @@ def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
         "tools": [_tool_to_anthropic(tool) for tool in request.tools],
         "max_tokens": request.limits.max_output_tokens,
     }
+    if request.limits.effort:
+        # 비어 있으면 **키 자체를 넣지 않는다.** `{"effort": None}` 을 보내는
+        # 것과 `output_config` 를 아예 안 보내는 것은 다른 요청이고, K5 의
+        # 배선 커밋들이 "요청이 예전과 바이트가 같다" 를 주장하려면 후자여야
+        # 한다. 게이트는 `resolve_effort` 에 있다 -- 여기서 다시 묻지 않는다.
+        payload["output_config"] = {"effort": request.limits.effort}
     if any(tool.deferred for tool in request.tools):
         betas.add(TOOL_CHANGES_BETA)
     if betas:

@@ -144,7 +144,23 @@ class ProviderModelRolesConfig(StrictConfigModel):
     powerful: str
 
 
+class RoleEffortConfig(StrictConfigModel):
+    """역할별 **모델 사고량** 기본값 (로드맵 K5).
+
+    `ProviderModelRolesConfig` 의 모델 기본값 옆에 둔다 -- 같은 사슬을 타므로
+    같은 자리에 있어야 한다. 프로바이더로 나누지 않는 이유는 레벨 이름이
+    모델이 아니라 **API 의 어휘**이기 때문이다.
+
+    `None` = 요구하지 않는다. 값을 정하는 것은 **표본 경계**다
+    (로드맵 §경계 10: "effort 변경마다 행을 더한다").
+    """
+
+    everyday: str | None = None
+    powerful: str | None = None
+
+
 class ModelRoutingConfig(StrictConfigModel):
+    effort: RoleEffortConfig = Field(default_factory=RoleEffortConfig)
     anthropic: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
             everyday="sonnet-5",
@@ -767,6 +783,24 @@ class DeepAnalysisModelsConfig(StrictConfigModel):
     judge: str | None = None
 
 
+class DeepAnalysisModelEffortConfig(StrictConfigModel):
+    """DA 역할별 **모델 사고량** (로드맵 K5 / 스펙 R-05).
+
+    ⚠️ `DeepAnalysisConfig.effort` 와 **다른 축**이다. 저쪽은 조사 깊이의
+    `token_cap`·`wall_clock_cap` 이고 여기는 모델이 얼마나 생각하는가다.
+    같은 트리에서 `effort` 가 두 축을 가리키면 설정을 읽는 사람이 어느
+    쪽인지 알 수 없어 이름을 `model_effort` 로 둔다.
+
+    사슬에서는 **feature override** 칸이다 -- `models.dig` 가 모델의 feature
+    override 인 것과 같은 자리.
+    """
+
+    scout: str | None = None
+    dig: str | None = None
+    synth: str | None = None
+    judge: str | None = None
+
+
 class DeepAnalysisDevProfileConfig(StrictConfigModel):
     # 20000 could not hold ONE worker_analysis call: measured input_bound for
     # that stage ran 5,542 / 10,893 / 17,723 (min/median/max), and that is
@@ -881,6 +915,10 @@ class DeepAnalysisConfig(StrictConfigModel):
     enabled: bool = False
     complexity_threshold: float = 0.5
     models: DeepAnalysisModelsConfig = Field(default_factory=DeepAnalysisModelsConfig)
+    # 모델 사고량. 아래 `effort`(조사 깊이)와 **다른 축**이다.
+    model_effort: DeepAnalysisModelEffortConfig = Field(
+        default_factory=DeepAnalysisModelEffortConfig
+    )
     effort: dict[str, DeepAnalysisEffortConfig] = Field(
         default_factory=lambda: {
             "scout": DeepAnalysisEffortConfig(

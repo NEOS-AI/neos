@@ -157,6 +157,10 @@ def request_key_payload(request: ModelRequest) -> dict[str, Any]:
         # 출력 상한은 모델이 무엇을 말할 수 있는지를 바꾼다 -- 잘린 답을
         # 안 잘린 답으로 재생하지 않기 위해 키에 넣는다.
         "max_output_tokens": request.limits.max_output_tokens,
+        # 사고량도 답을 바꾼다. 없으면 low 로 녹음한 턴이 high 요청에서
+        # 적중하고, 섀도가 **존재하지 않는 실행**을 비교한다 -- 도구 문구를
+        # 고쳤을 때 빗나가야 하는 것과 같은 이유다.
+        "effort": request.limits.effort,
     }
 
 
