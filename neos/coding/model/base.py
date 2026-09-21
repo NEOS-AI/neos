@@ -86,19 +86,91 @@ class ToolResultContent:
             raise ValueError("tool result content must be an object")
 
 
-CanonicalContent: TypeAlias = TextContent | ToolUseContent | ToolResultContent
+@dataclass(frozen=True, slots=True)
+class ThinkingContent:
+    """A provider thinking block, replayed byte-for-byte.
+
+    Claude Fable 5.1 binds the signature to the conversation prefix that
+    produced it. Never edit one; strip them all at a boundary instead.
+    Text may be empty (the default ``display: "omitted"``).
+    """
+
+    thinking: str
+    signature: str
+
+    def __post_init__(self) -> None:
+        if not self.signature:
+            raise ValueError("thinking content requires a signature")
+
+
+@dataclass(frozen=True, slots=True)
+class SystemNoteContent:
+    """An operator note appended mid-conversation instead of editing system."""
+
+    text: str
+    clear_at: Literal["never", "next_user_message"] = "next_user_message"
+
+    def __post_init__(self) -> None:
+        if not self.text:
+            raise ValueError("system note text cannot be empty")
+        if self.clear_at not in {"never", "next_user_message"}:
+            raise ValueError("invalid system note clear_at")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolAdditionContent:
+    """Announces that a declared-but-deferred tool is now offered.
+
+    The reveal travels as an appended message instead of a rewritten tool
+    array, which is what keeps earlier thinking blocks valid (roadmap K2b).
+    """
+
+    name: str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("tool addition requires a tool name")
+
+
+CanonicalContent: TypeAlias = (
+    TextContent
+    | ToolUseContent
+    | ToolResultContent
+    | ThinkingContent
+    | SystemNoteContent
+    | ToolAdditionContent
+)
 
 
 @dataclass(frozen=True, slots=True)
 class CanonicalMessage:
-    role: Literal["user", "assistant", "tool"]
+    role: Literal["user", "assistant", "tool", "system"]
     content: tuple[CanonicalContent, ...]
 
     def __post_init__(self) -> None:
-        if self.role not in {"user", "assistant", "tool"}:
+        if self.role not in {"user", "assistant", "tool", "system"}:
             raise ValueError("invalid canonical message role")
         if not self.content:
             raise ValueError("completed transcript messages require content")
+        # A system message is either one note, or one or more tool reveals.
+        # Never both: a note is turn-scoped and may be cleared, while a
+        # reveal must persist for the rest of the conversation.
+        if self.role == "system":
+            one_note = len(self.content) == 1 and isinstance(
+                self.content[0], SystemNoteContent
+            )
+            all_additions = all(
+                isinstance(item, ToolAdditionContent) for item in self.content
+            )
+            if not (one_note or all_additions):
+                raise ValueError(
+                    "system messages hold one note or only tool additions"
+                )
+        if self.role != "system" and any(
+            isinstance(item, (SystemNoteContent, ToolAdditionContent))
+            for item in self.content
+        ):
+            raise ValueError("system notes require the system role")
         if self.role == "tool" and not all(
             isinstance(item, ToolResultContent) for item in self.content
         ):
@@ -114,6 +186,13 @@ class ToolDefinition:
     name: str
     description: str
     input_schema: Mapping[str, object]
+    # Declared but not offered until a tool_addition announces it (roadmap
+    # K2b). This is a static property of the tool: if it flipped when the
+    # tool was revealed, the tool array would change again and every
+    # replayed thinking block would be invalidated -- the exact bug this
+    # flag exists to remove. `_request_fingerprint` ignores it for the same
+    # reason: it is not part of what the model is offered.
+    deferred: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or not self.description:
@@ -178,15 +257,53 @@ class ToolCallCompleted:
 class ModelCompleted:
     stop_reason: str
     usage: ModelUsage | None = None
+    # Set only on a refusal: the policy category the vendor named.
+    stop_category: str = ""
 
     def __post_init__(self) -> None:
         if not self.stop_reason:
             raise ValueError("model stop reason is required")
+        if self.stop_category and self.stop_reason != "refusal":
+            raise ValueError("stop category belongs to a refusal")
+
+
+@dataclass(frozen=True, slots=True)
+class ThinkingCompleted:
+    thinking: str
+    signature: str
+
+    def __post_init__(self) -> None:
+        if not self.signature:
+            raise ValueError("thinking block requires a signature")
 
 
 ModelEvent: TypeAlias = (
-    TextDelta | ToolInputDelta | ToolCallCompleted | ModelCompleted
+    TextDelta
+    | ToolInputDelta
+    | ToolCallCompleted
+    | ThinkingCompleted
+    | ModelCompleted
 )
+
+
+def strip_thinking(
+    messages: tuple[CanonicalMessage, ...],
+) -> tuple[CanonicalMessage, ...]:
+    """Drop every thinking block; text and tool calls stay.
+
+    The one-time recovery Anthropic documents for a changed prefix. Removing
+    only some blocks from the middle is what invalidates later ones.
+    """
+    stripped: list[CanonicalMessage] = []
+    for message in messages:
+        kept = tuple(
+            item for item in message.content if not isinstance(item, ThinkingContent)
+        )
+        if len(kept) == len(message.content):
+            stripped.append(message)
+        elif kept:
+            stripped.append(CanonicalMessage(message.role, kept))
+    return tuple(stripped)
 
 
 class CodingModel(Protocol):

@@ -13,6 +13,7 @@ from neos.coding.model.base import (
     ModelEvent,
     ModelRequest,
     ModelUsage,
+    SystemNoteContent,
     TextContent,
     TextDelta,
     ToolInputDelta,
@@ -190,6 +191,17 @@ def _to_openai_request(request: ModelRequest) -> dict[str, object]:
 
 
 def _message_to_openai(message: CanonicalMessage) -> list[dict[str, object]]:
+    if message.role == "system":
+        # Tool reveals have no text form here: this provider has no
+        # mid-conversation tool changes, so its array was never made
+        # constant and nothing needs announcing. Dropping the message beats
+        # sending an empty user turn, which the API rejects.
+        text = "".join(
+            item.text
+            for item in message.content
+            if isinstance(item, SystemNoteContent)
+        )
+        return [{"role": "user", "content": text}] if text else []
     if message.role == "tool":
         return [
             {

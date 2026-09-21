@@ -1,10 +1,16 @@
 """설계자 통과율 표본 — `LlmGraphDesigner`가 실제 모델로 성립하는 토폴로지를 내는가.
 
-사전 등록: `docs/graph_design_passrate_preregistration.md` (커밋 984ceced).
+사전 등록: `docs/graph_design_passrate_remeasure_preregistration.md` (M-0, 2026-09-14).
+첫 표본(`20260824T101448Z`)의 사전 등록은 `docs/graph_design_passrate_preregistration.md`
+(커밋 984ceced)이고, 그 표본은 이 파일의 옛 판본(`mandatory=(response_generator,)`)으로 돌았다.
 **표본은 정확히 1회 돈다** (§10.2). 실패한 호출도 관측이므로 재시도하지 않는다.
 
 프로덕션 경로와 같은 재료를 쓴다 -- 같은 프롬프트 파일, 같은 카탈로그
-(`NODE_CONTRACTS` 전량), 같은 `mandatory`, `budget`/`node_costs` 둘 다 `None`.
+(`NODE_CONTRACTS` 전량), 프로덕션 관문(`design_graph_or_fallback`)과 같은 `must_write`·
+`mandatory=()`, `budget`/`node_costs` 둘 다 `None`.
+
+⚠️ 옛 판본은 프로덕션이 버린 `mandatory=(response_generator,)` 를 넘겼다. 그대로 재면
+08-24 거부 5건을 **규칙 때문에** 다시 관측한다 -- M-0 사전 등록 §1.
 다른 것은 하나뿐이다: 여기서는 `validate_topology` 를 직접 불러 위반 목록을
 **보존**한다(프로덕션은 위반이 있으면 버리고 정적으로 폴백한다). L-2(거부 사유
 분포)가 그 목록을 필요로 한다.
@@ -16,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +40,7 @@ from neos.utils.llm_factory import LLMFactory  # noqa: E402
 # 잡았다 -- 표본은 1회뿐이라 이 한 줄이 표본 전체를 좌우한다.
 import neos.workflow.graph  # noqa: E402,F401 -- 부수효과로 NODE_CONTRACTS 를 채운다
 from neos.workflow.contracts import NODE_CONTRACTS  # noqa: E402
-from neos.workflow.enums import WorkflowNode  # noqa: E402
+from neos.workflow.graph_design_ledger import _DEFAULT_MUST_WRITE  # noqa: E402
 from neos.workflow.graph_designer import DesignRequest, InvalidDesignPayload  # noqa: E402
 from neos.workflow.graph_designer_llm import LlmGraphDesigner  # noqa: E402
 from neos.workflow.topology import validate_topology  # noqa: E402
@@ -68,6 +75,39 @@ QUERIES: tuple[tuple[str, str], ...] = (
 )
 
 
+PREREGISTRATION = Path("docs/graph_design_passrate_remeasure_preregistration.md")
+# 사전 등록 §3 의 실행 전 조건. 하나라도 어긋나면 표본을 돌리지 않는다 -- 돈 뒤에
+# 알면 "정확히 1회" 가 이미 쓰였다.
+EXPECTED_CATALOG_SIZE = 31
+EXPECTED_PROMPT_SHA256_16 = "7af3ebdd3e0a6bc2"
+MUST_WRITE = _DEFAULT_MUST_WRITE
+MANDATORY: tuple[str, ...] = ()
+
+
+def _preregistration_commit() -> str:
+    """사전 등록 파일의 마지막 커밋. 커밋되지 않았으면 빈 문자열."""
+
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%h", "--", str(PREREGISTRATION)],
+        capture_output=True, text=True, check=False,
+    )
+    return result.stdout.strip()
+
+
+def preflight_violations(prompt_path: Path) -> list[str]:
+    """사전 등록 §3 의 조건을 확인한다. 빈 목록이면 실행해도 된다."""
+
+    problems: list[str] = []
+    if len(NODE_CONTRACTS) != EXPECTED_CATALOG_SIZE:
+        problems.append(f"catalog_size={len(NODE_CONTRACTS)} != {EXPECTED_CATALOG_SIZE}")
+    digest = hashlib.sha256(prompt_path.read_bytes()).hexdigest()[:16]
+    if digest != EXPECTED_PROMPT_SHA256_16:
+        problems.append(f"prompt_sha256={digest} != {EXPECTED_PROMPT_SHA256_16}")
+    if getattr(settings.config.workflow, "subagent_nodes_enabled", False):
+        problems.append("workflow.subagent_nodes_enabled 가 켜져 있다 -- M-0 은 템플릿 없는 카탈로그다")
+    return problems
+
+
 def _fingerprint(model_name: str, provider: str, prompt_path: Path) -> dict:
     """§10.2 가 요구하는 구성 지문. 이 표본이 무엇으로 돌았는지 복원 가능해야 한다."""
 
@@ -77,7 +117,11 @@ def _fingerprint(model_name: str, provider: str, prompt_path: Path) -> dict:
         "catalog_size": len(NODE_CONTRACTS),
         "timeout_sec": settings.config.workflow.graph_design_timeout_sec,
         "budget_hint": settings.config.workflow.graph_design_budget_hint,
-        "mandatory": [WorkflowNode.RESP_GENERATOR.value],
+        "mandatory": list(MANDATORY),
+        "must_write": sorted(MUST_WRITE),
+        "subagent_nodes_enabled": bool(
+            getattr(settings.config.workflow, "subagent_nodes_enabled", False)
+        ),
         "prompt_sha256": hashlib.sha256(prompt_path.read_bytes()).hexdigest()[:16],
         "validate_budget": None,
         "validate_node_costs": None,
@@ -85,6 +129,17 @@ def _fingerprint(model_name: str, provider: str, prompt_path: Path) -> dict:
 
 
 async def main() -> int:
+    prompt_path = Path("neos/workflow/prompts/graph_design.md")
+    problems = preflight_violations(prompt_path)
+    prereg_commit = _preregistration_commit()
+    if not prereg_commit:
+        problems.append(f"{PREREGISTRATION} 가 커밋되지 않았다 -- 사전 등록이 표본보다 먼저다")
+    if problems:
+        print("표본을 돌리지 않는다 (사전 등록 §3):")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 2
+
     started = datetime.now(timezone.utc)
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
     out = Path("artifacts/graph-design-passrate") / stamp
@@ -97,12 +152,10 @@ async def main() -> int:
         role="everyday",
         feature_override=settings.config.workflow.graph_design_model,
     ).model
-    prompt_path = Path("neos/workflow/prompts/graph_design.md")
 
     llm = LLMFactory.create_llm(provider=provider, model=model_name)
     designer = LlmGraphDesigner(model=llm, prompt_path=prompt_path)
     catalog = tuple(NODE_CONTRACTS.values())
-    mandatory = (WorkflowNode.RESP_GENERATOR.value,)
 
     print(f"model={model_name} provider={provider} catalog={len(catalog)}")
     print(f"artifacts -> {out}\n")
@@ -126,8 +179,8 @@ async def main() -> int:
             record |= {"outcome": "error", "detail": f"{type(exc).__name__}: {exc}"[:400]}
         else:
             violations = validate_topology(
-                topology, contracts=NODE_CONTRACTS, mandatory=mandatory,
-                budget=None, node_costs=None,
+                topology, contracts=NODE_CONTRACTS, mandatory=MANDATORY,
+                must_write=MUST_WRITE, budget=None, node_costs=None,
             )
             record |= {
                 "outcome": "approved" if not violations else "rejected",
@@ -172,8 +225,8 @@ async def main() -> int:
     (out / "manifest.json").write_text(
         json.dumps(
             {
-                "preregistration_commit": "984ceced",
-                "preregistration": "docs/graph_design_passrate_preregistration.md",
+                "preregistration_commit": prereg_commit,
+                "preregistration": str(PREREGISTRATION),
                 "pid": os.getpid(),
                 "utc_start": started.isoformat(),
                 "utc_end": ended.isoformat(),
@@ -189,7 +242,7 @@ async def main() -> int:
     )
 
     print(f"\nL-1 통과율: {approved}/{len(QUERIES)} = {approved / len(QUERIES):.1%}")
-    print(f"기대 <30% / 반증 >=50% (사전 등록 984ceced)")
+    print(f"기대 >=90% / 반증 <75% (사전 등록 {prereg_commit})")
     return 0
 
 

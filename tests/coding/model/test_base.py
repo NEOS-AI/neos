@@ -80,8 +80,9 @@ def test_model_request_rejects_incomplete_transcript_messages() -> None:
 
 
 def test_canonical_message_rejects_unknown_role() -> None:
+    # "system" became a real role for turn-scoped notes (roadmap K2).
     with pytest.raises(ValueError, match="canonical message role"):
-        CanonicalMessage(role="system", content=(TextContent("no"),))
+        CanonicalMessage(role="developer", content=(TextContent("no"),))  # type: ignore[arg-type]
 
 
 def test_tool_call_requires_object_input() -> None:

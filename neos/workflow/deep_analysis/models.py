@@ -41,10 +41,37 @@ class ProposedEvidence:
 
 
 @dataclass
+class ComputedEvidence:
+    """계산 클레임의 증거 (계약 §4).
+
+    quote 클레임이 `ProposedEvidence`(출처·발췌·raw_ref)를 갖듯, 계산
+    클레임은 **재현에 필요한 전부**를 갖는다 -- 스크립트 바이트, 입력 blob,
+    전제 클레임, 런타임, 그리고 정규화된 stdout 의 digest.
+
+    채점은 J2 지만 모양은 제출이 받는 순간 필요하다. 여기를 비워 두면
+    `submit.v1` 이 계산 클레임을 아예 받지 못한다.
+    """
+
+    script_ref: str
+    inputs: list[str] = field(default_factory=list)
+    premises: list[str] = field(default_factory=list)
+    runtime: dict[str, Any] = field(default_factory=dict)
+    output_digest: str = ""
+    claimed_value: str = ""
+
+
+@dataclass
 class ProposedClaim:
     text: str
     confidence: float
     evidence: list[ProposedEvidence] = field(default_factory=list)
+    #: 계약 §3.4. 기존 경로가 만드는 클레임은 전부 quote 라 기본값이 그것이다 --
+    #: 이 필드가 생겨도 플래그 off 경로의 동작은 달라지지 않는다. `ProposedClaim`
+    #: 은 통째로 직렬화되는 곳이 없고(`asdict` 대상이 아니다), 원장은
+    #: `_upsert_claim` 에서 필드를 하나씩 읽는다.
+    kind: Literal["quote", "computed"] = "quote"
+    #: `kind == "computed"` 일 때만 채워진다.
+    computation: ComputedEvidence | None = None
 
 
 @dataclass
@@ -114,18 +141,14 @@ class WorkerResult:
     discarded_claims: list[ProposedClaim] = field(default_factory=list)
     blobs: list[ProposedBlob] = field(default_factory=list)
     repairs: list[RepairResult] = field(default_factory=list)
-    proposed_subquestions: list[ProposedSubquestion] = field(
-        default_factory=list
-    )
+    proposed_subquestions: list[ProposedSubquestion] = field(default_factory=list)
     dead_ends: list[str] = field(default_factory=list)
     tokens_spent: int = 0
     model: str = ""
     self_assessment: float = 0.0
     fail_reason: str = ""
     confidence_clamped_count: int = 0
-    confidence_clamped_by_source_count: dict[str, int] = field(
-        default_factory=dict
-    )
+    confidence_clamped_by_source_count: dict[str, int] = field(default_factory=dict)
     # entailment 배치가 필터를 적용하지 못하고 원본 claim을 그대로 통과시켰다면
     # **왜** 그랬는가 (`ENTAILMENT_SKIP_CAUSES` 중 하나), 정상 동작했으면 `None`.
     #
@@ -163,6 +186,10 @@ class WorkerResult:
     subagent_run_id: str = ""
     subagent_checkpoint_id: str = ""
     subagent_step_kind: str = ""
+    # 트랙 J. compose 자식이 워크스페이스에 쓴 리포트 경로 (계약 §3.4).
+    # `code_worker_submitted` 가 "report_path 여부" 를 싣는데, 그 값이 결과에
+    # 없으면 있지도 않은 것을 없다고 적게 된다. research·analyze 에서는 None.
+    report_path: str | None = None
 
 
 @dataclass

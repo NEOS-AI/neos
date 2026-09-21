@@ -15,7 +15,10 @@ from pathlib import Path
 from neos.coding.model.base import (
     CanonicalMessage,
     ModelCompleted,
+    SystemNoteContent,
     TextContent,
+    ThinkingContent,
+    ToolAdditionContent,
     ToolCallCompleted,
     ToolResultContent,
     ToolUseContent,
@@ -536,6 +539,20 @@ def _message_to_mapping(message: CanonicalMessage) -> dict[str, Any]:
                     "input": dict(item.input),
                 }
             )
+        elif isinstance(item, ThinkingContent):
+            content.append(
+                {
+                    "type": "thinking",
+                    "thinking": item.thinking,
+                    "signature": item.signature,
+                }
+            )
+        elif isinstance(item, SystemNoteContent):
+            content.append(
+                {"type": "system_note", "text": item.text, "clear_at": item.clear_at}
+            )
+        elif isinstance(item, ToolAdditionContent):
+            content.append({"type": "tool_addition", "name": item.name})
         else:
             content.append(
                 {
@@ -557,6 +574,15 @@ def _message_from_mapping(value: Mapping[str, Any]) -> CanonicalMessage:
             content.append(
                 ToolUseContent(item["tool_call_id"], item["name"], item["input"])
             )
+        elif item["type"] == "thinking":
+            content.append(ThinkingContent(item["thinking"], item["signature"]))
+        elif item["type"] == "system_note":
+            content.append(SystemNoteContent(item["text"], item["clear_at"]))
+        elif item["type"] == "tool_addition":
+            # Needs its own branch: the `else` below assumes a tool result
+            # and raises KeyError on anything else, and the loop resumes
+            # from a checkpoint on every step.
+            content.append(ToolAdditionContent(item["name"]))
         else:
             content.append(
                 ToolResultContent(item["tool_call_id"], item["status"], item["content"])

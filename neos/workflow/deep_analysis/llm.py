@@ -146,7 +146,17 @@ def _blocks_to_dicts(content) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     for block in content:
         kind = getattr(block, "type", "")
-        if kind == "text":
+        if kind == "thinking":
+            signature = str(getattr(block, "signature", "") or "")
+            if signature:
+                blocks.append(
+                    {
+                        "type": "thinking",
+                        "thinking": str(getattr(block, "thinking", "") or ""),
+                        "signature": signature,
+                    }
+                )
+        elif kind == "text":
             blocks.append({"type": "text", "text": block.text})
         elif kind == "tool_use":
             blocks.append(

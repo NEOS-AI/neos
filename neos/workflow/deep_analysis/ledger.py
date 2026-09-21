@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -112,6 +113,22 @@ def _degradation_kind(kind: str, payload: dict[str, Any]) -> str | None:
 
 def _hex_id() -> str:
     return uuid.uuid4().hex[:8]
+
+
+def _computation_json(claim: ProposedClaim) -> str | None:
+    """계산 증거를 행에 실을 JSON (계약 §4, 마이그레이션 061).
+
+    `kind` 가 아니라 `computation` 의 존재로 판정한다 -- 계산이라고 주장하면서
+    계산을 싣지 않은 클레임은 채점기가 `E_NO_EVIDENCE` 로 거절하고, 여기서
+    `"null"` 같은 문자열을 만들어 두면 그 행은 "계산이 있다" 고 거짓말한다.
+
+    **재현에 필요한 전부를 넣는다.** 하나라도 빠지면 그 클레임은 다시 채점할
+    수 없고, 그 사실은 run 이 재개된 뒤에야 드러난다.
+    """
+    computation = claim.computation
+    if computation is None:
+        return None
+    return json.dumps(asdict(computation), ensure_ascii=False)
 
 
 async def create_run(
@@ -416,10 +433,16 @@ class Ledger:
                 hash=normalized_hash,
                 status="pending",
                 confidence=claim.confidence,
+                kind=claim.kind,
+                computation=_computation_json(claim),
             )
             self.db.add(stored)
             await self.db.flush()
         else:
+            # 병합은 **신뢰도 상승**이지 재정의가 아니다. 행의 정체성은 텍스트
+            # 해시이고(D3), `question_id` 와 `text` 를 첫 기록대로 두는 것과
+            # 같은 이유로 `kind` 와 `computation` 도 그대로 둔다 -- 이미 그
+            # 행을 전제로 인용한 계산의 발밑이 나중에 바뀌면 안 된다.
             stored.confidence = min(0.95, stored.confidence + 0.15)
             await self.db.flush()
 
@@ -574,6 +597,66 @@ class Ledger:
             self._claim_graded_payload(claim_id, outcome, verdict),
         )
 
+    async def _log_reexecution(
+        self,
+        question_id: str,
+        claim_id: str,
+        verdict: Verdict,
+    ) -> None:
+        """계산 클레임을 다시 돌린 사실을 남긴다 (계약 §6).
+
+        채점기가 아니라 여기서 나는 이유는 `claim_id` 다 -- 채점이 도는
+        시점의 클레임은 아직 행이 아니라 `ProposedClaim` 이고 id 가 없다.
+        계약 §5 의 "재실행은 커밋 경로 밖에서 하고 **결과만 원장에 온다**" 와
+        같은 방향이고, 그래서 payload 의 원료는 `verdict.diagnostics` 다.
+
+        **두 kind 를 나누는 것이 이 함수의 전부다.** 한도에 걸린 실행에는
+        "digest 일치 여부" 가 없다(답을 내지 못했다). 그것을
+        `compute_reexecuted` 에 `matched: false` 로 적으면 비용 사건이
+        재현 실패로 집계된다 -- §5 가 섞지 말라고 한 바로 그 둘이다.
+
+        진단은 `_claim_graded_payload` 와 같은 규율로 읽는다: 모양이 달라도
+        예외를 내지 않는다. 원장 쓰기가 진단 파싱 때문에 죽으면 판정 자체가
+        사라진다.
+        """
+        diagnostics = (
+            verdict.diagnostics if isinstance(verdict.diagnostics, dict) else {}
+        )
+        if diagnostics.get("reexecuted") is not True:
+            # quote 클레임과, 규칙 1·2 에서 막혀 샌드박스가 돌지 않은 계산
+            # 클레임. 비용이 없었으므로 남길 사건도 없다.
+            return
+
+        duration = diagnostics.get("reexec_duration_sec")
+        if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+            duration = 0.0
+        duration = float(duration)
+        if not math.isfinite(duration) or duration < 0:
+            duration = 0.0
+
+        capped = diagnostics.get("reexec_capped")
+        if isinstance(capped, str) and capped:
+            await self.log(
+                "compute_reexecution_capped",
+                question_id,
+                {
+                    "claim_id": claim_id,
+                    "limit": capped,
+                    "duration_sec": duration,
+                },
+            )
+            return
+
+        await self.log(
+            "compute_reexecuted",
+            question_id,
+            {
+                "claim_id": claim_id,
+                "matched": diagnostics.get("reexec_matched") is True,
+                "duration_sec": duration,
+            },
+        )
+
     async def _apply_verdict(
         self,
         question_id: str,
@@ -586,6 +669,10 @@ class Ledger:
         claims re-graded outside a pass). Retry-cap and label handling must
         stay identical between the two call sites.
         """
+        # 판정보다 먼저 낸다. 재실행은 **판정의 재료**이므로 원장을 순서대로
+        # 읽는 쪽에서 "무엇을 보고 이 판정이 나왔는가" 가 앞에 온다.
+        await self._log_reexecution(question_id, claim.id, verdict)
+
         grade = "ok" if verdict.ok else verdict.code
         for evidence in evidence_rows:
             evidence.det_grade = grade

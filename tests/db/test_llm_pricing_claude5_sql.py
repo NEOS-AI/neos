@@ -8,7 +8,6 @@ pytestmark = pytest.mark.no_db
 REPO = Path(__file__).resolve().parents[2]
 SEED = REPO / "db" / "chat_cost_tracking.sql"
 MIGRATION = REPO / "db" / "migrations" / "056_llm_pricing_claude5.sql"
-BOOTSTRAP = REPO / "db" / "BOOTSTRAP_ORDER.txt"
 
 LEGACY_45 = (
     "claude-sonnet-4-5-20250929",
@@ -80,7 +79,10 @@ def test_migration_adds_claude5_prices_without_deleting_4_5() -> None:
 
 
 def test_bootstrap_order_includes_056_after_055() -> None:
-    order = BOOTSTRAP.read_text(encoding="utf-8")
+    # 순서는 BOOTSTRAP_ORDER.txt 의 규칙에서 유도된다 (2026-09-20) -- 본문 대신 유도 결과.
+    from scripts.verify_schema_bootstrap import bootstrap_order
+
+    order = bootstrap_order()
     assert "db/migrations/056_llm_pricing_claude5.sql" in order
     assert order.index("db/migrations/055_add_subagent_tables.sql") < order.index(
         "db/migrations/056_llm_pricing_claude5.sql"

@@ -121,6 +121,28 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
   if (kind === "claim_verified") {
     return "클레임 검증됨";
   }
+  if (kind === "code_worker_started") {
+    return "코드 조사 시작";
+  }
+  if (kind === "code_worker_submitted") {
+    const claims = asCount(payload.claims);
+    return claims === undefined
+      ? "코드 조사 제출"
+      : `코드 조사 제출 · 클레임 ${claims}건`;
+  }
+  if (kind === "code_worker_unsubmitted") {
+    // 이유를 그대로 보여준다. "제출 안 함"만 뜨면 turn cap 인지 거절인지
+    // 화면에서 구별되지 않는다.
+    const reason = asString(payload.reason);
+    return reason ? `코드 조사 미제출 · ${reason}` : "코드 조사 미제출";
+  }
+  if (kind === "compute_reexecution_capped") {
+    // 넘은 한도를 그대로 보여준다. "한도 초과"만 뜨면 계산을 줄여야 하는지
+    // 출력을 줄여야 하는지가 화면에서 구별되지 않는다 -- code_worker_unsubmitted
+    // 가 이유를 싣는 것과 같은 이유다.
+    const limit = asString(payload.limit);
+    return limit ? `계산 재실행 한도 초과 · ${limit}` : "계산 재실행 한도 초과";
+  }
   if (kind === "claim_rejected") {
     return "클레임 기각됨";
   }

@@ -1,11 +1,11 @@
 """Workspace session implemented with helper scripts run inside the guest.
 
 Every file, search, and git operation is a short Python helper executed
-against `/workspace` inside the sandbox. The Docker provider and managed
-remote sandboxes (E2B, Modal, ...) share this one implementation; subclasses
-supply only the transport -- how a helper or a command runs -- plus the
-liveness check and PTYs. Keeping one copy matters: a path-policy fix that
-lands in one session and not the other is the failure this module prevents.
+against `/workspace` inside the sandbox. The Docker provider uses it;
+subclasses supply only the transport -- how a helper or a command runs -- plus
+the liveness check and PTYs. Managed sandboxes (E2B, Modal) do not: they speak
+the `neos-sandboxd` RPC (`neos/coding/sandboxd/`) instead of `python -c`
+helpers.
 
 Transport contract for `_run_helper`: raise
 `SandboxUnavailable("<transport>_command_failed:<exit code>")` on a non-zero

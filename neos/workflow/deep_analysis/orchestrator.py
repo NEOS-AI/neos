@@ -8,14 +8,20 @@ from dataclasses import replace
 
 from neos.config.settings import settings
 
+from neos.coding.sandbox.base import SandboxLimits
+from neos.subagent.types import StepKind
+
 from .budgeter import Budgeter
 from .citation import CitationRenderer, OrphanCitationError
 from .conflict import resolve_conflicts
+from .fetch import fetch_url
 from .ledger import Ledger
 from .llm import call_json
 from .model_roles import resolve_harness_model
+from .assignment import build_assignment
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
+from .research_worker import run_research_worker
 from .subagent_adapter import (
     investigate_via_subagent,
     latest_subagent_pointers,
@@ -39,14 +45,6 @@ def _wall_clock_cap(effort: Effort) -> float:
     return float(settings.config.deep_analysis.effort[effort.value].wall_clock_cap)
 
 
-_REPAIR_PRESCRIPTIONS = {
-    "E_OVERCLAIM": "문구를 증거 수준으로 약화(action=weakened, 재조사 금지)",
-    "E_CONTRADICTED": "부정형으로 재작성(action=fixed, new_text=부정형)",
-    "E_UNSUPPORTED": "다른 증거 탐색, 실패 시 action=abandoned",
-    "E_QUOTE_MISMATCH": "salvage 출처에서 정확 발췌 재수집",
-}
-
-
 class SystemicWorkerFailure(RuntimeError):
     """Every assigned worker failed for too many consecutive rounds."""
 
@@ -56,9 +54,7 @@ _LIMITS_HEADING = "## 한계와 미확인 사항"
 # `graders/report.py` mirrors this string in its scoring boundaries.
 
 
-def adopted_child_caps(
-    remaining: int, values: list[float], policy: str
-) -> list[int]:
+def adopted_child_caps(remaining: int, values: list[float], policy: str) -> list[int]:
     """채택된 자식들에게 부모의 잔여 예산을 나눈다.
 
     두 정책 다 **부모 몫 하나를 먼저 뗀다.** `_do_split` 은 부모가 `split` 로
@@ -153,9 +149,7 @@ _DEGRADATION_PROSE = {
     "tier_floor": (
         "남은 토큰 예산이 부족해 이 하위 질문을 끝까지 요약하지 못했습니다."
     ),
-    "empty_assembly": (
-        "본문 조립이 비어 있어 결정론적 템플릿으로 대체되었습니다."
-    ),
+    "empty_assembly": ("본문 조립이 비어 있어 결정론적 템플릿으로 대체되었습니다."),
 }
 
 
@@ -283,9 +277,7 @@ def _ensure_limits_section(report: str, caveats: list[str]) -> str:
     return f"{report.rstrip()}\n\n{_LIMITS_HEADING}\n{body}\n"
 
 
-def _ensure_question_coverage(
-    report: str, child_summaries: list[NodeSummary]
-) -> str:
+def _ensure_question_coverage(report: str, child_summaries: list[NodeSummary]) -> str:
     """Guarantee that every resolved sub-question is named in the report.
 
     Third harness-owned section, for the same reason as the other two
@@ -350,6 +342,10 @@ class Orchestrator:
         max_stall_rounds: int | None = None,
         synthesis_max_tokens: int | None = None,
         subagent_runtime=None,
+        # 트랙 J. 둘 다 `deep_analysis.code_research_enabled` 가 켜졌을 때만
+        # 쓰인다. 꺼져 있으면 읽히지도 않는다 (I1).
+        sandbox_provider=None,
+        research_runtime_factory=None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -364,9 +360,7 @@ class Orchestrator:
             cassette=cassette,
             synthesis_max_tokens=synthesis_max_tokens,
         )
-        self.citation_renderer = citation_renderer or CitationRenderer(
-            self.ledger
-        )
+        self.citation_renderer = citation_renderer or CitationRenderer(self.ledger)
         self.report_grader = report_grader
         self.event_sink = event_sink
         self.checkpoint = checkpoint
@@ -398,9 +392,7 @@ class Orchestrator:
         )
         self.max_depth = config.max_depth if max_depth is None else max_depth
         self.max_stall_rounds = (
-            config.max_stall_rounds
-            if max_stall_rounds is None
-            else max_stall_rounds
+            config.max_stall_rounds if max_stall_rounds is None else max_stall_rounds
         )
         # D15: per-question consecutive no-progress counter (in-memory, run
         # scoped). Reset on any progress; at the cap the question is force
@@ -434,6 +426,8 @@ class Orchestrator:
         )
         self._split_decompose = self._default_split_decompose
         self.subagent_runtime = subagent_runtime
+        self.sandbox_provider = sandbox_provider
+        self.research_runtime_factory = research_runtime_factory
 
     async def _emit(self, kind: str, payload: dict) -> None:
         if self.event_sink is not None:
@@ -502,9 +496,7 @@ class Orchestrator:
         if self._investigation_stopped_at_floor_logged:
             return
         has_event = getattr(self.ledger, "has_event", None)
-        if has_event is not None and await has_event(
-            "investigation_stopped_at_floor"
-        ):
+        if has_event is not None and await has_event("investigation_stopped_at_floor"):
             self._investigation_stopped_at_floor_logged = True
             return
         payload = {
@@ -557,16 +549,12 @@ class Orchestrator:
             "input_bound": exc.input_bound,
             "ceiling": exc.ceiling,
         }
-        await self.ledger.log(
-            "investigation_stopped_at_input_bound", None, payload
-        )
+        await self.ledger.log("investigation_stopped_at_input_bound", None, payload)
         await self._checkpoint()
         await self._emit("investigation_stopped_at_input_bound", payload)
         self._investigation_stopped_at_input_bound_logged = True
 
-    async def _mark_stop_reason(
-        self, exc: TokenBudgetExhausted | None = None
-    ) -> None:
+    async def _mark_stop_reason(self, exc: TokenBudgetExhausted | None = None) -> None:
         """Record why investigation stopped, from the budget's state.
 
         The exception path used to assert "exhausted" on its own, and the
@@ -641,11 +629,7 @@ class Orchestrator:
             agentic_verdict = await self.agentic_grader.grade(claim, value_est)
             agentic_state = agentic_verdict.diagnostics.get(
                 "agentic",
-                (
-                    "attempted_passed"
-                    if agentic_verdict.ok
-                    else "attempted_rejected"
-                ),
+                ("attempted_passed" if agentic_verdict.ok else "attempted_rejected"),
             )
             return replace(
                 agentic_verdict,
@@ -706,6 +690,50 @@ class Orchestrator:
         child_run_id: str | None = None,
         child_checkpoint_id: str | None = None,
     ) -> WorkerResult:
+        if settings.config.deep_analysis.code_research_enabled:
+            # 조용한 degrade 금지 (계약 §3.4 와 같은 방향): 켜 두었는데 조각이
+            # 빠졌으면 옛 경로로 슬쩍 떨어지지 않는다. 그러면 "조사 모드로
+            # 돌고 있다" 고 믿는 실행이 사실은 옛 워커를 돌리고, 원장에는 그
+            # 사실이 남지 않는다. 두 사유를 **따로** 적는 이유는 설정을 고칠
+            # 때 어느 쪽이 빠졌는지 보이게 하기 위해서다.
+            if self.sandbox_provider is None:
+                return WorkerResult(
+                    question_id=assignment.question_id,
+                    status="failed",
+                    fail_reason="sandbox_provider_missing",
+                )
+            if self.research_runtime_factory is None:
+                return WorkerResult(
+                    question_id=assignment.question_id,
+                    status="failed",
+                    fail_reason="research_runtime_factory_missing",
+                )
+            research = settings.config.deep_analysis.code_research
+            await self.ledger.log(
+                "code_worker_started",
+                assignment.question_id,
+                {
+                    "spec": "research",
+                    "profile": research.sandbox_profile,
+                    # 재개면 이어받는 자식, 처음이면 빈 문자열.
+                    "run_id": child_run_id or "",
+                },
+            )
+            result = await run_research_worker(
+                assignment,
+                ledger=self.ledger,
+                provider=self.sandbox_provider,
+                grader=self.grader,
+                cap_bytes=research.evidence_bytes_cap,
+                limits=SandboxLimits.safe_defaults(),
+                fetch_fn=fetch_url,
+                runtime_factory=self.research_runtime_factory,
+                parent_id=str(self.ledger.run_id),
+                run_id=child_run_id,
+                expected_checkpoint_id=child_checkpoint_id,
+            )
+            await self._log_code_worker_outcome(assignment.question_id, result)
+            return result
         if settings.config.deep_analysis.subagent_enabled:
             if self.subagent_runtime is None:
                 return WorkerResult(
@@ -721,6 +749,37 @@ class Orchestrator:
                 expected_checkpoint_id=child_checkpoint_id,
             )
         return await self._run_legacy_worker(assignment)
+
+    async def _log_code_worker_outcome(
+        self, question_id: str, result: WorkerResult
+    ) -> None:
+        """제출됐는가, 아니면 왜 아닌가 (계약 §6).
+
+        **아직 끝나지 않은 턴은 둘 중 어느 것도 아니다.** `continuing` 을
+        미제출로 적으면 다음 라운드가 이어받을 작업이 원장에서는 실패한
+        것처럼 보인다.
+        """
+        if result.subagent_step_kind == StepKind.CONTINUING.value:
+            return
+        if result.fail_reason:
+            await self.ledger.log(
+                "code_worker_unsubmitted",
+                question_id,
+                {"reason": result.fail_reason},
+            )
+            return
+        by_kind: dict[str, int] = {}
+        for claim in result.claims:
+            by_kind[claim.kind] = by_kind.get(claim.kind, 0) + 1
+        await self.ledger.log(
+            "code_worker_submitted",
+            question_id,
+            {
+                "claims": len(result.claims),
+                "by_kind": by_kind,
+                "report_path": result.report_path is not None,
+            },
+        )
 
     async def _run_legacy_worker(self, assignment: Assignment) -> WorkerResult:
         worker = self.worker_factory()  # A1: fresh instance per assignment
@@ -839,80 +898,16 @@ class Orchestrator:
         return root_id
 
     async def _partition(self, picks):
+        """지시 조립은 `assignment.py` 에 있다 -- J3 섀도가 같은 brief 를
+        지어야 하고, 두 벌이면 한쪽만 고쳐지는 날이 온다."""
         assignments: list[Assignment] = []
         splits = []
-        config = settings.config.deep_analysis
         for question, effort in picks:
             if effort == Effort.SPLIT:
                 splits.append(question)
                 continue
-            feedback = await self.ledger.pending_feedback(question.id)
-            repairs = [
-                {
-                    "claim_id": item.claim_id,
-                    "code": item.code,
-                    "detail": item.detail,
-                    "salvage": item.salvage,
-                }
-                for item in feedback
-            ]
-            if repairs:
-                repair_count = len(repairs)
-                repairs_rendered = "\n".join(
-                    f"{r['claim_id']} | {r['code']} | {r['detail']} | "
-                    f"{_REPAIR_PRESCRIPTIONS.get(r['code'], '')} | "
-                    f"{r['salvage'] or ''}"
-                    for r in repairs
-                )
-            else:
-                repair_count = 0
-                repairs_rendered = "(없음)"
-            # worker_brief.md [3] "확정된 발견 — 재조사 금지": 이 질문의 이전
-            # 패스가 이미 확정한 클레임과 막다른 길을 워커에 전달해야 재조사가
-            # 같은 길을 반복하지 않고 수렴한다. (첫 패스에는 둘 다 "(없음)".)
-            # Ledger 접근자는 방어적으로 읽어 최소 test double은 구현할
-            # 필요가 없게 한다(_collect_caveats와 동일한 패턴).
-            summaries_fn = getattr(self.ledger, "verified_summaries", None)
-            verified_summaries = (
-                await summaries_fn(question.id)
-                if summaries_fn is not None
-                else "(없음)"
-            )
-            deadends_fn = getattr(
-                self.ledger, "unverified_and_deadends", None
-            )
-            dead_end_entries = (
-                await deadends_fn(question.id)
-                if deadends_fn is not None
-                else []
-            )
-            dead_ends_rendered = (
-                "\n".join(f"- {entry}" for entry in dead_end_entries)
-                if dead_end_entries
-                else "(없음)"
-            )
-            brief = render(
-                "worker_brief",
-                question_text=question.text,
-                verified_summaries=verified_summaries,
-                dead_ends=dead_ends_rendered,
-                repair_count=repair_count,
-                repairs=repairs_rendered,
-                token_cap=config.effort[effort.value].token_cap,
-                confidence_cap_one=config.confidence_cap[1],
-                confidence_cap_two=config.confidence_cap[2],
-                confidence_cap_three_plus=config.confidence_cap[3],
-                subq_adopt_threshold=config.subq_adopt_threshold,
-                resolve_threshold=config.resolve_threshold,
-            )
             assignments.append(
-                Assignment(
-                    question.id,
-                    brief,
-                    effort,
-                    repairs,
-                    question_text=question.text,
-                )
+                await build_assignment(self.ledger, question, effort)
             )
         return assignments, splits
 
@@ -988,9 +983,7 @@ class Orchestrator:
         )
         return reviewed
 
-    async def _adopt_subquestions(
-        self, question_id: str, proposals: list
-    ) -> None:
+    async def _adopt_subquestions(self, question_id: str, proposals: list) -> None:
         """워커가 제안한 하위 질문 중 값이 되는 것을 트리에 넣는다 (D65).
 
         여태 이 자리는 로깅만 했다(D11 -> D13 이 두 번 연기). 표본 #16 에서
@@ -1030,15 +1023,11 @@ class Orchestrator:
         if question is None or question.depth + 1 > self.max_depth:
             return
 
-        existing = {
-            _normalize_question(q.text) for q in await self.ledger.questions()
-        }
+        existing = {_normalize_question(q.text) for q in await self.ledger.questions()}
         proposals = await self._review_subquestions(question, proposals)
         cap = max(1, config.subq_adopt_cap)
         adopted: list = []
-        for proposal in sorted(
-            proposals, key=lambda p: p.value_est, reverse=True
-        ):
+        for proposal in sorted(proposals, key=lambda p: p.value_est, reverse=True):
             if len(adopted) >= cap:
                 break
             if proposal.value_est < config.subq_adopt_threshold:
@@ -1145,9 +1134,7 @@ class Orchestrator:
         tokens/0 claims, or a mismatch-skipped assignment) fails all three.
         Unavailable signals (limited fakes) count as progress -> no stall."""
         question = await self.ledger.get_question(question_id)
-        spent_after = (
-            question.spent_tokens if question is not None else spent_before
-        )
+        spent_after = question.spent_tokens if question is not None else spent_before
         if spent_after > spent_before:
             return True
         verified_after = await self._verified_count(question_id)
@@ -1203,9 +1190,7 @@ class Orchestrator:
             )
             if child_run_id:
                 try:
-                    await self.subagent_runtime.cancel(
-                        child_run_id, "stall_terminated"
-                    )
+                    await self.subagent_runtime.cancel(child_run_id, "stall_terminated")
                 except Exception:  # noqa: BLE001 — stall path must still split
                     pass
         # SPLIT if depth allows, else abandon (both handled by _do_split).
@@ -1225,9 +1210,7 @@ class Orchestrator:
         if self._all_failed_rounds < self.max_stall_rounds:
             return
 
-        reasons = [
-            (result.fail_reason or "unknown")[:200] for result in results
-        ]
+        reasons = [(result.fail_reason or "unknown")[:200] for result in results]
         payload = {
             "rounds": self._all_failed_rounds,
             "reasons": reasons,
@@ -1240,8 +1223,7 @@ class Orchestrator:
         await self._emit("systemic_failure_terminated", payload)
         await self._checkpoint()
         raise SystemicWorkerFailure(
-            "all workers failed for "
-            f"{self._all_failed_rounds} consecutive rounds"
+            f"all workers failed for {self._all_failed_rounds} consecutive rounds"
         )
 
     async def _run_round(self) -> bool:
@@ -1274,7 +1256,9 @@ class Orchestrator:
             *[
                 self._run_worker(
                     assignment,
-                    child_run_id=child_ptrs.get(assignment.question_id, (None, None))[0],
+                    child_run_id=child_ptrs.get(assignment.question_id, (None, None))[
+                        0
+                    ],
                     child_checkpoint_id=child_ptrs.get(
                         assignment.question_id, (None, None)
                     )[1],
@@ -1291,10 +1275,7 @@ class Orchestrator:
             # question_id를 돌려주면(또는 존재하지 않는 질문이면) 커밋하지
             # 않고, 실제 투입 질문을 investigating→open으로 복귀시켜
             # 영구 investigating 잠김을 방지한다.
-            if (
-                question is None
-                or result.question_id != assignment.question_id
-            ):
+            if question is None or result.question_id != assignment.question_id:
                 await self._emit(
                     "worker_result_mismatch",
                     {
@@ -1317,12 +1298,8 @@ class Orchestrator:
             value_est = question.value_est
             # D15 progress snapshot (before this pass mutates state).
             spent_before = question.spent_tokens
-            verified_before = await self._verified_count(
-                assignment.question_id
-            )
-            feedback_before = await self._feedback_signal(
-                assignment.question_id
-            )
+            verified_before = await self._verified_count(assignment.question_id)
+            feedback_before = await self._feedback_signal(assignment.question_id)
             if result.subagent_run_id:
                 await log_subagent_step(
                     self.ledger,
@@ -1410,9 +1387,7 @@ class Orchestrator:
             )
             if result.subagent_step_kind == "continuing":
                 made_progress = True
-            await self._register_progress(
-                assignment.question_id, made_progress
-            )
+            await self._register_progress(assignment.question_id, made_progress)
             for subq in result.proposed_subquestions:
                 await self.ledger.log(
                     "subq_proposed",
@@ -1485,9 +1460,7 @@ class Orchestrator:
                 )
         return out
 
-    async def _collect_caveats(
-        self, summaries: dict[str, NodeSummary]
-    ) -> list[str]:
+    async def _collect_caveats(self, summaries: dict[str, NodeSummary]) -> list[str]:
         """Caveats surfaced in the final report (§6.8): unverified claims /
         dead ends per reduced node, abandoned questions, plus each node
         summary's own caveats (which include tier-difference footnotes from
@@ -1526,14 +1499,11 @@ class Orchestrator:
         # IllegalTransition and (previously, swallowed) make the round a no-op.
         has_event_fn = getattr(self.ledger, "has_event", None)
         if has_event_fn is not None:
-            already_reinvestigated = await has_event_fn(
-                "conflict_reinvestigation"
-            )
+            already_reinvestigated = await has_event_fn("conflict_reinvestigation")
         else:
             # Minimal ledger doubles fall back to the in-memory counter.
             already_reinvestigated = (
-                self._reinvestigation_count
-                >= config.conflict_reinvestigation_cap
+                self._reinvestigation_count >= config.conflict_reinvestigation_cap
             )
         if reinvestigate and not already_reinvestigated:
             self._reinvestigation_count += 1
@@ -1556,9 +1526,7 @@ class Orchestrator:
             # from, and reinvestigation is an *optional* extra round.
             try:
                 await self._run_round()
-                summaries, reinvestigate = await self._reduce_and_resolve(
-                    root_id
-                )
+                summaries, reinvestigate = await self._reduce_and_resolve(root_id)
             except TokenBudgetExhausted as exc:
                 await self._mark_stop_reason(exc)
 
@@ -1752,9 +1720,7 @@ class Orchestrator:
                     #
                     # 재개마다 1건씩 남는 것이 맞다 -- 두 번 재개하며 각각 회수했다면
                     # 그것은 서로 다른 두 사건이다.
-                    await self.ledger.log(
-                        "recovered", None, {"questions": recovered}
-                    )
+                    await self.ledger.log("recovered", None, {"questions": recovered})
                     await self._emit("recovered", {"questions": recovered})
                     await self._checkpoint()
 

@@ -190,7 +190,11 @@ def test_migration_052_adds_nullable_usage_columns_not_claimed_by() -> None:
 
 
 def test_bootstrap_order_includes_052() -> None:
-    order = (REPO_ROOT / "db" / "BOOTSTRAP_ORDER.txt").read_text(encoding="utf-8")
+    # 정본 순서는 이제 BOOTSTRAP_ORDER.txt 의 규칙에서 **유도된다** (2026-09-20).
+    # 파일 본문을 읽으면 번호순 자동 포함분이 안 보이므로 유도 결과를 본다.
+    from scripts.verify_schema_bootstrap import bootstrap_order
+
+    order = bootstrap_order()
     assert "db/migrations/052_add_lesson_usage_metrics.sql" in order
     assert order.index("db/migrations/051_allow_user_question_approvals.sql") < order.index(
         "db/migrations/052_add_lesson_usage_metrics.sql"

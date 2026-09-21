@@ -106,9 +106,7 @@ async def test_build_orchestrator_uses_dev_cap_and_pure_worker(monkeypatch):
     from neos.config.settings import settings
 
     custom_caps = {1: 0.51, 2: 0.72, 3: 0.93}
-    monkeypatch.setattr(
-        settings.config.deep_analysis, "confidence_cap", custom_caps
-    )
+    monkeypatch.setattr(settings.config.deep_analysis, "confidence_cap", custom_caps)
     orchestrator = await build_orchestrator(
         object(),
         "run00001",
@@ -159,3 +157,158 @@ async def test_build_orchestrator_resolves_judge_at_construction_boundary(
 
     assert orchestrator.agentic_grader.judge_model == expected_model
     assert orchestrator.report_grader.judge_model == expected_model
+
+
+# ---- 트랙 J: 조사 경로 배선 --------------------------------------------------
+
+
+async def _research_search_fn(query, k):
+    return []
+
+
+@pytest.mark.asyncio
+async def test_code_research_off_wires_no_sandbox(monkeypatch):
+    """I1. 꺼져 있으면 provider 도 런타임 팩토리도 만들지 않는다."""
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", False)
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert orchestrator.sandbox_provider is None
+    assert orchestrator.research_runtime_factory is None
+
+
+@pytest.mark.asyncio
+async def test_code_research_on_wires_a_provider_and_a_runtime_factory(monkeypatch):
+    """켜지면 둘 다 붙는다 -- 하나라도 없으면 질문마다 실패한다."""
+    import neos.coding.sandbox.factory as factory_module
+
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", True)
+    sentinel = object()
+    monkeypatch.setattr(
+        factory_module, "create_sandbox_provider", lambda config, **kw: sentinel
+    )
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert orchestrator.sandbox_provider is sentinel
+    assert callable(orchestrator.research_runtime_factory)
+
+
+@pytest.mark.asyncio
+async def test_code_research_off_leaves_the_grader_without_a_reexecutor(monkeypatch):
+    """I1. 꺼져 있으면 채점기는 이전과 같은 객체다.
+
+    계산 클레임은 `specs_enabled` 에 analyze 가 없어 만들어지지도 않으므로,
+    재실행기가 없는 것이 degrade 가 아니라 **정확한 상태**다.
+    """
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", False)
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert orchestrator.grader.reexecutor is None
+
+
+@pytest.mark.asyncio
+async def test_code_research_on_gives_the_grader_a_reexecutor(monkeypatch):
+    """켜지면 채점기가 계산 클레임을 **판정할 수 있게** 된다.
+
+    이것이 없으면 `grade_computed` 가 배선 실수로 터진다 -- 조용히 통과
+    시키지 않기로 한 자리이므로, 배선이 빠지면 런타임에서 시끄럽다.
+    """
+    import neos.coding.sandbox.factory as factory_module
+
+    from neos.workflow.deep_analysis.reexecutor import SandboxReexecutor
+
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", True)
+    monkeypatch.setattr(
+        factory_module, "create_sandbox_provider", lambda config, **kw: object()
+    )
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert isinstance(orchestrator.grader.reexecutor, SandboxReexecutor)
+
+
+@pytest.mark.asyncio
+async def test_the_reexecutor_carries_the_configured_limits(monkeypatch):
+    """한도는 설정에서 온다 -- 코드에 박힌 값이면 계약 §7 이 거짓이 된다."""
+    import neos.coding.sandbox.factory as factory_module
+
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", True)
+    monkeypatch.setattr(
+        settings.config.deep_analysis.code_research.reexecution, "cpu_sec", 7.0
+    )
+    monkeypatch.setattr(
+        settings.config.deep_analysis.code_research.reexecution, "stdout_bytes", 4096
+    )
+    monkeypatch.setattr(
+        factory_module, "create_sandbox_provider", lambda config, **kw: object()
+    )
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    limits = orchestrator.grader.reexecutor._limits
+    assert limits.command_timeout_sec == 7.0
+    assert limits.max_output_bytes == 4096
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_be_built_leaves_the_grader_bare(monkeypatch):
+    """provider 가 없으면 재실행기도 없다 -- 부술 것이 없는 재실행기를 쥐면
+    계산 클레임이 채점 중에 터진다."""
+    import neos.coding.sandbox.factory as factory_module
+
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", True)
+
+    def boom(config, **kwargs):
+        raise RuntimeError("no docker here")
+
+    monkeypatch.setattr(factory_module, "create_sandbox_provider", boom)
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert orchestrator.grader.reexecutor is None
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_be_built_does_not_break_the_run(monkeypatch):
+    """빌드를 터뜨리지 않는다.
+
+    빠진 조각은 `_run_worker` 가 질문 단위로 시끄럽게 보고한다
+    (`sandbox_provider_missing`). 여기서 터뜨리면 조사와 무관한 단계까지 같이
+    죽고, 그것은 플래그 하나가 런 전체를 못 돌게 만드는 모양이다.
+    """
+    import neos.coding.sandbox.factory as factory_module
+
+    _install_fake_ledger(monkeypatch)
+    monkeypatch.setattr(settings.config.deep_analysis, "code_research_enabled", True)
+
+    def boom(config, **kwargs):
+        raise RuntimeError("no docker here")
+
+    monkeypatch.setattr(factory_module, "create_sandbox_provider", boom)
+
+    orchestrator = await build_orchestrator(
+        object(), "run00001", profile="dev", search_fn=_research_search_fn
+    )
+
+    assert orchestrator.sandbox_provider is None
+    assert orchestrator.research_runtime_factory is None

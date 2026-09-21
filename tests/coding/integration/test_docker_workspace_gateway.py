@@ -49,7 +49,8 @@ async def test_real_docker_workspace_watcher_and_pty_reconnect(tmp_path) -> None
         async for event in terminal.subscribe(after_cursor=0):
             if isinstance(event.value, PtyOutput) and b"docker-gateway" in event.value.data:
                 replay = await terminal.replay(after_cursor=event.cursor - 1)
-                assert replay[-1].cursor == event.cursor
+                # Anchor, not tail: the shell keeps emitting after the match.
+                assert replay[0].cursor == event.cursor
                 break
         await session.kill_pty(terminal.pty_id)
         await watcher.aclose()

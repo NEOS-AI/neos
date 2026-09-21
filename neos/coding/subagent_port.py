@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from neos.coding.redact import strip_binary_payloads
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk, ToolValidationError
 from neos.subagent.catalog import lookup_spec
 from neos.subagent.types import SandboxMode
@@ -64,7 +65,7 @@ class CodingToolPort:
             raise CodingToolPortError("sandbox_session_missing")
         result = await self._executor.execute(self._session, validated)
         if hasattr(result, "to_mapping"):
-            return dict(result.to_mapping())
+            return strip_binary_payloads(dict(result.to_mapping()))
         if isinstance(result, Mapping):
             return dict(result)
         return {"value": result}

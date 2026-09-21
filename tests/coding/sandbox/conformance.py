@@ -139,7 +139,13 @@ class SandboxProviderConformance:
         await session.write_pty(terminal.pty_id, b"printf conformance\n")
         output = await wait_for_output(terminal, contains=b"conformance")
         replay = await terminal.replay(after_cursor=output.cursor - 1)
-        assert replay[-1].cursor == output.cursor
+        # Replay returns everything journaled since the cursor, and the shell
+        # keeps producing -- it echoes the typed line, then prints, then draws
+        # a prompt. So the tail is whatever happened to land before the read;
+        # what this layer guarantees is that replay resumes *at* the cursor
+        # asked for, with that event intact. Assert the anchor, not the tail.
+        assert replay[0].cursor == output.cursor
+        assert replay[0].value == output.value
         await session.kill_pty(terminal.pty_id)
 
     async def test_path_and_environment_policy(self, provider) -> None:

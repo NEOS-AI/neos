@@ -37,6 +37,12 @@ NODE_LABELS: Dict[str, str] = {
     "mission_validator": "Validating mission",
     "mission_integrator": "Integrating mission results",
     "response_generator": "Generating response",
+    # 트랙 I 서브에이전트 템플릿 노드 (neos/workflow/subagent_nodes.py). 이 모듈은
+    # 템플릿 레지스트리를 import 하지 않는다(neos.subagent 가 따라 올라온다) --
+    # 대신 `tests/workflow/test_subagent_node_labels.py` 가 **양방향으로** 짝을 건다:
+    # 템플릿마다 라벨이 있고 `template.label` 과 같으며, 템플릿도 정적 노드도 아닌
+    # 라벨은 없다. 라벨이 없으면 진행 이벤트가 노드 이름을 title-case 로 보여 준다.
+    "explore_web": "Investigating with a subagent",
 }
 
 # 노드별 예상 소요 시간 (초) — 초기 정적 값 (히스토리가 없을 때 fallback)

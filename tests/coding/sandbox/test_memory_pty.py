@@ -31,8 +31,11 @@ async def test_pty_replays_output_after_client_disconnect(
     output = await _wait_for_output(terminal, b"reconnectable")
     replay = await terminal.replay(after_cursor=output.cursor - 1)
 
-    assert isinstance(replay[-1].value, PtyOutput)
-    assert b"reconnectable" in replay[-1].value.data
+    # The event at the requested cursor is the one replay guarantees; the
+    # tail is a race against the shell's next prompt.
+    assert replay[0].cursor == output.cursor
+    assert isinstance(replay[0].value, PtyOutput)
+    assert b"reconnectable" in replay[0].value.data
     await session.kill_pty(terminal.pty_id)
     await provider.close()
 

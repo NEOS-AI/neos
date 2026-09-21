@@ -6,11 +6,17 @@ README 순서로 55개를 적용하면 4개가 실패하고, 046 은 목록에�
 
 이 스크립트는 두 층으로 검사한다.
 
-**목록 완전성** (Docker 불필요, `--check-list-only`)
-    `db/**/*.sql` 중 `db/BOOTSTRAP_ORDER.txt` 에 없는 파일이 있으면 실패한다.
-    순서는 번호순이 아니라서 자동 유도가 불가능하다 -- 목록을 손으로 드는
-    비용은 치르되, **누락은 기계가 잡는다.** 새 마이그레이션을 더하고 목록에
-    적지 않으면 여기서 걸린다.
+**선언·이름·가드 검사** (Docker 불필요, `--check-list-only`)
+    순서는 이제 `db/BOOTSTRAP_ORDER.txt` 의 규칙에서 **유도한다** -- 기반 스키마는
+    `[base]` 에 명시하고(번호가 없어 유도 불가), 마이그레이션은 번호순 자동이며
+    `[hoist]` 규칙만 그것을 덮는다. 2026-09-20 이전에는 69줄을 손으로 들었다.
+
+    자동 유도의 대가를 세 가지 검사로 치른다. (1) `db/*.sql` 이 `[base]` 와
+    양방향으로 맞는가. (2) `db/migrations/*.sql` 이 `NNN_이름.sql` 인가 --
+    아무 파일이나 딸려 들어가지 않게 하는 울타리다. (3) **가드 자리가 맞는가** --
+    아래 `guard_violations()`. 세 번째가 핵심이다: 손으로 들 때는 "어디에 넣을까" 가
+    사람의 판단이었고 그 판단이 실제로 060 을 구했다. 자동 유도로 바꾼 이상
+    기계가 대신 해야 한다.
 
 **적용 검증** (Docker 필요)
     일회용 컨테이너의 빈 DB 에 정본 순서대로 전부 적용하고 실패 0 건을
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -55,14 +62,86 @@ class Failure:
     message: str
 
 
-def bootstrap_order(order_file: pathlib.Path = _ORDER_FILE) -> list[str]:
-    """정본 순서를 읽는다. 빈 줄과 주석은 버린다."""
-    lines = order_file.read_text(encoding="utf-8").splitlines()
-    return [
-        stripped
-        for line in lines
-        if (stripped := line.strip()) and not stripped.startswith("#")
-    ]
+_MIGRATION_NAME = re.compile(r"^(\d{3})_[A-Za-z0-9_]+\.sql$")
+
+# `information_schema.tables` 로 "이 테이블이 이미 있어야 한다" 를 묻는 가드. 줄바꿈이
+# 섞이므로 주석을 지우고 공백을 정규화한 뒤 같은 문장(세미콜론 전) 안에서만 찾는다.
+_GUARD = re.compile(
+    r"(?P<polarity>IF\s+(?:NOT\s+)?EXISTS|AND\s+(?:NOT\s+)?EXISTS)?\s*\(?\s*SELECT[^;]{0,120}?"
+    r"information_schema\.tables\b[^;]{0,200}?table_name\s*=\s*'(?P<table>[A-Za-z_][A-Za-z0-9_]*)'",
+    re.I,
+)
+_CREATE_TABLE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"']?(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)", re.I
+)
+_LINE_COMMENT = re.compile(r"--[^\n]*")
+_WHITESPACE = re.compile(r"\s+")
+
+
+@dataclass(frozen=True)
+class Rules:
+    """`BOOTSTRAP_ORDER.txt` 가 선언하는 것 전부."""
+
+    base: list[str]
+    hoists: list[tuple[str, str]]  # (앞당길 파일, 그 앞에 놓을 기준 파일) -- 파일명만
+
+
+def parse_rules(order_file: pathlib.Path = _ORDER_FILE) -> Rules:
+    """`[base]` 목록과 `[hoist]` 규칙을 읽는다. 빈 줄과 주석은 버린다."""
+    base: list[str] = []
+    hoists: list[tuple[str, str]] = []
+    section = None
+    for raw in order_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].lower()
+            continue
+        if section == "base":
+            base.append(line)
+        elif section == "hoist":
+            parts = line.split()
+            if len(parts) != 3 or parts[1].lower() != "before":
+                raise ValueError(f"[hoist] 형식은 `<파일> before <파일>` 이다: {line!r}")
+            hoists.append((parts[0], parts[2]))
+        else:
+            raise ValueError(f"[base]/[hoist] 밖에 내용이 있다: {line!r}")
+    return Rules(base=base, hoists=hoists)
+
+
+def discovered_migrations(repo: pathlib.Path = _REPO) -> list[str]:
+    """`db/migrations/*.sql` 을 번호순으로. 이름 규칙 위반은 여기서 거른다."""
+    found = []
+    for path in sorted((repo / "db" / "migrations").glob("*.sql")):
+        match = _MIGRATION_NAME.match(path.name)
+        if match:
+            found.append((int(match.group(1)), f"db/migrations/{path.name}"))
+    return [relative for _, relative in sorted(found)]
+
+
+def bootstrap_order(order_file: pathlib.Path = _ORDER_FILE, repo: pathlib.Path = _REPO) -> list[str]:
+    """정본 순서를 **유도한다**: 기반 스키마 + (번호순 마이그레이션에 hoist 적용).
+
+    예전에는 이 함수가 69줄을 그대로 읽었다. 이제 마이그레이션은 번호순으로 자동
+    유도되고 `[hoist]` 규칙만 그것을 덮는다 -- 새 마이그레이션이 파일을 건드리지
+    않고 들어온다. 자리를 잘못 잡는 위험은 `guard_violations()` 가 대신 잡는다.
+    """
+    rules = parse_rules(order_file)
+    migrations = discovered_migrations(repo)
+
+    hoisted = {name for name, _ in rules.hoists}
+    remaining = [p for p in migrations if pathlib.Path(p).name not in hoisted]
+
+    # 기준 파일 앞에 규칙 선언 순서대로 끼워 넣는다.
+    for name, anchor in rules.hoists:
+        relative = f"db/migrations/{name}"
+        anchor_relative = f"db/migrations/{anchor}"
+        if anchor_relative not in remaining:
+            raise ValueError(f"[hoist] 기준 파일을 순서에서 찾지 못했다: {anchor}")
+        remaining.insert(remaining.index(anchor_relative), relative)
+
+    return list(rules.base) + remaining
 
 
 def discovered_sql_files(repo: pathlib.Path = _REPO) -> list[str]:
@@ -71,27 +150,96 @@ def discovered_sql_files(repo: pathlib.Path = _REPO) -> list[str]:
     return [str(path.relative_to(repo)) for path in found]
 
 
-def check_list(repo: pathlib.Path = _REPO) -> list[str]:
-    """목록과 실물의 차이를 사람이 읽을 문장으로 낸다. 빈 리스트면 통과."""
-    ordered = bootstrap_order()
+def _normalized(path: pathlib.Path) -> str:
+    return _WHITESPACE.sub(" ", _LINE_COMMENT.sub("", path.read_text(encoding="utf-8")))
+
+
+def guard_violations(order: list[str], repo: pathlib.Path = _REPO) -> list[str]:
+    """선행 테이블을 요구하는 가드보다 그 테이블을 만드는 파일이 **뒤에** 있는 경우.
+
+    이것이 자동 유도의 안전망이다. `IF EXISTS (SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'X')` 로 감싼 블록은 X 가 없으면 **에러 없이 통째로 건너뛴다**.
+    그래서 적용은 초록인데 컬럼·인덱스·트리거가 조용히 빠진다 -- 2026-09-20 에 060 이
+    정확히 그랬다(1회 적용과 2회 적용의 스키마가 달랐다). 사람이 목록을 손으로 들 때는
+    "어디에 넣을까" 가 그 판단이었고, 자동 유도로 바꾼 이상 여기서 대신 잡아야 한다.
+
+    `NOT EXISTS` 는 "없으면 만든다" 이므로 선행 요구가 아니다 -- 건너뛴다.
+    """
+    positions = {relative: index for index, relative in enumerate(order)}
+    creator: dict[str, str] = {}
+    guards: list[tuple[str, str]] = []
+
+    for relative in order:
+        text = _normalized(repo / relative)
+        for match in _CREATE_TABLE.finditer(text):
+            creator.setdefault(match.group(1), relative)
+        for match in _GUARD.finditer(text):
+            if "NOT" in (match.group("polarity") or "").upper():
+                continue
+            guards.append((relative, match.group("table")))
+
     problems: list[str] = []
-
-    duplicates = sorted({p for p in ordered if ordered.count(p) > 1})
-    for path in duplicates:
-        problems.append(f"정본 순서에 중복으로 실려 있다: {path}")
-
-    on_disk = set(discovered_sql_files(repo))
-    listed = set(ordered)
-
-    for path in sorted(on_disk - listed):
+    for relative, table in guards:
+        source = creator.get(table)
+        if source is None or positions[source] <= positions[relative]:
+            continue
         problems.append(
-            f"저장소에 있으나 정본 순서에 없다: {path} "
-            "(db/BOOTSTRAP_ORDER.txt 에 적을 것 -- 적지 않으면 배포에서 빠진다)"
+            f"{relative} 가 `{table}` 이 이미 있기를 요구하는데, 그것을 만드는 "
+            f"{source} 가 뒤에 있다 (db/BOOTSTRAP_ORDER.txt 의 [hoist] 에 "
+            f"`{pathlib.Path(source).name} before {pathlib.Path(relative).name}` 를 더할 것 -- "
+            "지금 상태로는 그 가드 블록이 에러 없이 통째로 건너뛰어진다)"
         )
-    for path in sorted(listed - on_disk):
-        problems.append(f"정본 순서가 없는 파일을 가리킨다: {path}")
-
     return problems
+
+
+def check_list(repo: pathlib.Path = _REPO) -> list[str]:
+    """선언과 실물의 차이를 사람이 읽을 문장으로 낸다. 빈 리스트면 통과."""
+    problems: list[str] = []
+    try:
+        rules = parse_rules()
+    except ValueError as error:
+        return [str(error)]
+
+    # `[base]` 는 양방향으로 맞아야 한다 -- 번호가 없어 유도할 수 없기 때문이다.
+    base_on_disk = {str(p.relative_to(repo)) for p in repo.glob("db/*.sql")}
+    base_listed = set(rules.base)
+    for path in sorted({p for p in rules.base if rules.base.count(p) > 1}):
+        problems.append(f"[base] 에 중복으로 실려 있다: {path}")
+    for path in sorted(base_on_disk - base_listed):
+        problems.append(
+            f"저장소에 있으나 [base] 에 없다: {path} "
+            "(db/BOOTSTRAP_ORDER.txt 의 [base] 에 적을 것 -- 적지 않으면 배포에서 빠진다)"
+        )
+    for path in sorted(base_listed - base_on_disk):
+        problems.append(f"[base] 가 없는 파일을 가리킨다: {path}")
+
+    # 마이그레이션은 자동 포함이므로, 그 대가로 이름 규칙을 강제한다.
+    numbers: dict[str, list[str]] = {}
+    for path in sorted((repo / "db" / "migrations").glob("*.sql")):
+        match = _MIGRATION_NAME.match(path.name)
+        if not match:
+            problems.append(
+                f"마이그레이션 이름 규칙 위반: db/migrations/{path.name} "
+                "(`NNN_이름.sql` 이어야 자동 포함된다)"
+            )
+            continue
+        numbers.setdefault(match.group(1), []).append(path.name)
+    for number, names in sorted(numbers.items()):
+        if len(names) > 1:
+            problems.append(f"마이그레이션 번호 {number} 가 중복이다: {', '.join(sorted(names))}")
+
+    # hoist 규칙이 가리키는 파일이 실재하는가.
+    migration_names = {pathlib.Path(p).name for p in discovered_migrations(repo)}
+    for name, anchor in rules.hoists:
+        for which, value in (("앞당길 파일", name), ("기준 파일", anchor)):
+            if value not in migration_names:
+                problems.append(f"[hoist] 의 {which}을 찾지 못했다: {value}")
+
+    if problems:
+        return problems
+
+    # 자리까지 맞는가 -- 자동 유도의 안전망.
+    return guard_violations(bootstrap_order(repo=repo), repo)
 
 
 def _run(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
@@ -200,7 +348,7 @@ def main() -> int:
     parser.add_argument(
         "--check-list-only",
         action="store_true",
-        help="목록 완전성만 검사한다 (Docker 불필요)",
+        help="선언·이름·가드 검사만 한다 (Docker 불필요)",
     )
     parser.add_argument("--image", default=_DEFAULT_IMAGE, help="사용할 postgres 이미지")
     parser.add_argument("--keep", action="store_true", help="검증 컨테이너를 남긴다")
@@ -213,12 +361,12 @@ def main() -> int:
 
     problems = check_list()
     if problems:
-        print("정본 순서와 저장소가 어긋난다:")
+        print("정본 순서 선언과 저장소가 어긋난다:")
         for problem in problems:
             print(f"  - {problem}")
         return 1
     order = bootstrap_order()
-    print(f"목록 완전성 통과 -- {len(order)}개 파일")
+    print(f"선언·이름·가드 검사 통과 -- 적용 대상 {len(order)}개 파일")
 
     if args.check_list_only:
         return 0

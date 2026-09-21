@@ -304,6 +304,47 @@ class WorkflowConfig(StrictConfigModel):
         gt=0,
         description="설계 프롬프트에 박히는 참고용 노드 비용 상한. 검증기가 강제하지 않는다.",
     )
+    # 트랙 I (K25′, docs/GRAPH_SUBAGENT_INTEGRATION_DESIGN.md GS-K9). 설계된
+    # 그래프가 서브에이전트 템플릿 노드를 쓸 수 있는가. 꺼져 있으면 템플릿은
+    # 카탈로그에도 검증기에도 조립기에도 나타나지 않는다 -- 기존 31개 계약의
+    # 검증 결과가 구성상 그대로다.
+    subagent_nodes_enabled: bool = Field(
+        default=False,
+        description="설계된 그래프에 서브에이전트 템플릿 노드를 허용할지. graph_design_enabled 와 subagent_budget_micros 를 요구한다.",
+    )
+    # 한 실행(=조립된 그래프 하나) 안에서 동시에 advance 하는 자식 수.
+    # K18 과 같은 기본 1 · 상한 4. 프로세스 전역이 아니다.
+    subagent_max_active: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+        description="한 설계 실행 안에서 동시에 한 걸음을 가는 서브에이전트 자식 수.",
+    )
+    # 템플릿 노드 비용 상한 합의 예산(micros). 기본값을 지어내지 않는다 --
+    # 근거 없는 수는 근거 없는 거부·승인을 만든다(`graph_design_budget_hint`
+    # 주석). 켜는 사람이 적는다.
+    subagent_budget_micros: int | None = Field(
+        default=None,
+        gt=0,
+        description="템플릿 노드 계산 비용 상한 합의 예산(micros). subagent_nodes_enabled 이면 필수.",
+    )
+
+    @model_validator(mode="after")
+    def _subagent_nodes_need_design_and_budget(self) -> "WorkflowConfig":
+        if not self.subagent_nodes_enabled:
+            return self
+        missing = []
+        if not self.graph_design_enabled:
+            missing.append("graph_design_enabled")
+        if self.subagent_budget_micros is None:
+            missing.append("subagent_budget_micros")
+        if missing:
+            raise ValueError(
+                "workflow.subagent_nodes_enabled 는 "
+                + ", ".join(missing)
+                + " 를 요구한다"
+            )
+        return self
 
 
 class ResearchHarnessModelChecksConfig(StrictConfigModel):
@@ -383,6 +424,10 @@ class SecretsConfig(StrictConfigModel):
     # 관리형 샌드박스 provider 참조 봉인 키 (base64). 평문 값은 여기 두지
     # 않는다 -- .env.template 에도 이름만 남긴다.
     managed_provider_reference_key: str | None = Field(default=None, repr=False)
+    # 관리형 코딩 샌드박스의 물리 ownership HMAC 키 (base64, 정확히 32바이트).
+    # 참조 봉인 키와 **다른** 키여야 한다 -- 한 키가 새면 봉인과 소유권 증명이
+    # 함께 무너지지 않게 한다 (neos/coding/sandbox/managed/identity.py).
+    managed_coding_ownership_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -804,6 +849,34 @@ class DeepAnalysisDiscardRecallConfig(StrictConfigModel):
     over_discard_lower_bound: float = 0.40
 
 
+class CodeResearchReexecutionConfig(StrictConfigModel):
+    """채점기가 계산 클레임을 다시 돌릴 때의 한도 (계약 §7)."""
+
+    cpu_sec: float = Field(default=30.0, gt=0)
+    memory_mb: int = Field(default=512, gt=0)
+    stdout_bytes: int = Field(default=1_048_576, gt=0)
+
+
+class CodeResearchConfig(StrictConfigModel):
+    """트랙 J. 전부 기본 off·보수값이고, 값을 바꾸는 커밋은 표본 경계다 (계약 §7)."""
+
+    # analyze·compose 는 표본 경계마다 **하나씩** 연다(계약 §8).
+    specs_enabled: list[str] = Field(default_factory=lambda: ["research"])
+    sandbox_profile: str = "research-offline-v1"
+    # `/evidence` 의 질문별 blob 합계 상한. 한도에 닿으면 **새 fetch 를 거절한다**
+    # -- 오래된 blob 을 빼지 않는다(결정 2026-09-20, 계약 §9).
+    # 축출하면 이미 제출된 계산 클레임의 입력이 사라져 채점 때
+    # `E_COMPUTE_INPUT_UNFETCHED` 로 **나중에 조용히** 죽는다.
+    evidence_bytes_cap: int = Field(default=32 * 1024 * 1024, gt=0)
+    # 2*max_turns+1 걸음 상한. 티켓의 max_turns 상한이 8 이다.
+    max_steps: int = Field(default=17, ge=1)
+    # dig 의 wall_clock_cap(600)과 같은 크기에서 시작한다.
+    wall_clock_sec: float = Field(default=600.0, gt=0)
+    reexecution: CodeResearchReexecutionConfig = Field(
+        default_factory=CodeResearchReexecutionConfig
+    )
+
+
 class DeepAnalysisConfig(StrictConfigModel):
     enabled: bool = False
     complexity_threshold: float = 0.5
@@ -972,6 +1045,11 @@ class DeepAnalysisConfig(StrictConfigModel):
     # `reserve` clamps this by the caller's own `max_output_tokens`, so stages
     # that deliberately ask for less (the report judge asks 800) are unaffected.
     min_viable_output_tokens: int = Field(default=2048, ge=1)
+
+    # 트랙 J. 켜면 워커가 샌드박스에서 코드를 짜고 돌린다. 기본 off 이고,
+    # development 밖에서 켜려면 관리형 평면이 필요하다(I7).
+    code_research_enabled: bool = False
+    code_research: CodeResearchConfig = Field(default_factory=CodeResearchConfig)
 
     # Input allowances for the finalization stages, expressed as multiples of
     # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
@@ -1554,6 +1632,26 @@ class ManagedSandboxConfig(StrictConfigModel):
         ge=1,
         description="provider 참조 봉인에 쓰는 키 버전.",
     )
+    coding_profile: str = Field(
+        default="offline-v1",
+        pattern=r"^[a-z0-9][a-z0-9-]*-v[0-9]+$",
+        description=(
+            "코딩 샌드박스(`sandbox.provider: managed`)의 named profile. 코드 "
+            "레지스트리(`neos/coding/sandbox/managed/profiles.py`)에 없거나 provider "
+            "capability probe 가 정확히 만족하지 않으면 create 전에 "
+            "`profile_unsupported` 로 거절한다. 기본 `offline-v1` 은 outbound/inbound "
+            "모두 deny."
+        ),
+    )
+    sandboxd_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description=(
+            "이미지에 bake 된 `neos-sandboxd` 의 bundle digest 고정값. 비우면 이 "
+            "소스 트리의 guest 모듈 digest 를 요구한다. handshake 가 다르면 세션을 "
+            "열지 않는다."
+        ),
+    )
 
     @field_validator("cleanup_retry_backoff_seconds")
     @classmethod
@@ -1574,9 +1672,10 @@ class ManagedSandboxConfig(StrictConfigModel):
 
 class SandboxConfig(StrictConfigModel):
     enabled: bool = False
-    # memory | docker | managed. `managed` runs the coding loop on the managed
-    # adapter plane (`sandbox.managed.provider`: docker | e2b | modal) and
-    # requires `sandbox.managed.enabled`.
+    # memory | docker | managed. `managed` runs the coding loop on a managed
+    # coding sandbox (`sandbox.managed.provider`: e2b | modal) through a provider
+    # client, the durable sandbox ledger, and the guest `neos-sandboxd`. It
+    # requires `sandbox.managed.enabled` and an injected backend.
     provider: Literal["memory", "docker", "managed"] = "memory"
     lifecycle: SandboxLifecycleConfig = Field(
         default_factory=SandboxLifecycleConfig
@@ -1893,6 +1992,43 @@ class AppConfig(StrictConfigModel):
         return self
 
     @model_validator(mode="after")
+    def validate_code_research_gate(self) -> "AppConfig":
+        """I7. development 밖에서 트랙 J 를 켜려면 관리형 평면이 있어야 한다.
+
+        설정에 `b2` 라는 값이 없으므로 게이트를 **관리형 평면**으로 읽는다
+        (계약 §1 의 I7 주석, 2026-09-20). Docker 는 배포 경계가 아니다 --
+        바로 위 "production + docker 거절" 과 같은 판단이고, 같은 fail-closed
+        형태로 둔다.
+        """
+        if not self.deep_analysis.code_research_enabled:
+            return self
+        # `research-offline-v1` 은 레지스트리에서 DENY_ALL 이지만 Docker
+        # provider 는 profile 을 **읽지 않는다**(`docker.py` 에 그 단어가 없다).
+        # 그 경로의 격리는 오직 이 설정에서 오고, 필드는 제약 없는 문자열이다.
+        # 묶어 두지 않으면 프로파일에 "네트워크 없음" 이라고 적힌 채 컨테이너에
+        # 네트워크가 붙는다. development 에서도 적용된다 -- 조사 워커가 도는
+        # 곳이 바로 거기다.
+        if (
+            self.sandbox.provider == "docker"
+            and self.sandbox.docker.network_mode != "none"
+        ):
+            raise ValueError(
+                "code research on docker requires "
+                "sandbox.docker.network_mode=none: the research-offline-v1 "
+                "profile denies all network, but the Docker provider never "
+                "reads profiles, so the container would still get one."
+            )
+        if self.environment == "development":
+            return self
+        if self.sandbox.provider != "managed" or not self.sandbox.managed.enabled:
+            raise ValueError(
+                "code research outside development requires the managed "
+                "sandbox plane (sandbox.provider=managed and "
+                "sandbox.managed.enabled). Docker is not a deployment boundary."
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_managed_provider_reference_key(self) -> "AppConfig":
         """관리형이 켜졌는데 봉인 키가 없거나 부실하면 기동을 막는다.
 
@@ -1924,6 +2060,28 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "managed_provider_reference_key must decode to 16, 24, or 32 bytes"
             )
+        if self.sandbox.provider == "managed":
+            # 코딩 provider 는 vendor object 에 붙기 전에 키 있는 물리 digest 를
+            # 검증한다. 키가 없으면 소유권을 증명할 수단이 없다.
+            ownership = self.secrets.managed_coding_ownership_key
+            if not ownership:
+                raise ValueError(
+                    "sandbox.provider=managed requires "
+                    "secrets.managed_coding_ownership_key"
+                )
+            try:
+                ownership_bytes = base64.b64decode(ownership, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise ValueError(
+                    "managed_coding_ownership_key must be valid base64"
+                ) from error
+            if len(ownership_bytes) != 32:
+                raise ValueError("managed_coding_ownership_key must decode to 32 bytes")
+            if ownership_bytes == key_bytes:
+                raise ValueError(
+                    "managed_coding_ownership_key must differ from "
+                    "managed_provider_reference_key"
+                )
         return self
 
     @model_validator(mode="after")

@@ -82,6 +82,7 @@ SECRET_ENV_KEYS = {
     "CHANNEL_SLACK_BOT_TOKEN",
     "CHANNEL_SLACK_APP_TOKEN",
     "MANAGED_PROVIDER_REFERENCE_KEY",
+    "MANAGED_CODING_OWNERSHIP_KEY",
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "AUTH_SECRET",
@@ -126,6 +127,7 @@ SECRET_ENV_MAPPING = {
     "CHANNEL_SLACK_BOT_TOKEN": "secrets.channel_slack_bot_token",
     "CHANNEL_SLACK_APP_TOKEN": "secrets.channel_slack_app_token",
     "MANAGED_PROVIDER_REFERENCE_KEY": "secrets.managed_provider_reference_key",
+    "MANAGED_CODING_OWNERSHIP_KEY": "secrets.managed_coding_ownership_key",
     "GOOGLE_OAUTH_CLIENT_ID": "auth.google_oauth_client_id",
     "GOOGLE_OAUTH_CLIENT_SECRET": "auth.google_oauth_client_secret",
 }

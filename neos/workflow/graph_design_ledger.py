@@ -52,14 +52,14 @@ deep_analysis 하네스는 값비싼 교훈 하나를 남겼다: **이벤트를 
 import asyncio
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from neos.config.settings import settings
 from neos.workflow.contracts import NodeContract
 from neos.workflow.graph_designer import DesignRequest, GraphDesigner
-from neos.workflow.topology import GraphTopology, validate_topology
+from neos.workflow.topology import GraphTopology, SubagentRuleInputs, validate_topology
 
 # sha256 다이제스트(64자) 전체를 실어 나르는 건 원장 페이로드에 과하다. 앞
 # 16자(64비트)면 우연한 충돌 확률이 무시할 만한 수준이면서도 로그에서 눈으로
@@ -130,6 +130,12 @@ async def design_graph_or_fallback(
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
     timeout_sec: float | None = None,
+    # 트랙 I. 둘 다 기본 `None` 이면 이 함수는 추가 전과 같은 경로를 탄다.
+    # `expand` 는 설계자 출력에 템플릿 노드의 자기 루프·걸음 상한을 결정론적으로
+    # 붙인다 -- **검증 전에** 붙여야 검증기가 그 사이클과 상한을 본다. 설계자는
+    # 여전히 정적 엣지만 낸다(설계자 ≠ 승인자).
+    expand: Callable[[GraphTopology], GraphTopology] | None = None,
+    subagent: SubagentRuleInputs | None = None,
 ) -> DesignOutcome:
     """설계자를 호출하고, 성공하면 검증하고, 어느 쪽이든 이벤트를 남긴다.
 
@@ -161,6 +167,8 @@ async def design_graph_or_fallback(
         topology = await asyncio.wait_for(
             designer.design(request), timeout=effective_timeout
         )
+        if expand is not None:
+            topology = expand(topology)
         violations = validate_topology(
             topology,
             contracts=contracts,
@@ -168,6 +176,7 @@ async def design_graph_or_fallback(
             must_write=must_write,
             budget=budget,
             node_costs=node_costs,
+            subagent=subagent,
         )
     except TimeoutError:
         events.append(

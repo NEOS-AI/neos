@@ -96,4 +96,7 @@ export type CodingProjectionState = {
   maxCostMicros: number | null;
   gap: { expected: number; received: number } | null;
   projectionIssue: { code: "unknown_text_part"; eventSeq: number } | null;
+  // The model's latest running note, shown while a long tool chain is silent.
+  // Cleared once the model starts speaking, so it never competes with prose.
+  thinkingStatus: string | null;
 };

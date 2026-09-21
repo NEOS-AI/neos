@@ -15,6 +15,10 @@ from neos.coding.model.base import (
     ModelUsage,
     TextContent,
     TextDelta,
+    ThinkingCompleted,
+    ThinkingContent,
+    ToolAdditionContent,
+    ToolDefinition,
     ToolInputDelta,
     ToolResultContent,
     ToolUseContent,
@@ -25,6 +29,9 @@ from neos.coding.model.stop import normalize_stop_reason
 from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 
 __all__ = ["AnthropicCodingModel", "CodingModelError"]
+
+CLEAR_AT_BETA = "mid-conversation-system-clear-at-2026-08-21"
+TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01"
 
 
 class AnthropicCodingModel:
@@ -45,6 +52,7 @@ class AnthropicCodingModel:
         self, request: ModelRequest
     ) -> AsyncIterator[ModelEvent]:
         buffers: dict[int, ToolArgumentBuffer] = {}
+        thinking_buffers: dict[int, list[str]] = {}
         input_tokens = 0
         cache_read_tokens = 0
         cache_write_tokens = 0
@@ -75,11 +83,27 @@ class AnthropicCodingModel:
                                     tool_call_id=str(block.id),
                                     name=str(block.name),
                                 )
+                            elif getattr(block, "type", "") == "thinking":
+                                thinking_buffers[int(raw.index)] = [
+                                    str(getattr(block, "thinking", "") or ""),
+                                    str(getattr(block, "signature", "") or ""),
+                                ]
                             continue
                         if event_type == "content_block_delta":
                             delta = raw.delta
                             if getattr(delta, "type", "") == "text_delta":
                                 yield TextDelta(str(delta.text))
+                                continue
+                            if getattr(delta, "type", "") in {
+                                "thinking_delta",
+                                "signature_delta",
+                            }:
+                                thinking = thinking_buffers.get(int(raw.index))
+                                if thinking is not None:
+                                    if delta.type == "thinking_delta":
+                                        thinking[0] += str(delta.thinking)
+                                    else:
+                                        thinking[1] += str(delta.signature)
                                 continue
                             if getattr(delta, "type", "") == "input_json_delta":
                                 buffer = buffers.get(int(raw.index))
@@ -99,6 +123,9 @@ class AnthropicCodingModel:
                                 )
                             continue
                         if event_type == "content_block_stop":
+                            thinking = thinking_buffers.pop(int(raw.index), None)
+                            if thinking is not None and thinking[1]:
+                                yield ThinkingCompleted(thinking[0], thinking[1])
                             buffer = buffers.pop(int(raw.index), None)
                             if buffer is not None:
                                 yield complete_tool_buffer(
@@ -112,8 +139,16 @@ class AnthropicCodingModel:
                                 getattr(usage, "output_tokens", 0)
                             )
                             stop_reason = getattr(raw.delta, "stop_reason", None)
+                            normalized = normalize_stop_reason(stop_reason)
+                            details = getattr(raw.delta, "stop_details", None)
+                            category = getattr(details, "category", None)
                             yield ModelCompleted(
-                                stop_reason=normalize_stop_reason(stop_reason),
+                                stop_reason=normalized,
+                                stop_category=(
+                                    str(category)
+                                    if normalized == "refusal" and category
+                                    else ""
+                                ),
                                 usage=ModelUsage(
                                     input_tokens=input_tokens,
                                     output_tokens=output_tokens,
@@ -152,21 +187,93 @@ class AnthropicCodingModel:
             ) from error
 
 
+def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
+    rendered: dict[str, object] = {
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": dict(tool.input_schema),
+    }
+    if tool.deferred:
+        # Declared but not offered until a tool_addition names it. The key
+        # is omitted entirely when false so the payload is byte-identical
+        # to what providers without tool changes receive.
+        rendered["defer_loading"] = True
+    return rendered
+
+
 def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
-    return {
+    messages, betas = _messages_to_anthropic(request.model, request.messages)
+    payload: dict[str, object] = {
         "model": request.model,
         "system": _system_to_anthropic(request.system),
-        "messages": [_message_to_anthropic(item) for item in request.messages],
-        "tools": [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": dict(tool.input_schema),
-            }
-            for tool in request.tools
-        ],
+        "messages": messages,
+        "tools": [_tool_to_anthropic(tool) for tool in request.tools],
         "max_tokens": request.limits.max_output_tokens,
     }
+    if any(tool.deferred for tool in request.tools):
+        betas.add(TOOL_CHANGES_BETA)
+    if betas:
+        payload["extra_headers"] = {"anthropic-beta": ",".join(sorted(betas))}
+    return payload
+
+
+def _messages_to_anthropic(
+    model: str, messages: tuple[CanonicalMessage, ...]
+) -> tuple[list[dict[str, object]], set[str]]:
+    """Render system notes natively where the model and placement allow.
+
+    A mid-conversation system message must follow a user turn and be last
+    or followed by an assistant turn. Anywhere else, and on models without
+    support, the note is a text block after the tool results — the
+    documented fallback. Both forms are a pure function of the transcript,
+    so an appended history renders as an appended payload.
+    """
+    from neos.config.model_config import supports_mid_conversation_system
+
+    native = supports_mid_conversation_system(model)
+    rendered: list[dict[str, object]] = []
+    betas: set[str] = set()
+    for index, message in enumerate(messages):
+        if message.role != "system":
+            rendered.append(_message_to_anthropic(message))
+            continue
+        if all(isinstance(item, ToolAdditionContent) for item in message.content):
+            # A reveal never degrades to prose. A tool announced as text is
+            # a tool the model was never actually offered, so the reveal
+            # would silently not happen -- worse than failing loudly.
+            rendered.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "tool_addition",
+                            "tool": {"type": "tool_reference", "name": item.name},
+                        }
+                        for item in message.content
+                    ],
+                }
+            )
+            betas.add(TOOL_CHANGES_BETA)
+            continue
+        note = message.content[0]
+        previous = messages[index - 1] if index > 0 else None
+        following = messages[index + 1] if index + 1 < len(messages) else None
+        placeable = (
+            previous is not None
+            and previous.role in {"user", "tool"}
+            and (following is None or following.role == "assistant")
+        )
+        if native and placeable:
+            item: dict[str, object] = {"role": "system", "content": note.text}
+            if note.clear_at != "never":
+                item["clear_at"] = note.clear_at
+                betas.add(CLEAR_AT_BETA)
+            rendered.append(item)
+        else:
+            rendered.append(
+                {"role": "user", "content": [{"type": "text", "text": note.text}]}
+            )
+    return rendered, betas
 
 
 def _system_to_anthropic(system: str) -> str | list[dict[str, object]]:
@@ -192,6 +299,12 @@ def _message_to_anthropic(message: CanonicalMessage) -> dict[str, object]:
 
 
 def _content_to_anthropic(content: object) -> dict[str, object]:
+    if isinstance(content, ThinkingContent):
+        return {
+            "type": "thinking",
+            "thinking": content.thinking,
+            "signature": content.signature,
+        }
     if isinstance(content, TextContent):
         return {"type": "text", "text": content.text}
     if isinstance(content, ToolUseContent):

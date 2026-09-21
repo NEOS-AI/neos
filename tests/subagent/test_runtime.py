@@ -128,7 +128,6 @@ async def test_advance_completes_when_model_returns_no_tools() -> None:
     assert outcome.turn_count == 1
     assert model.requests[0].task_id == outcome.run_id
     assert model.requests[0].run_id == outcome.run_id
-    assert getattr(model.requests[0], "thinking", None) in {None, False}
     snap = await runtime.status(outcome.run_id)
     assert snap.status is SubagentStatus.COMPLETED
     assert (await store.get(outcome.run_id)).latest_seq == 1

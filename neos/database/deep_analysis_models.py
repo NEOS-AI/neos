@@ -90,6 +90,11 @@ class DAQuestion(Base):
     spent_tokens = Column(Integer, nullable=False, default=0)
     cap_tokens = Column(Integer, nullable=False)
     fail_streak = Column(Integer, nullable=False, default=0)
+    # 트랙 J. 이 질문이 `/evidence` 에 들인 blob 바이트 합계. `spent_tokens` 와
+    # 같은 모양인 이유는 같은 일을 하기 때문이다 -- 한도가 있는 자원을 질문
+    # 단위로 세고, 남은 양을 빼서 본다. run 이 재개되어도 잊지 않아야 하므로
+    # 메모리가 아니라 행에 둔다.
+    evidence_bytes = Column(Integer, nullable=False, default=0)
 
 
 class DAClaim(Base):
@@ -108,6 +113,10 @@ class DAClaim(Base):
             "status IN ('pending', 'verified', 'rejected', 'unverified')",
             name="ck_deep_analysis_claims_status",
         ),
+        CheckConstraint(
+            "kind IN ('quote', 'computed')",
+            name="ck_deep_analysis_claims_kind",
+        ),
     )
 
     id = Column(String(8), primary_key=True)
@@ -121,6 +130,14 @@ class DAClaim(Base):
     hash = Column(String(16), nullable=False)
     status = Column(String(12), nullable=False, default="pending")
     confidence = Column(REAL, nullable=False)
+    #: 계약 §4. 기본값이 'quote' 인 것은 추측이 아니라 사실이다 -- 계산
+    #: 클레임을 만드는 analyze 명세가 `specs_enabled` 에 없어 지금까지 어떤
+    #: run 도 그것을 제출할 수 없었다 (마이그레이션 061).
+    kind = Column(String(12), nullable=False, default="quote")
+    #: `kind == 'computed'` 일 때의 `ComputedEvidence`, JSON 문자열.
+    #: `DAEvent.payload` 와 같은 모양이다 -- 이 스키마에 JSONB 를 쓰는 표가
+    #: 아직 없고, 여기에 처음 들이면 직렬화 규약이 둘이 된다.
+    computation = Column(Text, nullable=True)
 
 
 class DABlob(Base):

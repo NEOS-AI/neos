@@ -78,8 +78,31 @@ async def resume_graph_for(
     # 만을 뜻하지 않게 되고, "애초에 검증 조건이 달랐다" 는 잡음이 섞인다 --
     # 이 재검증이 존재하는 유일한 이유(배포 드리프트 탐지)를 흐린다. 다음
     # 사람이 "이 인자 없어도 되지 않나" 하고 지우지 않도록 이유를 남긴다.
+    # 트랙 I: 정적 계약에 없는 노드가 있으면 서브에이전트 템플릿 노드일 수 있다.
+    # 플래그가 켜져 있을 때만 템플릿 계약을 합쳐 재검증한다(템플릿이 사라졌으면
+    # `missing_contract` 로 503). 꺼져 있으면 정적 계약 그대로 검증한다 -- 템플릿
+    # 노드도 없어진 노드와 똑같이 위반으로 거부된다. 여기서 "플래그 off" 로 먼저
+    # 거부하면 진짜 배포 드리프트(노드 삭제)까지 플래그 사유로 보고돼 이 재검증의
+    # 존재 이유를 흐린다. 저장된 페이로드는 이미 전개돼 있다 -- 다시 전개하지 않는다.
+    contracts = NODE_CONTRACTS
+    subagent_host = None
+    extra_nodes = sorted(set(topology.nodes) - set(NODE_CONTRACTS))
+    from neos.config.settings import settings
+
+    if extra_nodes and settings.config.workflow.subagent_nodes_enabled:
+        try:
+            from neos.workflow.subagent_nodes import merged_contracts
+
+            contracts = merged_contracts(NODE_CONTRACTS)
+            if set(extra_nodes) & set(contracts):
+                subagent_host = workflow._build_subagent_host(None)
+        except Exception as error:  # noqa: BLE001
+            raise ResumeGraphUnavailable(
+                f"subagent node host unavailable: {type(error).__name__}: {error}"
+            ) from error
+
     violations = validate_topology(
-        topology, contracts=NODE_CONTRACTS, must_write=_DEFAULT_MUST_WRITE
+        topology, contracts=contracts, must_write=_DEFAULT_MUST_WRITE
     )
     if violations:
         raise ResumeGraphUnavailable(
@@ -96,6 +119,7 @@ async def resume_graph_for(
             topology,
             checkpointer=checkpointer,
             interrupt_before=interrupt_before,
+            subagent_host=subagent_host,
         )
     except Exception as error:  # noqa: BLE001 -- 어떤 실패든 재개는 거부다
         raise ResumeGraphUnavailable(

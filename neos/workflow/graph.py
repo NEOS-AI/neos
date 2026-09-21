@@ -195,12 +195,37 @@ class EphemeralApprovalGateUnsupported(ValueError):
     거부가 낫다는, 이 클래스가 태어난 이유 그대로다."""
 
 
+#: 정적 그래프와 템플릿 없는 설계의 recursion_limit (재시도 여유를 둔 기존 값).
+_BASE_RECURSION_LIMIT = 50
+
+
+def _recursion_limit_for(execution_graph: Any) -> int:
+    """GS-K2′: 템플릿 노드의 자기 루프 걸음만큼 슈퍼스텝 한도를 늘린다."""
+    host = getattr(execution_graph, "subagent_host", None)
+    topology = getattr(execution_graph, "topology", None)
+    if host is None or topology is None:
+        return _BASE_RECURSION_LIMIT
+    return max(
+        _BASE_RECURSION_LIMIT,
+        len(execution_graph.nodes) + host.extra_steps(topology) + 1,
+    )
+
+
+class EphemeralSubagentUnsupported(ValueError):
+    """서브에이전트 템플릿 노드(트랙 I)를 체크포인터 없이 조립하려 했다 (GS-K3, K25′ c).
+
+    템플릿 노드는 한 걸음마다 자기 자신으로 돌아가고, 그 걸음 사이의 자식 포인터는
+    체크포인트에만 산다. 체크포인터 없이 조립하면 재개할 지점이 없다. 실제로 이
+    예외를 만나는 경로는 체크포인터를 쓰지 않는 A2UI 폼 제출 하나다."""
+
+
 def build_ephemeral_workflow(
     workflow: "MultiAgentWorkflow",
     topology: GraphTopology,
     *,
     checkpointer: Any | None = None,
     interrupt_before: Sequence[str] = (),
+    subagent_host: Any | None = None,
 ) -> Any:
     """검증을 통과한 `GraphTopology` 하나를 그 자리에서 조립해 컴파일한다.
 
@@ -248,17 +273,53 @@ def build_ephemeral_workflow(
             )
         )
 
+    # 트랙 I: 템플릿 노드는 `subagent_host` 가 있을 때만 인식한다. 호스트가 없으면
+    # 아래 루프는 추가 전과 같은 호출만 한다(템플릿 이름은 `NODE_CONTRACTS` 에 없어
+    # 예전처럼 KeyError 로 거부된다).
+    template_names = (
+        subagent_host.template_names if subagent_host is not None else frozenset()
+    )
+    template_nodes = [node for node in topology.nodes if node in template_names]
+    if template_nodes and checkpointer is None:
+        raise EphemeralSubagentUnsupported(
+            "ephemeral_subagent_unsupported: "
+            f"{template_nodes} 는 체크포인터가 있는 경로에서만 조립한다 (K25′ c)"
+        )
+    deferred = subagent_host.defer_nodes(topology) if template_nodes else frozenset()
+
     graph = StateGraph(AgentState)
 
     for node_name in topology.nodes:
+        if node_name in template_names:
+            graph.add_node(node_name, subagent_host.handler_for(node_name))
+            continue
         contract = NODE_CONTRACTS[node_name]
         bound_handler = contract.handler.__get__(workflow, type(workflow))
-        graph.add_node(node_name, bound_handler)
+        if node_name in deferred:
+            graph.add_node(node_name, bound_handler, defer=True)
+        else:
+            graph.add_node(node_name, bound_handler)
 
     for source, target in topology.edges:
+        if source in template_names:
+            continue
         graph.add_edge(
             _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(source, source),
             _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(target, target),
+        )
+
+    # 템플릿 노드의 나가는 간선은 조건부다: 자식이 살아 있으면 자기 자신, 끝났으면
+    # 설계자가 낸 후속 전부(여럿이면 팬아웃). 설계자는 이 라우팅을 설계하지 않는다.
+    for node_name in template_nodes:
+        done_targets = [
+            _TOPOLOGY_SENTINEL_TO_LANGGRAPH.get(target, target)
+            for source, target in topology.edges
+            if source == node_name and target != node_name
+        ]
+        graph.add_conditional_edges(
+            node_name,
+            subagent_host.route_for(node_name, done_targets),
+            [node_name, *done_targets],
         )
 
     if checkpointer is not None:
@@ -818,14 +879,55 @@ class MultiAgentWorkflow:
             )
             return static
 
+        # 트랙 I (GS2). 꺼져 있으면 아래 세 값이 추가 전 호출과 같다
+        # (`contracts=NODE_CONTRACTS`, `expand=None`, `subagent=None`), 그리고
+        # `neos.subagent` 는 import 되지 않는다.
+        subagent_enabled = settings.config.workflow.subagent_nodes_enabled
+        design_contracts: Any = NODE_CONTRACTS
+        expand = None
+        subagent_rules = None
+        if subagent_enabled:
+            try:
+                from .subagent_nodes import (
+                    build_rule_inputs,
+                    expand_subagent_nodes,
+                    merged_contracts,
+                )
+
+                design_contracts = merged_contracts(NODE_CONTRACTS)
+                expand = expand_subagent_nodes
+                subagent_rules = build_rule_inputs(
+                    provider=settings.LLM_PROVIDER,
+                    budget_micros=settings.config.workflow.subagent_budget_micros,
+                )
+            except Exception as exc:  # noqa: BLE001 -- 기본이 꺼진 기능이 요청을 죽이지 않는다
+                self._record_design_events(
+                    (
+                        LedgerEvent(
+                            kind="graph_design_fallback",
+                            payload={
+                                "reason": f"subagent_host_unavailable: {type(exc).__name__}: {exc}"
+                            },
+                        ),
+                    ),
+                    span,
+                )
+                return static
+
         outcome = await design_graph_or_fallback(
             designer=designer,
             request=DesignRequest(
                 query=user_input["query"],
-                catalog=tuple(NODE_CONTRACTS.values()),
+                # GS3: 템플릿 어휘는 플래그가 켜졌을 때만 카탈로그에 선다. 꺼져 있으면
+                # `design_contracts is NODE_CONTRACTS` 라 카탈로그와 렌더된 프롬프트가
+                # 바이트 단위로 같다(`test_subagent_node_catalog.py`). 켜지면 정적 31개
+                # 뒤에 템플릿 줄이 붙는다 -- 프롬프트 파일(v2)은 바꾸지 않는다.
+                catalog=tuple(design_contracts.values()),
                 budget=settings.config.workflow.graph_design_budget_hint,
             ),
-            contracts=NODE_CONTRACTS,
+            contracts=design_contracts,
+            expand=expand,
+            subagent=subagent_rules,
             # `must_write` 는 기본값(`{"final_response"}`)을 쓴다 -- 덮으면
             # "응답 없는 설계를 허용한다" 는 뜻이고 챗 경로에서 그것은
             # 언제나 오답이다. `mandatory`(노드 이름 기반)는 넘기지 않는다:
@@ -847,6 +949,42 @@ class MultiAgentWorkflow:
             set(outcome.topology.nodes) & _INTERRUPT_GATED_NODES
         )
 
+        subagent_host = None
+        if subagent_enabled:
+            from .subagent_nodes import template_nodes_in
+
+            if template_nodes_in(outcome.topology.nodes):
+                if not use_checkpointer:
+                    # GS-K3: 조립 전에 거른다 -- 호스트(모델·DB 풀)를 만들 이유가 없다.
+                    self._record_design_events(
+                        (
+                            LedgerEvent(
+                                kind="graph_design_fallback",
+                                payload={
+                                    "reason": "ephemeral_subagent_unsupported: "
+                                    "use_checkpointer=False"
+                                },
+                            ),
+                        ),
+                        span,
+                    )
+                    return static
+                try:
+                    subagent_host = self._build_subagent_host(span)
+                except Exception as exc:  # noqa: BLE001
+                    self._record_design_events(
+                        (
+                            LedgerEvent(
+                                kind="graph_design_fallback",
+                                payload={
+                                    "reason": f"subagent_host_unavailable: {type(exc).__name__}: {exc}"
+                                },
+                            ),
+                        ),
+                        span,
+                    )
+                    return static
+
         checkpointer = await get_checkpointer() if use_checkpointer else None
 
         try:
@@ -855,7 +993,19 @@ class MultiAgentWorkflow:
                 outcome.topology,
                 checkpointer=checkpointer,
                 interrupt_before=interrupt_before,
+                subagent_host=subagent_host,
             )
+        except EphemeralSubagentUnsupported as exc:
+            self._record_design_events(
+                (
+                    LedgerEvent(
+                        kind="graph_design_fallback",
+                        payload={"reason": str(exc)},
+                    ),
+                ),
+                span,
+            )
+            return static
         except EphemeralApprovalGateUnsupported as exc:
             # 체크포인터 없이 게이트 노드를 컴파일하면 여기로 온다(챗 경로,
             # `use_checkpointer=False`). 재개는 체크포인트가 있어야 성립하므로
@@ -883,6 +1033,7 @@ class MultiAgentWorkflow:
             topology_hash=topology_hash(outcome.topology),
             source="designed",
             topology=outcome.topology,
+            subagent_host=subagent_host,
         )
 
     def execution_topology_payload(
@@ -917,6 +1068,39 @@ class MultiAgentWorkflow:
         llm = LLMFactory.create_llm(provider=provider, model=model_name)
         prompt_path = Path(__file__).parent / "prompts" / "graph_design.md"
         return LlmGraphDesigner(model=llm, prompt_path=prompt_path)
+
+    def _build_subagent_host(self, span: Any) -> Any:
+        """트랙 I 템플릿 노드를 구동할 호스트. 실행 하나에 하나 (세마포어가 실행당이다).
+
+        설계자와 같은 배포 프로바이더를 쓴다. 모델은 템플릿 역할로 첫 걸음에서 한 번
+        해석된다. 테스트는 이 메서드를 가짜 런타임을 쥔 호스트로 바꾼다.
+        """
+        from .subagent_nodes import build_workflow_subagent_host
+
+        def _emit(kind: str, payload: Dict[str, Any]) -> None:
+            self._record_design_events((LedgerEvent(kind=kind, payload=payload),), span)
+
+        return build_workflow_subagent_host(
+            provider=settings.LLM_PROVIDER,
+            max_active=settings.config.workflow.subagent_max_active,
+            emit=_emit,
+        )
+
+    async def _finish_subagent_scope(
+        self, execution_graph: Any, state: Dict[str, Any], reason: str
+    ) -> None:
+        """GS-K8: 실행이 끝나면(성공·실패·취소) 이 스코프의 살아 있는 자식을 끝낸다.
+
+        승인 대기(`GraphInterrupt`)는 끝이 아니라서 부르지 않는다. 이미 끝난 자식에는
+        무해하다 -- 저장소가 종료 상태를 덮어쓰지 않는다. 실패는 요청을 죽이지 않는다.
+        """
+        host = getattr(execution_graph, "subagent_host", None)
+        if host is None:
+            return
+        try:
+            await host.cancel_scope(state.get("subagent_scope"), reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[SubagentNode] cancel_for_parent failed: %s", exc)
 
     def _record_design_events(self, events: Sequence[Any], span: Any) -> None:
         """설계 이벤트를 구조적 로그와 OTel span 두 곳에 남긴다.
@@ -2654,6 +2838,7 @@ class MultiAgentWorkflow:
             # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
             await self._record_session_start(user_input)
 
+            execution_graph = None
             try:
                 # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
                 # 로컬이며 인스턴스에 남지 않는다(G2-c).
@@ -2682,6 +2867,14 @@ class MultiAgentWorkflow:
                     execution_graph
                 )
 
+                # 트랙 I GS-K4: 템플릿 노드가 있는 실행만 자식 부모 스코프를 받는다.
+                # thread_id(대화) 가 아니라 이 호출 단위다 -- 같은 대화의 다음 턴이
+                # 이전 턴 자식을 되찾지 않게 한다.
+                if execution_graph.subagent_host is not None:
+                    initial_state["subagent_scope"] = (
+                        execution_graph.subagent_host.new_scope()
+                    )
+
                 # G2-e: 조인 키를 이 run 이 **실제로 남기게** 한다. 값을
                 # `ExecutionGraph` 에 싣기만 하고 아무 데도 내보내지 않으면
                 # 정적 run 은 여전히 해시가 없는 run 이고, 설계된 run 과 비교할
@@ -2699,16 +2892,19 @@ class MultiAgentWorkflow:
 
                 # 워크플로우 실행
                 add_span_event(span, "starting_graph_execution")
+                # 재시도를 위한 recursion limit 증가. 트랙 I 템플릿 노드의 자기 루프는
+                # 슈퍼스텝을 쓴다 -- 그만큼 더한다(GS-K2′). 템플릿이 없으면 50 그대로.
+                recursion_limit = _recursion_limit_for(execution_graph)
                 if use_checkpointer:
                     logger.debug("[ExecuteWorkflow] Executing with checkpointer (distributed state management)")
                     config = {
                         "configurable": {"thread_id": user_input["session_id"]},
-                        "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                        "recursion_limit": recursion_limit,
                     }
                 else:
                     logger.debug("[ExecuteWorkflow] Executing in stateless mode")
                     config = {
-                        "recursion_limit": 50  # 재시도를 위한 recursion limit 증가
+                        "recursion_limit": recursion_limit,
                     }
 
                 # 진행 추적의 근거는 **이번 실행의 그래프**다. 손으로 나열한
@@ -2726,6 +2922,12 @@ class MultiAgentWorkflow:
                 # 그 사실을 말하게 둔다. `total_steps` 라고 부르면 다음 사람이
                 # 이것을 정확한 총계로 읽는다.
                 max_steps = len(execution_graph.nodes)
+                if execution_graph.subagent_host is not None and execution_graph.topology is not None:
+                    # 자기 루프 걸음도 on_node_start 를 받는다 -- 상한에 넣지 않으면
+                    # step 이 max_steps 를 넘는다.
+                    max_steps += execution_graph.subagent_host.extra_steps(
+                        execution_graph.topology
+                    )
 
                 current_step = 0
                 final_state = None
@@ -2851,9 +3053,21 @@ class MultiAgentWorkflow:
                         user_input, result, final_state
                     )
 
+                await self._finish_subagent_scope(
+                    execution_graph, initial_state, "workflow_finished"
+                )
                 logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
 
+            except asyncio.CancelledError:
+                # 클라이언트가 끊겨 태스크가 취소돼도 자식은 남는다 -- 끝낸다(GS-K8).
+                if execution_graph is not None:
+                    await asyncio.shield(
+                        self._finish_subagent_scope(
+                            execution_graph, initial_state, "workflow_cancelled"
+                        )
+                    )
+                raise
             except Exception as e:
                 # GraphInterrupt: interrupt_before=EXECUTION_APPROVAL 발동
                 # Generic Exception catch 이전에 처리해야 SSE approval_request 이벤트가 발행됨
@@ -2896,6 +3110,9 @@ class MultiAgentWorkflow:
                 # 세션 상태를 failed로 업데이트
                 await self._record_session_failed(user_input, e)
 
+                await self._finish_subagent_scope(
+                    execution_graph, initial_state, "workflow_failed"
+                )
                 return self._create_error_result(e, initial_state)
 
     async def _check_smart_cache(

@@ -40,9 +40,23 @@
     { "kind": "claim_rejected", "labeled": true },
     { "kind": "claim_unverified", "labeled": true },
     { "kind": "claim_verified", "labeled": true },
+    { "kind": "code_worker_started", "labeled": true },
+    { "kind": "code_worker_submitted", "labeled": true },
+    { "kind": "code_worker_unsubmitted", "labeled": true },
+    {
+      "kind": "compute_reexecuted",
+      "labeled": false,
+      "reason": "계산 클레임마다 발행되는 계측이다. 재실행의 결과는 claim_verified / claim_rejected 가 이미 말한다 -- 계약 §6 이 §5 의 E_COMPUTE_* 코드를 claim_rejected 로 흘려보내기 때문이다. claim_graded 를 면제한 것과 같은 이유다."
+    },
+    { "kind": "compute_reexecution_capped", "labeled": true },
     { "kind": "conflict_reinvestigation", "labeled": true },
     { "kind": "dead_end", "labeled": true },
     { "kind": "entailment_filter_skipped", "labeled": true },
+    {
+      "kind": "evidence_fetched_for_sandbox",
+      "labeled": false,
+      "reason": "fetch 마다 발행된다. claim_graded 를 면제한 것과 같은 이유로, 라벨을 붙이면 활동 줄이 증거 수집 로그로 뒤덮여 정작 질문이 어디까지 갔는지가 보이지 않는다. 질문 단위 진행은 code_worker_started / code_worker_submitted 가 말한다."
+    },
     {
       "kind": "explore_brief",
       "labeled": false,

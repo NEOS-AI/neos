@@ -11,6 +11,7 @@ from neos.coding.model.base import (
     ModelEvent,
     ModelRequest,
     ModelUsage,
+    SystemNoteContent,
     TextContent,
     TextDelta,
     ToolInputDelta,
@@ -180,6 +181,17 @@ def _messages_to_gemini(
                     ],
                 }
             )
+            continue
+        if message.role == "system":
+            note_parts = [
+                {"text": item.text}
+                for item in message.content
+                if isinstance(item, SystemNoteContent)
+            ]
+            # A reveal-only message leaves this empty, and an empty parts
+            # list is rejected, so the message is skipped rather than sent.
+            if note_parts:
+                contents.append({"role": "user", "parts": note_parts})
             continue
         role = "user" if message.role == "user" else "model"
         parts: list[dict[str, object]] = []

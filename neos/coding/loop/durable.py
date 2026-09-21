@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import replace
@@ -35,13 +37,20 @@ from neos.coding.model.base import (
     ModelCompleted,
     ModelLimits,
     ModelRequest,
+    SystemNoteContent,
     TextContent,
     TextDelta,
+    ThinkingCompleted,
+    ToolAdditionContent,
+    ThinkingContent,
     ToolCallCompleted,
+    ToolDefinition,
     ToolInputDelta,
     ToolResultContent,
     ToolUseContent,
+    strip_thinking,
 )
+from neos.config.model_config import supports_mid_conversation_tools
 from neos.config.model_identity import usable_window_tokens
 from neos.coding.phases import (
     CodingAgentPhase,
@@ -58,7 +67,7 @@ from neos.coding.loop.hooks import (
     invoke_post_generate,
     invoke_pre_generate,
 )
-from neos.coding.redact import redact_sensitive
+from neos.coding.redact import redact_sensitive, strip_binary_payloads
 from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import (
     CodingToolAuditEvent,
@@ -157,6 +166,27 @@ logger = logging.getLogger(__name__)
 # Read by `_pre_tool_decision` and `_execute_validated` on the core class.
 # Keep both readers in this module: tests monkeypatch it on this module object.
 PRE_TOOL_HOOK_TIMEOUT_SEC = 5.0
+# One status line's worth. `max_text_delta_bytes` governs durable model text
+# and is three orders of magnitude too large for this.
+THINKING_PREVIEW_CHARS = 200
+
+
+def _request_fingerprint(system: str, tools: Sequence[ToolDefinition]) -> str:
+    """Digest of the two request fields a thinking block is bound to besides messages."""
+    payload = json.dumps(
+        {
+            "system": system,
+            "tools": [
+                [tool.name, tool.description, dict(tool.input_schema)]
+                for tool in tools
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin, CheckpointMixin):
@@ -261,11 +291,22 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         system = inject_previous_summary(system, state.summary)
         system_note = str(note.get("system") or "")
         if system_note:
-            system = f"{system}\n\n{system_note}" if system else system_note
+            # Appended, never folded into `system`: rebuilding the system
+            # prompt per turn invalidates every later thinking block.
+            transcript = state.transcript + (
+                CanonicalMessage("system", (SystemNoteContent(system_note),)),
+            )
+            state = replace(
+                state,
+                transcript=transcript,
+                transcript_digest=self._digest(transcript),
+            )
+        tools = self._tool_definitions(state)
+        state = self._guard_thinking_prefix(state, system, tools)
         request = ModelRequest(
             system=system,
             messages=state.transcript,
-            tools=self._tool_definitions(state),
+            tools=tools,
             model=self._config.model,
             limits=self._model_limits(state),
             task_id=input.task_id,
@@ -286,6 +327,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         yield started.event
         text_parts: list[str] = []
         calls: list[ToolCallCompleted] = []
+        thinking: list[ThinkingCompleted] = []
         completion: ModelCompleted | None = None
         prefetch_tasks: dict[str, asyncio.Task] = {}
         try:
@@ -299,7 +341,10 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                     await self._persist_abort_after_cancel(input, state, bound, deps)
                     raise asyncio.CancelledError
                 folded = fold_model_event(
-                    model_event, text_parts=text_parts, tool_calls=calls
+                    model_event,
+                    text_parts=text_parts,
+                    tool_calls=calls,
+                    thinking=thinking,
                 )
                 if folded is not None:
                     completion = folded
@@ -323,6 +368,27 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                         raise CodingLoopFailure(str(error), retryable=False) from error
                     persisted_stream = True
                     yield committed.event
+                elif isinstance(model_event, ThinkingCompleted):
+                    # A status line, not the block. The signature is opaque
+                    # provenance and never belongs in a display event.
+                    #
+                    # This deliberately does not set `persisted_stream`:
+                    # thinking arrives at the head of a turn, so treating it as
+                    # durable output would make almost every turn unretryable
+                    # after a transient error. A retry repeats a status line,
+                    # which the next turn overwrites anyway.
+                    preview = model_event.thinking[:THINKING_PREVIEW_CHARS]
+                    yield await deps.events.append(
+                        task_id=input.task_id,
+                        event_type="model.thinking",
+                        payload={
+                            "preview": preview,
+                            "chars": len(model_event.thinking),
+                            "truncated": len(model_event.thinking) > len(preview),
+                        },
+                        run_id=input.run_id,
+                        turn_id=request.turn_id,
+                    )
                 elif isinstance(model_event, ToolInputDelta):
                     persisted_stream = True
                     yield await deps.events.append(
@@ -387,7 +453,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         if self._metrics is not None:
             outcome = (
                 completion.stop_reason
-                if completion.stop_reason in {"tool_use", "end_turn", "max_tokens"}
+                if completion.stop_reason
+                in {"tool_use", "end_turn", "max_tokens", "refusal"}
                 else "other"
             )
             self._metrics.coding_model_turn_total.labels(
@@ -432,9 +499,26 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             )
             yield committed.event
             return
-        next_state = await self._completed_turn(state, text_parts, calls, completion)
+        next_state = await self._completed_turn(
+            state, text_parts, calls, completion, thinking
+        )
         self._check_usage_budgets(next_state)
         prefetch = await self._await_prefetch(prefetch_tasks)
+        if completion.stop_reason == "refusal":
+            # A refusal is an answer, not a truncated turn. It gets its own
+            # code and its own event so it never reads as a transport fault,
+            # and it is never retried: the same request refuses again.
+            await deps.events.append(
+                task_id=input.task_id,
+                event_type="model.refused",
+                payload={
+                    "stop_reason": "refusal",
+                    "stop_category": completion.stop_category,
+                },
+                run_id=input.run_id,
+                turn_id=request.turn_id,
+            )
+            raise CodingLoopFailure("model_refused", retryable=False)
         if not calls:
             public_text = _scrub_think_blocks("".join(text_parts))
             if completion.stop_reason not in {"end_turn", "unknown"}:
@@ -549,6 +633,63 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
     ) -> tuple[CanonicalMessage, ...]:
         return tuple(transcript) + (CanonicalMessage("user", (TextContent(text),)),)
 
+    def _guard_thinking_prefix(
+        self,
+        state: AgentLoopState,
+        system: str,
+        tools: Sequence[ToolDefinition],
+    ) -> AgentLoopState:
+        """Keep replayed thinking valid across every non-append edit.
+
+        Claude Fable 5.1 binds a thinking block to the system prompt, the
+        tool set, and every earlier message. Compaction, head drops, result
+        shrinking, a rebuilt system prompt, and a revealed tool all change
+        that prefix. Rather than teach each of those paths, this one check
+        compares what the last request carried with what this one would,
+        and strips all thinking once where they differ.
+        """
+        transcript = state.transcript
+        fingerprint = _request_fingerprint(system, tools)
+        count = state.sent_prefix_count
+        if count and (
+            count > len(transcript)
+            or self._prefix_digest(fingerprint, transcript[:count])
+            != state.sent_prefix_digest
+        ):
+            transcript = strip_thinking(transcript)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+            sent_prefix_count=len(transcript),
+            sent_prefix_digest=self._prefix_digest(fingerprint, transcript),
+        )
+
+    def _announce_reveals(self, transcript, before, after):
+        """Append newly revealed tools instead of growing the tool array.
+
+        Defined once because two call sites widen `revealed_tools`, and a
+        reveal announced at only one of them is the stale copy this
+        repository keeps rediscovering.
+        """
+        if not supports_mid_conversation_tools(self._config.model):
+            return transcript
+        names = sorted(frozenset(after) - frozenset(before))
+        if not names:
+            return transcript
+        return transcript + (
+            CanonicalMessage(
+                "system", tuple(ToolAdditionContent(name) for name in names)
+            ),
+        )
+
+    def _prefix_digest(
+        self, fingerprint: str, messages: tuple[CanonicalMessage, ...]
+    ) -> str:
+        return hashlib.sha256(
+            f"{fingerprint}:{self._digest(messages)}".encode()
+        ).hexdigest()
+
     def _hold_incomplete_phase(
         self, state: AgentLoopState, text: str
     ) -> AgentLoopState | None:
@@ -662,7 +803,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             raise CodingLoopFailure(
                 code, retryable=validated.risk is ToolRisk.READ_ONLY
             ) from error
-        result = dict(executed.to_mapping())
+        result = strip_binary_payloads(dict(executed.to_mapping()))
         rewritten = None
         try:
             rewritten = await asyncio.wait_for(
@@ -679,7 +820,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             result = dict(rewritten)
         return redact_sensitive(result)
 
-    async def _completed_turn(self, state, text_parts, calls, completion):
+    async def _completed_turn(self, state, text_parts, calls, completion, thinking=()):
         content = []
         raw_text = "".join(text_parts)
         text = _scrub_think_blocks(raw_text)
@@ -689,6 +830,12 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         content.extend(
             ToolUseContent(c.tool_call_id, c.name, dict(c.input)) for c in calls
         )
+        if content:
+            # Thinking leads the turn, in stream order. A thinking-only turn
+            # is not appended: it is the empty turn the retry path handles.
+            content = [
+                ThinkingContent(block.thinking, block.signature) for block in thinking
+            ] + content
         transcript = state.transcript
         if content:
             transcript += (CanonicalMessage("assistant", tuple(content)),)
@@ -699,6 +846,12 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         )
         revealed = state.revealed_tools | self._revealed_from_transcript(
             before_compact
+        )
+        # Catches a reveal re-derived from the transcript, which is what a
+        # resume does. Announcing only the delta keeps this from repeating
+        # what the tool-result path already announced.
+        transcript = self._announce_reveals(
+            transcript, state.revealed_tools, revealed
         )
         in_tokens, out_tokens = _usage_tokens(completion)
         cache_read, cache_write, reasoning = _usage_window(completion)
@@ -811,6 +964,9 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                 if isinstance(item, Mapping) and item.get("name")
             }
             revealed = revealed | names
+        # The primary path: the search result that revealed the tool has
+        # just been appended, so the announcement follows it directly.
+        transcript = self._announce_reveals(transcript, state.revealed_tools, revealed)
         allowed = state.allowed_tools
         if tool_name == "load_skill.v1" and result.status == "ok":
             allowed = self._union_skill_allowed_tools(allowed, result.content)
@@ -942,6 +1098,10 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             kwargs["phase"] = state.phase
         if "revealed" in parameters:
             kwargs["revealed"] = state.revealed_tools
+        if "declare_deferred" in parameters:
+            kwargs["declare_deferred"] = supports_mid_conversation_tools(
+                self._config.model
+            )
         if kwargs:
             definitions = method(**kwargs)
         else:

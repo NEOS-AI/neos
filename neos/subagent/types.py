@@ -10,6 +10,10 @@ from typing import Any, Literal, Mapping, Protocol
 class ParentKind(StrEnum):
     CODING = "coding"
     DEEP_ANALYSIS = "deep_analysis"
+    # K25′ (2026-09-14): designed-graph subagent nodes. Read-only explore
+    # specs only, one advance per node invocation, checkpointed paths only,
+    # folds are unverified reports. Never bound to a channel session.
+    WORKFLOW = "workflow"
 
 
 class LineageKind(StrEnum):

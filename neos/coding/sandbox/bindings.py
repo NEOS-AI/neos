@@ -116,11 +116,24 @@ class SandboxBindingService:
         self._image_digest = image_digest
         self._clock = clock or (lambda: datetime.now(UTC))
 
+    def _provider_for(self, lease: ExecutionLease) -> SandboxProvider:
+        """The provider view fenced to this execution lease.
+
+        A provider that exposes `for_lease` (the managed coding provider) returns
+        a view whose ledger writes carry the lease and whose `destroy` only drops
+        that view's handles -- a binding CAS loser must never tear down the
+        allocation the winner is using. Memory and Docker providers have no such
+        method and are used as they are.
+        """
+        bind = getattr(self._provider, "for_lease", None)
+        return bind(lease) if callable(bind) else self._provider
+
     async def resolve(self, lease: ExecutionLease) -> BoundSandboxSession:
+        provider = self._provider_for(lease)
         current = await self._repository.get(lease.task_id)
         if current is None:
-            return await self._create_and_bind(lease)
-        return await self._resolve_existing(current, lease)
+            return await self._create_and_bind(lease, provider)
+        return await self._resolve_existing(current, lease, provider)
 
     async def open_existing_admin(self, task_id: str) -> BoundSandboxSession:
         current = await self._require_binding(task_id)
@@ -160,9 +173,9 @@ class SandboxBindingService:
         )
 
     async def _create_and_bind(
-        self, lease: ExecutionLease
+        self, lease: ExecutionLease, provider: SandboxProvider
     ) -> BoundSandboxSession:
-        created = await self._provider.create(
+        created = await provider.create(
             owner_id=lease.task_id, limits=self._limits
         )
         try:
@@ -173,32 +186,35 @@ class SandboxBindingService:
                 candidate, lease=lease, now=self._clock()
             )
         except Exception:
-            await self._provider.destroy(created.sandbox_id)
+            await provider.destroy(created.sandbox_id)
             raise
         if not persisted:
-            await self._provider.destroy(created.sandbox_id)
+            await provider.destroy(created.sandbox_id)
             winner = await self._repository.get(lease.task_id)
             if winner is None:
                 raise SandboxBindingError(
                     "sandbox_binding_ownership_lost", retryable=False
                 )
-            return await self._resolve_existing(winner, lease)
-        session = await self._provider.open_session(created.sandbox_id)
+            return await self._resolve_existing(winner, lease, provider)
+        session = await provider.open_session(created.sandbox_id)
         return BoundSandboxSession(candidate, session)
 
     async def _resolve_existing(
-        self, current: SandboxBinding, lease: ExecutionLease
+        self,
+        current: SandboxBinding,
+        lease: ExecutionLease,
+        provider: SandboxProvider,
     ) -> BoundSandboxSession:
         self._verify_image(current.image_digest)
         try:
-            sandbox = await self._provider.get(current.sandbox_id)
+            sandbox = await provider.get(current.sandbox_id)
         except SandboxNotFound:
-            return await self._restore(current, lease)
+            return await self._restore(current, lease, provider)
         self._verify_sandbox(current, sandbox)
         resumed = sandbox.state is SandboxState.SUSPENDED
         if resumed:
             await self._repository.validate_fenced(lease=lease, now=self._clock())
-            sandbox = await self._provider.resume(sandbox.sandbox_id)
+            sandbox = await provider.resume(sandbox.sandbox_id)
         if sandbox.state is not SandboxState.RUNNING or not sandbox.healthy:
             raise SandboxBindingError("sandbox_unhealthy", retryable=True)
         if (
@@ -219,22 +235,25 @@ class SandboxBindingService:
                     and winner is not None
                     and winner.sandbox_id != sandbox.sandbox_id
                 ):
-                    await self._provider.suspend(sandbox.sandbox_id)
+                    await provider.suspend(sandbox.sandbox_id)
                 if winner is None:
                     raise SandboxBindingError(
                         "sandbox_binding_ownership_lost", retryable=False
                     )
-                return await self._resolve_existing(winner, lease)
+                return await self._resolve_existing(winner, lease, provider)
             current = rebound
-        session = await self._provider.open_session(sandbox.sandbox_id)
+        session = await provider.open_session(sandbox.sandbox_id)
         return BoundSandboxSession(current, session)
 
     async def _restore(
-        self, current: SandboxBinding, lease: ExecutionLease
+        self,
+        current: SandboxBinding,
+        lease: ExecutionLease,
+        provider: SandboxProvider,
     ) -> BoundSandboxSession:
         if current.latest_snapshot_id is None:
             raise SandboxBindingError("sandbox_unrecoverable", retryable=True)
-        restored = await self._provider.restore(
+        restored = await provider.restore(
             current.latest_snapshot_id, owner_id=current.task_id
         )
         try:
@@ -256,19 +275,19 @@ class SandboxBindingService:
                 now=self._clock(),
             )
             if updated is None:
-                await self._provider.destroy(restored.sandbox_id)
+                await provider.destroy(restored.sandbox_id)
                 winner = await self._repository.get(current.task_id)
                 if winner is None:
                     raise SandboxBindingError(
                         "sandbox_binding_ownership_lost", retryable=False
                     )
-                return await self._resolve_existing(winner, lease)
-            session = await self._provider.open_session(restored.sandbox_id)
+                return await self._resolve_existing(winner, lease, provider)
+            session = await provider.open_session(restored.sandbox_id)
             return BoundSandboxSession(updated, session)
         except Exception:
             # A failed compatibility check leaves no durable owner for the restore.
             if (await self._repository.get(current.task_id)) == current:
-                await self._provider.destroy(restored.sandbox_id)
+                await provider.destroy(restored.sandbox_id)
             raise
 
     async def record_mutation(
@@ -282,7 +301,7 @@ class SandboxBindingService:
             snapshot_id = current.latest_snapshot_id
             if mutation_count >= self._snapshot_cadence:
                 if prepared_snapshot is None:
-                    prepared_snapshot = await self._provider.snapshot(
+                    prepared_snapshot = await self._provider_for(lease).snapshot(
                         owned_sandbox_id
                     )
                 snapshot_id = prepared_snapshot.snapshot_id

@@ -578,3 +578,22 @@ async def test_a_replayed_fetch_reports_no_attempts(tmp_path):
 
     assert blob.http_status == 200
     assert seen == []
+
+
+def test_a_blob_ref_fits_the_column_that_stores_it():
+    """blob 주소의 폭은 **두 곳에 각각** 적혀 있다.
+
+    `_content_hash` 가 sha256 을 16자로 자르고, `deep_analysis_blobs.
+    content_hash` 가 VARCHAR(16) 이며, `deep_analysis_evidence.raw_ref` 가
+    거기에 FK 로 걸린다. 한쪽만 바뀌면 조용히 깨지지 않는다 -- 넓히면 INSERT
+    가 죽고, 좁히면 **주소가 충돌해 서로 다른 본문이 한 blob 이 된다.**
+
+    트랙 J 가 이것을 밟았다: 계약 §4 가 `script_ref` 를 "sha256" 이라고 적어
+    테스트가 64자를 썼는데, 그 폭은 원장이 만들 수 없는 값이라 프로덕션에서는
+    `get_blob` 이 영원히 None 을 돌려줬을 것이다. 픽스처가 만들어 낼 수 없는
+    값을 쓰면 테스트는 초록인데 코드는 닿지 않는다.
+    """
+    from neos.database.deep_analysis_models import DABlob
+    from neos.workflow.deep_analysis.fetch import _content_hash
+
+    assert len(_content_hash("어떤 본문")) == DABlob.content_hash.type.length
