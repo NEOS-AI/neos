@@ -19,6 +19,7 @@ from neos.coding.application.workspace_stream_service import (
     CodingWorkspaceStreamService,
 )
 from neos.coding.loop.base import CodingLoop
+from neos.jev.assembly import build_tool_risk_gate
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -724,6 +725,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             metrics=metrics,
             audit=LoggingCodingAuditSink(),
             subagents=subagents,
+            # `None` 이 off 다. 켜졌는지 판단하는 자리는 이 팩토리 하나이고,
+            # 켜라고 했는데 못 켜면 여기서 시끄럽게 실패한다.
+            jev=build_tool_risk_gate(config.jev),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라
