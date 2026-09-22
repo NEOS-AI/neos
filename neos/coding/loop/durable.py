@@ -21,6 +21,7 @@ from neos.coding.domain.approvals import (
     evaluate_approval,
 )
 from neos.coding.domain.phases import CodingCheckpoint
+from neos.jev.gate import evaluate_approval_with_jev
 from neos.coding.harness import fold_model_event, iter_model_turn
 from neos.coding.instructions import (
     INSTRUCTION_CANDIDATES,
@@ -204,6 +205,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         approval_evaluator: Callable[..., ApprovalPolicyOutcome] = evaluate_approval,
         hooks: CodingHookPort | None = None,
         subagents=None,
+        jev=None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -216,6 +218,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
         self._subagents = subagents
+        # `None` 이 off 다. 루프는 설정을 읽지 않는다 -- 조립하는 쪽이 정한다.
+        self._jev = jev
 
     def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
         try:
@@ -232,12 +236,74 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             unattended=self._config.approval_unattended,
         )
 
-    def _evaluate_call(self, validated, state: AgentLoopState) -> ApprovalPolicyOutcome:
+    def _evaluate_static_call(
+        self, validated, state: AgentLoopState
+    ) -> ApprovalPolicyOutcome:
+        """주입된 평가기로 내는 판정. Jev 가 꺼져 있을 때의 유일한 경로다."""
         gate = self._approval_gate(state)
         try:
             return self._approval_evaluator(validated, gate)
         except TypeError:
             return self._approval_evaluator(validated)
+
+    async def _evaluate_call(
+        self,
+        validated,
+        state: AgentLoopState,
+        deps=None,
+        task_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> ApprovalPolicyOutcome:
+        """정적 판정에 Jev 밴딩을 얹는다. 꺼져 있으면 정적 판정 그대로다.
+
+        이벤트는 **부르는 쪽이 아니라 여기서** 단다. 판정이 만들어지는 자리와
+        그 판정을 기록하는 자리가 갈라지면, 호출부 하나가 기록을 빠뜨려도
+        아무것도 빨개지지 않는다 -- 이 저장소의 전례가 정확히 그것이다.
+        """
+        if self._jev is None:
+            return self._evaluate_static_call(validated, state)
+
+        decision = await evaluate_approval_with_jev(
+            validated,
+            self._approval_gate(state),
+            scorer=self._jev.scorer,
+            thresholds=self._jev.thresholds,
+            enforce=self._jev.enforce,
+            static_evaluator=lambda call, _gate: self._evaluate_static_call(
+                call, state
+            ),
+        )
+        if decision.event is not None and deps is not None and task_id is not None:
+            payload = dict(decision.event)
+            kind = payload.pop("kind")
+            await deps.events.append(
+                task_id=task_id,
+                event_type=kind,
+                payload={
+                    **payload,
+                    "tool": validated.name,
+                    # 어느 호출의 점수인가. 없으면 원장은 점수를 세지만
+                    # 그것을 호출에 붙이지 못하고, 중복이 생겨도 보이지 않는다.
+                    "tool_call_id": tool_call_id,
+                },
+                tool_call_id=tool_call_id,
+            )
+        return decision.outcome
+
+    def _jev_blocks_speculation(self) -> bool:
+        """투기적 경로(읽기 전용 배치 · prefetch)를 포기해야 하는가.
+
+        둘 다 **본 판정 전에** 움직인다. prefetch 는 도구를 먼저 실행하고,
+        배치는 자기 검사로 통과시킨 뒤 본 경로를 건너뛴다. 게이트가 실제로
+        차단하는 중이라면 둘 다 Jev 를 앞지르는 구멍이다.
+
+        배치를 살려 두면 또 하나 새는 곳이 있다 -- 배치 검사에서 막힌 호출이
+        본 경로로 떨어져 **같은 호출이 두 번 채점된다**(실측: 호출 2건에
+        점수 3건). 한 건이 두 줄로 보이면 L3 을 켤지 보는 사람의 분모가 틀린다.
+
+        섀도에서는 행동이 바뀌지 않으므로 둘 다 그대로 둔다.
+        """
+        return self._jev is not None and self._jev.enforce
 
     @staticmethod
     def _with_approval_answers(validated, approval) -> Any:

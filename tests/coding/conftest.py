@@ -165,6 +165,7 @@ async def real_loop_harness(tmp_path):
     async def create(
         *, script, metrics=None, audit=None, crash_after=None,
         approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
+        jev=None,
     ):
         now = SimpleNamespace(value=datetime(2026, 7, 19, tzinfo=UTC))
         provider = MemorySandboxProvider(root=tmp_path / f"sandbox-{len(harnesses)}")
@@ -194,6 +195,7 @@ async def real_loop_harness(tmp_path):
             audit=audit,
             clock=lambda: now.value,
             approval_evaluator=approval_evaluator,
+            jev=jev,
         )
         runs = CodingRunService(
             tasks=tasks_repository,

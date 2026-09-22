@@ -80,7 +80,9 @@ async def test_shadow_mode_leaves_an_unattended_run_untouched() -> None:
     # 접기까지 거친 값이다. 접기 전 값을 실으면 L3 을 켤지 보는 사람이
     # "실제로 무슨 일이 일어났을 것인가"를 못 본다 -- unattended 런에서
     # 그 둘은 REQUIRE_APPROVAL 과 DENY 만큼 다르다.
-    assert decision.event["would_be_outcome"] is ApprovalPolicyOutcome.DENY
+    # 문자열이다. payload 는 원장에 그대로 들어가므로 JSON 가능한 값만 싣는다
+    # -- enum 을 실으면 인메모리 테스트는 통과하고 진짜 원장에서 터진다.
+    assert decision.event["would_be_outcome"] == "deny"
 
 
 async def test_an_unattended_run_that_jev_cannot_answer_keeps_the_static_outcome() -> None:

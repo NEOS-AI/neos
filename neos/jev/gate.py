@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
 from neos.coding.domain.approvals import (
@@ -57,6 +58,20 @@ class ToolRiskScorer(Protocol):
     """확률을 구해 오는 쪽. SDK 를 아는 것은 이 Protocol 의 구현체뿐이다."""
 
     async def score_tool_risk(self, state: Mapping[str, object]) -> RiskScore: ...
+
+
+@dataclass(frozen=True, slots=True)
+class JevToolRiskGate:
+    """루프에 주입하는 묶음. **`None` 이 곧 off 다.**
+
+    플래그를 루프 안에서 다시 읽지 않는다 -- 읽는 자리가 늘면 "켜졌다고 믿는
+    자리"와 "실제로 켜진 자리"가 갈라진다. 조립하는 쪽이 설정을 보고 이 객체를
+    만들거나 만들지 않고, 루프는 있으면 쓴다.
+    """
+
+    scorer: "ToolRiskScorer"
+    thresholds: RiskBandThresholds
+    enforce: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +114,7 @@ async def apply_tool_risk_banding(
             event={
                 "kind": JEV_UNAVAILABLE,
                 "reason": type(error).__name__,
-                "static_outcome": static_outcome,
+                "static_outcome": str(static_outcome),
                 "enforced": enforce,
             },
         )
@@ -116,8 +131,8 @@ async def apply_tool_risk_banding(
             "high_at_or_above": thresholds.high_at_or_above,
             "rubric_digest": score.rubric_digest,
             "model": score.model,
-            "static_outcome": static_outcome,
-            "would_be_outcome": narrowed,
+            "static_outcome": str(static_outcome),
+            "would_be_outcome": str(narrowed),
             "enforced": enforce,
         },
     )
@@ -130,6 +145,7 @@ async def evaluate_approval_with_jev(
     scorer: ToolRiskScorer,
     thresholds: RiskBandThresholds,
     enforce: bool,
+    static_evaluator: "Callable[[ValidatedToolCall, ApprovalGate], ApprovalPolicyOutcome]" = None,  # type: ignore[assignment]
 ) -> BandedDecision:
     """정적 정책 → Jev 밴딩 → unattended 접기. **이 순서가 계약이다.**
 
@@ -140,10 +156,16 @@ async def evaluate_approval_with_jev(
     정적 판정이 터지면 `evaluate_approval` 과 똑같이 DENY 로 닫는다. Jev 가
     터지는 것과 정적 정책이 터지는 것은 **다른 사건**이다: 앞은 축소할 근거가
     없어 R₀ 가 서고, 뒤는 R₀ 자체가 없다.
+
+    `static_evaluator` 는 R₀ 를 내는 함수다. durable 루프가 **주입된 평가기**를
+    쓰기 때문에 열어 둔다 -- 이 인자가 없으면 루프가 순서를 자기 쪽에 다시
+    구현하게 되고, 그러면 D-L1 의 순서 계약을 검사하는 테스트가 프로덕션이
+    아니라 사본을 검사하게 된다.
     """
     resolved = gate or ApprovalGate()
+    evaluate_static = static_evaluator or evaluate_static_approval
     try:
-        static_outcome = evaluate_static_approval(call, resolved)
+        static_outcome = evaluate_static(call, resolved)
     except Exception:  # noqa: BLE001 -- evaluate_approval 과 같은 계약
         return BandedDecision(outcome=ApprovalPolicyOutcome.DENY, event=None)
 
@@ -158,8 +180,10 @@ async def evaluate_approval_with_jev(
     event = banded.event
     if event is not None and "would_be_outcome" in event:
         event = dict(event)
-        event["would_be_outcome"] = fold_for_unattended(
-            event["would_be_outcome"], resolved
+        event["would_be_outcome"] = str(
+            fold_for_unattended(
+                ApprovalPolicyOutcome(event["would_be_outcome"]), resolved
+            )
         )
     return BandedDecision(
         outcome=fold_for_unattended(banded.outcome, resolved),

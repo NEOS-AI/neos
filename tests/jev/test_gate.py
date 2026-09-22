@@ -153,3 +153,25 @@ async def test_the_scored_event_carries_everything_needed_to_reproduce_it() -> N
     assert decision.event["high_at_or_above"] == 0.7
     assert decision.event["rubric_digest"] == "d" * 64
     assert decision.event["model"] == "jev-test-pin"
+
+
+def test_every_event_field_is_json_serialisable() -> None:
+    """payload 는 원장에 그대로 들어간다.
+
+    enum 을 실으면 인메모리 저장소는 받아 주고 진짜 원장에서 터진다 -- 그리고
+    그때는 Jev 를 켠 런에서만 터지므로, 켜는 커밋이 아니라 켠 **뒤에** 드러난다.
+    """
+    import asyncio
+    import json
+
+    decision = asyncio.run(
+        apply_tool_risk_banding(
+            ApprovalPolicyOutcome.ALLOW,
+            scorer=StubScorer(0.42),
+            state={"tool": "execute.v1"},
+            thresholds=THRESHOLDS,
+            enforce=True,
+        )
+    )
+    assert decision.event is not None
+    json.dumps(decision.event)

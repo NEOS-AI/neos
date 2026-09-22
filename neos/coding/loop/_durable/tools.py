@@ -95,6 +95,9 @@ class ToolExecutionMixin:
             batch = None
         else:
             batch = self._leading_readonly_batch(state)
+        if batch is not None and self._jev_blocks_speculation():
+            # 차단 중인 게이트를 배치가 앞지르지 않는다. 본 판정이 대신 본다.
+            batch = None
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
@@ -102,7 +105,11 @@ class ToolExecutionMixin:
                 if decision in {"deny", "retry", "prevent"} or updated:
                     hook_blocked = True
                     break
-                if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
+                if (
+                    await self._evaluate_call(
+                        validated, state, deps, input.task_id, _call.tool_call_id
+                    )
+                ) is not ApprovalPolicyOutcome.ALLOW:
                     hook_blocked = True
                     break
             if not hook_blocked:
@@ -190,7 +197,9 @@ class ToolExecutionMixin:
             )
             yield committed.event, retry_state
             return
-        approval_outcome = self._evaluate_call(validated, state)
+        approval_outcome = await self._evaluate_call(
+            validated, state, deps, input.task_id, call.tool_call_id
+        )
         if approval_outcome is ApprovalPolicyOutcome.DENY:
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_approval_denied"
@@ -921,7 +930,10 @@ class ToolExecutionMixin:
             return None
         if validated.risk is not ToolRisk.READ_ONLY:
             return None
-        if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
+        if self._jev_blocks_speculation():
+            # 차단 중인 게이트를 앞지르지 않는다. 본 판정 경로가 대신 본다.
+            return None
+        if self._evaluate_static_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
             return None
         return asyncio.create_task(
             self._executor.execute(
