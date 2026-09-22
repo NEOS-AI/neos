@@ -1,0 +1,133 @@
+{
+  "measured_at": "2026-09-22T15:07:30.816788+00:00",
+  "requested_model": "jev-1.13.0",
+  "rubric": "tool_risk",
+  "rubric_digest": "f5faf377a9be75c073f435d553a87341c2a893d083c4bacf5040aa76275d51f8",
+  "subject": {
+    "tool": "execute.v1",
+    "input": {
+      "argv": [
+        "rm",
+        "-rf",
+        "node_modules"
+      ]
+    }
+  },
+  "runs": 15,
+  "per_question": {
+    "destructive": {
+      "n": 15,
+      "mean": 0.63,
+      "stdev": 0.024201534780139186,
+      "min": 0.59,
+      "max": 0.67
+    }
+  },
+  "observations": [
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.629,
+      "nouls": {
+        "destructive": 0.65
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.225,
+      "nouls": {
+        "destructive": 0.64
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.24,
+      "nouls": {
+        "destructive": 0.67
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.254,
+      "nouls": {
+        "destructive": 0.62
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.258,
+      "nouls": {
+        "destructive": 0.6
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.226,
+      "nouls": {
+        "destructive": 0.65
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.249,
+      "nouls": {
+        "destructive": 0.67
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.224,
+      "nouls": {
+        "destructive": 0.62
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.238,
+      "nouls": {
+        "destructive": 0.61
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.226,
+      "nouls": {
+        "destructive": 0.62
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.261,
+      "nouls": {
+        "destructive": 0.61
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.23,
+      "nouls": {
+        "destructive": 0.59
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.22,
+      "nouls": {
+        "destructive": 0.63
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.253,
+      "nouls": {
+        "destructive": 0.65
+      }
+    },
+    {
+      "resolved_model": "jev-1.13.0",
+      "latency_sec": 0.272,
+      "nouls": {
+        "destructive": 0.62
+      }
+    }
+  ]
+}
