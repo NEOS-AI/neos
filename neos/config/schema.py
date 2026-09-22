@@ -1568,6 +1568,69 @@ class SandboxMemoryConfig(StrictConfigModel):
 _CLAIM_LEASE_CREATE_STEPS = 6
 
 
+class JevConfig(StrictConfigModel):
+    """Jev 확률 판정 층 -- 로드맵 §12(트랙 L).
+
+    **임계값에 기본값이 없다.** 쿡북의 `<0.30 / >0.70` 을 여기 적지 않는 것이
+    §9(매직넘버 금지)이고 §12.4 다 -- 기본값은 L1 일관성 기준선과 L2 섀도의
+    실측이 정한다. 그때까지 밴딩을 켜려면 값을 **명시해야** 하고, 명시하지
+    않으면 기동이 실패한다. 조용히 도는 것보다 낫다.
+    """
+
+    enabled: bool = False
+    #: L2. 정적 정책 판정 직후 Jev 에 묻되 행동은 바꾸지 않고 기록만 한다.
+    tool_risk_shadow_enabled: bool = False
+    #: L3. 실제로 차단한다. 섀도 불일치의 건별 리뷰가 선행이다.
+    tool_risk_gate_enabled: bool = False
+    #: L5. 판정자 섀도. 원장의 판정은 여전히 AgenticGrader 다.
+    judge_shadow_enabled: bool = False
+
+    #: 해소된 모델 id. 별칭(`jev-latest`)은 받지 않는다 -- §12.5 L0.
+    model: str | None = None
+    #: `p < low_below` 가 LOW 밴드. 기본값 없음.
+    low_below: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: `p >= high_at_or_above` 가 HIGH 밴드. 기본값 없음.
+    high_at_or_above: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: 도구 위험 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    tool_risk_rubric: str = "tool_risk"
+    #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
+    timeout_sec: float = Field(default=5.0, gt=0, le=60)
+
+    @field_validator("model")
+    @classmethod
+    def reject_floating_aliases(cls, value: str | None) -> str | None:
+        """`jev-latest` 로 돈 런은 어떤 모델이 답했는지 모른다 = 표본이 아니다."""
+        if value is not None and "latest" in value:
+            raise ValueError(
+                "jev.model 은 해소된 id 여야 한다. 'latest' 별칭은 판정을 "
+                f"재현할 수 없게 만든다: {value!r}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_banding_policy(self) -> "JevConfig":
+        banding_on = self.tool_risk_shadow_enabled or self.tool_risk_gate_enabled
+        if banding_on:
+            if self.low_below is None or self.high_at_or_above is None:
+                raise ValueError(
+                    "Jev 밴딩을 켜려면 jev.low_below 와 jev.high_at_or_above 를 "
+                    "명시해야 한다. 기본값은 없다 -- L1·L2 실측이 정한다."
+                )
+            if self.low_below > self.high_at_or_above:
+                raise ValueError(
+                    "jev.high_at_or_above 는 jev.low_below 보다 작을 수 없다: "
+                    f"{self.low_below} > {self.high_at_or_above}"
+                )
+        if not self.enabled and (
+            banding_on or self.judge_shadow_enabled
+        ):
+            raise ValueError(
+                "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "
+                "플래그는 읽는 사람을 틀리게 만든다."
+            )
+        return self
+
+
 class ManagedSandboxConfig(StrictConfigModel):
     enabled: bool = False
     shadow_admission: bool = True
@@ -1990,6 +2053,7 @@ class AppConfig(StrictConfigModel):
     ray: RayConfig = Field(default_factory=RayConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     coding_model: CodingModelConfig = Field(default_factory=CodingModelConfig)
+    jev: JevConfig = Field(default_factory=JevConfig)
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
