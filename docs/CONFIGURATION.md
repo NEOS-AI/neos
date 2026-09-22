@@ -623,6 +623,54 @@ defaults to `3`, preventing an indefinite server-tool loop. Advisor-side prompt
 caching is separately disabled by default because `max_uses` defaults to `2`;
 enable it only when observed requests regularly make at least three Advisor
 calls, Anthropic's approximate cache break-even threshold.
+### Jev probabilistic risk banding
+
+`jev` puts a probability from TypeSafe AI's System One model on top of the
+static tool-approval policy. Everything is off by default; when off, the coding
+loop takes the exact path it took before the feature existed.
+
+```yaml
+jev:
+  enabled: false                   # master switch; sub-flags require it
+  tool_risk_shadow_enabled: false  # score and record, change nothing
+  tool_risk_gate_enabled: false    # actually narrow the outcome
+  judge_shadow_enabled: false      # judge-side shadow (not yet wired)
+  model: null                      # a resolved id, e.g. jev-1.13.0
+  low_below: null                  # p < this  -> low band
+  high_at_or_above: null           # p >= this -> high band
+  tool_risk_rubric: tool_risk      # neos/jev/rubrics/<name>.yaml
+  timeout_sec: 5.0
+```
+
+The key is `TYPESAFE_API_KEY`, read from the process environment or `.env` with
+the same precedence as every other secret (process wins).
+
+**The band thresholds have no defaults.** Turning banding on without both of
+them fails validation rather than falling back to a number nobody measured.
+Pick them from a measured baseline, not from a vendor cookbook: the measured
+run-to-run spread is widest exactly where the thresholds matter (see the Jev
+section of `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md`), so a threshold placed
+where real calls cluster makes the same call flip bands between runs.
+
+**`model` must be a resolved id.** Validation rejects anything containing
+`latest`: the SDK would otherwise default to the `jev-latest` alias, and a run
+answered by an alias cannot say which model answered it.
+
+Three properties are enforced rather than documented:
+
+- **Narrowing only.** The probability can make an outcome stricter, never
+  looser; `DENY` never becomes `ALLOW`. A static `DENY` does not call Jev at
+  all, so no availability fallback can open it.
+- **Loud fallback.** If Jev times out or errors, the static outcome stands and
+  a `jev_unavailable` event records it. Watch that event's rate: making Jev
+  unreachable is the cheapest way to remove the gate.
+- **Misconfiguration is not "off".** Enabling banding without a key, a pinned
+  model, or thresholds raises at assembly time instead of quietly running
+  ungated.
+
+While enforcement is on, the loop stops speculatively prefetching read-only
+tools: that path executes a tool before the decision and would outrun the gate.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:
