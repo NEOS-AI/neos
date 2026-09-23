@@ -138,6 +138,20 @@ class CodingRefusalProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingChildEventProjection:
+    """A child lifecycle event, shaped like the live event it came from.
+
+    The client folds these after `active_children`, in seq order, through the
+    same function as live `subagent.*` events -- so the ledger's terminal
+    event wins over a checkpoint that still lists the child as running.
+    """
+
+    type: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionSnapshot:
     task: CodingTaskProjection
     active_run: CodingRunProjection | None
@@ -153,6 +167,7 @@ class CodingProjectionSnapshot:
     active_children: tuple[CodingActiveChildProjection, ...] = ()
     tool_risks: tuple[CodingToolRiskProjection, ...] = ()
     refusal: CodingRefusalProjection | None = None
+    child_events: tuple[CodingChildEventProjection, ...] = ()
 
 
 class ProjectionRepository(Protocol):
@@ -295,6 +310,12 @@ class CodingSnapshotService:
                 for row in rows.tool_risks
             ),
             refusal=_refusal_on_latest_run(rows.refusal, rows.runs),
+            child_events=tuple(
+                CodingChildEventProjection(
+                    type=row.event_type, seq=row.seq, payload=dict(row.payload)
+                )
+                for row in sorted(rows.child_events, key=lambda row: row.seq)
+            ),
         )
 
 

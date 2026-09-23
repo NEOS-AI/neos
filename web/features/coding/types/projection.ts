@@ -99,6 +99,12 @@ export type CodingToolRiskSnapshot = {
   payload: Record<string, unknown>;
 };
 
+export type CodingChildEventSnapshot = {
+  type: string;
+  seq: number;
+  payload: Record<string, unknown>;
+};
+
 // A child agent the parent spawned (K3). Seeded from the snapshot's
 // active_children and kept current by subagent.* events.
 export type CodingChildView = {
@@ -138,6 +144,9 @@ export type CodingProjectionSnapshot = {
     seq: number;
     payload: Record<string, unknown>;
   } | null;
+  // The ledger's subagent.* events, shaped like the live ones. Folded after
+  // active_children so a child that ended after the checkpoint shows as ended.
+  child_events?: CodingChildEventSnapshot[];
 };
 
 export type CodingProjectionState = {

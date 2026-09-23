@@ -118,6 +118,17 @@ function childrenFromSnapshot(
     const view = childFromEvent("snapshot", { ...child }, undefined);
     if (view) children[view.run_id] = view;
   }
+  // Then the ledger, in its own order, through the live decoder: the
+  // checkpoint only knows who was running when it was taken, so a child it
+  // lists may have completed, stalled or been cancelled since.
+  const events = [...(snapshot.child_events ?? [])].sort((a, b) => a.seq - b.seq);
+  for (const event of events) {
+    const payload = event.payload ?? {};
+    const runId = payload.run_id;
+    const previous = typeof runId === "string" ? children[runId] : undefined;
+    const view = childFromEvent(event.type, payload, previous);
+    if (view) children[view.run_id] = view;
+  }
   return children;
 }
 
