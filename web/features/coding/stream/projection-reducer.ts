@@ -1,11 +1,19 @@
+import {
+  childFromEvent,
+  TOOL_RISK_EVENT_TYPES,
+  toolRiskFromPayload,
+  upsertUserEdit,
+} from "@/features/coding/stream/projection-events";
 import type { CodingEvent } from "@/features/coding/types/events";
 import type {
   CodingApprovalView,
+  CodingChildView,
   CodingPhaseView,
   CodingProjectionSnapshot,
   CodingProjectionState,
   CodingToolView,
   CodingTextPartView,
+  CodingToolRiskView,
 } from "@/features/coding/types/projection";
 
 const phaseId = (kind: string, attempt: number) => `phase:${kind}:${attempt}`;
@@ -30,6 +38,9 @@ export const emptyProjection = (taskId: string): CodingProjectionState => ({
   gap: null,
   projectionIssue: null,
   thinkingStatus: null,
+  toolRisksById: {},
+  childrenById: {},
+  refusal: null,
 });
 
 export function reduceSnapshot(
@@ -73,7 +84,34 @@ export function reduceSnapshot(
     projectionIssue: null,
     // A checkpoint is a fresh basis: no thinking is in flight to show.
     thinkingStatus: null,
+    toolRisksById: risksFromSnapshot(snapshot),
+    childrenById: childrenFromSnapshot(snapshot),
+    // Not in the snapshot: the task's failed status still shows, but the
+    // refusal's category lives only in the ledger event.
+    refusal: null,
   };
+}
+
+function risksFromSnapshot(
+  snapshot: CodingProjectionSnapshot
+): Record<string, CodingToolRiskView> {
+  const risks: Record<string, CodingToolRiskView> = {};
+  for (const row of snapshot.tool_risks ?? []) {
+    const risk = toolRiskFromPayload(row.kind, row.payload ?? {}, row.tool_call_id, row.seq);
+    if (risk) risks[risk.tool_call_id] = risk;
+  }
+  return risks;
+}
+
+function childrenFromSnapshot(
+  snapshot: CodingProjectionSnapshot
+): Record<string, CodingChildView> {
+  const children: Record<string, CodingChildView> = {};
+  for (const child of snapshot.active_children ?? []) {
+    const view = childFromEvent("snapshot", { ...child }, undefined);
+    if (view) children[view.run_id] = view;
+  }
+  return children;
 }
 
 export function reduceProjectionEvent(
@@ -88,6 +126,60 @@ export function reduceProjectionEvent(
     return { ...state, gap: { expected, received: event.seq } };
   }
   const base = { ...state, appliedSeq: event.seq, gap: null };
+  if ((TOOL_RISK_EVENT_TYPES as readonly string[]).includes(event.type)) {
+    const risk = toolRiskFromPayload(event.type, event.payload, event.tool_call_id, event.seq);
+    if (!risk) return base;
+    return { ...base, toolRisksById: { ...state.toolRisksById, [risk.tool_call_id]: risk } };
+  }
+  if (event.type.startsWith("subagent.")) {
+    const runId = event.payload.run_id;
+    const previous = typeof runId === "string" ? state.childrenById[runId] : undefined;
+    const child = childFromEvent(event.type, event.payload, previous);
+    if (!child) return base;
+    return { ...base, childrenById: { ...state.childrenById, [child.run_id]: child } };
+  }
+  if (event.type === "model.refused") {
+    const category = event.payload.stop_category;
+    return {
+      ...base,
+      // The turn is over and will not be retried; a running note is stale.
+      thinkingStatus: null,
+      refusal: {
+        run_id: event.run_id ?? null,
+        stop_category: typeof category === "string" && category ? category : null,
+        seq: event.seq,
+      },
+    };
+  }
+  if (event.type === "run.started") {
+    const attempt = event.payload.attempt;
+    if (!event.run_id || typeof attempt !== "number") return base;
+    return {
+      ...base,
+      activeRun: {
+        run_id: event.run_id,
+        attempt,
+        status: "running",
+        resume_from_checkpoint_id: null,
+      },
+      // A new run is a new attempt; the last one's refusal no longer applies.
+      refusal: null,
+    };
+  }
+  if (
+    event.type === "run.completed" ||
+    event.type === "run.failed" ||
+    event.type === "run.cancelled"
+  ) {
+    const ended = state.activeRun?.run_id === event.run_id;
+    if (!ended) return base;
+    return { ...base, activeRun: null, thinkingStatus: null };
+  }
+  if (event.type === "workspace.user_edit.applied" || event.type === "workspace.user_edit.synced") {
+    const edits = upsertUserEdit(state.workspace.user_edits ?? [], event.payload);
+    if (!edits) return base;
+    return { ...base, workspace: { ...state.workspace, user_edits: edits } };
+  }
   if (event.type === "model.thinking") {
     const preview = event.payload.preview;
     // A non-string preview is a malformed event, not a status line. Advance
@@ -257,7 +349,7 @@ export function reduceProjectionEvent(
     };
   }
   if (
-    event.type === "task.status.changed" &&
+    (event.type === "task.status.changed" || event.type === "task.created") &&
     typeof event.payload.status === "string"
   ) {
     return { ...base, taskStatus: event.payload.status };

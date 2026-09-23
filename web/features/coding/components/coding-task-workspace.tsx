@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
 import { CodingDetailPanel } from "@/features/coding/components/coding-detail-panel";
 import { CodingOutputLedger } from "@/features/coding/components/coding-output-ledger";
+import { CodingRunSignals } from "@/features/coding/components/coding-run-signals";
 import { CodingSandboxStatus } from "@/features/coding/components/coding-sandbox-status";
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
@@ -175,6 +176,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
                 </ul>
               </section>
             ) : null}
+            <CodingRunSignals projection={projection} />
             <CodingOutputLedger
               parts={projection.orderedTextPartIds.map(
                 (partId) => projection.textPartsById[partId]

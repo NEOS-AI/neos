@@ -1,6 +1,12 @@
 import { FileCode2, GitCommitHorizontal, Wrench } from "lucide-react";
+import {
+  describeToolRisk,
+  toolRiskBadge,
+  toolRiskMode,
+} from "@/features/coding/components/tool-risk";
 import type {
   CodingProjectionState,
+  CodingToolRiskView,
   CodingToolView,
 } from "@/features/coding/types/projection";
 
@@ -33,6 +39,7 @@ export function CodingDetailPanel({
               const preview = toolPreview(tool);
               const deniedBy = toolDeniedBy(tool);
               const reasonCode = toolReasonCode(tool);
+              const risk = projection.toolRisksById[tool.tool_call_id];
               return (
                 <div
                   className="border border-border/70 px-3 py-2"
@@ -62,6 +69,7 @@ export function CodingDetailPanel({
                       {reasonCode ? `reason_code ${reasonCode}` : null}
                     </p>
                   ) : null}
+                  {risk ? <ToolRiskLine risk={risk} /> : null}
                   <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">
                     {tool.tool_call_id}
                   </p>
@@ -107,6 +115,32 @@ export function CodingDetailPanel({
           </p>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function ToolRiskLine({ risk }: { risk: CodingToolRiskView }) {
+  const mode = toolRiskMode(risk);
+  const sentence = describeToolRisk(risk);
+  return (
+    <div className="mt-1" data-testid="coding-tool-risk">
+      <p className="flex items-center gap-2 font-mono text-[11px]">
+        <span
+          className={
+            risk.kind === "unavailable"
+              ? "text-amber-300"
+              : "text-muted-foreground"
+          }
+        >
+          {toolRiskBadge(risk)}
+        </span>
+        <span className="rounded-sm border border-border/70 px-1 py-px text-[9px] text-muted-foreground uppercase tracking-wider">
+          {mode}
+        </span>
+      </p>
+      {sentence ? (
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{sentence}</p>
+      ) : null}
     </div>
   );
 }
