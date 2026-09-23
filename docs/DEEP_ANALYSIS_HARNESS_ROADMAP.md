@@ -28,7 +28,7 @@
 - **절대 수치는 적지 않는다.** 적어야 하면 측정 날짜를 함께 적는다
 - **§4·§5·§12는 아직 설계다.** 코드가 착지하면 그 줄을 "착지(커밋)"로 바꾸고, 설계와 코드가 어긋나면 **코드가 이긴다**
 
-**기준 시점: 2026-09-22** (트랙 L 추가. 그 앞의 서술은 2026-09-15 기준이다)
+**기준 시점: 2026-09-23** (코딩 스트림 짝 규칙 · §12.9. 트랙 L 은 2026-09-22, 그 앞의 서술은 2026-09-15 기준이다)
 
 ---
 
@@ -38,16 +38,16 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · 코드 인벤토리 비었다 | 🔴 **라이브 표본 #23** — `ANTHROPIC_WORKSPACE_ID` 값 하나에 막혀 있다(§7) |
 | **B. 역할 기반 모델 라우팅** | ✅ 안정 | 유지보수. **effort 축이 들어오면 여기에 붙는다**(K5) |
-| **C. 프론트엔드** | ✅ FE1~FE17 종결 | J·K가 새 이벤트 kind를 만들면 짝 규칙(fixture)이 다시 문다 |
+| **C. 프론트엔드** | ✅ FE1~FE17 종결 · 🆕 **코딩 스트림 짝 규칙**(2026-09-23, §12.9) | 새 kind 는 이제 **두** fixture 가 문다 — DA(`deep_analysis_event_kinds.json`)와 코딩(`coding_event_kinds.json`) |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2 · D4(전송만 SDK로) · D3b. **J가 D4의 수요처가 된다** |
 | **E. 코딩 에이전트** | 🟢 플랜 14개 완료 · development 프로파일 실제 루프 on | E-S2 배포 결정 · 잔여는 [PLAN_260913.md](PLAN_260913.md) A~H. managed provider **B2 게이트 미충족** |
 | **F. 개선 루프 서브에이전트화** | 🔴 닫힘 | 재개하려면 새 스펙 + 새 사전 등록 |
 | **G. 그래프 계약·검증** | 🟢 C3·C4 live(플래그 off) | 켜는 결정 · M-0 재측정(사전 등록 완료) |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료(꺼짐) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
-| **J. 코딩 루프 조사** 🆕 | 🟡 **J1 절반 착지**(2026-09-20) — 프로파일·설정·I3·I7 게이트·스펙 셋·`/evidence` 한도·질문 샌드박스. **전부 플래그 off** | 남은 J1 은 **도구**(`fetch.v1`·`submit.v1`·`check_claims.v1`·건별 blob 커밋)와 **I1·I2**, 이벤트 kind 여섯. 그다음 J2·J3. ⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**(계약 §3.2 downgrade) |
+| **J. 코딩 루프 조사** 🆕 | 🟢 **J1·J2·J3 착지**(코드 대조 2026-09-23) — 도구 셋(`fetch.v1`·`submit.v1`·`check_claims.v1`) · 스펙 셋 · `evidence_cap_reached` · S9 플래그 off 테스트 · 계산 클레임 재실행 · 오프라인 섀도 · 이벤트 kind 여섯(DA fixture 에 있다). **전부 플래그 off** | **J4**(#23 판정 뒤). ~~J1 절반~~은 낡은 서술이었다 — §11 인벤토리가 J3 착지를 적는 동안 이 줄은 J1 에 머물러 있었다. ⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**(계약 §3.2 downgrade) |
 | **K. Fable 5.1 적응** 🆕 | 🟢 **표본 없이 되는 K는 다 썼다**(K0·K1·K2·K7·K1c·K1d·K6·K4a·K2b, 2026-09-15~19) — 코딩 루프 · 자식 · DA 세 경로 + 거절 분기 + 상태 줄 + 도구 공개 | **키가 있어야 하는 것이 둘이다 — K1b·K4b**(전엔 K1b 하나라고 적혀 있었다) · K5④⑤·K9·K10·K11. **K3 착지(2026-09-22, 기본 off)** — 켜는 것은 A1·A2 숫자 뒤 |
-| **L. Jev 확률 판정 층** 🆕 | 🟢 **L0·L1·L2 완료**(2026-09-23, 전부 플래그 off). 핀 **`jev-1.13.0`** · 기준선 §12.7 · durable 루프 배선 · 실 API end-to-end | **D-L2**(루브릭을 쪼갤 것인가) · 가격 하나 · 프론트 라벨 · 그다음 L3~L7. **D-L1 닫혔다** ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · L6 은 **#23 판정 뒤** |
+| **L. Jev 확률 판정 층** 🆕 | 🟢 **L0·L1·L2 완료**(2026-09-23, 전부 플래그 off). 핀 **`jev-1.13.0`** · 기준선 §12.7 · durable 루프 배선 · 실 API end-to-end | **D-L2**(루브릭을 쪼갤 것인가) · 가격 하나 · ~~프론트 라벨~~ **투영 착지**(2026-09-23, §12.9) — 남은 것은 판정 **문장** 하나(`describeToolRisk`) · 그다음 L3~L7. **D-L1 닫혔다** ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · L6 은 **#23 판정 뒤** |
 
 **기본 플래그** — 두 제품 표면이 아직 프로덕션 기본 경로에 없다. 줄 번호는 적지 않는다.
 
@@ -603,7 +603,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | **라이브 표본** | CITE1 후보 판별(#23) · BUDGET2 효과 · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · 🆕 **C-계열**(J5) · 🆕 effort 스윕(K5) · 🆕 **L5 판정자 섀도**(판정 불변, 지출만 움직인다) |
 | **새 사전 등록** | D93 다시 쓰기 · M-1 · 🆕 **J4**(점진 공개 조립) · 🆕 **C-계열 첫 표본** |
 | **새 스펙** | 트랙 F 재개 |
-| **표본 없이 되는 코드** 🆕 | **J1·J2·J3**(플래그 off, S9 — 선행 결정 전부 닫혔다) · 🆕 **L2**(섀도, 카세트) · 🆕 **L4**(저장 원장 백테스트) |
+| **표본 없이 되는 코드** 🆕 | 🆕 **L4**(저장 원장 백테스트) · `describeToolRisk` 판정 문장(§12.9) |
 | **키 하나로 되는 검사** 🆕 | **K1b** — 실계정에서 `drop_block` 진단 세션 한 번. `ANTHROPIC_WORKSPACE_ID`와 같은 값에 걸린다 |
 | **TypeSafe 키로 되는 것** 🆕 | ✅ **끝났다**(2026-09-22) — 핀 `jev-1.13.0` · 기준선 §12.7. 남은 것은 키가 아니라 **가격**(API 가 주지 않는다) |
 | **측정 없이 못 정함** | `claude-opus-5` 세대 사실(CA12) |
@@ -629,7 +629,6 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 |---|---|---|---|
 | 🔴 P0 | **K1b** | 실계정 3단계 검사 — `thinking-binding-controls-2026-08-01` + `drop_block`, 매 응답 `input_transformations` 로깅. thinking 블록 순서 가정(맨 앞 모음)도 여기서 확인 | 키 |
 | 🔴 P0 | **K4b** | `thinking.display="updates"` — 설치된 SDK 타입에 `"updates"` 가 없고 기본값도 스펙과 어긋난다(스펙 `omitted` vs SDK `summarized`). K1b 와 같은 세션에서 확인한다 | 키 |
-| 🟠 P1 | **J1·J2** | 도구 경계(`fetch.v1`→`fetch.py` · `/evidence` 읽기 전용 마운트, 한도 도달 시 **거절** · `submit.v1` · 카탈로그 셋째 타입 · S9) · 계산 클레임 채점기 | J0 ✅ — **선행 결정 전부 닫혔다** |
 | 🟠 P1 | **K5** | effort 카탈로그 필드(G10 흡수) + 역할별 설정 + 벤치 러너 | K0 |
 | 🟠 P1 | **K9** | 자율/대면 오버레이(G11) | — |
 | 🟠 P1 | **K10** | 배칭 넛지 | K2 |
@@ -638,7 +637,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | ⚪ | **J4 · J5 · J6** | 조립 · C-계열 표본 · staged 스킬 | #23 판정 · 사전 등록 |
 | ✅ | ~~**K3**~~ | 비동기 spawn(즉시 반환 · safe point append · `await_subagent.v1`) — **착지, 기본 off** (2026-09-22) | 켜기는 A1·A2 |
 | 🟡 P2 | **L0 잔여** | **가격 하나.** API 가 주지 않으므로 계정 청구 정보에서 가져와 `models.yaml` 에 등재한다. 나머지 L0·L1 은 실측 완료(§12.7) | 사람 |
-| 🟡 P2 | **L2 잔여** | 배선은 끝났다. 남은 것은 **프론트**: `jev_risk_scored`/`jev_unavailable` 이 코딩 스트림에서 **조용히 무시된다**(아래 주의) | — |
+| 🟡 P2 | **L2 잔여** | 투영·스냅샷·배지는 착지(2026-09-23, §12.9). 남은 것은 도구 줄 아래 **판정 문장 한 줄**(`web/features/coding/components/tool-risk.ts` 의 `describeToolRisk`) — L3 리뷰어가 섀도 기간을 건별로 읽는 자리다 | — |
 | 🟢 P2 | **L4** | Jev-as-Judge **오프라인 백테스트**(저장 원장). 표본 경계가 아니다 | L1 |
 | ⚪ | **L3 · L5 · L6 · L7** | 게이트 켜기 · 판정자 섀도 · 판정자 교체 · 분기 이전 후보 | L2·L4 · #23 판정 (**D-L1 은 닫혔다**) |
 
@@ -862,6 +861,8 @@ L7 이 후보로 볼 수 있는 것: `skill_selector` 의 스킬 선택 · `conf
 쌓인다. 그 스트림에는 **DA 의 짝 규칙(`tests/fixtures/deep_analysis_event_kinds.json`)
 같은 장치가 없다.**
 
+> ✅ **닫혔다 (2026-09-23) — §12.9.** 아래는 닫기 전의 서술이다.
+>
 > ⚠️ **결과: `jev_risk_scored`·`jev_unavailable` 은 프론트에서 조용히 무시된다.**
 > `web/features/coding/stream/projection-reducer.ts` 는 모르는 타입을 만나면
 > `return base` 한다 — 깨지지는 않지만 화면에 나오지도 않는다. 이것은 FE1
@@ -915,6 +916,60 @@ L7 이 후보로 볼 수 있는 것: `skill_selector` 의 스킬 선택 · `conf
 사실조차 남기지 못한다. D-L2 가 닫힐 때까지 게이트가 스스로 막는다.
 
 
+### 12.9 코딩 스트림 짝 규칙 — 구멍은 둘이 아니라 여섯이었다 (2026-09-23)
+
+§12.8 ① 은 Jev 두 kind 가 사라진다고 적었다. 짝 규칙을 세우고 나서 세어 보니
+코딩 원장에 쓰이는 kind 는 **36**(투영 30 · 면제 6)이고, 프론트 리듀서가 `return base` 로 흘려보내던
+것이 Jev 둘만이 아니었다.
+
+| 무엇이 사라지고 있었나 | 어디서 왔나 | 결과 |
+|---|---|---|
+| `jev_risk_scored` · `jev_unavailable` | L2 | 섀도 기간의 판정이 화면에 없다. L3 리뷰의 재료가 없다 |
+| `model.refused` | K6 | 거절한 런이 **이유 없이 멈춘 런**으로 보인다 |
+| `subagent.*` | K3 | detached 자식이 화면에 없다 |
+| `run.*` | — | `activeRun` 이 스냅샷에서만 온다 — 런이 끝나도 `RUN n` 배지가 남는다 |
+| `workspace.user_edit.*` | — | 사용자 편집의 동기화 상태가 새로고침 전까지 안 바뀐다 |
+| 🔴 **`thinkingStatus`** | **K4a** | 리듀서는 채웠는데 **읽는 컴포넌트가 0개**였다 |
+
+마지막 줄이 §14 "고침은 한 호출부에만 도착한다"의 **호출부 0개** 판이다(K2b 의
+`_announce_reveals` 와 같은 모양). K4a 의 표는 "Code UI 는 최신 노트를 상태 줄로
+둔다"고 적었고 리듀서 테스트 7개가 초록이었다 — **그 상태 줄을 그리는 코드는 없었다.**
+렌더 테스트(`coding-run-signals.test.tsx`)가 이제 그것을 문다.
+
+**백엔드에도 구멍이 하나 있었다.** 멈춘(stalled) 자식의 `subagent.failed` 와 취소된
+자식의 `subagent.cancelled` 는 payload 에 `parent_id` 가 없었고 부모 싱크 허용 목록에도
+없었다. 둘은 `subagent.step` 없이 자식을 끝내므로 **부모 원장은 그 자식이 끝났다는 것을
+영영 모른다** — K3 이 켜지면 detached 자식이 화면에서 영원히 "running" 이다.
+`_terminal_fields` 한 헬퍼로 네 emit 자리에 같은 필드를 싣고 허용 목록에 둘을 더했다.
+
+**장치** — DA 의 짝 규칙을 그대로 옮겼다.
+
+- `tests/fixtures/coding_event_kinds.json` — kind 마다 `projected` 와 `sample`, 면제에는 `reason`
+- `tests/coding/test_event_kinds.py` — 소스를 AST 로 훑어 **정확히 일치**. 싱크를 함수 이름이
+  아니라 `event_type=` 키워드로 잡는다(싱크 함수가 늘어도 키워드는 같다). f-string 두 곳
+  (`run.{status}` · `approval.{status}`)과 durable 루프가 Jev 결정에서 kind 를 **값으로** 꺼내는
+  자리는 출처를 따라가 풀고, 못 푼 호출부는 이름으로 짚어 실패한다
+- `web/tests/source/coding-event-kinds.test.ts` — `projected: true` 면 커서 **말고도** 무언가
+  바뀌어야 하고, false 면 **커서만** 움직여야 한다. 양방향
+- 두 테스트 모두 **변이로 확인했다**: fixture 에서 kind 하나를 빼면 `missing`, 허용 목록에서
+  하나를 빼면 `stale`, 리듀서에서 Jev 분기를 끄면 `jev_risk_scored 가 커서만 넘겼다`
+
+**스냅샷도 판정을 싣는다.** 판정은 `tool.started` **앞에** 원장에 찍히고, 승인에 걸린 호출은
+실행 행이 아예 없다. 그래서 `coding_tool_executions` 에 붙이지 않고 `coding_events` 에서
+호출별 최신 판정을 읽는다(`tool_risks`). 스냅샷 행은 이벤트의 type·payload 를 그대로 싣고
+프론트는 **디코더 하나**로 둘 다 읽는다 — 디코더가 둘이면 밴드를 다르게 읽는 자리가 둘이다.
+
+> 📌 **표본 경계가 아니다**(§8). 이벤트 어휘와 payload 필드가 늘었을 뿐 모델이 보는 것은
+> 하나도 바뀌지 않았다 — K4a 와 같은 이유다. DA 의 서브에이전트 싱크는 `_NullSink` 라
+> 자식 payload 필드 추가가 DA 원장에 닿지 않는다.
+>
+> ⚪ **남은 것:** 도구 줄의 배지는 **무엇을 쟀는가**(확률·밴드·shadow/enforced)만 말한다.
+> **그것이 이 호출에 무엇을 뜻하는가** — 섀도에서 "게이트가 켜졌다면 승인을 요구했을 것",
+> unattended DENY 의 거절 사유(§12.4 ⚠️) — 는 `describeToolRisk` 한 함수이고 비어 있다.
+> 스냅샷의 `refusal` 도 없다(거절 범주는 원장 이벤트에만 있다). 재접속하면 태스크의 failed
+> 상태는 보이지만 거절이었다는 사실은 사라진다.
+
+
 ## 13. 트랙별 한 줄 — 어디를 읽어야 하는가
 
 ### A. 심층분석 하네스
@@ -930,8 +985,9 @@ L7 이 후보로 볼 수 있는 것: `skill_selector` 의 스킬 선택 · `conf
 
 ### C. 프론트엔드
 어휘는 `tests/fixtures/deep_analysis_event_kinds.json` 한 파일, 백엔드는 AST로 훑어 일치를 주장, 면제는 양방향.
+🆕 코딩 스트림도 같은 규율이다 — `tests/fixtures/coding_event_kinds.json`(§12.9).
 `frontend-ci.yml`에 `paths: [web/**]`를 넣지 말 것. 📌 되돌리지 말 것: 프록시 라우트에 POST 없음 ·
-모르는 kind도 커서 전진 · `Record<CounterKey, …>`. **J·K가 만드는 kind는 이 fixture를 거친다.**
+모르는 kind도 커서 전진 · `Record<CounterKey, …>`. **J·K·L이 만드는 kind는 이 fixture들을 거친다** — DA 원장이면 DA fixture, 코딩 원장이면 코딩 fixture.
 
 ### D. 프레임워크 이탈
 ```
