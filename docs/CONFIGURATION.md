@@ -636,11 +636,23 @@ jev:
   tool_risk_gate_enabled: false    # actually narrow the outcome
   judge_shadow_enabled: false      # judge-side shadow (not yet wired)
   model: null                      # a resolved id, e.g. jev-1.13.0
-  low_below: null                  # p < this  -> low band
-  high_at_or_above: null           # p >= this -> high band
-  tool_risk_rubric: tool_risk      # neos/jev/rubrics/<name>.yaml
+  tool_risk_rubric: tool_risk_split  # neos/jev/rubrics/<name>.yaml
+  question_thresholds: {}          # per question of a split rubric, no defaults:
+  #   irreversible: {low_below: ..., high_at_or_above: ...}
+  #   exfiltration: {low_below: ..., high_at_or_above: ...}
+  low_below: null                  # single-question rubrics only
+  high_at_or_above: null           #   (e.g. tool_risk_rubric: tool_risk)
   timeout_sec: 5.0
 ```
+
+**The default rubric asks two questions** (`irreversible`, `exfiltration`).
+Each question is banded against its own thresholds, and the call takes the
+strictest resulting outcome. Probabilities are never combined into one number:
+a combination rule would be one more unmeasured constant, and the ledger would
+lose which axis was high. The keys of `question_thresholds` must match the
+rubric's questions exactly -- a missing or extra key fails at assembly. Giving
+both `question_thresholds` and the single `low_below`/`high_at_or_above` pair
+is rejected, because the ledger could not tell which one was used.
 
 The key is `TYPESAFE_API_KEY`, read from the process environment or `.env` with
 the same precedence as every other secret (process wins).
@@ -664,6 +676,14 @@ Three properties are enforced rather than documented:
 - **Loud fallback.** If Jev times out or errors, the static outcome stands and
   a `jev_unavailable` event records it. Watch that event's rate: making Jev
   unreachable is the cheapest way to remove the gate.
+- **A provider block is not a fallback.** TypeSafe's edge WAF rejects request
+  bodies containing strings it treats as attack payloads -- including text in a
+  tool's input. Such a 403 (no `x-typesafe-request-id`, HTML body) is recorded
+  as `jev_unavailable` with `reason: provider_blocked`, and when enforcing it
+  narrows one step like the middle band instead of letting the static outcome
+  stand. Otherwise anyone who can put that string into a tool input could turn
+  the gate off for that call. Rubric text is sent with every request, so a
+  rubric must not contain such strings either; a test checks the known ones.
 - **Misconfiguration is not "off".** Enabling banding without a key, a pinned
   model, or thresholds raises at assembly time instead of quietly running
   ungated.
