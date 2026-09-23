@@ -67,6 +67,26 @@ def _briefing_from_record(record: RunRecord) -> ParentBriefing:
     )
 
 
+def _terminal_fields(record: RunRecord) -> dict[str, object]:
+    """What a parent needs to place a child's terminal event.
+
+    Stalls and cancels end a child without a `subagent.step`, so their own
+    event is the only word the parent's ledger gets. Without `parent_id` the
+    parent sink cannot route it, and a detached child stays "running" on
+    screen forever. One helper, so the four emit sites cannot drift.
+    """
+    return {
+        "spec": record.spec,
+        "status": record.status.value,
+        "parent_kind": record.parent_kind.value,
+        "parent_id": record.parent_id,
+        "parent_run_id": record.parent_run_id,
+        "parent_tool_call_id": record.parent_tool_call_id,
+        "turn_count": record.turn_count,
+        "tool_count": record.tool_count,
+    }
+
+
 def _outcome(record: RunRecord, *, tokens_delta: int = 0) -> StepOutcome:
     return StepOutcome(
         kind=_step_kind(record.status),
@@ -186,10 +206,9 @@ class SubagentRuntime:
             await self._events.emit(
                 "subagent.failed",
                 {
+                    **_terminal_fields(committed),
                     "run_id": committed.run_id,
                     "error_code": committed.error_code,
-                    "spec": committed.spec,
-                    "parent_kind": committed.parent_kind.value,
                 },
             )
         return _outcome(committed, tokens_delta=tokens_delta)
@@ -269,10 +288,9 @@ class SubagentRuntime:
             await self._events.emit(
                 "subagent.failed",
                 {
+                    **_terminal_fields(failed),
                     "run_id": failed.run_id,
                     "error_code": failed.error_code,
-                    "spec": failed.spec,
-                    "parent_kind": failed.parent_kind.value,
                 },
             )
             await self._cascade_cancel(run_id, "stalled")
@@ -283,7 +301,7 @@ class SubagentRuntime:
         if record.status is SubagentStatus.KILLED:
             await self._events.emit(
                 "subagent.cancelled",
-                {"run_id": record.run_id, "reason": reason},
+                {**_terminal_fields(record), "run_id": record.run_id, "reason": reason},
             )
         await self._cascade_cancel(run_id, reason)
         return record.snapshot()
@@ -297,7 +315,11 @@ class SubagentRuntime:
             if record.status is SubagentStatus.KILLED:
                 await self._events.emit(
                     "subagent.cancelled",
-                    {"run_id": record.run_id, "reason": reason},
+                    {
+                        **_terminal_fields(record),
+                        "run_id": record.run_id,
+                        "reason": reason,
+                    },
                 )
             snapshots.append(record.snapshot())
             await self._cascade_cancel(record.run_id, reason)

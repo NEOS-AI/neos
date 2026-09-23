@@ -495,8 +495,17 @@ def _resolve_coding_session_factory(session_factory):
 
 logger = logging.getLogger(__name__)
 
+# failed/cancelled are here because a stall or a cancel ends a child without a
+# `subagent.step` -- leave them out and the parent's ledger never learns the
+# child ended. `tests/fixtures/coding_event_kinds.json` pins this vocabulary.
 _PARENT_SINK_EVENTS = frozenset(
-    {"subagent.started", "subagent.step", "subagent.completed"}
+    {
+        "subagent.started",
+        "subagent.step",
+        "subagent.completed",
+        "subagent.failed",
+        "subagent.cancelled",
+    }
 )
 _PARENT_SINK_PAYLOAD = frozenset(
     {
@@ -509,6 +518,9 @@ _PARENT_SINK_PAYLOAD = frozenset(
         "turn_count",
         "tool_count",
         "status",
+        # Short codes, not prose: `stalled`, `parent_cancelled`, ...
+        "error_code",
+        "reason",
     }
 )
 
