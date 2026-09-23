@@ -34,7 +34,7 @@ def main() -> int:
 
     connection = psycopg2.connect(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
-        dbname=os.environ.get("POSTGRES_DB", "neos_db"),
+        dbname=os.environ.get("POSTGRES_DB", "neos_test"),
         user=os.environ.get("POSTGRES_USER", "neos"),
         password=os.environ.get("POSTGRES_PASSWORD", "neos_password"),
     )

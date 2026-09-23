@@ -541,7 +541,7 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 `git worktree remove`는 gitignore 대상 파일을 경고 없이 삭제한다. `artifacts/deep-analysis-funnel/<ts>/`는
 재생성 불가다. **J 이후에는 샌드박스 산출물(스크립트·출력)도 같은 등급이다** — 워크트리 정리 전에 옮긴다.
 
-### 10.3 앰비언트 상태 오염 4종 (전부 실제 발생)
+### 10.3 앰비언트 상태 오염 (전부 실제 발생)
 
 | 증상 | 원인 |
 |---|---|
@@ -549,7 +549,8 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 | 프로세스 env가 테스트 지정값을 이김 | litellm import 시 `load_dotenv()` |
 | import 시점 고정 플래그 어긋남 | `neos/main.py`의 `IS_DEBUG` |
 | 테스트가 심은 AsyncMock이 전역에 남음 | `patch`는 팩토리를 복원하지 캐시된 인스턴스를 복원하지 않는다 |
-| 🆕 **개발 DB 에 테스트 런이 쌓임** (2026-09-24 확인) | DB 를 쓰는 테스트(`test_ledger_purge`·`test_orchestrator_m*` 등)가 `.env` 의 `DATABASE_URL` = **`neos`** 를 그대로 쓴다. 스위트 한 번에 `deep_analysis_runs` 가 ~6 건씩 는다. `neos_test` 는 있는데 아무도 가리키지 않는다. 09-20 의 DB 재구축도 배포 부트스트랩과 pytest 가 같은 `neos` 에서 부딪친 것이었다 |
+| 🆕 **개발 DB 에 테스트 런이 쌓임** (2026-09-24 확인) | DB 를 쓰는 테스트(`test_ledger_purge`·`test_orchestrator_m*` 등)가 `.env` 의 `DATABASE_URL` = **`neos`** 를 그대로 쓴다. 스위트 한 번에 `deep_analysis_runs` 가 ~6 건씩 는다. `neos_test` 는 있는데 아무도 가리키지 않는다. 09-20 의 DB 재구축도 배포 부트스트랩과 pytest 가 같은 `neos` 에서 부딪친 것이었다· ✅ **고쳤다**(2026-09-24): `tests/conftest.py` 가 설정 로드 전에 `DATABASE_URL` 의 DB 이름을 `<이름>_test` 로 바꾼다(이미 `_test` 면 그대로). CI 도 `neos_test` 로 옮겼다. 전체 스위트 전후로 `neos` 490 건 불변, `neos_test` +10 |
+| 🆕 **한 파일만 돌리면 깨지는 설정 테스트** (2026-09-24) | `test_config_loader.py` 10건 — `.env` 를 가린 뒤 development 프로파일을 로드하는데 코딩 루프가 크리덴셜을 요구한다. 전체 스위트에서는 **윗줄의 litellm `load_dotenv()`** 가 키를 프로세스 env 에 넣어 줘서 통과했다. 픽스처가 CI 와 같은 자리표시자를 준다 |
 
 ### 10.4 검증 명령
 
@@ -1128,7 +1129,7 @@ enforce 에서 WAF 차단은 **R₀ 가 아니라 한 단계 좁히기**(`ALLOW 
 
 #### 같은 날의 점검 둘
 
-- **개발 DB 에 무엇이 쓰는가** — 테스트 스위트다(§10.3 새 줄). 런이 ~6 건씩 분 단위로 몰려 있고, 시각이
+- **개발 DB 에 무엇이 쓰는가** — 테스트 스위트다(§10.3 새 줄). → **같은 날 고쳤다** — conftest 가 이름을 강제한다. 런이 ~6 건씩 분 단위로 몰려 있고, 시각이
   스위트 실행과 겹치며, `root_question` 이 `purge 테스트용 루트 질문` 이다. 고치는 길은 테스트 DB 이름을
   **강제로** 나누는 것이다(`neos_test`) — 메모리에 규칙으로만 있었고 코드는 따르지 않았다
 - **고아 PG17 볼륨** — 다섯 모두 **2026-09-20 에 만들어졌다**(재구축 당일). 넷은 142M(빈 클러스터 크기), 하나
