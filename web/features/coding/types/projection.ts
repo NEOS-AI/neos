@@ -132,6 +132,12 @@ export type CodingProjectionSnapshot = {
   connection_basis: "checkpoint";
   active_children?: CodingActiveChildView[];
   tool_risks?: CodingToolRiskSnapshot[];
+  // The `model.refused` event, only while it belongs to the latest run.
+  refusal?: {
+    run_id: string | null;
+    seq: number;
+    payload: Record<string, unknown>;
+  } | null;
 };
 
 export type CodingProjectionState = {

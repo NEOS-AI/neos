@@ -1,5 +1,6 @@
 import {
   childFromEvent,
+  refusalFromPayload,
   TOOL_RISK_EVENT_TYPES,
   toolRiskFromPayload,
   upsertUserEdit,
@@ -86,9 +87,15 @@ export function reduceSnapshot(
     thinkingStatus: null,
     toolRisksById: risksFromSnapshot(snapshot),
     childrenById: childrenFromSnapshot(snapshot),
-    // Not in the snapshot: the task's failed status still shows, but the
-    // refusal's category lives only in the ledger event.
-    refusal: null,
+    // The server sends a refusal only while it belongs to the latest run --
+    // the same rule as the live `run.started` clearing it.
+    refusal: snapshot.refusal
+      ? refusalFromPayload(
+          snapshot.refusal.payload ?? {},
+          snapshot.refusal.run_id,
+          snapshot.refusal.seq
+        )
+      : null,
   };
 }
 
@@ -139,16 +146,11 @@ export function reduceProjectionEvent(
     return { ...base, childrenById: { ...state.childrenById, [child.run_id]: child } };
   }
   if (event.type === "model.refused") {
-    const category = event.payload.stop_category;
     return {
       ...base,
       // The turn is over and will not be retried; a running note is stale.
       thinkingStatus: null,
-      refusal: {
-        run_id: event.run_id ?? null,
-        stop_category: typeof category === "string" && category ? category : null,
-        seq: event.seq,
-      },
+      refusal: refusalFromPayload(event.payload, event.run_id, event.seq),
     };
   }
   if (event.type === "run.started") {

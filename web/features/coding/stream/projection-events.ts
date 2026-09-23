@@ -7,6 +7,7 @@
 // it is not a reason to render junk either.
 import type {
   CodingChildView,
+  CodingRefusalView,
   CodingToolRiskView,
 } from "@/features/coding/types/projection";
 import type { WorkspaceUserEditView } from "@/features/coding/workspace/types";
@@ -66,6 +67,21 @@ export function toolRiskFromPayload(
     enforced,
     rubric_digest: str(payload.rubric_digest),
     model: str(payload.model),
+  };
+}
+
+// `model.refused`, live or from the snapshot row -- one decoder, like the
+// verdicts above.
+export function refusalFromPayload(
+  payload: Record<string, unknown>,
+  runId: string | null | undefined,
+  seq: number
+): CodingRefusalView {
+  const category = payload.stop_category;
+  return {
+    run_id: runId ?? null,
+    stop_category: typeof category === "string" && category ? category : null,
+    seq,
   };
 }
 

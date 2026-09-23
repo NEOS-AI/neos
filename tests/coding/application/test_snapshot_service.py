@@ -325,3 +325,58 @@ def test_projection_reads_the_same_kinds_the_gate_writes() -> None:
     from neos.jev.gate import JEV_RISK_SCORED, JEV_UNAVAILABLE
 
     assert set(TOOL_RISK_EVENT_TYPES) == {JEV_RISK_SCORED, JEV_UNAVAILABLE}
+
+
+def _refusal_repository(refusal):
+    from dataclasses import replace
+
+    class RefusalRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(rows, refusal=refusal)
+
+    return RefusalRepository(head_seq=14)
+
+
+@pytest.mark.no_db
+async def test_snapshot_carries_a_refusal_on_the_latest_run() -> None:
+    """A refused run fails and is never retried, so the refusal is the last
+    thing the user is told -- a refresh must not erase it.
+    """
+    from neos.coding.repositories.projection_repository import CodingRefusalRow
+
+    payload = {"stop_reason": "refusal", "stop_category": "cyber"}
+    snapshot = await CodingSnapshotService(
+        _refusal_repository(CodingRefusalRow("cr_2", 13, payload))
+    ).get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.refusal is not None
+    assert snapshot.refusal.run_id == "cr_2"
+    assert snapshot.refusal.seq == 13
+    assert snapshot.refusal.payload == payload
+
+
+@pytest.mark.no_db
+async def test_snapshot_drops_a_refusal_a_newer_run_has_cleared() -> None:
+    """Live, `run.started` clears the refusal. A snapshot taken after a newer
+    run started must agree, or a reconnect resurrects the banner.
+    """
+    from neos.coding.repositories.projection_repository import CodingRefusalRow
+
+    snapshot = await CodingSnapshotService(
+        _refusal_repository(CodingRefusalRow("cr_1", 7, {"stop_reason": "refusal"}))
+    ).get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.refusal is None
+
+
+@pytest.mark.no_db
+async def test_snapshot_without_a_refusal_has_none() -> None:
+    snapshot = await CodingSnapshotService(_refusal_repository(None)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    assert snapshot.refusal is None

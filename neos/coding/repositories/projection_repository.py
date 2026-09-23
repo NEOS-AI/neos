@@ -98,6 +98,19 @@ TOOL_RISK_EVENT_TYPES = ("jev_risk_scored", "jev_unavailable")
 
 
 @dataclass(frozen=True, slots=True)
+class CodingRefusalRow:
+    """The latest `model.refused` event the ledger holds for the task.
+
+    Which run it belongs to is left to the snapshot service: SQL hands over
+    the newest refusal, the service decides whether a newer run cleared it.
+    """
+
+    run_id: str | None
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionRows:
     task: CodingTaskRow
     runs: tuple[CodingRunRow, ...]
@@ -110,6 +123,7 @@ class CodingProjectionRows:
     latest_checkpoint: CodingCheckpointRow | None
     head_seq: int
     tool_risks: tuple[CodingToolRiskRow, ...] = ()
+    refusal: CodingRefusalRow | None = None
 
 
 class PostgresCodingProjectionRepository:
@@ -148,6 +162,7 @@ class PostgresCodingProjectionRepository:
                 workspace_edits = await self._workspace_edits(session, task_id)
                 checkpoint = await self._checkpoint(session, task_id)
                 tool_risks = await self._tool_risks(session, task_id)
+                refusal = await self._refusal(session, task_id)
 
         task = CodingTaskRow(
             task_id=task_record[0],
@@ -175,6 +190,7 @@ class PostgresCodingProjectionRepository:
             latest_checkpoint=checkpoint,
             head_seq=task.last_seq,
             tool_risks=tool_risks,
+            refusal=refusal,
         )
 
     async def _runs(self, session, task_id: str) -> tuple[CodingRunRow, ...]:
@@ -255,6 +271,29 @@ class PostgresCodingProjectionRepository:
                 payload=dict(row[3]) if row[3] is not None else {},
             )
             for row in result.all()
+        )
+
+    async def _refusal(self, session, task_id: str) -> CodingRefusalRow | None:
+        result = await session.execute(
+            text(
+                """
+                SELECT run_id, seq, payload
+                FROM coding_events
+                WHERE task_id = :task_id
+                  AND event_type = 'model.refused'
+                ORDER BY seq DESC
+                LIMIT 1
+                """
+            ),
+            {"task_id": task_id},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return CodingRefusalRow(
+            run_id=row[0],
+            seq=int(row[1]),
+            payload=dict(row[2]) if row[2] is not None else {},
         )
 
     async def _approvals(

@@ -177,6 +177,12 @@ class CodingToolRiskSnapshot(BaseModel):
     payload: dict[str, Any]
 
 
+class CodingRefusalSnapshot(BaseModel):
+    run_id: str | None
+    seq: int
+    payload: dict[str, Any]
+
+
 class CodingProjectionSnapshotResponse(BaseModel):
     task: CodingTaskResponse
     active_run: CodingRunSnapshot | None
@@ -191,6 +197,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     connection_basis: Literal["checkpoint"]
     active_children: list[CodingActiveChildSnapshot] = Field(default_factory=list)
     tool_risks: list[CodingToolRiskSnapshot] = Field(default_factory=list)
+    refusal: CodingRefusalSnapshot | None = None
 
 
 class CodingCommandRequest(BaseModel):
