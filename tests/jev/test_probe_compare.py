@@ -17,7 +17,7 @@ import math
 import pytest
 from typesafe_sdk import SystemOneResponse
 
-from neos.jev.assembly import MisconfiguredJev, _single_noul_question
+from neos.jev.assembly import _noul_questions
 from neos.jev.rubric import load_rubric
 from scripts.jev_probe import (
     COMPARE_TARGETS,
@@ -51,10 +51,10 @@ def test_the_single_rubric_still_has_exactly_one_noul_question() -> None:
     assert noul_questions(load_rubric("tool_risk")) == ["destructive"]
 
 
-def test_the_assembly_guard_still_refuses_the_split_rubric() -> None:
-    """D-L2 가 닫히기 전에는 합성 규칙이 없다 -- 가드가 풀리면 안 된다."""
-    with pytest.raises(MisconfiguredJev, match="D-L2"):
-        _single_noul_question("tool_risk_split")
+def test_the_split_rubric_has_exactly_the_two_questions_the_config_names() -> None:
+    """D-L2 가 닫혔다(2026-09-24). 가드는 "하나만"에서 "질문마다 경계"로 바뀌었다
+    -- `tests/jev/test_assembly.py` 가 그것을 문다. 여기서는 이름만 고정한다."""
+    assert _noul_questions("tool_risk_split") == ("irreversible", "exfiltration")
 
 
 # --- 합성 열 ------------------------------------------------------------------

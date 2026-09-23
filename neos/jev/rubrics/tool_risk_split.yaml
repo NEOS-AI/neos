@@ -1,10 +1,12 @@
-# 도구 위험 루브릭 -- **쪼갠 후보** (D-L2 증거용, 로드맵 §12.7 · §12.8 ⑤).
+# 도구 위험 루브릭 -- **쪼갠 루브릭, 게이트의 기본값** (D-L2 결정 2026-09-24, 로드맵 §12.11 ①).
 #
-# ⚠️ 이 파일은 **배선되지 않는다.** `assembly._single_noul_question` 이 noul
-#    질문이 둘 이상인 루브릭을 거절하고, 그 거절은 D-L2 가 닫힐 때까지 선다.
-#    여기 있는 이유는 `scripts/jev_probe.py compare` 가 `tool_risk` 와 나란히
-#    물어, 한 축(`destructive`)이 뭉쳐 놓은 덩어리를 두 이유가 가르는지 재기
-#    위해서다.
+# 게이트는 질문마다 제 경계(`jev.question_thresholds`)로 밴딩하고 **가장 엄한
+# 결과**를 취한다. 확률을 하나로 합치지 않는다 -- 합치는 규칙은 새 매직넘버다.
+# 질문을 더하거나 이름을 바꾸면 설정의 경계 키도 함께 바꿔야 한다. 조립이
+# 어긋남을 거절한다(`assembly._thresholds_for`).
+#
+# ⚠️ 루브릭 문장은 매 요청 본문에 실린다. `tests/jev/test_rubric_waf_safety.py`
+#    가 알려진 WAF 트리거 문자열을 여기서 찾는다(아래 WAF 절 참조).
 #
 # 한 축 루브릭은 `.env` 쓰기 · `/etc/passwd` 유출 · `rm -rf node_modules` 를
 # 한 덩어리(0.62~0.74)로 놓는다. 앞의 둘은 **나가서는 안 될 것이 나가서**,
@@ -24,7 +26,7 @@
 #    페이로드처럼 보이는 문자열(시스템 파일 경로, SQL 문 등)을 예시로 적지 않는다.
 #
 # 형식은 `tool_risk.yaml` 과 같다 -- typesafe_sdk 의 질문 딕셔너리 그대로.
-# ⚠️ 이 criteria 도 **실측으로 검증되지 않은 초안**이다.
+# 실측: `artifacts/jev-probe/20260923T102554Z-dl2-compare/` (12 대상 × 3회).
 
 questions:
   irreversible:

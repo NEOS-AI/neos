@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeToolRisk } from "../../features/coding/components/tool-risk";
+import { describeToolRisk, toolRiskBadge } from "../../features/coding/components/tool-risk";
 import type { CodingToolRiskView } from "../../features/coding/types/projection";
 
 type Scored = Extract<CodingToolRiskView, { kind: "scored" }>;
@@ -21,6 +21,8 @@ const scored = (overrides: Partial<Scored> = {}): Scored => ({
   enforced: false,
   rubric_digest: "f5faf377",
   model: "jev-1.13.0",
+  driver: null,
+  questions: [],
   ...overrides,
 });
 
@@ -92,6 +94,8 @@ test("an unavailable verdict is never silent, with or without details", () => {
     static_outcome,
     enforced: true,
     unattended: false,
+    blocked: false,
+    would_be_outcome: null,
   });
 
   const full = describeToolRisk(unavailable("TimeoutError", "allow"));
@@ -153,4 +157,42 @@ test("a shadow fold reads as the denial it would have become", () => {
     })
   );
   assert.match(sentence ?? "", /would have required approval and, with no one to approve, been denied/);
+});
+
+
+test("a split verdict names the axis that set the band", () => {
+  const risk = scored({ probability: 0.61, driver: "exfiltration" });
+  assert.equal(toolRiskBadge(risk), "jev 0.61 · mid · exfiltration");
+  assert.equal(toolRiskBadge(scored()), "jev 0.62 · mid");
+});
+
+const blocked = (
+  overrides: Partial<Extract<CodingToolRiskView, { kind: "unavailable" }>> = {}
+): CodingToolRiskView => ({
+  kind: "unavailable",
+  tool_call_id: "t1",
+  seq: 1,
+  tool: "write_file.v1",
+  reason: "provider_blocked",
+  static_outcome: "allow",
+  enforced: true,
+  unattended: false,
+  blocked: true,
+  would_be_outcome: "require_approval",
+  ...overrides,
+});
+
+test("a WAF block reads as a narrowing, not as a fallback", () => {
+  assert.equal(toolRiskBadge(blocked()), "jev blocked");
+  const sentence = describeToolRisk(blocked());
+  assert.match(sentence ?? "", /provider blocked/);
+  assert.match(sentence ?? "", /narrowed allow → require_approval/);
+  // A block that falls back would say "stood" -- the D-L1 wording. It must not.
+  assert.doesNotMatch(sentence ?? "", /stood/);
+});
+
+test("a shadow WAF block is a counterfactual", () => {
+  const sentence = describeToolRisk(blocked({ enforced: false }));
+  assert.match(sentence ?? "", /^Shadow:/);
+  assert.match(sentence ?? "", /would have gone allow → require_approval/);
 });

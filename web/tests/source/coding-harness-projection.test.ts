@@ -252,3 +252,39 @@ test("a live user edit reaches the workspace, and its sync updates it in place",
   assert.equal(state.workspace.user_edits?.[0]?.base_revision, "r1");
   assert.equal(state.workspace.user_edits?.[0]?.applied_checkpoint_id, "cc_3");
 });
+
+test("a split verdict keeps every question, and drops a half-read one", () => {
+  const state = reduceProjectionEvent(
+    emptyProjection("ct_1"),
+    event(1, "jev_risk_scored", {
+      ...SCORED,
+      probability: 0.61,
+      driver: "exfiltration",
+      questions: [
+        { name: "irreversible", probability: 0.03, band: "low" },
+        { name: "exfiltration", probability: 0.61, band: "mid" },
+        { name: "broken", band: "high" },
+      ],
+    }, { tool_call_id: "t1" })
+  );
+  const risk = state.toolRisksById.t1;
+  assert.equal(risk?.kind, "scored");
+  if (risk?.kind !== "scored") return;
+  assert.equal(risk.driver, "exfiltration");
+  assert.deepEqual(risk.questions.map((q) => q.name), ["irreversible", "exfiltration"]);
+});
+
+test("a WAF block is decoded as blocked, with where it would have narrowed to", () => {
+  const state = reduceProjectionEvent(
+    emptyProjection("ct_1"),
+    event(1, "jev_unavailable", {
+      reason: "provider_blocked", blocked: true, static_outcome: "allow",
+      would_be_outcome: "require_approval", enforced: true, unattended: false,
+    }, { tool_call_id: "t1" })
+  );
+  const risk = state.toolRisksById.t1;
+  assert.equal(risk?.kind, "unavailable");
+  if (risk?.kind !== "unavailable") return;
+  assert.equal(risk.blocked, true);
+  assert.equal(risk.would_be_outcome, "require_approval");
+});

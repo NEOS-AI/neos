@@ -1568,6 +1568,22 @@ class SandboxMemoryConfig(StrictConfigModel):
 _CLAIM_LEASE_CREATE_STEPS = 6
 
 
+class JevBandThresholds(StrictConfigModel):
+    """질문 하나의 밴드 경계. 기본값이 없다 -- `JevConfig` 와 같은 이유다."""
+
+    low_below: float = Field(ge=0.0, le=1.0)
+    high_at_or_above: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def ordered(self) -> "JevBandThresholds":
+        if self.low_below > self.high_at_or_above:
+            raise ValueError(
+                "high_at_or_above 는 low_below 보다 작을 수 없다: "
+                f"{self.low_below} > {self.high_at_or_above}"
+            )
+        return self
+
+
 class JevConfig(StrictConfigModel):
     """Jev 확률 판정 층 -- 로드맵 §12(트랙 L).
 
@@ -1591,8 +1607,13 @@ class JevConfig(StrictConfigModel):
     low_below: float | None = Field(default=None, ge=0.0, le=1.0)
     #: `p >= high_at_or_above` 가 HIGH 밴드. 기본값 없음.
     high_at_or_above: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: 쪼갠 루브릭(D-L2)의 질문별 경계. 키는 루브릭의 noul 질문 이름과
+    #: **정확히** 같아야 한다(조립이 확인한다). 기본값 없음 -- 질문마다 둘이다.
+    question_thresholds: dict[str, JevBandThresholds] = Field(default_factory=dict)
     #: 도구 위험 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
-    tool_risk_rubric: str = "tool_risk"
+    #: D-L2(2026-09-24): 쪼갠 루브릭이 기본이다. 단일 질문은 `cat ~/.aws/credentials`
+    #: 를 0.10 으로 읽는 맹점이 있었다(로드맵 §12.11 ①).
+    tool_risk_rubric: str = "tool_risk_split"
     #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
     timeout_sec: float = Field(default=5.0, gt=0, le=60)
 
@@ -1610,10 +1631,17 @@ class JevConfig(StrictConfigModel):
     @model_validator(mode="after")
     def validate_banding_policy(self) -> "JevConfig":
         banding_on = self.tool_risk_shadow_enabled or self.tool_risk_gate_enabled
-        if banding_on:
+        single = self.low_below is not None or self.high_at_or_above is not None
+        if single and self.question_thresholds:
+            raise ValueError(
+                "jev.low_below/high_at_or_above 와 jev.question_thresholds 를 함께 "
+                "줄 수 없다. 어느 경계가 쓰였는지 원장만 보고 알 수 없게 된다."
+            )
+        if banding_on and not self.question_thresholds:
             if self.low_below is None or self.high_at_or_above is None:
                 raise ValueError(
-                    "Jev 밴딩을 켜려면 jev.low_below 와 jev.high_at_or_above 를 "
+                    "Jev 밴딩을 켜려면 jev.question_thresholds(쪼갠 루브릭) 또는 "
+                    "jev.low_below 와 jev.high_at_or_above(질문 하나짜리 루브릭)를 "
                     "명시해야 한다. 기본값은 없다 -- L1·L2 실측이 정한다."
                 )
             if self.low_below > self.high_at_or_above:

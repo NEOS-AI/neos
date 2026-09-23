@@ -85,6 +85,10 @@ export type CodingToolRiskView =
       enforced: boolean;
       rubric_digest: string | null;
       model: string | null;
+      // Split rubric (D-L2): the question that set the band, and every
+      // question's own verdict. Null/empty for single-question events.
+      driver: string | null;
+      questions: CodingToolRiskQuestionView[];
     }
   | {
       kind: "unavailable";
@@ -95,7 +99,17 @@ export type CodingToolRiskView =
       static_outcome: string | null;
       enforced: boolean;
       unattended: boolean;
+      // D-L3: the provider's WAF refused the request. Unlike other failures
+      // this narrows (would_be_outcome) instead of falling back to R₀.
+      blocked: boolean;
+      would_be_outcome: string | null;
     };
+
+export type CodingToolRiskQuestionView = {
+  name: string;
+  probability: number;
+  band: string;
+};
 
 export type CodingToolRiskSnapshot = {
   tool_call_id: string;

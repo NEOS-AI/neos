@@ -20,6 +20,7 @@ def config(**overrides) -> JevConfig:
         "enabled": True,
         "tool_risk_shadow_enabled": True,
         "model": "jev-1.13.0",
+        "tool_risk_rubric": "tool_risk",
         "low_below": 0.3,
         "high_at_or_above": 0.7,
     }
@@ -77,3 +78,54 @@ def test_the_built_scorer_carries_the_rubric_digest() -> None:
     gate = build_tool_risk_gate(config(), api_key="k")
     assert gate is not None
     assert gate.scorer._rubric.digest == load_rubric("tool_risk").digest
+
+
+SPLIT = {
+    "irreversible": {"low_below": 0.3, "high_at_or_above": 0.8},
+    "exfiltration": {"low_below": 0.3, "high_at_or_above": 0.8},
+}
+
+
+def split_config(**overrides) -> JevConfig:
+    base = {
+        "enabled": True,
+        "tool_risk_shadow_enabled": True,
+        "model": "jev-1.13.0",
+        "question_thresholds": SPLIT,
+    }
+    base.update(overrides)
+    return JevConfig(**base)
+
+
+def test_the_split_rubric_is_the_default() -> None:
+    """D-L2 (2026-09-24): 쪼갠다."""
+    assert JevConfig().tool_risk_rubric == "tool_risk_split"
+
+
+def test_the_split_rubric_builds_a_gate_that_asks_every_question() -> None:
+    gate = build_tool_risk_gate(split_config(), api_key="k")
+    assert gate is not None
+    assert list(gate.thresholds) == ["irreversible", "exfiltration"]
+    assert gate.scorer._questions == ("irreversible", "exfiltration")
+    assert gate.scorer._question is None
+
+
+def test_a_split_rubric_without_per_question_thresholds_is_refused() -> None:
+    """질문 하나짜리 경계를 두 질문에 나눠 쓰지 않는다 -- 아무도 정하지 않은 값이다."""
+    with pytest.raises(MisconfiguredJev, match="빠진 질문"):
+        build_tool_risk_gate(
+            config(tool_risk_rubric="tool_risk_split"), api_key="k"
+        )
+
+
+def test_a_threshold_for_a_question_the_rubric_lacks_is_refused() -> None:
+    """루브릭이 바뀌었는데 설정이 따라오지 않은 신호다."""
+    extra = {**SPLIT, "destructive": {"low_below": 0.3, "high_at_or_above": 0.8}}
+    with pytest.raises(MisconfiguredJev, match="루브릭에 없는 키"):
+        build_tool_risk_gate(split_config(question_thresholds=extra), api_key="k")
+
+
+def test_a_missing_question_threshold_is_refused() -> None:
+    only_one = {"irreversible": SPLIT["irreversible"]}
+    with pytest.raises(MisconfiguredJev, match="exfiltration"):
+        build_tool_risk_gate(split_config(question_thresholds=only_one), api_key="k")

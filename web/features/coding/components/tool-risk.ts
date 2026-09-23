@@ -3,8 +3,12 @@ import type { CodingToolRiskView } from "@/features/coding/types/projection";
 // The fixed part of a verdict's badge: what Jev measured. Always shown, so a
 // verdict is never invisible even where `describeToolRisk` says nothing.
 export function toolRiskBadge(risk: CodingToolRiskView): string {
-  if (risk.kind === "unavailable") return "jev unavailable";
-  return `jev ${risk.probability.toFixed(2)} · ${risk.band}`;
+  if (risk.kind === "unavailable") {
+    return risk.blocked ? "jev blocked" : "jev unavailable";
+  }
+  const base = `jev ${risk.probability.toFixed(2)} · ${risk.band}`;
+  // Split rubric: name the axis, so "0.61 mid" reads as a leak, not a wipe.
+  return risk.driver ? `${base} · ${risk.driver}` : base;
 }
 
 // Whether the verdict was acted on. Shadow (L2) records; the gate (L3) blocks.
@@ -18,6 +22,18 @@ export function toolRiskMode(risk: CodingToolRiskView): "shadow" | "enforced" {
 // (roadmap §12.5 L3: "L2 불일치 건별 리뷰"), and where an unattended DENY
 // reaches the user (§12.4 ⚠️, S6). Return null to show the badge alone.
 export function describeToolRisk(risk: CodingToolRiskView): string | null {
+  if (risk.kind === "unavailable" && risk.blocked) {
+    // D-L3: blocked is not "no answer" -- the request carried something the
+    // provider's WAF treats as an attack payload, so the gate narrowed.
+    const from = risk.static_outcome ?? "the static outcome";
+    const to = risk.would_be_outcome;
+    if (!to || to === risk.static_outcome) {
+      return "The provider blocked the Jev request; the static policy was already as strict.";
+    }
+    return risk.enforced
+      ? `The provider blocked the Jev request (its input looks like an attack payload); the gate narrowed ${from} → ${to}.`
+      : `Shadow: the provider blocked the Jev request; with the gate on, this call would have gone ${from} → ${to}.`;
+  }
   if (risk.kind === "unavailable") {
     // Never silent (S12): falling back to R₀ is itself something to report.
     const why = risk.reason ? ` (${risk.reason})` : "";

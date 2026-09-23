@@ -58,10 +58,8 @@ def build_tool_risk_gate(
             "jev.model 이 비어 있다. 적지 않으면 SDK 기본값 'jev-latest' 로 "
             "도는데, 별칭으로 돈 런은 어떤 모델이 답했는지 모른다."
         )
-    if config.low_below is None or config.high_at_or_above is None:
-        # `JevConfig` 가 이미 막지만, 이 팩토리는 설정 객체를 직접 받을 수도
-        # 있으므로 한 번 더 본다. 임계값 없이 만들어진 게이트는 밴드가 없다.
-        raise MisconfiguredJev("jev 밴드 임계값이 없다")
+    nouls = _noul_questions(config.tool_risk_rubric)
+    thresholds = _thresholds_for(config, nouls)
 
     if client is None:
         from typesafe_sdk import AsyncTypeSafeClient
@@ -77,13 +75,11 @@ def build_tool_risk_gate(
             client=client,
             model=config.model,
             rubric=load_rubric(config.tool_risk_rubric),
-            question=_single_noul_question(config.tool_risk_rubric),
+            question=nouls[0] if isinstance(thresholds, RiskBandThresholds) else None,
+            questions=() if isinstance(thresholds, RiskBandThresholds) else nouls,
             timeout_sec=config.timeout_sec,
         ),
-        thresholds=RiskBandThresholds(
-            low_below=config.low_below,
-            high_at_or_above=config.high_at_or_above,
-        ),
+        thresholds=thresholds,
         enforce=config.tool_risk_gate_enabled,
     )
 
@@ -102,22 +98,53 @@ def _key_from_environment() -> str:
         return ""
 
 
-def _single_noul_question(rubric_name: str) -> str:
-    """지금은 Noul 질문이 **정확히 하나**여야 한다.
-
-    여러 확률을 한 밴드로 합치는 규칙이 아직 없다(D-L2). 그 규칙 없이 여러
-    질문을 받으면 어느 하나를 말없이 골라 쓰게 되고, 원장은 나머지를 물었다는
-    사실조차 남기지 못한다. 그래서 고르지 않고 **거절한다**.
-    """
+def _noul_questions(rubric_name: str) -> tuple[str, ...]:
+    """루브릭의 noul 질문 이름들, 루브릭에 적힌 순서대로."""
     rubric = load_rubric(rubric_name)
-    nouls = [
+    nouls = tuple(
         name
         for name, question in rubric.questions.items()
         if question.get("type") == "noul"
-    ]
-    if len(nouls) != 1:
-        raise MisconfiguredJev(
-            f"루브릭 {rubric_name!r} 의 noul 질문이 {len(nouls)} 개다. "
-            "여러 확률을 한 밴드로 합치는 규칙은 아직 없다(D-L2)."
+    )
+    if not nouls:
+        raise MisconfiguredJev(f"루브릭 {rubric_name!r} 에 noul 질문이 없다")
+    return nouls
+
+
+def _thresholds_for(
+    config: "JevConfig", nouls: tuple[str, ...]
+) -> "RiskBandThresholds | dict[str, RiskBandThresholds]":
+    """루브릭의 질문과 설정의 경계를 **정확히** 맞춘다.
+
+    질문이 하나면 단일 경계(`low_below`/`high_at_or_above`)를 쓴다. 둘 이상이면
+    (D-L2, 2026-09-24 쪼개기로 결정) 질문마다 경계가 있어야 한다 -- 빠진
+    질문을 기본 경계로 채우면 그 축의 임계값이 **아무도 정하지 않은 값**이 되고,
+    남는 키는 루브릭이 바뀌었는데 설정이 따라오지 않았다는 신호다. 둘 다
+    조용히 넘기지 않는다.
+
+    합치는 규칙은 없다. 게이트가 질문마다 밴딩해 가장 엄한 결과를 취한다.
+    """
+    per_question = config.question_thresholds
+    if len(nouls) == 1 and not per_question:
+        if config.low_below is None or config.high_at_or_above is None:
+            # `JevConfig` 가 이미 막지만, 설정 객체를 직접 받을 수도 있다.
+            raise MisconfiguredJev("jev 밴드 임계값이 없다")
+        return RiskBandThresholds(
+            low_below=config.low_below,
+            high_at_or_above=config.high_at_or_above,
         )
-    return nouls[0]
+    missing = [name for name in nouls if name not in per_question]
+    extra = sorted(set(per_question) - set(nouls))
+    if missing or extra:
+        raise MisconfiguredJev(
+            f"루브릭 {config.tool_risk_rubric!r} 의 질문과 jev.question_thresholds 가 "
+            f"맞지 않는다 -- 빠진 질문: {missing}, 루브릭에 없는 키: {extra}. "
+            "질문마다 경계를 명시해야 한다(D-L2)."
+        )
+    return {
+        name: RiskBandThresholds(
+            low_below=per_question[name].low_below,
+            high_at_or_above=per_question[name].high_at_or_above,
+        )
+        for name in nouls
+    }

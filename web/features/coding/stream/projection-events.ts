@@ -8,6 +8,7 @@
 import type {
   CodingChildView,
   CodingRefusalView,
+  CodingToolRiskQuestionView,
   CodingToolRiskView,
 } from "@/features/coding/types/projection";
 import type { WorkspaceUserEditView } from "@/features/coding/workspace/types";
@@ -47,6 +48,8 @@ export function toolRiskFromPayload(
       static_outcome: str(payload.static_outcome),
       enforced,
       unattended,
+      blocked: payload.blocked === true,
+      would_be_outcome: str(payload.would_be_outcome),
     };
   }
   if (kind !== "jev_risk_scored") return null;
@@ -71,7 +74,26 @@ export function toolRiskFromPayload(
     enforced,
     rubric_digest: str(payload.rubric_digest),
     model: str(payload.model),
+    driver: str(payload.driver),
+    questions: questionsFrom(payload.questions),
   };
+}
+
+function questionsFrom(value: unknown): CodingToolRiskQuestionView[] {
+  if (!Array.isArray(value)) return [];
+  const questions: CodingToolRiskQuestionView[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const name = str(record.name);
+    const probability = num(record.probability);
+    const band = str(record.band);
+    // A half-read question is worse than none: it would show an axis as low.
+    if (name && probability !== null && band) {
+      questions.push({ name, probability, band });
+    }
+  }
+  return questions;
 }
 
 // `model.refused`, live or from the snapshot row -- one decoder, like the

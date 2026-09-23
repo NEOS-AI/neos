@@ -122,6 +122,8 @@ test("a tool row carries its Jev verdict and whether it was enforced", async () 
             enforced: false,
             rubric_digest: "f5faf377",
             model: "jev-1.13.0",
+            driver: null,
+            questions: [],
           },
         },
       })}
