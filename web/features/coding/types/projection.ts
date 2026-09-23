@@ -76,7 +76,11 @@ export type CodingToolRiskView =
       low_below: number | null;
       high_at_or_above: number | null;
       static_outcome: string | null;
+      // After the unattended fold. `banded_outcome` is before it -- what Jev
+      // alone did. Old events lack it; readers fall back to would_be.
       would_be_outcome: string | null;
+      banded_outcome: string | null;
+      unattended: boolean;
       // false = shadow (L2): recorded, not acted on. true = the gate (L3).
       enforced: boolean;
       rubric_digest: string | null;
@@ -90,6 +94,7 @@ export type CodingToolRiskView =
       reason: string | null;
       static_outcome: string | null;
       enforced: boolean;
+      unattended: boolean;
     };
 
 export type CodingToolRiskSnapshot = {

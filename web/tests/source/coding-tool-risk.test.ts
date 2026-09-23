@@ -16,6 +16,8 @@ const scored = (overrides: Partial<Scored> = {}): Scored => ({
   high_at_or_above: 0.8,
   static_outcome: "allow",
   would_be_outcome: "require_approval",
+  banded_outcome: null,
+  unattended: false,
   enforced: false,
   rubric_digest: "f5faf377",
   model: "jev-1.13.0",
@@ -89,6 +91,7 @@ test("an unavailable verdict is never silent, with or without details", () => {
     reason,
     static_outcome,
     enforced: true,
+    unattended: false,
   });
 
   const full = describeToolRisk(unavailable("TimeoutError", "allow"));
@@ -106,4 +109,48 @@ test("an unknown outcome code passes through instead of throwing", () => {
   );
   assert.match(sentence ?? "", /escalate/);
   assert.match(sentence ?? "", /quarantine/);
+});
+
+test("a fold Jev did not cause is not credited to Jev", () => {
+  // Unattended, static require_approval, low band: Jev changed nothing; the
+  // fold denies the call exactly as it would without Jev.
+  const sentence = describeToolRisk(
+    scored({
+      probability: 0.1,
+      band: "low",
+      static_outcome: "require_approval",
+      banded_outcome: "require_approval",
+      would_be_outcome: "deny",
+      unattended: true,
+      enforced: true,
+    })
+  );
+  assert.equal(sentence, null);
+});
+
+test("an unattended mid band names both steps, Jev's and the fold's", () => {
+  const sentence = describeToolRisk(
+    scored({
+      probability: 0.55,
+      banded_outcome: "require_approval",
+      would_be_outcome: "deny",
+      unattended: true,
+      enforced: true,
+    })
+  );
+  assert.equal(
+    sentence,
+    "Gate narrowed allow → require_approval; unattended, so require_approval → deny: p=0.55 ≥ 0.30."
+  );
+});
+
+test("a shadow fold reads as the denial it would have become", () => {
+  const sentence = describeToolRisk(
+    scored({
+      banded_outcome: "require_approval",
+      would_be_outcome: "deny",
+      unattended: true,
+    })
+  );
+  assert.match(sentence ?? "", /would have required approval and, with no one to approve, been denied/);
 });

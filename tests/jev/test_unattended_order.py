@@ -103,3 +103,53 @@ async def test_an_unattended_run_that_jev_cannot_answer_keeps_the_static_outcome
     assert decision.outcome is ApprovalPolicyOutcome.ALLOW
     assert decision.event is not None
     assert decision.event["kind"] == "jev_unavailable"
+    assert decision.event["unattended"] is True
+
+
+async def test_the_event_separates_what_jev_narrowed_from_what_the_fold_did() -> None:
+    """접힌 값만 남기면 unattended DENY 가 Jev 의 판정처럼 읽힌다.
+
+    낮은 밴드에서 Jev 는 아무것도 좁히지 않는다. 정적 정책이 REQUIRE_APPROVAL
+    이면 unattended 접기가 Jev 없이도 DENY 로 만든다 -- 그 DENY 를 "Gate
+    narrowed" 라고 부르면 화면이 Jev 의 몫을 부풀린다.
+    """
+
+    decision = await evaluate_approval_with_jev(
+        read_only_call(),
+        ApprovalGate(unattended=True),
+        scorer=StubScorer(0.1),
+        thresholds=THRESHOLDS,
+        enforce=True,
+        static_evaluator=lambda call, gate: ApprovalPolicyOutcome.REQUIRE_APPROVAL,
+    )
+    assert decision.event is not None
+    assert decision.event["unattended"] is True
+    assert decision.event["static_outcome"] == "require_approval"
+    assert decision.event["banded_outcome"] == "require_approval"  # Jev: 변화 없음
+    assert decision.event["would_be_outcome"] == "deny"  # 접기가 한 일
+
+
+async def test_a_mid_band_records_both_steps() -> None:
+    decision = await evaluate_approval_with_jev(
+        read_only_call(),
+        ApprovalGate(unattended=True),
+        scorer=StubScorer(0.5),
+        thresholds=THRESHOLDS,
+        enforce=True,
+    )
+    assert decision.event is not None
+    assert decision.event["banded_outcome"] == "require_approval"
+    assert decision.event["would_be_outcome"] == "deny"
+
+
+async def test_an_attended_event_says_so() -> None:
+    decision = await evaluate_approval_with_jev(
+        read_only_call(),
+        ApprovalGate(unattended=False),
+        scorer=StubScorer(0.5),
+        thresholds=THRESHOLDS,
+        enforce=True,
+    )
+    assert decision.event is not None
+    assert decision.event["unattended"] is False
+    assert decision.event["banded_outcome"] == decision.event["would_be_outcome"]

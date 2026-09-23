@@ -178,8 +178,13 @@ async def evaluate_approval_with_jev(
     )
 
     event = banded.event
-    if event is not None and "would_be_outcome" in event:
+    if event is not None:
         event = dict(event)
+        # 원장이 "누가 좁혔는가"를 말하게 한다. 접기는 Jev 없이도 일어나므로,
+        # 접힌 값만 남기면 unattended 런의 DENY 가 Jev 의 판정처럼 읽힌다.
+        event["unattended"] = resolved.unattended
+    if event is not None and "would_be_outcome" in event:
+        event["banded_outcome"] = event["would_be_outcome"]
         event["would_be_outcome"] = str(
             fold_for_unattended(
                 ApprovalPolicyOutcome(event["would_be_outcome"]), resolved

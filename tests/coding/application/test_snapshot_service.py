@@ -277,7 +277,7 @@ async def test_snapshot_carries_jev_verdicts_shaped_like_their_events() -> None:
 
     scored = {
         "probability": 0.62,
-        "band": "middle",
+        "band": "mid",
         "low_below": 0.3,
         "high_at_or_above": 0.8,
         "rubric_digest": "f5faf377",

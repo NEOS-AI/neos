@@ -36,6 +36,7 @@ export function toolRiskFromPayload(
   const id = str(toolCallId) ?? str(payload.tool_call_id);
   if (!id) return null;
   const enforced = payload.enforced === true;
+  const unattended = payload.unattended === true;
   if (kind === "jev_unavailable") {
     return {
       kind: "unavailable",
@@ -45,6 +46,7 @@ export function toolRiskFromPayload(
       reason: str(payload.reason),
       static_outcome: str(payload.static_outcome),
       enforced,
+      unattended,
     };
   }
   if (kind !== "jev_risk_scored") return null;
@@ -64,6 +66,8 @@ export function toolRiskFromPayload(
     high_at_or_above: num(payload.high_at_or_above),
     static_outcome: str(payload.static_outcome),
     would_be_outcome: str(payload.would_be_outcome),
+    banded_outcome: str(payload.banded_outcome),
+    unattended,
     enforced,
     rubric_digest: str(payload.rubric_digest),
     model: str(payload.model),

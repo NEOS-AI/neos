@@ -28,18 +28,30 @@ export function describeToolRisk(risk: CodingToolRiskView): string | null {
   }
 
   const from = risk.static_outcome;
+  // What Jev alone did, before the unattended fold. Events written before the
+  // gate recorded it carry only the folded value.
+  const jev = risk.banded_outcome ?? risk.would_be_outcome;
   const to = risk.would_be_outcome;
-  // Nothing narrowed: the badge already says everything.
-  if (from === null || to === null || from === to) return null;
+  // Jev narrowed nothing. A fold may still have denied the call, but it would
+  // have done so without Jev -- crediting Jev with it overstates the gate.
+  if (from === null || jev === null || to === null || from === jev) {
+    return null;
+  }
+  const folded = to !== jev;
 
   if (!risk.enforced) {
-    const would = to === "deny" ? "been denied" : outcomeWord(to);
+    const would = folded
+      ? `${outcomeWord(jev)} and, with no one to approve, been denied`
+      : jev === "deny"
+        ? "been denied"
+        : outcomeWord(jev);
     return `Shadow: with the gate on, this call would have ${would} (static policy ${outcomeWord(from)} it).`;
   }
 
+  const fold = folded ? `; unattended, so ${jev} → ${to}` : "";
   // A denial is the loud failure (§12.4 ⚠️): show the evidence, not just the verdict.
   const evidence = to === "deny" ? `: ${denialEvidence(risk)}` : "";
-  return `Gate narrowed ${from} → ${to}${evidence}.`;
+  return `Gate narrowed ${from} → ${jev}${fold}${evidence}.`;
 }
 
 const OUTCOME_WORDS: Record<string, string> = {

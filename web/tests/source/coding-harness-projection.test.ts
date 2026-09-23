@@ -29,13 +29,15 @@ const event = (
 
 const SCORED = {
   probability: 0.62,
-  band: "middle",
+  band: "mid",
   low_below: 0.3,
   high_at_or_above: 0.8,
   rubric_digest: "f5faf377",
   model: "jev-1.13.0",
   static_outcome: "allow",
   would_be_outcome: "require_approval",
+  banded_outcome: "require_approval",
+  unattended: false,
   enforced: false,
   tool: "execute.v1",
   tool_call_id: "t1",

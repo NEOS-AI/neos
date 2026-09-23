@@ -112,11 +112,13 @@ test("a tool row carries its Jev verdict and whether it was enforced", async () 
             seq: 3,
             tool: "execute.v1",
             probability: 0.623,
-            band: "middle",
+            band: "mid",
             low_below: 0.3,
             high_at_or_above: 0.8,
             static_outcome: "allow",
             would_be_outcome: "require_approval",
+            banded_outcome: "require_approval",
+            unattended: false,
             enforced: false,
             rubric_digest: "f5faf377",
             model: "jev-1.13.0",
@@ -129,7 +131,7 @@ test("a tool row carries its Jev verdict and whether it was enforced", async () 
   // the K2b lesson): the verdict must sit on t1's row and on no other.
   const lines = host.querySelectorAll('[data-testid="coding-tool-risk"]');
   assert.equal(lines.length, 1);
-  assert.match(lines[0]?.textContent ?? "", /jev 0\.62 · middle/);
+  assert.match(lines[0]?.textContent ?? "", /jev 0\.62 · mid/);
   assert.match(lines[0]?.textContent ?? "", /shadow/);
   assert.match(lines[0]?.parentElement?.textContent ?? "", /execute\.v1/);
 });
