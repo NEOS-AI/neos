@@ -731,6 +731,9 @@ class Orchestrator:
                 parent_id=str(self.ledger.run_id),
                 run_id=child_run_id,
                 expected_checkpoint_id=child_checkpoint_id,
+                # 원장의 `code_worker_started.profile` 과 **같은 값**이다. 적은
+                # 이름과 실제로 연 이름이 갈라지면 원장이 거짓말을 한다.
+                profile=research.sandbox_profile,
             )
             await self._log_code_worker_outcome(assignment.question_id, result)
             return result

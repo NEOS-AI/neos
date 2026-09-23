@@ -2113,12 +2113,15 @@ class AppConfig(StrictConfigModel):
         """
         if not self.deep_analysis.code_research_enabled:
             return self
-        # `research-offline-v1` 은 레지스트리에서 DENY_ALL 이지만 Docker
-        # provider 는 profile 을 **읽지 않는다**(`docker.py` 에 그 단어가 없다).
-        # 그 경로의 격리는 오직 이 설정에서 오고, 필드는 제약 없는 문자열이다.
-        # 묶어 두지 않으면 프로파일에 "네트워크 없음" 이라고 적힌 채 컨테이너에
-        # 네트워크가 붙는다. development 에서도 적용된다 -- 조사 워커가 도는
-        # 곳이 바로 거기다.
+        # 심층 방어. 2026-09-23 부터 Docker provider 는 조사 샌드박스를
+        # `profile` 과 함께 열고 그 네트워크 정책을 **스스로** 강제한다
+        # (설정이 bridge 여도 none, create 뒤 inspect 로 확인). 게다가
+        # `build_create_args` 는 처음(33064654)부터 none 이 아닌 값을 거절했다.
+        # 그래도 이 검증을 남기는 이유: 그 둘은 **질문마다 create 시점**에
+        # 터지고, 이것은 **기동 시점**에 터진다 -- 켜 두고 첫 질문에서야 모든
+        # 질문이 `sandbox_error` 로 죽는 것보다 앞에서 막는 편이 낫다. 그리고
+        # 누가 코딩 루프를 위해 `build_create_args` 를 느슨하게 풀어도 조사
+        # 경로의 설정 약속은 따로 남는다.
         if (
             self.sandbox.provider == "docker"
             and self.sandbox.docker.network_mode != "none"
@@ -2126,8 +2129,9 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "code research on docker requires "
                 "sandbox.docker.network_mode=none: the research-offline-v1 "
-                "profile denies all network, but the Docker provider never "
-                "reads profiles, so the container would still get one."
+                "profile denies all network, and the Docker provider refuses "
+                "any other network mode at sandbox creation -- fail at startup "
+                "instead of on every question."
             )
         if self.environment == "development":
             return self

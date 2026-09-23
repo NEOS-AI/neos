@@ -196,6 +196,7 @@ def build_create_args(
     allow_unpinned_image: bool = False,
     tmpfs_bytes: int = 64 * 1024 * 1024,
     extra_labels: Mapping[str, str] | None = None,
+    evidence_volume: str | None = None,
 ) -> tuple[str, ...]:
     if not _SANDBOX_ID.fullmatch(sandbox_id):
         raise SandboxPolicyViolation("sandbox_id_invalid")
@@ -205,6 +206,10 @@ def build_create_args(
         raise SandboxPolicyViolation("docker_network_not_isolated")
     if tmpfs_bytes < 1:
         raise SandboxPolicyViolation("docker_tmpfs_limit_invalid")
+    if evidence_volume is not None and evidence_volume != evidence_volume_name(
+        sandbox_id
+    ):
+        raise SandboxPolicyViolation("docker_evidence_volume_invalid")
 
     volume = f"neos-sandbox-{sandbox_id}"
     return (
@@ -235,12 +240,117 @@ def build_create_args(
         f"/tmp:rw,noexec,nosuid,size={tmpfs_bytes}",
         "--mount",
         f"type=volume,source={volume},target=/workspace",
+        *_evidence_mount_args(evidence_volume),
         "--workdir",
         "/workspace",
         image,
         "sleep",
         "infinity",
     )
+
+
+#: 계약 §3.1 의 경로. 워커 컨테이너에서는 **읽기 전용**으로만 붙는다.
+EVIDENCE_MOUNT = "/evidence"
+#: 같은 볼륨의 두 번째 읽기 전용 자리. 세션 도구(`read_file.v1` 등)는
+#: 워크스페이스 상대 경로만 받으므로(`normalize_workspace_path`), 이 자리가
+#: 없으면 워커는 증거를 스크립트로만 읽을 수 있다.
+EVIDENCE_WORKSPACE_MOUNT = "/workspace/evidence"
+
+
+def evidence_volume_name(sandbox_id: str) -> str:
+    if not _SANDBOX_ID.fullmatch(sandbox_id):
+        raise SandboxPolicyViolation("sandbox_id_invalid")
+    return f"neos-evidence-{sandbox_id}"
+
+
+def _evidence_mount_args(evidence_volume: str | None) -> tuple[str, ...]:
+    """증거 볼륨을 워커 컨테이너에 **읽기 전용으로만** 붙인다.
+
+    `volume-nocopy` 는 이미지가 그 자리에 미리 넣어 둔 파일이 빈 볼륨으로
+    복사되는 것을 막는다 -- 복사를 허용하면 이미지가 원장에 없는 "증거"를
+    심을 수 있고, 볼륨 루트의 소유자도 이미지가 정하게 된다.
+    """
+    if evidence_volume is None:
+        return ()
+    return tuple(
+        arg
+        for target in (EVIDENCE_MOUNT, EVIDENCE_WORKSPACE_MOUNT)
+        for arg in (
+            "--mount",
+            f"type=volume,source={evidence_volume},target={target},"
+            "readonly,volume-nocopy",
+        )
+    )
+
+
+def build_evidence_writer_args(
+    *,
+    sandbox_id: str,
+    image: str,
+    writer_id: str,
+    helper: str,
+    name: str,
+    memory_bytes: int,
+    allow_unpinned_image: bool = False,
+    extra_labels: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """증거 볼륨에 쓰는 **유일한** 컨테이너. 한 번 쓰고 사라진다(`--rm`).
+
+    워커 컨테이너에는 증거 볼륨의 쓰기 가능한 자리가 하나도 없다. 쓰기는
+    오케스트레이터가 부르는 이 짧은 컨테이너에서만 일어난다. `--user 0:0`
+    인 이유는 볼륨 루트가 root 소유(0755)이기 때문이고, `--cap-drop ALL`
+    이므로 root 는 소유자 권한 말고는 아무것도 갖지 않는다(DAC_OVERRIDE ·
+    CHOWN 없음). 네트워크는 없다.
+    """
+    if not _SANDBOX_ID.fullmatch(sandbox_id):
+        raise SandboxPolicyViolation("sandbox_id_invalid")
+    if not allow_unpinned_image and not _DIGEST_IMAGE.fullmatch(image):
+        raise SandboxPolicyViolation("docker_image_unpinned")
+    if not _EVIDENCE_WRITER_ID.fullmatch(writer_id):
+        raise SandboxPolicyViolation("docker_evidence_writer_id_invalid")
+    if not _EVIDENCE_NAME.fullmatch(name):
+        raise SandboxPolicyViolation("evidence_name_invalid")
+    if memory_bytes < 1:
+        raise SandboxPolicyViolation("docker_memory_limit_invalid")
+    return (
+        "run",
+        "--rm",
+        "-i",
+        "--name",
+        f"neos-{sandbox_id}-evidence-{writer_id}",
+        "--label",
+        "com.neos.coding.evidence-writer=true",
+        "--label",
+        f"com.neos.coding.sandbox-id={sandbox_id}",
+        *_label_args(extra_labels),
+        "--user",
+        "0:0",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--read-only",
+        "--network",
+        "none",
+        "--pids-limit",
+        "16",
+        "--memory",
+        str(memory_bytes),
+        "--mount",
+        f"type=volume,source={evidence_volume_name(sandbox_id)},"
+        f"target={EVIDENCE_MOUNT},volume-nocopy",
+        image,
+        "python",
+        "-c",
+        helper,
+        name,
+    )
+
+
+_EVIDENCE_WRITER_ID = re.compile(r"^[0-9a-f]{8,32}$")
+#: 원장의 raw_ref 는 16자 hex 다. 이름은 그보다 넓게 받되 경로 구분자·점으로
+#: 시작하는 이름(임시 파일 자리)은 받지 않는다.
+_EVIDENCE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,128}\.txt$")
 
 
 _DOCKER_VALUE_OPTS = {

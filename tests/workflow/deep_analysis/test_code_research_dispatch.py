@@ -138,6 +138,12 @@ async def test_with_the_flag_on_the_research_path_runs(
         call["cap_bytes"]
         == settings.config.deep_analysis.code_research.evidence_bytes_cap
     )
+    # 원장의 `code_worker_started.profile` 에 적는 값과 샌드박스를 여는 값이
+    # 같은 설정에서 온다. 갈라지면 원장이 거짓말을 한다.
+    assert (
+        call["profile"]
+        == settings.config.deep_analysis.code_research.sandbox_profile
+    )
     assert result.status == "completed"
 
 

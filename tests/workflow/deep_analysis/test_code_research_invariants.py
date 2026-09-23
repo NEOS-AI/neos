@@ -129,12 +129,15 @@ def test_enabling_outside_development_is_allowed_on_the_managed_plane() -> None:
 def test_code_research_on_docker_requires_no_network() -> None:
     """I3 을 development 경로에서 **실제로** 강제한다.
 
-    프로파일은 레지스트리에서 `DENY_ALL` 이지만, Docker provider 는
-    `profile` 이라는 단어를 모른다(확인함 — `docker.py` 에 한 번도 나오지
-    않는다). 그 경로의 격리는 오로지 `sandbox.docker.network_mode` 에서 오고,
-    그 필드는 제약 없는 문자열이다. 그래서 둘을 여기서 묶는다 -- 묶지 않으면
-    프로파일이 "네트워크 없음" 이라고 적혀 있는 채로 컨테이너에는 네트워크가
-    붙는다. 낡은 면제 플래그가 가드를 조용히 끄는 것과 같은 모양이다.
+    프로파일은 레지스트리에서 `DENY_ALL` 이다. 이 테스트를 처음 쓸 때는
+    "Docker provider 는 `profile` 을 모르므로 묶지 않으면 컨테이너에 네트워크가
+    붙는다" 고 적었다. 앞 절반은 2026-09-23 에 **거짓이 되었고**(Docker
+    provider 가 profile 을 스스로 강제한다, `test_docker_profile_evidence.py`),
+    뒤 절반은 **처음부터 거짓이었다** -- `build_create_args` 가 33064654
+    (2026-07-19)부터 none 이 아닌 값을 거절했다.
+
+    그래도 이 검증을 남긴다(심층 방어): 그 둘은 질문마다 create 시점에
+    터지고, 이것은 기동 시점에 터진다.
     """
     from pydantic import ValidationError
 

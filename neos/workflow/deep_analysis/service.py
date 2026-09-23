@@ -113,6 +113,7 @@ async def build_orchestrator(
                 cpu_sec=reexecution.cpu_sec,
                 memory_mb=reexecution.memory_mb,
                 stdout_bytes=reexecution.stdout_bytes,
+                profile=config.code_research.sandbox_profile,
             )
         ),
     )
