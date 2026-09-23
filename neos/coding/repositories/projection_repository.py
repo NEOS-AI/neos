@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from neos.coding.persistence.postgres import SessionFactory
 
@@ -76,6 +76,28 @@ class CodingWorkspaceEditRow:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingToolRiskRow:
+    """The latest Jev verdict the ledger holds for one tool call.
+
+    Read from `coding_events`, not from `coding_tool_executions`: the verdict
+    is written *before* the tool runs, and a call parked on approval has no
+    execution row at all. Joining on executions would lose exactly the calls
+    the gate stopped.
+    """
+
+    tool_call_id: str
+    kind: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+#: Jev's event kinds (`neos.jev.gate`). Spelled here rather than imported so
+#: the projection layer does not pull the Jev package in; the coding event-kind
+#: fixture test fails if the two ever disagree.
+TOOL_RISK_EVENT_TYPES = ("jev_risk_scored", "jev_unavailable")
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionRows:
     task: CodingTaskRow
     runs: tuple[CodingRunRow, ...]
@@ -87,6 +109,7 @@ class CodingProjectionRows:
     todos: tuple[Mapping[str, Any], ...]
     latest_checkpoint: CodingCheckpointRow | None
     head_seq: int
+    tool_risks: tuple[CodingToolRiskRow, ...] = ()
 
 
 class PostgresCodingProjectionRepository:
@@ -124,6 +147,7 @@ class PostgresCodingProjectionRepository:
                 parts = await self._parts(session, task_id)
                 workspace_edits = await self._workspace_edits(session, task_id)
                 checkpoint = await self._checkpoint(session, task_id)
+                tool_risks = await self._tool_risks(session, task_id)
 
         task = CodingTaskRow(
             task_id=task_record[0],
@@ -150,6 +174,7 @@ class PostgresCodingProjectionRepository:
             todos=todos,
             latest_checkpoint=checkpoint,
             head_seq=task.last_seq,
+            tool_risks=tool_risks,
         )
 
     async def _runs(self, session, task_id: str) -> tuple[CodingRunRow, ...]:
@@ -199,6 +224,35 @@ class PostgresCodingProjectionRepository:
         return tuple(
             CodingToolExecutionRow(
                 row[0], row[1], row[2], dict(row[3]) if row[3] is not None else None
+            )
+            for row in result.all()
+        )
+
+    async def _tool_risks(
+        self, session, task_id: str
+    ) -> tuple[CodingToolRiskRow, ...]:
+        # Latest verdict per call. A call is scored once today, but "latest"
+        # keeps a re-score (a resumed run) from showing a stale band.
+        result = await session.execute(
+            text(
+                """
+                SELECT DISTINCT ON (tool_call_id)
+                       tool_call_id, event_type, seq, payload
+                FROM coding_events
+                WHERE task_id = :task_id
+                  AND tool_call_id IS NOT NULL
+                  AND event_type IN :event_types
+                ORDER BY tool_call_id, seq DESC
+                """
+            ).bindparams(bindparam("event_types", expanding=True)),
+            {"task_id": task_id, "event_types": list(TOOL_RISK_EVENT_TYPES)},
+        )
+        return tuple(
+            CodingToolRiskRow(
+                tool_call_id=row[0],
+                kind=row[1],
+                seq=int(row[2]),
+                payload=dict(row[3]) if row[3] is not None else {},
             )
             for row in result.all()
         )

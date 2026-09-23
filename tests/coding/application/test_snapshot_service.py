@@ -263,3 +263,65 @@ async def test_postgres_projection_uses_repeatable_read_and_owner_scope() -> Non
     sql = "\n".join(session.sql)
     assert "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" in sql
     assert "owner_id = :owner_id" in sql
+
+
+@pytest.mark.no_db
+async def test_snapshot_carries_jev_verdicts_shaped_like_their_events() -> None:
+    """A reconnect starts from the snapshot, so a verdict only the live stream
+    carried would vanish on refresh. The verdict for a call parked on approval
+    has no execution row, so it must survive without one.
+    """
+    from dataclasses import replace
+
+    from neos.coding.repositories.projection_repository import CodingToolRiskRow
+
+    scored = {
+        "probability": 0.62,
+        "band": "middle",
+        "low_below": 0.3,
+        "high_at_or_above": 0.8,
+        "rubric_digest": "f5faf377",
+        "model": "jev-1.13.0",
+        "static_outcome": "allow",
+        "would_be_outcome": "require_approval",
+        "enforced": False,
+        "tool": "execute.v1",
+        "tool_call_id": "t_parked",
+    }
+
+    class RiskRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(
+                rows,
+                tool_risks=(
+                    CodingToolRiskRow("t_parked", "jev_risk_scored", 9, scored),
+                    CodingToolRiskRow(
+                        "t_down",
+                        "jev_unavailable",
+                        11,
+                        {"reason": "TimeoutError", "enforced": False},
+                    ),
+                ),
+            )
+
+    snapshot = await CodingSnapshotService(RiskRepository(head_seq=14)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    by_id = {risk.tool_call_id: risk for risk in snapshot.tool_risks}
+    assert sorted(by_id) == ["t_down", "t_parked"]
+    assert by_id["t_parked"].kind == "jev_risk_scored"
+    assert by_id["t_parked"].payload == scored
+    assert by_id["t_down"].kind == "jev_unavailable"
+    assert by_id["t_down"].seq == 11
+    # No execution row for either call -- the verdict stands on its own.
+    assert not {t.tool_call_id for t in snapshot.tools} & set(by_id)
+
+
+def test_projection_reads_the_same_kinds_the_gate_writes() -> None:
+    from neos.coding.repositories.projection_repository import TOOL_RISK_EVENT_TYPES
+    from neos.jev.gate import JEV_RISK_SCORED, JEV_UNAVAILABLE
+
+    assert set(TOOL_RISK_EVENT_TYPES) == {JEV_RISK_SCORED, JEV_UNAVAILABLE}

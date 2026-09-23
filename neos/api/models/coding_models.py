@@ -170,6 +170,13 @@ class CodingActiveChildSnapshot(BaseModel):
     spec: str | None = None
 
 
+class CodingToolRiskSnapshot(BaseModel):
+    tool_call_id: str
+    kind: Literal["jev_risk_scored", "jev_unavailable"]
+    seq: int
+    payload: dict[str, Any]
+
+
 class CodingProjectionSnapshotResponse(BaseModel):
     task: CodingTaskResponse
     active_run: CodingRunSnapshot | None
@@ -183,6 +190,7 @@ class CodingProjectionSnapshotResponse(BaseModel):
     head_seq: int
     connection_basis: Literal["checkpoint"]
     active_children: list[CodingActiveChildSnapshot] = Field(default_factory=list)
+    tool_risks: list[CodingToolRiskSnapshot] = Field(default_factory=list)
 
 
 class CodingCommandRequest(BaseModel):

@@ -106,6 +106,21 @@ class CodingActiveChildProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingToolRiskProjection:
+    """A Jev verdict, shaped like the live event it came from.
+
+    `kind` and `payload` are the event's own type and payload so the client
+    folds a snapshot and a live event through one function -- two decoders
+    are two places for the band to be read differently.
+    """
+
+    tool_call_id: str
+    kind: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionSnapshot:
     task: CodingTaskProjection
     active_run: CodingRunProjection | None
@@ -119,6 +134,7 @@ class CodingProjectionSnapshot:
     head_seq: int
     connection_basis: str = "checkpoint"
     active_children: tuple[CodingActiveChildProjection, ...] = ()
+    tool_risks: tuple[CodingToolRiskProjection, ...] = ()
 
 
 class ProjectionRepository(Protocol):
@@ -251,6 +267,15 @@ class CodingSnapshotService:
             latest_checkpoint=checkpoint,
             head_seq=rows.head_seq,
             active_children=_active_children(loop_state),
+            tool_risks=tuple(
+                CodingToolRiskProjection(
+                    tool_call_id=row.tool_call_id,
+                    kind=row.kind,
+                    seq=row.seq,
+                    payload=dict(row.payload),
+                )
+                for row in rows.tool_risks
+            ),
         )
 
 
