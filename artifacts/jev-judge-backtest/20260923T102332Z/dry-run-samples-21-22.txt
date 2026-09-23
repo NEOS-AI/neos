@@ -1,0 +1,29 @@
+{
+  "requested_prefixes": [
+    "e1e461e9",
+    "3abaf523",
+    "643ddd46",
+    "ca288b93",
+    "de15f297",
+    "e0c1a998",
+    "950c948a",
+    "c44ee6ee",
+    "7b899de3",
+    "6252da9e"
+  ],
+  "runs_found": 0,
+  "claims_in_scope": 0,
+  "verdict_events": 0,
+  "verdict_events_with_judge_label": 0,
+  "selected": 0,
+  "selected_by_run": {},
+  "selected_judge_labels": {},
+  "excluded": {},
+  "excerpt_max_chars": 500,
+  "chosen": 0,
+  "repeat_subset": 0,
+  "planned_jev_calls": 0,
+  "max_calls": 200
+}
+
+(dry-run: Jev 를 부르지 않았다)
