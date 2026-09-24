@@ -1103,6 +1103,12 @@ class DeepAnalysisConfig(StrictConfigModel):
     # Measured: node_reduction input_bound ran 1,225 / 1,369 / 6,480
     # (min/median/max) against synthesis_max_tokens=4000 -> 6480/4000 = 1.62.
     reduction_input_ratio: float = Field(default=1.6, gt=0.0)
+    # BUDGET2 (b7932522): 리덕션 클램프가 티어 잔량을 알고, 마커가 전부 잘린
+    # 프롬프트는 모델에 보내지 않는다. **켜진 것이 기본이다** -- 기전이 코드에서
+    # 확정된 고침이다. 끄는 이유는 하나뿐이다: D-14(2026-09-24 결정, 분리)에
+    # 따라 표본 #23 은 CITE1 의 원인을 **고치기 전 코드로** 판별한다. 끄면
+    # 허용치와 가드 둘 다 BUDGET2 이전과 정확히 같다. 런 매니페스트에 실린다.
+    budget_aware_reduction: bool = True
     # Never measured -- report_assembly has never received a reservation in
     # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
     # the assembly's child blocks and caveats until `prompt_input_bound`

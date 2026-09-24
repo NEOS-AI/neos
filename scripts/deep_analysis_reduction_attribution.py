@@ -37,6 +37,17 @@ D92 가 그 안에서 후보를 셋으로 갈랐다. 이 도구는 그 셋을 �
     .venv/bin/python scripts/deep_analysis_reduction_attribution.py --sample 21 --sample 22
     .venv/bin/python scripts/deep_analysis_reduction_attribution.py --run <prefix8> ...
 
+## 새 표본의 게이트 -- 독립 집계 (D98, 2026-09-24)
+
+D92 게이트는 **정답키가 있는 원장**에만 걸린다. 그 원장(#21·#22)이 로컬에서
+사라졌으므로(로드맵 §12.12) 새 표본에는 다른 게이트가 필요하다. 목적은 같다:
+**실제 원장에서 파싱을 검사한다.** `--run` 으로 읽은 런을 SQL 로 한 번 더,
+파서를 거치지 않고 센다. 넷이 다르면 판정을 내지 않는다. 리덕션 이벤트가 0 건이면
+그것도 실패다 -- 빈 원장은 "문제없음" 이 아니다.
+
+`--expect-budget2 off|on` 을 주면 모든 런의 매니페스트가 그 값을 적었는지 본다.
+#23 은 `off` 로 돈다(D-14).
+
 ## 판별 규칙 (사전 등록 D93)
 
 `DOMINANCE_SHARE`·`DOMINANCE_MARGIN`·`MIN_MEDIAN_TOTAL_DROP` 이 그 규칙이고,
@@ -415,6 +426,30 @@ def gate_applies(samples: set[str]) -> bool:
     return set(samples) == set(GATE_SAMPLES)
 
 
+def cross_check(parsed: GateCounts, independent: GateCounts) -> list[str]:
+    """파서가 센 넷과 SQL 이 센 넷. 정답키가 없는 원장의 게이트다(D98)."""
+    problems: list[str] = []
+    if independent.summaries + independent.degradations == 0:
+        problems.append("읽을 리덕션 이벤트가 없다 -- 빈 원장은 판정하지 않는다")
+    for field_name in ("summaries", "degradations", "input_bound", "truncated"):
+        got = getattr(parsed, field_name)
+        want = getattr(independent, field_name)
+        if want != got:
+            problems.append(f"{field_name}: SQL 은 {want} 인데 파서는 {got}")
+    return problems
+
+
+def budget2_problems(
+    flags: dict[str, bool | None], expected: bool
+) -> list[str]:
+    """런별 매니페스트의 `budget_aware_reduction`. 없으면 기대와 다른 것으로 센다."""
+    return [
+        f"{prefix}: 매니페스트의 budget_aware_reduction={value} (기대 {expected})"
+        for prefix, value in sorted(flags.items())
+        if value is not expected
+    ]
+
+
 def verify_d92(counts: GateCounts) -> list[str]:
     problems: list[str] = []
     for field_name in ("summaries", "degradations", "input_bound", "truncated"):
@@ -459,6 +494,45 @@ async def _load_run(session, prefix: str) -> RunAttribution:
         selection_gap=await _selection_gap(session, prefix, int(verified or 0)),
         attribution=attribute(summaries, degradations),
     )
+
+
+async def _independent_counts(session, prefixes: list[str]) -> GateCounts:
+    """파서를 거치지 않는 집계. `payload` 는 TEXT 라 jsonb 로 캐스트해 SQL 이 읽는다."""
+    from sqlalchemy import text
+
+    row = (
+        await session.execute(
+            text(
+                """
+                SELECT
+                  count(*) FILTER (WHERE kind = 'node_summary'),
+                  count(*) FILTER (WHERE kind = 'node_reduction_degraded'),
+                  count(*) FILTER (WHERE kind = 'node_reduction_degraded'
+                                   AND payload::jsonb ->> 'reason' = 'input_bound'),
+                  count(*) FILTER (WHERE kind = 'node_reduction_degraded'
+                                   AND (payload::jsonb ->> 'answer_truncated')::boolean)
+                FROM deep_analysis_events
+                WHERE run_id LIKE ANY(:patterns)
+                """
+            ),
+            {"patterns": [f"{prefix}%" for prefix in prefixes]},
+        )
+    ).one()
+    return GateCounts(*(int(value or 0) for value in row))
+
+
+async def _budget2_flags(session, prefixes: list[str]) -> dict[str, bool | None]:
+    flags: dict[str, bool | None] = {}
+    for prefix in prefixes:
+        raw = await session.scalar(
+            select(DAEvent.payload)
+            .where(DAEvent.run_id.like(f"{prefix}%"), DAEvent.kind == "run_manifest")
+            .order_by(DAEvent.seq)
+            .limit(1)
+        )
+        payload = {} if raw is None else (raw if isinstance(raw, dict) else json.loads(raw))
+        flags[prefix] = payload.get("config", {}).get("budget_aware_reduction")
+    return flags
 
 
 async def _selection_gap(session, prefix: str, verified: int) -> int | None:
@@ -531,9 +605,19 @@ def _print_verdict(result: Verdict) -> None:
     print(f"- 근거: {result.note}")
 
 
-async def _run(samples: list[str], extra_runs: list[str], verify: bool) -> int:
+async def _run(
+    samples: list[str],
+    extra_runs: list[str],
+    verify: bool,
+    expect_budget2: bool | None = None,
+) -> int:
     by_sample: dict[str, list[RunAttribution]] = {}
+    independent: GateCounts | None = None
+    flags: dict[str, bool | None] = {}
     async with get_session_ctx() as session:
+        if extra_runs:
+            independent = await _independent_counts(session, extra_runs)
+            flags = await _budget2_flags(session, extra_runs)
         for sample in samples:
             by_sample[sample] = [
                 await _load_run(session, prefix) for prefix in SAMPLES[sample]
@@ -545,7 +629,27 @@ async def _run(samples: list[str], extra_runs: list[str], verify: bool) -> int:
 
     all_runs = [run for runs in by_sample.values() for run in runs]
 
-    if verify and gate_applies(set(samples)) and not extra_runs:
+    if verify and extra_runs and not samples:
+        own = by_sample["(직접 지정)"]
+        parsed = GateCounts(
+            summaries=sum(r.attribution.summaries for r in own),
+            degradations=sum(r.attribution.degradations for r in own),
+            input_bound=sum(r.attribution.reasons.get("input_bound", 0) for r in own),
+            truncated=_truncated_count(own),
+        )
+        problems = cross_check(parsed, independent)
+        if expect_budget2 is not None:
+            problems += budget2_problems(flags, expect_budget2)
+        if problems:
+            print("🔴 독립 집계 게이트 실패 — 판정을 내지 않는다:")
+            for problem in problems:
+                print(f"  - {problem}")
+            return 1
+        print(
+            f"✅ 독립 집계 일치 ({parsed.summaries} · {parsed.degradations} · "
+            f"{parsed.input_bound} · {parsed.truncated}) · budget_aware_reduction={sorted(set(map(str, flags.values())))}"
+        )
+    elif verify and gate_applies(set(samples)) and not extra_runs:
         counts = GateCounts(
             summaries=sum(r.attribution.summaries for r in all_runs),
             degradations=sum(r.attribution.degradations for r in all_runs),
@@ -597,6 +701,11 @@ def main() -> int:
         help="런 접두사 8자. 표본 원장에 없는 새 표본을 읽을 때 쓴다.",
     )
     parser.add_argument(
+        "--expect-budget2",
+        choices=["on", "off"],
+        help="--run 의 모든 런 매니페스트가 이 BUDGET2 상태를 적었는지 본다. #23 은 off (D-14).",
+    )
+    parser.add_argument(
         "--no-verify-d92",
         action="store_true",
         help="D92 재현 게이트를 끈다. SAMPLES 를 확장할 때만 쓸 것.",
@@ -604,7 +713,12 @@ def main() -> int:
     args = parser.parse_args()
     samples = args.sample or (sorted(SAMPLES) if not args.run else [])
     return asyncio.run(
-        _run(samples, args.run, verify=not args.no_verify_d92)
+        _run(
+            samples,
+            args.run,
+            verify=not args.no_verify_d92,
+            expect_budget2=None if args.expect_budget2 is None else args.expect_budget2 == "on",
+        )
     )
 
 

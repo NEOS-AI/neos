@@ -298,3 +298,91 @@ def test_the_gate_is_skipped_loudly_when_the_answer_key_does_not_apply():
     assert cli.gate_applies({"21", "22"}) is True
     assert cli.gate_applies({"21"}) is False
     assert cli.gate_applies({"21", "22", "23"}) is False
+
+
+# --- D98: 정답키 없는 원장의 게이트 -- 독립 집계 ------------------------------
+#
+# #21·#22 원장이 로컬에서 사라졌다(로드맵 §12.12). D92 게이트는 그 원장에만
+# 걸리므로, #23 은 파서가 센 것을 SQL 이 따로 센 것과 맞춘다.
+
+
+def test_cross_check_passes_when_parser_and_sql_agree():
+    counts = cli.GateCounts(summaries=4, degradations=9, input_bound=9, truncated=1)
+    assert cli.cross_check(counts, counts) == []
+
+
+def test_cross_check_names_the_field_that_moved():
+    parsed = cli.GateCounts(summaries=4, degradations=9, input_bound=8, truncated=1)
+    sql = cli.GateCounts(summaries=4, degradations=9, input_bound=9, truncated=1)
+    problems = cli.cross_check(parsed, sql)
+    assert len(problems) == 1 and "input_bound" in problems[0]
+
+
+def test_an_empty_ledger_is_not_a_pass():
+    """파서와 SQL 이 **둘 다 0** 이면 일치한다 -- 그리고 아무것도 증명하지 않는다.
+
+    L4 가 빈 로컬 원장에서 정확히 이 모양으로 "불일치 0" 을 보고할 뻔했다.
+    """
+    empty = cli.GateCounts(summaries=0, degradations=0, input_bound=0, truncated=0)
+    problems = cli.cross_check(empty, empty)
+    assert problems and "빈 원장" in problems[0]
+
+
+def test_budget2_expectation_counts_a_missing_flag_as_a_mismatch():
+    """매니페스트에 값이 없는 런은 BUDGET2 이전 코드였는지 알 수 없다."""
+    flags = {"aaaa0001": False, "aaaa0002": None, "aaaa0003": True}
+    problems = cli.budget2_problems(flags, expected=False)
+    assert [p.split(":")[0] for p in problems] == ["aaaa0002", "aaaa0003"]
+
+
+@pytest.mark.asyncio
+async def test_sql_counts_match_the_parser_on_a_real_ledger():
+    """두 집계가 같은 원장에서 같은 수를 내는지 -- 실제 Postgres 에서."""
+    import json as _json
+
+    from neos.database.connection import get_session_ctx
+    from neos.database.deep_analysis_models import DAEvent, DARun
+    from tests.workflow.deep_analysis.test_funnel_sample_runner_integration import (
+        _delete_fixture_run,
+    )
+
+    run_id = "d98xchk1"
+    await _delete_fixture_run(run_id)
+    summary = {"distinct_claims_prompt": 3, "distinct_claims_answer": 2}
+    degraded = {
+        "reason": "input_bound",
+        "answer_source": "children_join",
+        "own_claims_available": 1,
+        "distinct_claims_before_bound": 4,
+        "distinct_claims_after_bound": 2,
+        "answer_truncated": True,
+    }
+    other = dict(degraded, reason="reduction_allowance_below_claim_floor", answer_truncated=False)
+    async with get_session_ctx() as session:
+        session.add(DARun(id=run_id, root_question="D98 독립 집계", status="completed"))
+        await session.flush()
+        session.add_all(
+            [
+                DAEvent(run_id=run_id, kind="run_manifest", payload=_json.dumps({"config": {"budget_aware_reduction": False}})),
+                DAEvent(run_id=run_id, kind="node_summary", payload=_json.dumps(summary)),
+                DAEvent(run_id=run_id, kind="node_reduction_degraded", payload=_json.dumps(degraded)),
+                DAEvent(run_id=run_id, kind="node_reduction_degraded", payload=_json.dumps(other)),
+            ]
+        )
+        await session.commit()
+    try:
+        async with get_session_ctx() as session:
+            sql = await cli._independent_counts(session, [run_id])
+            run = await cli._load_run(session, run_id)
+            flags = await cli._budget2_flags(session, [run_id])
+        parsed = cli.GateCounts(
+            summaries=run.attribution.summaries,
+            degradations=run.attribution.degradations,
+            input_bound=run.attribution.reasons.get("input_bound", 0),
+            truncated=run.attribution.truncated_events,
+        )
+        assert sql == cli.GateCounts(summaries=1, degradations=2, input_bound=1, truncated=1)
+        assert cli.cross_check(parsed, sql) == []
+        assert flags == {run_id: False}
+    finally:
+        await _delete_fixture_run(run_id)

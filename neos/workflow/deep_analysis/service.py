@@ -231,6 +231,8 @@ async def build_orchestrator(
             "agentic_threshold": config.agentic_threshold,
             "agentic_sample_rate": config.agentic_sample_rate,
             "claim_retry_cap": config.claim_retry_cap,
+            # D-14: #23 은 이것을 끄고 돈다 -- 표본이 어느 코드를 쟀는지 원장이 말한다.
+            "budget_aware_reduction": config.budget_aware_reduction,
             "decompose_max_tokens": config.decompose_max_tokens,
             "judge_max_output_tokens": config.judge_max_output_tokens,
             "entailment_max_output_tokens": config.entailment_max_output_tokens,
