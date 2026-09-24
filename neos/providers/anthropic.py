@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseLanguageModel
 
 from neos.config.model_config import (
     ThinkingContract,
+    effort_levels_for,
     get_model_spec,
     models_for_provider,
     thinking_contract,
@@ -21,6 +22,7 @@ from neos.utils.anthropic_client import (
     build_async_anthropic,
 )
 from .base import CodingCapabilities, ModelProviderBase
+from .effort import effort_request_fields
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +71,18 @@ def _translate_thinking_off(model: str, params: dict[str, Any]) -> dict[str, Any
     (claude-opus-5-5, claude-fable-5-1). 호출자(검색 에이전트의
     `DISABLE_THINKING_FOR_SEARCH`)가 원한 것은 "빠른 응답"이지 400 이 아니다.
 
-    Anthropic 레퍼런스의 권고는 thinking 을 켜 둔 채 `output_config.effort`
-    를 `low` 로 내리는 것이다. 이 경로(ChatAnthropic)는 지금 effort 를
-    어디서도 보내지 않으며, 카탈로그의 `effort_levels` 가 빈 모델에 effort 를
-    보내는 것은 금지돼 있다.
+    Anthropic 레퍼런스의 권고대로 thinking 을 켠 채 `effort: low` 로 번역한다
+    -- 이 모델이 `low` 를 받는다고 **확인된** 경우에만. 명시적으로 정해진
+    effort(사용자·설정)가 있으면 그것이 이긴다.
     """
-    # TODO(user): 끄기 요청을 무엇으로 번역할지 정한다. 최소 요건은
-    # `params["thinking"]` 에 `{"type": "disabled"}` 가 남지 않는 것이다.
     params["thinking"] = {"type": "adaptive"}
+    if (params.get("output_config") or {}).get("effort"):
+        return params
+    if "low" in effort_levels_for(model):
+        params["output_config"] = {
+            **(params.get("output_config") or {}),
+            "effort": "low",
+        }
     return params
 
 
@@ -126,6 +132,8 @@ class AnthropicProvider(ModelProviderBase):
         if workspace_headers:
             params["default_headers"] = workspace_headers
         params.update(kwargs)
+        effort = params.pop("effort", None)
+        params.update(effort_request_fields("anthropic", effort))
 
         # Thinking Blocks 제어 — 계약은 카탈로그가 선언한다
         disable_thinking = params.pop("disable_thinking", False)

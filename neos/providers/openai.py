@@ -11,6 +11,7 @@ from langchain_core.language_models import BaseLanguageModel
 from neos.config.model_config import models_for_provider
 from neos.config.settings import settings
 from .base import CodingCapabilities, ModelProviderBase
+from .effort import effort_request_fields
 
 
 class OpenAIProvider(ModelProviderBase):
@@ -46,6 +47,8 @@ class OpenAIProvider(ModelProviderBase):
         if max_tokens:
             params["max_tokens"] = max_tokens
         params.update(kwargs)
+        effort = params.pop("effort", None)
+        params.update(effort_request_fields("openai", effort))
         return ChatOpenAI(**params)
 
     def coding_capabilities(self) -> CodingCapabilities:
