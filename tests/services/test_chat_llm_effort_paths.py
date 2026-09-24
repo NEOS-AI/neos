@@ -196,3 +196,28 @@ async def test_effort_resolution_does_not_look_up_the_owner(monkeypatch) -> None
     ))
 
     assert owner_calls == []
+
+
+@pytest.mark.asyncio
+async def test_title_generation_sends_no_effort(monkeypatch) -> None:
+    """Final review #1: 자동 작업(제목 생성)은 사용자 · 설정 effort 를 받지 않는다.
+
+    제목은 max_tokens=50 이다. 사용자가 Sonnet 5 에 `max` 를 골라 두면 그
+    50 토큰이 사고로 다 쓰여 빈 제목이 돌아올 수 있다. 스펙의 범위는 채팅 턴이다.
+    """
+    captured: dict = {}
+    calls = _stub(monkeypatch, "max")
+    _capture_create_llm(monkeypatch, captured)
+
+    service = chat_llm_service.ChatLLMService()
+    try:
+        await service.generate_response(
+            conversation_id="c", message_id="m", conversation_messages=MSGS,
+            model_name="claude-sonnet-5", max_tokens=50,
+            workflow_type="title_generation", enable_context_optimization=False,
+        )
+    except RuntimeError:
+        pass
+
+    assert calls == []
+    assert "effort" not in captured

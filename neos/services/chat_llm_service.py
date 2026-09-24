@@ -302,6 +302,11 @@ class ChatLLMService:
                 "finish_reason": str
             }
         """
+        # 사고량은 채팅 턴의 설정이다. 자동 작업(제목 생성 등)은 사용자 · 설정
+        # effort 를 받지 않는다 -- 제목의 max_tokens=50 이 사고로 다 쓰여 빈
+        # 제목이 되는 것을 막는다.
+        if workflow_type != "chat" and not effort_known:
+            effort_known, effort_resolved = True, None
         turn = await self._resolve_turn(
             model_name,
             conversation_id,

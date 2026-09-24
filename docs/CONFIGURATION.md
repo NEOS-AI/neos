@@ -659,7 +659,9 @@ levels. Translation to request fields happens once, in
 level the model no longer takes is refused with a warning and the next rung
 applies. A failed preference lookup never fails the turn.
 `neos_chat_effort_resolved_total{source}` counts turns by where their effort
-came from.
+came from. Automatic jobs that go through `generate_response` with a
+non-`chat` `workflow_type` (title generation) get no effort at all — a
+50-token title must not be spent on thinking.
 
 On `thinking_always_on` models, a "thinking off" request becomes
 `effort: low` when the model declares `low`, unless an explicit effort was

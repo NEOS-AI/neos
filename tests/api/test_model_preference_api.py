@@ -94,8 +94,16 @@ def test_delete_returns_to_default(client) -> None:
 
 
 def test_unauthenticated_is_rejected() -> None:
+    # 실제 get_db 를 쓰면 TestClient 루프에 풀 커넥션이 남아 다음 DB 테스트가
+    # "attached to a different loop" 로 죽는다 (순서 의존). test_catalog_api 처럼 막는다.
+    from neos.database.connection import get_db
+
+    async def no_db():
+        yield None
+
     app = FastAPI()
     app.include_router(mod.router)
+    app.dependency_overrides[get_db] = no_db
     assert TestClient(app).get("/users/me/model-preferences").status_code in {401, 403}
 
 
