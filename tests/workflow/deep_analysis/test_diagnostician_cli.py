@@ -20,7 +20,7 @@ def test_artifacts_keep_the_input_the_diagnostician_actually_saw(tmp_path):
     """
     out = write_artifacts(
         tmp_path,
-        manifest={"model": "claude-opus-5", "repeats": 3},
+        manifest={"model": "claude-opus-5-5", "repeats": 3},
         inputs={"11": {"events": {"claim_verified": 3}}},
         outputs={"11": [{"candidates": [], "failure": None}]},
         score={"mean_recall": 0.5, "constant_best": 4 / 6},
@@ -35,7 +35,7 @@ def test_artifacts_keep_the_input_the_diagnostician_actually_saw(tmp_path):
 def test_manifest_records_what_would_change_the_score(tmp_path):
     out = write_artifacts(
         tmp_path,
-        manifest={"model": "claude-opus-5", "repeats": 3,
+        manifest={"model": "claude-opus-5-5", "repeats": 3,
                   "answer_key_sha": "abc123", "git_tree_clean": True},
         inputs={}, outputs={}, score={},
     )
@@ -51,7 +51,7 @@ def test_outputs_are_written_per_repetition_under_the_sample_id(tmp_path):
     """
     out = write_artifacts(
         tmp_path,
-        manifest={"model": "claude-opus-5", "repeats": 2},
+        manifest={"model": "claude-opus-5-5", "repeats": 2},
         inputs={},
         outputs={
             "12": [

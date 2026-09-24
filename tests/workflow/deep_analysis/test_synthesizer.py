@@ -88,7 +88,7 @@ class FakeLLMCall:
 @pytest.mark.parametrize(
     ("feature_model", "expected_model"),
     [
-        (None, "claude-opus-5"),
+        (None, "claude-opus-5-5"),
         ("claude-synth-manual", "claude-synth-manual"),
     ],
 )

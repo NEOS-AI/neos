@@ -150,8 +150,8 @@ payloads. The default is `240`.
 ### Model Catalog
 
 `neos/config/models.yaml` is the operator bump surface for facts, role-alias
-current-pins, remaps, and picker projection. Roles in `schema.py` already
-point at `sonnet-5` / `opus-5`. The chat picker fetches
+current-pins, remaps, retirements, and picker projection. Roles in `schema.py`
+point at `sonnet-5` / `opus-5.5`. The chat picker fetches
 `GET /api/v1/models` at runtime, so a YAML deploy moves the live picker
 without a web rebuild. Do **not** hand-edit `web/lib/ai/models.ts` maps or
 `web/lib/ai/catalog.generated.ts`.
@@ -243,7 +243,7 @@ Tests that hit `GET /api/v1/models` must enable `picker_api`. The
 production default remains false.
 
 Custom catalogs (`NEOS_MODEL_CONFIG_PATH`) must ship `role_aliases:` (the
-schema defaults are now `sonnet-5` / `opus-5`, not dated pins). A file
+schema defaults are now `sonnet-5` / `opus-5.5`, not dated pins). A file
 without that block will not resolve those roles: boot logs the existing
 unknown-routed-model warning and everyday traffic has no pin. The
 alternative is a dated `model_routing` override in env YAML
@@ -329,7 +329,8 @@ two separate Python tables were in: they used different prefix vocabularies,
 and merging them preserved that asymmetry rather than inventing entries to
 erase it.
 
-> **Known gap — `claude-opus-5` has no generation facts.** It is the deep
+> **Known gap — `claude-opus-5-5` has no generation facts** (inherited from
+> the retired `claude-opus-5`). It is the deep
 > analysis `powerful` worker and the `powerful` picker tier, but the table this
 > block replaced only ever knew opus-4.5 through 4.8. With Advisor enabled it
 > is skipped as `unknown_executor_model`, and its cache floor is the unverified
@@ -415,6 +416,36 @@ Six models used to violate that and were retired:
 `gpt-5.6-terra` — so terra now fills both `fast` and `balanced`, the same
 one-model-two-tiers shape Gemini and Ollama already use.
 
+#### 2026-09-24: Opus 5.5 and GPT-6
+
+| Retired | Replaced by |
+|---|---|
+| `claude-opus-5` | `claude-opus-5-5` |
+| `gpt-5.6-sol` | `gpt-6-sol` |
+| `gpt-5.6-terra` | `gpt-6-sol` |
+
+GPT-6 has no Terra-class model, so `gpt-6-sol` fills both OpenAI roles
+(`everyday` and `powerful`) and the `balanced`/`powerful` tiers.
+`gpt-6-luna` takes the `fast` tier. The role alias `opus-5` became `opus-5.5`.
+
+Old picker cookies go through `remaps:`. Old **pins and role aliases** go
+through `retired:`, which applies to every resolution source, including stored
+conversation pins and feature overrides. `remaps:` apply only to user/cookie
+strings. Without `retired:`, a conversation stored on `claude-opus-5` would
+resolve as an unknown model. An unknown Claude model gets the `budgeted`
+thinking contract, and Opus 5 rejects `budget_tokens` with a 400.
+
+`claude-opus-5-5` and `claude-fable-5-1` declare `thinking_always_on: true`:
+`{type: "disabled"}` is a 400 on them at every effort level, so
+`normalize_anthropic_request` never sends it there (the search agents'
+`DISABLE_THINKING_FOR_SEARCH` is on by default). Opus 5.5 also rejects forced
+`tool_choice` (`any`/`tool`). The only forced call today
+(`ui_frame_generator`, A2UI) runs on Haiku.
+
+Prices are in the catalog and in `db/migrations/062_llm_pricing_opus55_gpt6.sql`
+(the DB outranks the catalog). OpenAI rates are the short-context tier; input
+over 272K tokens costs 2x and is not modelled.
+
 `test_every_selectable_model_is_priced` enforces the invariant, and
 `test_retired_models_are_gone_from_the_catalog` stops the six coming back
 without a `pricing:` block.
@@ -470,7 +501,7 @@ Converted entries have no tier and no price, and fall back to
 `thinking: budgeted`. Provider `google` is normalized to `gemini`.
 
 Custom catalogs must ship `role_aliases:` (the schema defaults are now
-`sonnet-5` / `opus-5`, not dated pins). A file without that block will not
+`sonnet-5` / `opus-5.5`, not dated pins). A file without that block will not
 resolve those roles: boot logs the existing unknown-routed-model warning and
 everyday traffic has no pin. The alternative is a dated `model_routing`
 override in env YAML (`everyday: claude-sonnet-5`). Legacy conversion does
@@ -490,10 +521,10 @@ role default.
 model_routing:
   anthropic:
     everyday: sonnet-5
-    powerful: opus-5
+    powerful: opus-5.5
   openai:
-    everyday: gpt-5.6-terra
-    powerful: gpt-5.6-sol
+    everyday: gpt-6-sol
+    powerful: gpt-6-sol
 ```
 
 Resolution follows a strict precedence, and the winner is reported as
@@ -589,8 +620,8 @@ to fully automatic calls:
 
 | Call | Behavior on provider failure |
 |---|---|
-| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-5.6-terra`) |
-| `create_llm(model="claude-opus-5")` | raises — an explicit model is never replaced |
+| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-6-sol`) |
+| `create_llm(model="claude-opus-5-5")` | raises — an explicit model is never replaced |
 | `create_llm(provider="anthropic")` | raises — an explicit provider is never replaced |
 | any `provider="ollama"` call | raises — Ollama is an explicit local service |
 
@@ -613,7 +644,7 @@ Advisor while retaining prompt caching.
 
 That compatibility table lives in the catalog, not in code — see *Generation
 facts (Anthropic)* above. **Before enabling this, check that the executor
-models you actually route to have a `family` there.** `claude-opus-5` does not,
+models you actually route to have a `family` there.** `claude-opus-5-5` does not,
 so with the default role routing turning Advisor on today changes nothing at
 all: every deep analysis worker would be skipped as `unknown_executor_model`,
 and a feature that silently does nothing is worse than one that is off.

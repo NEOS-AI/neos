@@ -36,14 +36,14 @@ def _anthropic_models() -> list[str]:
 # 드러난 실제 상태이고, 값을 지어내는 것은 §4.3 의
 # "확인 못 한 모델은 추측하지 않는다" 를 어기는 것이다.
 #
-# 🔴 `claude-opus-5` 가 여기 있는 것이 이 표의 존재 이유다. 하네스의
+# 🔴 `claude-opus-5-5` 가 여기 있는 것이 이 표의 존재 이유다. 하네스의
 # `powerful` 워커(dig·synth)이고 피커의 `powerful` 티어인데, 코드에 있던
 # 접두사표는 opus-4.5~4.8 만 알고 **5 세대를 배운 적이 없다.** 그래서
 # advisor 를 켜면 `unknown_executor_model` 로 조용히 미주입되고, 캐시
 # 하한은 확인되지 않은 기본값 1024 를 쓴다. 지금 잠들어 있어 무해하지만
 # (`llm.advisor.enabled: false`), 이것이 정확히 CA12 가 추적하던 드리프트다.
 _UNCOVERED = {
-    "claude-opus-5",
+    "claude-opus-5-5",
     "claude-3-5-sonnet-20240620",
 }
 
@@ -89,9 +89,9 @@ def test_cache_only_entries_are_named_rather_than_indistinguishable():
 
 def test_a_model_without_family_facts_takes_the_documented_defaults():
     """공백은 조용한 오답이 아니라 **문서화된 기본값**이어야 한다."""
-    assert canonical_model_family("claude-opus-5") is None
-    assert cache_minimum_tokens("claude-opus-5") == DEFAULT_CACHE_MINIMUM_TOKENS
-    assert advisor_targets("opus-5") == frozenset()
+    assert canonical_model_family("claude-opus-5-5") is None
+    assert cache_minimum_tokens("claude-opus-5-5") == DEFAULT_CACHE_MINIMUM_TOKENS
+    assert advisor_targets("opus-5.5") == frozenset()
 
 
 def test_dated_variants_inherit_their_generation():

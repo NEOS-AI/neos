@@ -37,7 +37,7 @@ def test_fable_asks_for_progress_updates() -> None:
     assert THINKING_UPDATES_BETA in payload["extra_headers"]["anthropic-beta"].split(",")
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5", "claude-opus-4-8"])
 def test_other_models_send_no_thinking_key(model: str) -> None:
     """선언하지 않은 모델의 요청은 예전과 바이트가 같다 -- 키도 베타도 없다."""
     payload = _payload(model)
@@ -47,7 +47,7 @@ def test_other_models_send_no_thinking_key(model: str) -> None:
 
 def test_only_fable_declares_a_display() -> None:
     assert thinking_display_for("claude-fable-5-1") == "updates"
-    assert thinking_display_for("claude-opus-5") is None
+    assert thinking_display_for("claude-opus-5-5") is None
     assert thinking_display_for("claude-from-the-future") is None
 
 

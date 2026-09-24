@@ -30,7 +30,7 @@ def _request(effort: str = "") -> ModelRequest:
             CanonicalMessage(role="user", content=(TextContent(text="질문"),)),
         ),
         tools=(),
-        model="claude-opus-5",
+        model="claude-opus-5-5",
         limits=ModelLimits(
             max_output_tokens=4096, timeout_sec=120.0, effort=effort
         ),

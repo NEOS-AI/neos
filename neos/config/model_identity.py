@@ -17,7 +17,7 @@ _KNOWN_PREFIXES = frozenset({"anthropic", "openai", "google", "gemini", "xai"})
 _MAX_REMAP_HOPS = 4
 RESERVED_WINDOW_CAP = 20_000
 
-IdentitySource = Literal["role_alias", "pin", "remap", "gateway", "id_form"]
+IdentitySource = Literal["role_alias", "pin", "remap", "gateway", "id_form", "retired"]
 
 
 def reserved_tokens(window: int) -> int:
@@ -227,6 +227,12 @@ def canonicalize(
         return None
 
     current = raw.strip()
+    successor = catalog.retired.get(current)
+    if successor is not None:
+        # 은퇴는 출처를 가리지 않는다 (apply_remap 과 무관).
+        ident = _identity_from_pin(catalog, successor, "retired")
+        _record_catalog_metrics(ident.source, remapped=True)
+        return ident
     seen: list[str] = []
     if apply_remap:
         while current in catalog.remaps:

@@ -41,12 +41,12 @@ def test_openai_provider_without_model_uses_everyday_role() -> None:
     )
 
     assert selected.provider == "openai"
-    assert selected.model == "gpt-5.6-terra"
+    assert selected.model == "gpt-6-sol"
     assert selected.source == "role_default"
 
 
 def test_sol_and_astra_are_both_selectable_openai_models() -> None:
-    for model in ("gpt-5.6-sol", "gpt-6-astra"):
+    for model in ("gpt-6-sol", "gpt-6-astra"):
         selected = resolve_coding_selection(
             coding=CodingModelConfig(provider="anthropic", model=model),
             routing=ModelRoutingConfig(),

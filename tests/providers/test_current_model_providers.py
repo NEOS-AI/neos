@@ -44,12 +44,12 @@ def test_provider_catalogs_include_current_and_legacy_models():
     anthropic_models = AnthropicProvider.__new__(AnthropicProvider).list_models()
     openai_models = OpenAIProvider.__new__(OpenAIProvider).list_models()
 
-    assert {"claude-sonnet-5", "claude-opus-5"} <= set(anthropic_models)
+    assert {"claude-sonnet-5", "claude-opus-5-5"} <= set(anthropic_models)
     assert {
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-5-20250929",
     } <= set(anthropic_models)
-    assert {"gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"} <= set(openai_models)
+    assert {"gpt-6-sol", "gpt-6-luna", "gpt-6-astra"} <= set(openai_models)
 
 
 def test_retired_unpriced_models_are_not_offered():
@@ -91,9 +91,9 @@ def test_recommendations_are_derived_from_the_model_catalog(monkeypatch):
 
 def test_recommendations_use_current_everyday_and_powerful_models():
     assert get_recommended_models("anthropic")["balanced"] == "claude-sonnet-5"
-    assert get_recommended_models("anthropic")["powerful"] == "claude-opus-5"
-    assert get_recommended_models("openai")["balanced"] == "gpt-5.6-terra"
-    assert get_recommended_models("openai")["powerful"] == "gpt-5.6-sol"
+    assert get_recommended_models("anthropic")["powerful"] == "claude-opus-5-5"
+    assert get_recommended_models("openai")["balanced"] == "gpt-6-sol"
+    assert get_recommended_models("openai")["powerful"] == "gpt-6-sol"
 
 
 def test_recommendations_for_unknown_provider_are_empty():
@@ -148,7 +148,7 @@ def test_claude_opus_5_uses_adaptive_thinking_without_sampling_parameters(monkey
 
     with patch("neos.providers.anthropic.ChatAnthropic") as chat_anthropic:
         provider.create_llm(
-            model="claude-opus-5",
+            model="claude-opus-5-5",
             temperature=0.7,
             max_tokens=8192,
             top_p=0.9,

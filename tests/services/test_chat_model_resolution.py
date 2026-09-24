@@ -31,11 +31,11 @@ def test_new_chat_without_selection_uses_anthropic_everyday() -> None:
 
 
 def test_explicit_chat_model_is_not_replaced() -> None:
-    assert resolve_new_chat_model("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert resolve_new_chat_model("gpt-6-sol") == "gpt-6-sol"
 
 
 def test_new_chat_user_cookie_is_remapped() -> None:
-    assert resolve_new_chat_model("openai/gpt-4.1") == "gpt-5.6-sol"
+    assert resolve_new_chat_model("openai/gpt-4.1") == "gpt-6-sol"
 
 
 def test_gemini_pin_is_stored_without_calling_resolve_model(monkeypatch) -> None:
@@ -57,9 +57,9 @@ def test_openai_selection_resolves_with_openai_provider(monkeypatch) -> None:
         return real(**kwargs)
 
     monkeypatch.setattr(chat_service, "resolve_model", _spy)
-    assert resolve_new_chat_model("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert resolve_new_chat_model("gpt-6-sol") == "gpt-6-sol"
     assert seen["provider"] == "openai"
-    assert seen["user_model"] == "gpt-5.6-sol"
+    assert seen["user_model"] == "gpt-6-sol"
     assert seen["role"] == "everyday"
 
 
@@ -72,9 +72,9 @@ def test_anthropic_selection_resolves_with_anthropic_provider(monkeypatch) -> No
         return real(**kwargs)
 
     monkeypatch.setattr(chat_service, "resolve_model", _spy)
-    assert resolve_new_chat_model("claude-opus-5") == "claude-opus-5"
+    assert resolve_new_chat_model("claude-opus-5-5") == "claude-opus-5-5"
     assert seen["provider"] == "anthropic"
-    assert seen["user_model"] == "claude-opus-5"
+    assert seen["user_model"] == "claude-opus-5-5"
 
 
 def test_stored_conversation_model_is_not_replaced() -> None:
@@ -97,7 +97,7 @@ def test_turn_override_applies_user_remap() -> None:
             {"model": "anthropic/claude-opus-4.5"},
             {"model_name": "gpt-4o-mini"},
         )
-        == "claude-opus-5"
+        == "claude-opus-5-5"
     )
 
 
@@ -164,10 +164,10 @@ async def test_explicit_template_model_is_not_replaced(monkeypatch) -> None:
     await ChatService.create_template(
         name="Research",
         created_by="owner",
-        default_model="gpt-5.6-sol",
+        default_model="gpt-6-sol",
     )
 
-    assert inserted[0][_DEFAULT_MODEL_ARG] == "gpt-5.6-sol"
+    assert inserted[0][_DEFAULT_MODEL_ARG] == "gpt-6-sol"
 
 
 @pytest.mark.asyncio
@@ -342,14 +342,14 @@ async def test_explicit_openai_tool_streams_use_openai_provider_boundary(
         async for event in _tool_stream(
             ChatLLMService(),
             path,
-            model_name="gpt-5.6-terra",
+            model_name="gpt-6-sol",
         )
     ]
 
     assert factory_calls == [
         {
             "provider": "openai",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6-sol",
             "temperature": 0.7,
             "streaming": True,
             "max_tokens": 321,
@@ -358,7 +358,7 @@ async def test_explicit_openai_tool_streams_use_openai_provider_boundary(
     assert len(streamed_messages) == 1
     assert events[0] == {
         "type": "start",
-        "model": "gpt-5.6-terra",
+        "model": "gpt-6-sol",
         "provider": "openai",
     }
     assert events[-1]["type"] == "complete"

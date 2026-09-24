@@ -170,7 +170,7 @@ async def test_create_conversation_canonicalizes_remap_and_role_alias(
     assert alias is not None
     assert remap is not None
     assert create.await_args_list[0].kwargs["model_name"] == "claude-sonnet-5"
-    assert create.await_args_list[1].kwargs["model_name"] == "gpt-5.6-sol"
+    assert create.await_args_list[1].kwargs["model_name"] == "gpt-6-sol"
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +350,8 @@ def test_is_user_selectable_model_accepts_remaps_and_role_aliases():
     assert is_user_selectable_model("anthropic/claude-opus-4.5") is True
     assert is_user_selectable_model("anthropic/claude-sonnet-5") is True
     assert resolve_user_selectable_model("sonnet-5") == "claude-sonnet-5"
-    assert resolve_user_selectable_model("openai/gpt-4.1") == "gpt-5.6-sol"
-    assert resolve_user_selectable_model("anthropic/claude-opus-4.5") == "claude-opus-5"
+    assert resolve_user_selectable_model("openai/gpt-4.1") == "gpt-6-sol"
+    assert resolve_user_selectable_model("anthropic/claude-opus-4.5") == "claude-opus-5-5"
     assert resolve_user_selectable_model("claude-opus-4-8") is None
 
 

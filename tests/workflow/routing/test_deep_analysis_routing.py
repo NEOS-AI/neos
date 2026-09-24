@@ -35,8 +35,8 @@ def test_deep_analysis_settings_defaults():
     ("field", "role", "alias"),
     [
         ("scout", "everyday", "sonnet-5"),
-        ("dig", "powerful", "opus-5"),
-        ("synth", "powerful", "opus-5"),
+        ("dig", "powerful", "opus-5.5"),
+        ("synth", "powerful", "opus-5.5"),
         ("judge", "everyday", "sonnet-5"),
     ],
 )
@@ -91,7 +91,7 @@ def test_recursive_planner_uses_powerful_role_without_feature_override() -> None
             role="powerful",
             feature_override=recursive.planner_model,
         ).model
-        == model_config.catalog.role_aliases["opus-5"].current
+        == model_config.catalog.role_aliases["opus-5.5"].current
     )
 
 
@@ -112,7 +112,7 @@ def test_explicit_recursive_planner_model_wins_over_powerful_role() -> None:
 @pytest.mark.parametrize(
     ("feature_model", "expected_model"),
     [
-        (None, model_config.catalog.role_aliases["opus-5"].current),
+        (None, model_config.catalog.role_aliases["opus-5.5"].current),
         ("claude-manual", "claude-manual"),
     ],
 )

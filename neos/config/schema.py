@@ -164,13 +164,13 @@ class ModelRoutingConfig(StrictConfigModel):
     anthropic: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
             everyday="sonnet-5",
-            powerful="opus-5",
+            powerful="opus-5.5",
         )
     )
     openai: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
-            everyday="gpt-5.6-terra",
-            powerful="gpt-5.6-sol",
+            everyday="gpt-6-sol",
+            powerful="gpt-6-sol",
         )
     )
 

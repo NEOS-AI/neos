@@ -61,7 +61,7 @@ def _request(
     run_id: str = "run_a",
     task_id: str = "task_a",
     tool_description: str = "Fetch one http(s) URL as evidence.",
-    model: str = "claude-opus-5",
+    model: str = "claude-opus-5-5",
 ) -> ModelRequest:
     return ModelRequest(
         system="당신은 조사 워커다",

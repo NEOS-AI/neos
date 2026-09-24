@@ -26,8 +26,8 @@ def _resolution(model: str, role: str) -> ModelResolution:
 
 _MODELS = {
     "scout": _resolution("claude-sonnet-5", "everyday"),
-    "dig": _resolution("claude-opus-5", "powerful"),
-    "synth": _resolution("claude-opus-5", "powerful"),
+    "dig": _resolution("claude-opus-5-5", "powerful"),
+    "synth": _resolution("claude-opus-5-5", "powerful"),
     "judge": _resolution("claude-sonnet-5", "everyday"),
 }
 _BUDGET = {
@@ -85,7 +85,7 @@ def test_build_manifest_writes_resolution_not_config():
 
     assert manifest["models"]["dig"] == {
         "role": "powerful",
-        "model": "claude-opus-5",
+        "model": "claude-opus-5-5",
         "source": "role_default",
     }
 
@@ -102,7 +102,7 @@ def test_build_manifest_confesses_judge_equals_scout():
 
 def test_build_manifest_reports_distinct_judge_and_scout():
     models = dict(_MODELS)
-    models["judge"] = _resolution("claude-opus-5", "powerful")
+    models["judge"] = _resolution("claude-opus-5-5", "powerful")
 
     assert _build(models=models)["judge_equals_scout"] is False
 

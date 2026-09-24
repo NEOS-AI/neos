@@ -111,6 +111,11 @@ class ModelSpec(StrictConfigModel):
     # 한 모델이 두 티어를 겸할 수 있다 — Ollama llama3.1:8b가 fast와 balanced를 겸한다.
     tiers: list[Tier] = Field(default_factory=list)
     thinking: ThinkingContract = ThinkingContract.BUDGETED
+    # thinking 을 끌 수 없는 모델인가 (adaptive 계약 안의 하위 사실).
+    # true 면 `{type: "disabled"}` 가 400 이므로 `normalize_anthropic_request`
+    # 가 끄기 요청을 다르게 번역한다. 모르면 false -- 끌 수 있다는 가정이
+    # 지금까지의 동작이다.
+    thinking_always_on: bool = False
     # list_models() 노출 여부. 가격만 아는 레거시 모델은 false.
     selectable: bool = True
     max_tokens: int | None = None
@@ -221,6 +226,12 @@ class ModelCatalog(StrictConfigModel):
     # YAML 에서는 anthropic_families: 뒤에 둔다 (FE 정규식 잠금).
     role_aliases: dict[str, RoleAlias] = Field(default_factory=dict)
     remaps: dict[str, str] = Field(default_factory=dict)
+    # 은퇴한 핀 · 역할 별칭 → 후계 핀. remaps 와 달리 **모든 출처**(저장된
+    # 대화 핀, 기능 오버라이드 포함)에 적용된다. remaps 가 사용자 문자열에만
+    # 걸리는 이유는 gateway id 가 같은 철자의 핀을 덮어쓰지 않게 하려는 것인데,
+    # 은퇴한 핀은 카탈로그 키가 아니므로 그 충돌이 없다. 안 걸면 저장된
+    # `claude-opus-5` 가 미등록 모델로 BUDGETED 계약을 받아 400 이 된다.
+    retired: dict[str, str] = Field(default_factory=dict)
     # Optional helper slots (fast / title / artifact) → catalog pin.
     aux: dict[str, str] = Field(default_factory=dict)
 
@@ -302,6 +313,16 @@ class ModelCatalog(StrictConfigModel):
             if not self.models[pin].selectable:
                 raise ValueError(
                     f"remap {raw!r} targets non-selectable pin {pin!r}"
+                )
+
+        for old, pin in self.retired.items():
+            if old in self.models or old in self.role_aliases:
+                raise ValueError(
+                    f"retired {old!r} is still a live catalog key or role alias"
+                )
+            if pin not in self.models:
+                raise ValueError(
+                    f"retired {old!r} points to unknown model {pin!r}"
                 )
 
         claimed_lookup: dict[str, str] = {}

@@ -17,9 +17,9 @@ pytestmark = pytest.mark.no_db
 
 def test_catalog_decides_for_known_models() -> None:
     assert provider_for_model("claude-sonnet-5") == "anthropic"
-    assert provider_for_model("claude-opus-5") == "anthropic"
-    assert provider_for_model("gpt-5.6-terra") == "openai"
-    assert provider_for_model("gpt-5.6-sol") == "openai"
+    assert provider_for_model("claude-opus-5-5") == "anthropic"
+    assert provider_for_model("gpt-6-sol") == "openai"
+    assert provider_for_model("gpt-6-luna") == "openai"
     assert provider_for_model("gpt-6-astra") == "openai"
     assert provider_for_model("gpt-4o") == "openai"
 
@@ -77,7 +77,7 @@ class TestChatServiceInference:
         service = ChatLLMService.__new__(ChatLLMService)
         service.default_provider = "anthropic"
 
-        assert service._extract_provider_from_model("gpt-5.6-terra") == "openai"
+        assert service._extract_provider_from_model("gpt-6-sol") == "openai"
         assert service._extract_provider_from_model("claude-sonnet-5") == "anthropic"
 
     def test_keeps_the_name_heuristic_for_uncatalogued_models(self) -> None:
@@ -103,9 +103,9 @@ class TestDeepAnalysisInference:
 
         for model, expected in (
             ("claude-sonnet-5", True),
-            ("claude-opus-5", True),
-            ("gpt-5.6-terra", False),
-            ("gpt-5.6-sol", False),
+            ("claude-opus-5-5", True),
+            ("gpt-6-sol", False),
+            ("gpt-6-luna", False),
             ("gpt-6-astra", False),
             ("gpt-4o", False),
         ):

@@ -48,10 +48,36 @@ def normalize_anthropic_request(
     normalized.pop("temperature", None)
     normalized.pop("top_p", None)
     normalized.pop("top_k", None)
-    normalized["thinking"] = (
-        {"type": "adaptive"} if thinking_enabled else {"type": "disabled"}
-    )
+    if thinking_enabled:
+        normalized["thinking"] = {"type": "adaptive"}
+    elif _thinking_always_on(model):
+        return _translate_thinking_off(model, normalized)
+    else:
+        normalized["thinking"] = {"type": "disabled"}
     return normalized
+
+
+def _thinking_always_on(model: str) -> bool:
+    spec = get_model_spec(model)
+    return spec is not None and spec.thinking_always_on
+
+
+def _translate_thinking_off(model: str, params: dict[str, Any]) -> dict[str, Any]:
+    """끌 수 없는 모델에 온 "thinking 끄기" 요청을 400 이 아닌 형태로 번역한다.
+
+    `{type: "disabled"}` 는 이 모델에서 모든 effort 에서 400 이다
+    (claude-opus-5-5, claude-fable-5-1). 호출자(검색 에이전트의
+    `DISABLE_THINKING_FOR_SEARCH`)가 원한 것은 "빠른 응답"이지 400 이 아니다.
+
+    Anthropic 레퍼런스의 권고는 thinking 을 켜 둔 채 `output_config.effort`
+    를 `low` 로 내리는 것이다. 이 경로(ChatAnthropic)는 지금 effort 를
+    어디서도 보내지 않으며, 카탈로그의 `effort_levels` 가 빈 모델에 effort 를
+    보내는 것은 금지돼 있다.
+    """
+    # TODO(user): 끄기 요청을 무엇으로 번역할지 정한다. 최소 요건은
+    # `params["thinking"]` 에 `{"type": "disabled"}` 가 남지 않는 것이다.
+    params["thinking"] = {"type": "adaptive"}
+    return params
 
 
 class AnthropicProvider(ModelProviderBase):

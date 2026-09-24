@@ -93,9 +93,10 @@ llm:
     # 틀려도 `neos_llm_unpriced_calls_total` 을 울리지 않는다. 즉 §6 ③ 의
     # 고장(비용이 조용히 0)은 막혔지만 **조용히 틀린 값**은 아직 가능하다.
     #
-    # 🔴 켜기 전에 남은 조건 하나: `claude-opus-5` 는 카탈로그의 Anthropic
+    # 🔴 켜기 전에 남은 조건 하나: `claude-opus-5-5` 는 카탈로그의 Anthropic
     # 모델 중 유일하게 세대 사실이 없다(§CA12, `tests/config/
-    # test_anthropic_model_families.py` 의 `_UNCOVERED`). executor 가 opus-5
+    # test_anthropic_model_families.py` 의 `_UNCOVERED`; 은퇴한 opus-5 에게서
+    # 물려받은 공백이다). executor 가 opus-5.5
     # 면 advisor 는 `unknown_executor_model` 로 **조용히 미주입**된다 --
     # 켜는 것이 아무 일도 안 하는 상태이므로, 켜기 전에 그 세대의
     # `anthropic_families` 항목을 실측으로 채울 것.
@@ -502,7 +503,7 @@ deep_analysis:
     #
     # **judge 는 scout·dig·synth 셋 모두와 달라야 한다.** scout 만 보고
     # `claude-opus-5` 를 넣었다가 되돌렸다 -- dig·synth 가 이미 powerful 역할로
-    # opus-5 라, 그러면 위반의 위치가 scout 에서 dig 로 옮겨갈 뿐이다.
+    # opus-5(지금은 opus-5.5) 라, 그러면 위반의 위치가 scout 에서 dig 로 옮겨갈 뿐이다.
     # (`test_manifest_records_the_configuration_that_produced_the_number` 가
     # 그것을 잡았다.)
     #

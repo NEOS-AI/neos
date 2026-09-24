@@ -174,7 +174,7 @@ def test_worker_constructor_has_no_database_or_run_state():
     [
         (Effort.SCOUT, "scout", None, "claude-sonnet-5"),
         (Effort.SCOUT, "scout", "claude-scout-manual", "claude-scout-manual"),
-        (Effort.DIG, "dig", None, "claude-opus-5"),
+        (Effort.DIG, "dig", None, "claude-opus-5-5"),
         (Effort.DIG, "dig", "claude-dig-manual", "claude-dig-manual"),
     ],
 )

@@ -39,7 +39,7 @@ def test_fable_5_1_facts_match_the_published_reference() -> None:
 
 def test_mid_conversation_system_support_follows_the_catalog() -> None:
     assert supports_mid_conversation_system("claude-fable-5-1")
-    assert supports_mid_conversation_system("claude-opus-5")
+    assert supports_mid_conversation_system("claude-opus-5-5")
     assert supports_mid_conversation_system("claude-opus-4-8")
     assert not supports_mid_conversation_system("claude-sonnet-5")
     assert not supports_mid_conversation_system("claude-from-the-future")
@@ -53,7 +53,7 @@ def test_mid_conversation_tools_is_enabled_only_where_it_was_verified() -> None:
     path, which is correct rather than merely safe.
     """
     assert supports_mid_conversation_tools("claude-fable-5-1")
-    assert not supports_mid_conversation_tools("claude-opus-5")
+    assert not supports_mid_conversation_tools("claude-opus-5-5")
     assert not supports_mid_conversation_tools("claude-opus-4-8")
     assert not supports_mid_conversation_tools("claude-sonnet-5")
     assert not supports_mid_conversation_tools("claude-from-the-future")

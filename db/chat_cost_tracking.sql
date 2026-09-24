@@ -406,7 +406,14 @@ INSERT INTO llm_model_pricing (
     ('anthropic', 'claude-opus-5', 5.00, 25.00, 6.25, 0.50, 200000, 8192, TRUE, TRUE),
 
     -- Anthropic Claude Opus 4.8 (deep-analysis judge)
-    ('anthropic', 'claude-opus-4-8', 5.00, 25.00, 6.25, 0.50, 200000, 8192, TRUE, TRUE)
+    ('anthropic', 'claude-opus-4-8', 5.00, 25.00, 6.25, 0.50, 200000, 8192, TRUE, TRUE),
+
+    -- Anthropic Claude Opus 5.5 (replaces claude-opus-5)
+    ('anthropic', 'claude-opus-5-5', 4.00, 20.00, 5.00, 0.20, 1000000, 128000, TRUE, TRUE),
+
+    -- OpenAI GPT-6 Sol / Luna (replace gpt-5.6-sol / gpt-5.6-terra)
+    ('openai', 'gpt-6-sol', 2.00, 10.00, 2.50, 0.20, 1050000, 128000, TRUE, TRUE),
+    ('openai', 'gpt-6-luna', 0.10, 0.50, 0.125, 0.01, 1050000, 128000, TRUE, TRUE)
 ON CONFLICT (provider, model_name, effective_from) DO NOTHING;
 
 -- ============================================================================
