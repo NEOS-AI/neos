@@ -54,8 +54,55 @@ def test_the_levels_come_from_the_installed_sdk() -> None:
 
     # 대조 테스트가 덜 검사할 수 있다 -- 비면 아래 두 단언이 공허하다.
     assert len(levels) >= 5
-    assert set(EFFORT_LEVELS) == levels
+    from neos.config.model_config import EFFORT_VOCABULARY
+
+    assert set(EFFORT_VOCABULARY["anthropic"]) == levels
     assert set(EFFORT_LEVELS) == set(SDK_EFFORT_LEVELS)
+
+
+def test_openai_levels_come_from_the_installed_sdk() -> None:
+    from typing import get_args
+
+    from openai.types.shared.reasoning_effort import ReasoningEffort
+
+    from neos.config.model_config import EFFORT_VOCABULARY
+
+    # ReasoningEffort = Optional[Literal[...]]
+    literal = next(arg for arg in get_args(ReasoningEffort) if get_args(arg))
+    levels = set(get_args(literal))
+    assert len(levels) >= 7
+    assert set(EFFORT_VOCABULARY["openai"]) == levels
+
+
+def test_the_union_is_ordered_low_to_high() -> None:
+    from neos.config.model_config import ALL_EFFORT_LEVELS, EFFORT_VOCABULARY
+
+    assert ALL_EFFORT_LEVELS == (
+        "none", "minimal", "low", "medium", "high", "xhigh", "max",
+    )
+    for vocab in EFFORT_VOCABULARY.values():
+        assert set(vocab) <= set(ALL_EFFORT_LEVELS)
+
+
+def test_an_openai_level_is_refused_on_an_anthropic_model() -> None:
+    from neos.config.model_config import ModelSpec
+
+    with pytest.raises(ValueError, match="effort"):
+        ModelSpec(provider="anthropic", effort_levels=["none"])
+
+
+def test_an_openai_model_takes_openai_levels() -> None:
+    from neos.config.model_config import ModelSpec
+
+    spec = ModelSpec(provider="openai", effort_levels=["high", "none", "low"])
+    assert spec.effort_levels == ["none", "low", "high"]
+
+
+def test_a_provider_without_a_vocabulary_takes_no_levels() -> None:
+    from neos.config.model_config import ModelSpec
+
+    with pytest.raises(ValueError, match="effort"):
+        ModelSpec(provider="gemini", effort_levels=["low"])
 
 
 def test_no_catalog_model_claims_effort_support_yet() -> None:

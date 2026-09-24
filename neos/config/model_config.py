@@ -95,14 +95,24 @@ class RoleAlias(StrictConfigModel):
     current: str
 
 
-#: 모델 사고량 레벨. **SDK 가 정한 어휘이고 순서가 있다** (low < … < max).
+#: 모델 사고량 레벨. **SDK 가 정한 어휘이고 순서가 있다** (none < … < max).
 #:
-#: 손으로 적은 목록이 아니라 `anthropic.types.output_config_param.
-#: OutputConfigParam.effort` 의 Literal 과 같아야 하며, `tests/config/
-#: test_model_effort.py` 가 그 둘을 맞대 놓는다 -- 프로바이더가 정한 어휘는
-#: 프로바이더에게 묻는다(`id_forms` 의 "날짜 접미사를 지어내지 않는다" 와
-#: 같은 규율).
-EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+#: 프로바이더마다 어휘가 다르다 -- Anthropic `OutputConfigParam.effort`,
+#: OpenAI `ReasoningEffort`. 둘 다 `tests/config/test_model_effort.py` 가
+#: SDK 의 Literal 과 맞대 놓는다. 프로바이더가 정한 어휘는 프로바이더에게
+#: 묻는다(`id_forms` 의 "날짜 접미사를 지어내지 않는다" 와 같은 규율).
+EFFORT_VOCABULARY: dict[str, tuple[str, ...]] = {
+    "anthropic": ("low", "medium", "high", "xhigh", "max"),
+    "openai": ("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+}
+
+#: 두 어휘의 순서 있는 합집합. 정렬과 "알려진 레벨인가" 검사에 쓴다.
+ALL_EFFORT_LEVELS: tuple[str, ...] = (
+    "none", "minimal", "low", "medium", "high", "xhigh", "max",
+)
+
+#: 하위 호환 별칭 -- Anthropic 어휘. 새 코드는 EFFORT_VOCABULARY 를 쓴다.
+EFFORT_LEVELS: tuple[str, ...] = EFFORT_VOCABULARY["anthropic"]
 
 
 class ModelSpec(StrictConfigModel):
@@ -163,22 +173,25 @@ class ModelSpec(StrictConfigModel):
     id_forms: list[str] = Field(default_factory=list)
     picker: PickerSpec | None = None
 
-    @field_validator("effort_levels")
-    @classmethod
-    def _effort_levels_known(cls, value: list[str]) -> list[str]:
-        """SDK 어휘 밖의 레벨은 설정 검증에서 멈춘다.
+    @model_validator(mode="after")
+    def _effort_levels_in_provider_vocabulary(self) -> "ModelSpec":
+        """프로바이더 어휘 밖의 레벨은 설정 검증에서 멈춘다.
 
-        오타가 배포까지 가면 그 모델의 **매 요청이 400** 이다. 순서는 SDK
-        순서로 정렬한다 -- effort 는 순서가 있는 축이라(low < … < max)
-        선언 순서를 그대로 두면 "가장 낮은 레벨" 같은 질문이 틀린 답을 얻는다.
+        오타가 배포까지 가면 그 모델의 **매 요청이 400** 이다. 순서는 사고량
+        순서로 정렬한다 -- effort 는 순서가 있는 축이라 선언 순서를 그대로
+        두면 "가장 낮은 레벨" 같은 질문이 틀린 답을 얻는다.
         """
-        unknown = sorted(set(value) - set(EFFORT_LEVELS))
+        vocab = EFFORT_VOCABULARY.get(self.provider, ())
+        unknown = sorted(set(self.effort_levels) - set(vocab))
         if unknown:
             raise ValueError(
-                f"unknown effort levels {unknown}; "
-                f"the SDK defines {list(EFFORT_LEVELS)}"
+                f"unknown effort levels {unknown} for provider "
+                f"{self.provider!r}; the SDK defines {list(vocab)}"
             )
-        return sorted(set(value), key=EFFORT_LEVELS.index)
+        ordered = sorted(set(self.effort_levels), key=ALL_EFFORT_LEVELS.index)
+        # validate_assignment 가 켜져 있어 속성 대입은 이 검증기를 다시 부른다.
+        object.__setattr__(self, "effort_levels", ordered)
+        return self
 
     @field_validator("thinking_budgets")
     @classmethod
