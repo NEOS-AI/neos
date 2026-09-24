@@ -197,6 +197,9 @@ class Synthesizer:
         the shape of the fix.
         """
         static = self.reduction_input_allowance
+        if not settings.config.deep_analysis.budget_aware_reduction:
+            # D-14: 표본 #23 은 BUDGET2 이전 코드로 원인을 판별한다.
+            return static
         budget = active_token_budget()
         if budget is None:
             return static
@@ -596,7 +599,10 @@ class Synthesizer:
         # Only fires when input carried claims and the clamped prompt carries
         # none: a genuinely claim-free node (no verified claims, no cited
         # children) has nothing to lose and goes to the model as before.
-        had_claims = _distinct_claims(
+        # 가드도 BUDGET2 의 일부다 -- 허용치만 되돌리고 가드를 남기면 BUDGET2
+        # 이전 코드가 아니라 제3의 코드를 재게 된다.
+        guarded = settings.config.deep_analysis.budget_aware_reduction
+        had_claims = guarded and _distinct_claims(
             "\n".join(claim_lines), "\n".join(child_lines)
         )
         if had_claims and not _distinct_claims(prompt):

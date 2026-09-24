@@ -24,6 +24,49 @@ os.environ.setdefault("DEBUG", "false")
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
+_TEST_DATABASE_SUFFIX = "_test"
+
+
+def _test_database_url(url: str) -> str:
+    """테스트가 닿을 수 있는 DB 는 이름이 `_test` 로 끝나는 것뿐이다.
+
+    이전에는 테스트가 `.env` 의 `DATABASE_URL` 을 그대로 썼고, 그것은 개발 DB
+    (`neos`)였다. 두 번 다쳤다: 2026-09-20 에는 배포 부트스트랩과 pytest 가 같은
+    DB 에 스키마를 세우다 충돌했고, 2026-09-24 에는 개발 원장에 스위트 한 번마다
+    `deep_analysis_runs` ~6건이 쌓이고 있었다. "테스트 DB 는 이름을 나눠라" 는
+    규칙으로만 있었고 코드는 따르지 않았다 -- 그래서 규칙을 여기서 강제한다.
+
+    이름을 바꿀 뿐 만들지는 않는다. 없으면 연결이 실패한다 -- 조용히 개발 DB 로
+    돌아가는 것보다 그쪽이 낫다.
+    """
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    name = parsed.database or ""
+    if name.endswith(_TEST_DATABASE_SUFFIX):
+        return url
+    return parsed.set(database=f"{name}{_TEST_DATABASE_SUFFIX}").render_as_string(
+        hide_password=False
+    )
+
+
+def _configured_database_url() -> str:
+    """앱의 설정 로더와 같은 우선순위: 프로세스 env > `.env` > 스키마 기본값."""
+    from dotenv import dotenv_values
+
+    from neos.config.schema import DatabaseConfig
+
+    return (
+        os.environ.get("DATABASE_URL")
+        or dotenv_values(_REPO_ROOT / ".env").get("DATABASE_URL")
+        or DatabaseConfig().url
+    )
+
+
+# 프로세스 env 가 `.env` 를 이기므로(`neos.config.loader.load_app_config`),
+# 설정이 처음 로드되기 전인 여기서 덮어쓰면 테스트의 모든 경로가 이 값을 본다.
+os.environ["DATABASE_URL"] = _test_database_url(_configured_database_url())
+
 # `db_manager.initialize()` 는 `Base.metadata.create_all` 로 **ORM 모델만** 만든다.
 # 채팅 스키마(conversations·messages·participants·templates + create_conversation
 # 같은 저장 함수)는 ORM 모델이 아니라 이 SQL 파일에 있고, 부트스트랩은 그것을

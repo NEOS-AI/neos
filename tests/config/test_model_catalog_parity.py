@@ -21,14 +21,14 @@ pytestmark = pytest.mark.no_db
 
 ANTHROPIC_SELECTABLE = [
     "claude-sonnet-5",
-    "claude-opus-5",
+    "claude-opus-5-5",
     "claude-haiku-4-5-20251001",
     "claude-sonnet-4-5-20250929",
 ]
 
 OPENAI_SELECTABLE = [
-    "gpt-5.6-terra",
-    "gpt-5.6-sol",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-6-astra",
 ]
 
@@ -41,19 +41,23 @@ RETIRED_MODELS = [
     "gpt-5-2025-08-07",
     "o3-mini",
     "o3",
+    # 2026-09-24: opus-5.5 · gpt-6-sol · gpt-6-luna 로 교체
+    "claude-opus-5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
 ]
 
 EXPECTED_TIERS = {
     "anthropic": {
         "fast": "claude-haiku-4-5-20251001",
         "balanced": "claude-sonnet-5",
-        "powerful": "claude-opus-5",
+        "powerful": "claude-opus-5-5",
     },
     "openai": {
-        # gpt-5-mini-2025-08-07 은퇴로 terra가 fast까지 겸한다
-        "fast": "gpt-5.6-terra",
-        "balanced": "gpt-5.6-terra",
-        "powerful": "gpt-5.6-sol",
+        # GPT-6 에는 Terra 급이 없다: Sol 이 balanced·powerful, Luna 가 fast
+        "fast": "gpt-6-luna",
+        "balanced": "gpt-6-sol",
+        "powerful": "gpt-6-sol",
     },
     "gemini": {
         "fast": "gemini-2.0-flash-exp",
@@ -68,22 +72,22 @@ EXPECTED_TIERS = {
 }
 
 EXPECTED_PRICING = {
-    ("openai", "gpt-5.6-terra"): (2.50, 15.00, 0.0, 0.0),
-    ("openai", "gpt-5.6-sol"): (5.00, 30.00, 0.0, 0.0),
+    ("openai", "gpt-6-sol"): (2.00, 10.00, 2.50, 0.20),
+    ("openai", "gpt-6-luna"): (0.10, 0.50, 0.125, 0.01),
     ("openai", "gpt-6-astra"): (10.00, 50.00, 12.50, 1.00),
     ("openai", "gpt-4o"): (2.50, 10.00, 0.0, 0.0),
     ("openai", "gpt-4o-mini"): (0.15, 0.60, 0.0, 0.0),
     ("openai", "gpt-4-turbo"): (10.00, 30.00, 0.0, 0.0),
     ("openai", "gpt-3.5-turbo"): (0.50, 1.50, 0.0, 0.0),
     ("anthropic", "claude-sonnet-5"): (3.00, 15.00, 3.75, 0.30),
-    ("anthropic", "claude-opus-5"): (5.00, 25.00, 6.25, 0.50),
+    ("anthropic", "claude-opus-5-5"): (4.00, 20.00, 5.00, 0.20),
     ("anthropic", "claude-sonnet-4-5-20250929"): (3.00, 15.00, 3.75, 0.30),
     ("anthropic", "claude-3-5-sonnet-20240620"): (3.00, 15.00, 3.75, 0.30),
     ("anthropic", "claude-opus-4-5-20251101"): (15.00, 75.00, 18.75, 1.50),
     ("anthropic", "claude-haiku-4-5-20251001"): (0.25, 1.25, 0.30, 0.03),
 }
 
-ADAPTIVE_MODELS = ["claude-sonnet-5", "claude-opus-5"]
+ADAPTIVE_MODELS = ["claude-sonnet-5", "claude-opus-5-5"]
 
 BUDGETED_MODELS = [
     "claude-haiku-4-5-20251001",

@@ -778,3 +778,81 @@ async def test_a_claim_free_node_still_reaches_the_model_when_starved():
 
     assert len(cj.prompts) == 1
     assert summary.answer == "마커 없는 답"
+
+
+# --- D-14: BUDGET2 를 끄면 BUDGET2 이전 코드와 **정확히** 같다 ----------------
+#
+# 표본 #23 은 CITE1 의 원인을 고치기 전 코드로 판별한다(D-14, 2026-09-24).
+# 허용치만 되돌리고 가드를 남기면 이전 코드가 아니라 제3의 코드를 잰다 -- 둘 다 꺼진다.
+
+
+@pytest.fixture
+def budget2_off(monkeypatch):
+    from neos.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.config.deep_analysis, "budget_aware_reduction", False
+    )
+
+
+async def test_budget2_is_on_by_default():
+    from neos.config.schema import DeepAnalysisConfig
+
+    assert DeepAnalysisConfig().budget_aware_reduction is True
+
+
+async def test_with_budget2_off_the_allowance_ignores_the_tier(budget2_off):
+    synth = Synthesizer(FakeLedger({}), synthesis_max_tokens=1_000)
+    with token_budget_scope(_budget(remaining=0, report_floor=0)):
+        assert (
+            synth.effective_reduction_allowance()
+            == synth.reduction_input_allowance
+        )
+
+
+async def test_with_budget2_off_a_starved_tier_still_reaches_the_model(budget2_off):
+    """가드가 없던 시절: 클램프는 static 에 맞추고 프롬프트는 모델로 간다.
+
+    그 뒤 `reserve()` 가 `input_bound` 로 거절하는 것이 D92 의 152 건이다 --
+    여기서는 예약이 가짜 `json_call` 밖에 있으므로 호출이 닿는 데서 멈춘다.
+    """
+    q = SimpleNamespace(id="n1", text="Q", status="open", value_est=0.8)
+    led = FakeLedger(
+        {"n1": [(_claim("aaaaaaaa", "가" * 4_000), [_ev("ex a")])]}
+    )
+    cj = CapturingJSON(
+        [
+            {
+                "question_id": "n1",
+                "answer": "답 [C:aaaaaaaa]",
+                "key_claim_ids": ["aaaaaaaa"],
+                "confidence": 0.5,
+                "caveats": [],
+                "conflicts": [],
+            }
+        ]
+    )
+    synth = Synthesizer(led, json_call=cj, synthesis_max_tokens=1_000)
+    with token_budget_scope(_budget(remaining=0, report_floor=0)):
+        await synth.reduce_node(q, [])
+
+    assert len(cj.prompts) == 1
+    assert not [a for a, _ in led.logged if a[0] == "node_reduction_degraded"]
+
+
+def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monkeypatch):
+    """오버레이가 한 줄이어야 #23 이 "BUDGET2 이전 코드"를 잰다 -- D98."""
+    from pathlib import Path
+
+    import yaml
+
+    from neos.config import loader
+
+    overlay = Path("config/samples/sample-23.yaml")
+    assert yaml.safe_load(overlay.read_text(encoding="utf-8")) == {
+        "deep_analysis": {"budget_aware_reduction": False}
+    }
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    config = loader.load_app_config(config_path=str(overlay))
+    assert config.deep_analysis.budget_aware_reduction is False

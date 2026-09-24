@@ -79,7 +79,7 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 | 항목 | 값 |
 |---|---|
 | 네트워크 | 없음 |
-| 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) — ⚠️ **development 에서는 읽기 전용이 아니다**, 아래 참조 |
+| 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) — ~~⚠️ **development 에서는 읽기 전용이 아니다**~~ development(Docker)에서도 읽기 전용이다(2026-09-23). ⚠️ 관리형·메모리 provider 에서는 아니다, 아래 참조 |
 | argv allowlist | `python3` 만. 셸 없음 |
 | 이미지 | digest 고정. digest가 매니페스트 구성 지문에 들어간다 |
 | 이미지 내용물 | 파이썬 + **분석 번들**: pandas · numpy · pypdf · beautifulsoup4 (2026-09-17 결정). 목록은 잠금 파일로 고정한다 — 버전이 움직이면 재실행이 재현되지 않는다 |
@@ -89,17 +89,66 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 > ⚠️ **development 경로의 두 가지 downgrade (2026-09-20, 구현 확인).** 위 표는 관리형 provider 를
 > 전제로 적혀 있다. Docker provider 에서는 둘이 성립하지 않는다:
 >
-> 1. **읽기 전용 마운트가 없다.** Docker provider 에는 바인드 마운트 기능이 없다(볼륨 + tmpfs 뿐).
+> 1. ~~**읽기 전용 마운트가 없다.** Docker provider 에는 바인드 마운트 기능이 없다(볼륨 + tmpfs 뿐).
 >    그래서 `open_question_sandbox` 는 증거를 **워크스페이스 안에 쓴다**(`evidence/<raw_ref>.txt`).
 >    워커가 그 파일을 고쳐 쓰는 것을 막는 장치는 **없다.** 막는 것은 파일시스템이 아니라 채점기다 —
->    `ComputedEvidence.inputs` 가 원장 blob 이 아니면 `E_COMPUTE_INPUT_UNFETCHED`(I4)
-> 2. **Docker provider 는 profile 을 읽지 않는다.** `docker.py` 에 `profile` 이라는 단어가 한 번도
+>    `ComputedEvidence.inputs` 가 원장 blob 이 아니면 `E_COMPUTE_INPUT_UNFETCHED`(I4)~~
+> 2. ~~**Docker provider 는 profile 을 읽지 않는다.** `docker.py` 에 `profile` 이라는 단어가 한 번도
 >    나오지 않는다(확인함). `research-offline-v1` 이 `DENY_ALL` 인 것은 레지스트리의 사실일 뿐이고,
->    그 경로의 실제 격리는 `sandbox.docker.network_mode` 하나에서 온다. 그래서 **설정 검증이 둘을
+>    그 경로의 실제 격리는 `sandbox.docker.network_mode` 하나에서 온다.~~ 그래서 **설정 검증이 둘을
 >    묶는다** — code research 가 켜진 채 provider 가 docker 이면 `network_mode=none` 이 아니면 거절한다.
->    묶지 않으면 "네트워크 없음" 이라고 적힌 프로파일 아래에서 컨테이너에 네트워크가 붙는다
+>    ~~묶지 않으면 "네트워크 없음" 이라고 적힌 프로파일 아래에서 컨테이너에 네트워크가 붙는다~~
 >
-> 진짜 읽기 전용과 profile 강제는 관리형 provider 에만 있고, 그것은 **B2 게이트 뒤**다(§4.5).
+> ~~진짜 읽기 전용과 profile 강제는 관리형 provider 에만 있고, 그것은 **B2 게이트 뒤**다(§4.5).~~
+>
+> **2026-09-23 — 둘 다 닫혔다 (Docker provider).**
+>
+> 1. **증거는 읽기 전용 볼륨에 있다.** 바인드 마운트가 없는 이유는 설계다 — Docker provider 는 첫 커밋
+>    (33064654 · 15e7da7c, 2026-07-19)부터 호스트 경로를 컨테이너에 노출하지 않는다(named volume +
+>    tmpfs, `--read-only` 루트). 그 이유를 지키려고 바인드 마운트를 들이지 않았다. 대신 샌드박스마다
+>    **별도 named volume** `neos-evidence-<sandbox_id>` 를 만들어 워커 컨테이너에 `/evidence` 와
+>    `/workspace/evidence` 두 자리에 **`readonly,volume-nocopy` 로만** 붙인다. 워커 컨테이너에는 그
+>    볼륨의 쓰기 가능한 자리가 **하나도 없다.** 쓰기는 `DockerSandboxProvider.write_evidence` 가 띄우는
+>    짧은 컨테이너(`docker run --rm`, `--network none` · `--cap-drop ALL` · `--read-only`, 그 볼륨만
+>    쓰기 가능) 하나뿐이고, 파일은 root 소유 `0444` 로 남는다. 워커가 고쳐 쓰기·새 파일 끼워 넣기·
+>    삭제를 시도하면 커널이 `EROFS` 로 거절한다(진짜 Docker 로 확인 —
+>    `tests/coding/integration/test_docker_research_profile.py`). create 뒤에 `docker inspect` 로 두
+>    마운트가 `RW=false` 인지 다시 읽고, 아니면 샌드박스를 부수고 `evidence_mount_not_readonly` 로
+>    거절한다. §3.1 의 "원장에 기록한 **뒤에** 나타난다" 순서는 그대로 `ResearchToolPort` 가 지킨다
+>    (commit → `write_evidence` → `record_fetched`). 채점기의 I4 검사는 **여전히 돈다** — 이제는
+>    둘째 벽이다.
+> 2. **Docker provider 가 profile 을 스스로 강제한다.** `open_question_sandbox` 가
+>    `code_research.sandbox_profile` 을 넘기고(재실행기도 같은 profile), provider 는 레지스트리의
+>    profile 을 관리형과 **같은 협상 함수**(`negotiate_profile_requirements`)로 따진다. `DENY_ALL` 이면
+>    `sandbox.docker.network_mode` 가 무엇이든 그 컨테이너는 `--network none` 이고, create 뒤
+>    `HostConfig.NetworkMode` 를 읽어 확인한다(불일치 → `profile_unsupported:<name>:network_readback_mismatch`).
+>    Docker 가 강제할 수 없는 요구(목적지 allowlist · 워크스페이스 용량 한도 · suspend 중 프로세스 유지)는
+>    **리소스를 만들기 전에** `profile_unsupported:<name>:<reason>` 으로 거절한다. fallback 은 없다.
+>
+> **바로잡음.** 2번의 "묶지 않으면 컨테이너에 네트워크가 붙는다" 는 **적힌 날에도 거짓이었다.**
+> `build_create_args` 는 33064654(2026-07-19)부터 `network_mode != "none"` 을
+> `docker_network_not_isolated` 로 거절했다 — profile 을 몰랐어도 Docker 컨테이너에는 네트워크가 붙을
+> 수 없었다. 설정 검증은 **심층 방어로 남긴다**: provider 쪽 두 벽은 질문마다 create 시점에 터지고,
+> 설정 검증은 기동 시점에 터진다. 누가 코딩 루프를 위해 `build_create_args` 를 느슨하게 풀어도 조사
+> 경로의 설정 약속은 따로 남는다.
+>
+> **아직 참이 아닌 것 (2026-09-23 확인).**
+>
+> - **관리형 provider 도 위 표를 지키지 않는다.** 취소선을 그은 마지막 줄("진짜 읽기 전용과 profile 강제는
+>   관리형 provider 에만 있다")은 코드와 다르다. 관리형 provider 는 profile 을 **생성 시 하나로 고정**
+>   하고(`sandbox.managed.coding_profile`, 기본 `offline-v1`), `open_question_sandbox` 는 그 provider 에
+>   profile 을 넘기지 않으며 증거를 **워크스페이스 안에 쓴다**. 즉 관리형에서 조사 샌드박스는
+>   `offline-v1`(역시 `DENY_ALL`)로 돌고 원장의 `code_worker_started.profile` 은
+>   `research-offline-v1` 이라고 적는다. 증거는 채점기(I4)만 지킨다. B2 게이트 뒤라 이번에 고치지 않았다.
+> - **메모리 provider** 도 증거를 워크스페이스에 쓰고 profile 을 모른다. 테스트용이고 격리 경계가 아니다.
+> - 어느 쪽으로 열렸는지는 `QuestionSandbox.evidence_readonly` 가 말한다. 원장에는 아직 남기지 않는다.
+> - `read_file.v1` 은 워크스페이스 상대 경로만 받는다. `fetch.v1` 이 돌려주는 `/evidence/<raw_ref>.txt`
+>   는 스크립트(`execute.v1`)에서는 그대로 열리지만 `read_file.v1` 에는 `evidence/<raw_ref>.txt` 로
+>   줘야 한다(Docker 는 두 자리에 같은 볼륨을 붙여 둘 다 읽힌다). 이 어긋남은 이번 변경 전부터 있었다.
+> - blob 하나가 16MiB 를 넘으면 `write_evidence` 가 `docker_input_limit_exceeded` 로 실패한다
+>   (`DockerCommandRunner` 의 stdin 상한). 조용히 잘리지 않고 `fetch.v1` 호출이 예외로 끝난다 — 다만
+>   원장 커밋은 그 **앞에** 끝났으므로 원장에는 있고 `/evidence` 에는 없는 blob 이 남는다(워크스페이스
+>   쓰기가 실패하던 이전 경로와 같은 모양).
 
 ### 3.3 `check_claims.v1` — 채점기를 읽기 전용으로
 

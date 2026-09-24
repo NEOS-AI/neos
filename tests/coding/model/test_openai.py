@@ -66,7 +66,7 @@ class FakeOpenAIClient:
         return self.chat.completions.requests
 
 
-def request(*, model: str = "gpt-5.6-sol") -> ModelRequest:
+def request(*, model: str = "gpt-6-sol") -> ModelRequest:
     return ModelRequest(
         system="Work safely.",
         messages=(

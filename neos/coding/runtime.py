@@ -19,6 +19,7 @@ from neos.coding.application.workspace_stream_service import (
     CodingWorkspaceStreamService,
 )
 from neos.coding.loop.base import CodingLoop
+from neos.jev.assembly import build_tool_risk_gate
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -494,8 +495,17 @@ def _resolve_coding_session_factory(session_factory):
 
 logger = logging.getLogger(__name__)
 
+# failed/cancelled are here because a stall or a cancel ends a child without a
+# `subagent.step` -- leave them out and the parent's ledger never learns the
+# child ended. `tests/fixtures/coding_event_kinds.json` pins this vocabulary.
 _PARENT_SINK_EVENTS = frozenset(
-    {"subagent.started", "subagent.step", "subagent.completed"}
+    {
+        "subagent.started",
+        "subagent.step",
+        "subagent.completed",
+        "subagent.failed",
+        "subagent.cancelled",
+    }
 )
 _PARENT_SINK_PAYLOAD = frozenset(
     {
@@ -508,6 +518,9 @@ _PARENT_SINK_PAYLOAD = frozenset(
         "turn_count",
         "tool_count",
         "status",
+        # Short codes, not prose: `stalled`, `parent_cancelled`, ...
+        "error_code",
+        "reason",
     }
 )
 
@@ -695,6 +708,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         approval_always_allow=frozenset(coding.approval_always_allow),
         subagent_enabled=coding.subagent_enabled,
         subagent_max_active=coding.subagent_max_active,
+        subagent_async_spawn=coding.subagent_async_spawn,
     )
     subagents = _build_subagent_runtime(
         model=model,
@@ -723,6 +737,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             metrics=metrics,
             audit=LoggingCodingAuditSink(),
             subagents=subagents,
+            # `None` 이 off 다. 켜졌는지 판단하는 자리는 이 팩토리 하나이고,
+            # 켜라고 했는데 못 켜면 여기서 시끄럽게 실패한다.
+            jev=build_tool_risk_gate(config.jev),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라

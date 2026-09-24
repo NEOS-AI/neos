@@ -96,7 +96,7 @@ def test_openai_provider_resolves_openai_everyday_default(monkeypatch, factory):
 
     LLMFactory.create_llm(provider="openai", use_cache=False)
 
-    assert factory.openai.calls[0]["model"] == "gpt-5.6-terra"
+    assert factory.openai.calls[0]["model"] == "gpt-6-sol"
 
 
 def test_configured_llm_model_overrides_the_role_default(monkeypatch, factory):
@@ -116,9 +116,9 @@ def test_explicit_model_argument_wins_over_everything(monkeypatch, factory):
         _settings(llm_model="claude-opus-4-6"),
     )
 
-    LLMFactory.create_llm(model="claude-opus-5", use_cache=False)
+    LLMFactory.create_llm(model="claude-opus-5-5", use_cache=False)
 
-    assert factory.anthropic.calls[0]["model"] == "claude-opus-5"
+    assert factory.anthropic.calls[0]["model"] == "claude-opus-5-5"
 
 
 def test_get_default_model_reports_the_effective_automatic_model(monkeypatch, factory):
@@ -126,7 +126,7 @@ def test_get_default_model_reports_the_effective_automatic_model(monkeypatch, fa
     monkeypatch.setattr("neos.utils.llm_factory.settings", _settings(llm_model=None))
 
     assert get_default_model() == model_config.catalog.role_aliases["sonnet-5"].current
-    assert get_default_model("openai") == "gpt-5.6-terra"
+    assert get_default_model("openai") == "gpt-6-sol"
 
 
 def test_unrouted_provider_without_a_model_fails_clearly(monkeypatch, factory):
@@ -145,7 +145,7 @@ def test_automatic_call_falls_back_to_openai_everyday(monkeypatch, factory):
 
     LLMFactory.create_llm(use_cache=False)
 
-    assert factory.openai.calls[0]["model"] == "gpt-5.6-terra"
+    assert factory.openai.calls[0]["model"] == "gpt-6-sol"
 
 
 def test_explicit_model_selection_is_never_replaced_by_fallback(monkeypatch, factory):
@@ -153,7 +153,7 @@ def test_explicit_model_selection_is_never_replaced_by_fallback(monkeypatch, fac
     monkeypatch.setitem(LLMFactory._providers, "anthropic", _FailingProvider)
 
     with pytest.raises(ValueError):
-        LLMFactory.create_llm(model="claude-opus-5", use_cache=False)
+        LLMFactory.create_llm(model="claude-opus-5-5", use_cache=False)
 
     assert factory.openai.calls == []
 

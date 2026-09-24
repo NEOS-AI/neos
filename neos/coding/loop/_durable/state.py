@@ -74,6 +74,11 @@ class CodingLoopConfig:
     approval_unattended: bool = False
     subagent_enabled: bool = False
     subagent_max_active: int = 1
+    # K3. Off is park/fold: `spawn_agent.v1` holds its tool result until the
+    # child folds. On is immediate return + safe-point append. Turning this on
+    # is a sample boundary for the coding agent's numbers (roadmap §5.3), so it
+    # stays off until A1/A2 say otherwise.
+    subagent_async_spawn: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -134,7 +139,9 @@ class _AppliedPendingCommand:
     instructions_loaded: bool
 
 
-_CONTROL_PLANE_TOOLS = frozenset({"subagent_list.v1", "subagent_steer.v1"})
+# `_CONTROL_PLANE_TOOLS` 는 여기 없다 -- 레지스트리가 도구 정체성의 주인이고,
+# 사본을 두면 도구가 늘 때 한쪽만 고쳐진다(실제로 그럴 뻔했다: K3 가
+# `await_subagent.v1` 을 레지스트리에만 더했을 때 루프는 못 봤다).
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +159,20 @@ class ActiveChildRef:
     worktree_path: str = ""
     worktree_branch: str = ""
     worktree_base_sha: str = ""
+    #: 이 자식의 보고서가 부모에게 **어떻게** 도착하는가.
+    #:
+    #: ``"tool_result"`` (park, 기본값): `spawn_agent.v1` 호출이 아직 pending
+    #: 이고 fold 가 그 도구 결과가 된다. ``"user_message"`` (K3 비동기): 도구
+    #: 결과는 spawn 때 이미 썼고 fold 는 다음 safe point 에 user 메시지로
+    #: append 된다.
+    #:
+    #: 기본값이 park 인 것은 **옛 체크포인트를 위해서**다 -- 이 키가 없는
+    #: 체크포인트는 전부 park 로 복원되어야 한다.
+    delivery: str = "tool_result"
+
+    @property
+    def detached(self) -> bool:
+        return self.delivery == "user_message"
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +235,12 @@ class DelegatedSpawn:
     run_id: str
     checkpoint_id: str | None
     step_kind: str
+    #: 이 park 이 갱신할 `ActiveChildRef` 의 호출 id. 비어 있으면 park 을 일으킨
+    #: 호출의 id 를 쓴다(기존 동작).
+    #:
+    #: `await_subagent.v1` 때문에 필요하다: 기다리는 호출의 id 는 자식을 띄운
+    #: spawn 호출의 id 와 **다르므로**, 그대로 두면 한 run 에 ref 가 둘 생긴다.
+    tool_call_id: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     spec: str = "explore"

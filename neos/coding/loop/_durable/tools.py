@@ -29,6 +29,7 @@ from neos.coding.sandbox.observability import (
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.orchestrator import partition_leading_readonly
 from neos.coding.tools.registry import (
+    _CONTROL_PLANE_TOOLS,
     ToolRisk,
     ToolValidationError,
     ValidatedToolCall,
@@ -39,7 +40,6 @@ from neos.coding.loop._durable.state import (
     CodingLoopFailure,
     CodingLoopWaitingApproval,
     DelegatedSpawn,
-    _CONTROL_PLANE_TOOLS,
 )
 from neos.coding.loop._durable.support import (
     _is_stall_denied,
@@ -95,6 +95,9 @@ class ToolExecutionMixin:
             batch = None
         else:
             batch = self._leading_readonly_batch(state)
+        if batch is not None and self._jev_blocks_speculation():
+            # 차단 중인 게이트를 배치가 앞지르지 않는다. 본 판정이 대신 본다.
+            batch = None
         if batch is not None:
             hook_blocked = False
             for _call, validated in batch:
@@ -102,7 +105,11 @@ class ToolExecutionMixin:
                 if decision in {"deny", "retry", "prevent"} or updated:
                     hook_blocked = True
                     break
-                if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
+                if (
+                    await self._evaluate_call(
+                        validated, state, deps, input.task_id, _call.tool_call_id
+                    )
+                ) is not ApprovalPolicyOutcome.ALLOW:
                     hook_blocked = True
                     break
             if not hook_blocked:
@@ -190,7 +197,9 @@ class ToolExecutionMixin:
             )
             yield committed.event, retry_state
             return
-        approval_outcome = self._evaluate_call(validated, state)
+        approval_outcome = await self._evaluate_call(
+            validated, state, deps, input.task_id, call.tool_call_id
+        )
         if approval_outcome is ApprovalPolicyOutcome.DENY:
             event, denied_state = await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_approval_denied"
@@ -338,6 +347,14 @@ class ToolExecutionMixin:
                     result = await self._run_subagent_list(
                         bound, state, input=input
                     )
+                elif call.name == "await_subagent.v1":
+                    result = await self._run_await_subagent(
+                        call, bound, state, input=input, deps=deps
+                    )
+                    if isinstance(result, dict):
+                        updated = result.pop("_loop_state", None)
+                        if updated is not None:
+                            state = updated
                 elif call.name == "subagent_steer.v1":
                     result = await self._run_subagent_steer(
                         call, bound, state, input=input
@@ -375,7 +392,8 @@ class ToolExecutionMixin:
                     ToolExecutionDisposition.RECLAIMED,
                 }:
                     await self._mark_spawn_delegated(deps, claim, result)
-                existing = self._child_ref(state, call.tool_call_id)
+                ref_call_id = result.tool_call_id or call.tool_call_id
+                existing = self._child_ref(state, ref_call_id)
                 in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
                     existing, result.input_tokens, result.output_tokens
                 )
@@ -384,7 +402,7 @@ class ToolExecutionMixin:
                     ActiveChildRef(
                         run_id=result.run_id,
                         checkpoint_id=result.checkpoint_id,
-                        tool_call_id=call.tool_call_id,
+                        tool_call_id=ref_call_id,
                         last_advanced_at=self._utc_stamp(),
                         rolled_input_tokens=rolled_in,
                         rolled_output_tokens=rolled_out,
@@ -403,6 +421,8 @@ class ToolExecutionMixin:
                         or (existing.worktree_branch if existing else ""),
                         worktree_base_sha=result.worktree_base_sha
                         or (existing.worktree_base_sha if existing else ""),
+                        # park 이 자식의 배달 방식을 바꾸지는 않는다.
+                        delivery=existing.delivery if existing else "tool_result",
                     ),
                 )
                 payload = {
@@ -553,16 +573,22 @@ class ToolExecutionMixin:
             )
         if ran_spawn and not self._config.subagent_enabled:
             after = self._with_spawn_handoff(after, call, result)
-        still_live = self._child_ref(after, call.tool_call_id) is not None
+        ref = self._child_ref(after, call.tool_call_id)
+        still_live = ref is not None
+        # A parked child's tool result *is* its fold, so writing one means the
+        # child is done and the ref goes. A detached child (K3) already had its
+        # result written at spawn time -- dropping it here would strand a run
+        # nobody advances and lose the report.
         if ran_spawn or child_fold or still_live:
-            after = self._sync_active_children(
-                after,
-                tuple(
-                    child
-                    for child in after.active_children
-                    if child.tool_call_id != call.tool_call_id
-                ),
-            )
+            if ref is None or not ref.detached:
+                after = self._sync_active_children(
+                    after,
+                    tuple(
+                        child
+                        for child in after.active_children
+                        if child.tool_call_id != call.tool_call_id
+                    ),
+                )
             after = self._drain_completed_prefix(after)
             self._record_spawn_live_children(after, call)
         revision = str(result.get("workspace_revision") or "")
@@ -904,7 +930,10 @@ class ToolExecutionMixin:
             return None
         if validated.risk is not ToolRisk.READ_ONLY:
             return None
-        if self._evaluate_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
+        if self._jev_blocks_speculation():
+            # 차단 중인 게이트를 앞지르지 않는다. 본 판정 경로가 대신 본다.
+            return None
+        if self._evaluate_static_call(validated, state) is not ApprovalPolicyOutcome.ALLOW:
             return None
         return asyncio.create_task(
             self._executor.execute(

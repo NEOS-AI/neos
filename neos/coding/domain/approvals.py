@@ -137,16 +137,44 @@ def ask_user_answers_complete(questions, answers) -> bool:
     )
 
 
+def fold_for_unattended(
+    outcome: ApprovalPolicyOutcome, gate: ApprovalGate
+) -> ApprovalPolicyOutcome:
+    """승인할 사람이 없는 런에서 "사람에게 묻는다"는 답이 아니다.
+
+    이 규칙은 **접기다** -- 결과를 좁히기만 하고 넓히지 않는다. 확률 판정
+    층(로드맵 트랙 L)이 이 함수를 재사용하는 이유가 그것이고, 재사용해야
+    하는 이유는 규칙 사본이 둘이 되면 고침이 한쪽에만 도착하기 때문이다.
+
+    호출 순서가 계약이다: **밴딩이 먼저, 접기가 나중.** 뒤집으면 Jev 가
+    올린 중간대 REQUIRE_APPROVAL 이 접히지 않고 남아, 승인할 사람이 없는
+    런에서 매달린다(D-L1).
+    """
+    if gate.unattended and outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
+        return ApprovalPolicyOutcome.DENY
+    return outcome
+
+
+def evaluate_static_approval(
+    call: ValidatedToolCall, gate: ApprovalGate
+) -> ApprovalPolicyOutcome:
+    """접기 **전**의 정적 정책 결과 R₀.
+
+    트랙 L 이 밴딩을 끼워 넣을 수 있도록 노출한다. 평소 경로는
+    `evaluate_approval` 이고, 그쪽이 이것과 접기를 이어 붙인 것이다.
+    """
+    return _evaluate_approval(call, gate)
+
+
 def evaluate_approval(
     call: ValidatedToolCall,
     gate: ApprovalGate | None = None,
 ) -> ApprovalPolicyOutcome:
     try:
         resolved = gate or ApprovalGate()
-        outcome = _evaluate_approval(call, resolved)
-        if resolved.unattended and outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
-            return ApprovalPolicyOutcome.DENY
-        return outcome
+        return fold_for_unattended(
+            evaluate_static_approval(call, resolved), resolved
+        )
     except Exception:
         return ApprovalPolicyOutcome.DENY
 

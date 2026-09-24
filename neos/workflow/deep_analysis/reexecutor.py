@@ -36,7 +36,7 @@ from typing import Any
 from neos.coding.sandbox.base import CommandRequest, SandboxLimits
 
 from .graders.computed import normalize_stdout
-from .sandbox import open_question_sandbox
+from .sandbox import RESEARCH_PROFILE, open_question_sandbox
 
 #: `capped` 에 실리는 이름. 설정 키(`code_research.reexecution.*`)와 같은
 #: 철자다 -- 화면에서 읽은 이름으로 설정을 찾을 수 있어야 한다.
@@ -82,9 +82,13 @@ class SandboxReexecutor:
         cpu_sec: float,
         memory_mb: int,
         stdout_bytes: int,
+        profile: str = RESEARCH_PROFILE,
     ) -> None:
         self._ledger = ledger
         self._provider = provider
+        # 워커가 돈 것과 같은 profile 에서 다시 돌린다. 다른 격리에서 같은
+        # digest 가 나와도 그것은 재현이 아니라 우연이다.
+        self._profile = profile
         self._cpu_sec = float(cpu_sec)
         self._stdout_bytes = int(stdout_bytes)
         # `cpu_sec` 은 설정의 이름이지만 샌드박스 층에는 CPU 시간 한도가
@@ -124,6 +128,7 @@ class SandboxReexecutor:
             # 채점이 주인이라는 것을 남긴다.
             question_id=f"regrade_{computation.script_ref[:8]}",
             limits=self._limits,
+            profile=self._profile,
         )
         try:
             for raw_ref, text in inputs.items():

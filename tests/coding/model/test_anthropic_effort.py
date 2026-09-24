@@ -32,7 +32,7 @@ def _request(**limit_kwargs) -> ModelRequest:
             CanonicalMessage(role="user", content=(TextContent(text="안녕"),)),
         ),
         tools=(),
-        model="claude-opus-5",
+        model="claude-opus-5-5",
         limits=ModelLimits(**limits),
         task_id="t",
         run_id="r",

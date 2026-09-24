@@ -62,9 +62,9 @@ def test_schema_defaults_match_current_runtime_policy():
     assert config.api.v1_prefix == "/api/v1"
     assert config.research_harness.direct_repair.enabled is False
     assert config.model_routing.anthropic.everyday == "sonnet-5"
-    assert config.model_routing.anthropic.powerful == "opus-5"
-    assert config.model_routing.openai.everyday == "gpt-5.6-terra"
-    assert config.model_routing.openai.powerful == "gpt-5.6-sol"
+    assert config.model_routing.anthropic.powerful == "opus-5.5"
+    assert config.model_routing.openai.everyday == "gpt-6-sol"
+    assert config.model_routing.openai.powerful == "gpt-6-sol"
     assert config.model_catalog.picker_api is False
     assert config.model_catalog.default_unknown_claude_adaptive is False
     assert config.model_catalog.live_anthropic is False

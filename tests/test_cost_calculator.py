@@ -109,9 +109,9 @@ class TestCostCalculator:
 
         for provider, model in (
             ("anthropic", "claude-sonnet-5"),
-            ("anthropic", "claude-opus-5"),
-            ("openai", "gpt-5.6-terra"),
-            ("openai", "gpt-5.6-sol"),
+            ("anthropic", "claude-opus-5-5"),
+            ("openai", "gpt-6-sol"),
+            ("openai", "gpt-6-luna"),
             ("openai", "gpt-6-astra"),
         ):
             catalog_pricing = pricing_for(provider, model)
@@ -127,18 +127,18 @@ class TestCostCalculator:
         anthropic_sonnet = CostCalculator._get_default_pricing(
             "anthropic", "claude-sonnet-5"
         )
-        anthropic_opus = CostCalculator._get_default_pricing("anthropic", "claude-opus-5")
-        openai_terra = CostCalculator._get_default_pricing("openai", "gpt-5.6-terra")
-        openai_sol = CostCalculator._get_default_pricing("openai", "gpt-5.6-sol")
+        anthropic_opus = CostCalculator._get_default_pricing("anthropic", "claude-opus-5-5")
+        openai_luna = CostCalculator._get_default_pricing("openai", "gpt-6-luna")
+        openai_sol = CostCalculator._get_default_pricing("openai", "gpt-6-sol")
 
         assert anthropic_sonnet["input"] == Decimal("3.00")
         assert anthropic_sonnet["output"] == Decimal("15.00")
-        assert anthropic_opus["input"] == Decimal("5.00")
-        assert anthropic_opus["output"] == Decimal("25.00")
-        assert openai_terra["input"] == Decimal("2.50")
-        assert openai_terra["output"] == Decimal("15.00")
-        assert openai_sol["input"] == Decimal("5.00")
-        assert openai_sol["output"] == Decimal("30.00")
+        assert anthropic_opus["input"] == Decimal("4.00")
+        assert anthropic_opus["output"] == Decimal("20.00")
+        assert openai_luna["input"] == Decimal("0.10")
+        assert openai_luna["output"] == Decimal("0.50")
+        assert openai_sol["input"] == Decimal("2.00")
+        assert openai_sol["output"] == Decimal("10.00")
 
     def test_get_default_pricing_ignores_provider_mismatch(self):
         """provider가 어긋난 조회는 가격을 주지 않는다."""

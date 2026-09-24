@@ -239,7 +239,7 @@ def test_legacy_entry_missing_model_id_is_skipped_with_warning(
         {
             "llm_models": {
                 "sonnet": {"provider": "anthropic"},  # model_id 누락
-                "opus": {"model_id": "claude-opus-5", "provider": "anthropic"},
+                "opus": {"model_id": "claude-opus-5-5", "provider": "anthropic"},
             }
         },
     )
@@ -247,8 +247,8 @@ def test_legacy_entry_missing_model_id_is_skipped_with_warning(
     with caplog.at_level("WARNING", logger="neos.config.model_config"):
         catalog = load_catalog(path)
 
-    assert catalog.aliases["llm"] == {"opus": "claude-opus-5"}
-    assert catalog.models["claude-opus-5"].provider == "anthropic"
+    assert catalog.aliases["llm"] == {"opus": "claude-opus-5-5"}
+    assert catalog.models["claude-opus-5-5"].provider == "anthropic"
     warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
     assert any("llm_models" in msg and "sonnet" in msg for msg in warnings)
 
@@ -262,7 +262,7 @@ def test_legacy_entry_that_is_not_a_mapping_is_skipped_with_warning(
         {
             "llm_models": {
                 "sonnet": "claude-sonnet-5",  # dict가 아니라 맨 문자열
-                "opus": {"model_id": "claude-opus-5", "provider": "anthropic"},
+                "opus": {"model_id": "claude-opus-5-5", "provider": "anthropic"},
             }
         },
     )
@@ -270,8 +270,8 @@ def test_legacy_entry_that_is_not_a_mapping_is_skipped_with_warning(
     with caplog.at_level("WARNING", logger="neos.config.model_config"):
         catalog = load_catalog(path)
 
-    assert catalog.aliases["llm"] == {"opus": "claude-opus-5"}
-    assert catalog.models["claude-opus-5"].provider == "anthropic"
+    assert catalog.aliases["llm"] == {"opus": "claude-opus-5-5"}
+    assert catalog.models["claude-opus-5-5"].provider == "anthropic"
     warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
     assert any("llm_models" in msg and "sonnet" in msg for msg in warnings)
 
@@ -478,7 +478,7 @@ def test_legacy_alias_helpers_resolve_committed_catalog() -> None:
     assert get_vision_model_id("gpt4o") == "gpt-4o"
     assert get_vision_model_id("claude") == "claude-sonnet-5"
     assert get_llm_model_id("claude_sonnet") == "claude-sonnet-5"
-    assert get_llm_model_id("claude_opus") == "claude-opus-5"
+    assert get_llm_model_id("claude_opus") == "claude-opus-5-5"
     assert get_llm_model_id("claude_haiku") == "claude-haiku-4-5-20251001"
     assert get_embedding_model_id("openai_small") == "text-embedding-3-small"
     # 인자 없이 호출하면 defaults를 따른다
@@ -558,8 +558,8 @@ def test_warn_unknown_routed_models_flags_typos(caplog) -> None:
 
     routing = ModelRoutingConfig.model_validate(
         {
-            "anthropic": {"everyday": "claude-sonnet-5", "powerful": "claude-opus-5"},
-            "openai": {"everyday": "gpt-5.6-tera", "powerful": "gpt-5.6-sol"},
+            "anthropic": {"everyday": "claude-sonnet-5", "powerful": "claude-opus-5-5"},
+            "openai": {"everyday": "gpt-5.6-tera", "powerful": "gpt-6-sol"},
         }
     )
 
@@ -591,9 +591,9 @@ def test_warn_unknown_routed_models_flags_role_aliases_missing_from_custom_catal
         {
             "models": {
                 "claude-sonnet-5": {"provider": "anthropic"},
-                "claude-opus-5": {"provider": "anthropic"},
-                "gpt-5.6-terra": {"provider": "openai"},
-                "gpt-5.6-sol": {"provider": "openai"},
+                "claude-opus-5-5": {"provider": "anthropic"},
+                "gpt-6-sol": {"provider": "openai"},
+                "gpt-6-luna": {"provider": "openai"},
             }
         },
     )
@@ -604,17 +604,17 @@ def test_warn_unknown_routed_models_flags_role_aliases_missing_from_custom_catal
         unknown = warn_unknown_routed_models(ModelRoutingConfig())
 
     assert "sonnet-5" in unknown
-    assert "opus-5" in unknown
+    assert "opus-5.5" in unknown
 
     dated = ModelRoutingConfig.model_validate(
         {
             "anthropic": {
                 "everyday": "claude-sonnet-5",
-                "powerful": "claude-opus-5",
+                "powerful": "claude-opus-5-5",
             },
             "openai": {
-                "everyday": "gpt-5.6-terra",
-                "powerful": "gpt-5.6-sol",
+                "everyday": "gpt-6-sol",
+                "powerful": "gpt-6-sol",
             },
         }
     )
@@ -1018,7 +1018,7 @@ def test_committed_role_aliases_current_pins_exist() -> None:
     catalog = model_config.catalog
 
     assert catalog.role_aliases["sonnet-5"].current == "claude-sonnet-5"
-    assert catalog.role_aliases["opus-5"].current == "claude-opus-5"
+    assert catalog.role_aliases["opus-5.5"].current == "claude-opus-5-5"
     assert catalog.role_aliases["haiku-4.5"].current == "claude-haiku-4-5-20251001"
     for name, alias in catalog.role_aliases.items():
         assert alias.current in catalog.models, name

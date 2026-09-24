@@ -23,7 +23,7 @@ from typing import Any
 
 from .evidence_store import LedgerEvidenceStore
 from .research_tools import ResearchToolPort
-from .sandbox import QuestionSandbox, open_question_sandbox
+from .sandbox import RESEARCH_PROFILE, QuestionSandbox, open_question_sandbox
 
 
 @dataclass
@@ -51,6 +51,7 @@ async def open_research_session(
     fetch_fn: Any,
     limits: Any,
     grader: Any = None,
+    profile: str = RESEARCH_PROFILE,
 ) -> ResearchSession:
     """이 질문의 샌드박스를 열고 도구를 묶는다.
 
@@ -63,7 +64,7 @@ async def open_research_session(
     목록에서 빠진다 -- 부를 수 없는 도구를 내밀지 않는다.
     """
     sandbox = await open_question_sandbox(
-        provider, question_id=question_id, limits=limits
+        provider, question_id=question_id, limits=limits, profile=profile
     )
     port = ResearchToolPort(
         fetch_fn=fetch_fn,

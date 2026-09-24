@@ -148,7 +148,7 @@ def test_thinking_is_sent_back_to_anthropic_unchanged() -> None:
 
 
 def test_openai_request_carries_no_thinking() -> None:
-    payload = _to_openai_request(_request((USER, ASSISTANT), model="gpt-5.6-terra"))
+    payload = _to_openai_request(_request((USER, ASSISTANT), model="gpt-6-sol"))
 
     assert "sig-1" not in json.dumps(payload)
 

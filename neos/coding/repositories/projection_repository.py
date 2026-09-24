@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from neos.coding.persistence.postgres import SessionFactory
 
@@ -76,6 +76,71 @@ class CodingWorkspaceEditRow:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingToolRiskRow:
+    """The latest Jev verdict the ledger holds for one tool call.
+
+    Read from `coding_events`, not from `coding_tool_executions`: the verdict
+    is written *before* the tool runs, and a call parked on approval has no
+    execution row at all. Joining on executions would lose exactly the calls
+    the gate stopped.
+    """
+
+    tool_call_id: str
+    kind: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+#: Jev's event kinds (`neos.jev.gate`). Spelled here rather than imported so
+#: the projection layer does not pull the Jev package in; the coding event-kind
+#: fixture test fails if the two ever disagree.
+TOOL_RISK_EVENT_TYPES = ("jev_risk_scored", "jev_unavailable")
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRefusalRow:
+    """The latest `model.refused` event the ledger holds for the task.
+
+    Which run it belongs to is left to the snapshot service: SQL hands over
+    the newest refusal, the service decides whether a newer run cleared it.
+    """
+
+    run_id: str | None
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CodingChildEventRow:
+    """A child-agent lifecycle event from the parent's ledger, as written.
+
+    The checkpoint's `active_children` only knows who was running when it was
+    taken; a child that has since completed, stalled or been cancelled is
+    known only to `coding_events`. The row keeps the event's own type and
+    payload (the child's id is `payload.run_id`) so the client folds it with
+    the same decoder it uses for the live event.
+    """
+
+    event_type: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+#: What `ParentSubagentEventAdapter` forwards onto the parent sink.
+CHILD_EVENT_TYPES = (
+    "subagent.started",
+    "subagent.step",
+    "subagent.completed",
+    "subagent.failed",
+    "subagent.cancelled",
+)
+
+#: Newest rows kept when a task has spawned an unusual number of children.
+#: Trimming from the old end keeps terminal events (they come last).
+CHILD_EVENT_ROW_CAP = 500
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionRows:
     task: CodingTaskRow
     runs: tuple[CodingRunRow, ...]
@@ -87,6 +152,9 @@ class CodingProjectionRows:
     todos: tuple[Mapping[str, Any], ...]
     latest_checkpoint: CodingCheckpointRow | None
     head_seq: int
+    tool_risks: tuple[CodingToolRiskRow, ...] = ()
+    refusal: CodingRefusalRow | None = None
+    child_events: tuple[CodingChildEventRow, ...] = ()
 
 
 class PostgresCodingProjectionRepository:
@@ -124,6 +192,9 @@ class PostgresCodingProjectionRepository:
                 parts = await self._parts(session, task_id)
                 workspace_edits = await self._workspace_edits(session, task_id)
                 checkpoint = await self._checkpoint(session, task_id)
+                tool_risks = await self._tool_risks(session, task_id)
+                refusal = await self._refusal(session, task_id)
+                child_events = await self._child_events(session, task_id)
 
         task = CodingTaskRow(
             task_id=task_record[0],
@@ -150,6 +221,9 @@ class PostgresCodingProjectionRepository:
             todos=todos,
             latest_checkpoint=checkpoint,
             head_seq=task.last_seq,
+            tool_risks=tool_risks,
+            refusal=refusal,
+            child_events=child_events,
         )
 
     async def _runs(self, session, task_id: str) -> tuple[CodingRunRow, ...]:
@@ -202,6 +276,107 @@ class PostgresCodingProjectionRepository:
             )
             for row in result.all()
         )
+
+    async def _tool_risks(
+        self, session, task_id: str
+    ) -> tuple[CodingToolRiskRow, ...]:
+        # Latest verdict per call. A call is scored once today, but "latest"
+        # keeps a re-score (a resumed run) from showing a stale band.
+        result = await session.execute(
+            text(
+                """
+                SELECT DISTINCT ON (tool_call_id)
+                       tool_call_id, event_type, seq, payload
+                FROM coding_events
+                WHERE task_id = :task_id
+                  AND tool_call_id IS NOT NULL
+                  AND event_type IN :event_types
+                ORDER BY tool_call_id, seq DESC
+                """
+            ).bindparams(bindparam("event_types", expanding=True)),
+            {"task_id": task_id, "event_types": list(TOOL_RISK_EVENT_TYPES)},
+        )
+        return tuple(
+            CodingToolRiskRow(
+                tool_call_id=row[0],
+                kind=row[1],
+                seq=int(row[2]),
+                payload=dict(row[3]) if row[3] is not None else {},
+            )
+            for row in result.all()
+        )
+
+    async def _refusal(self, session, task_id: str) -> CodingRefusalRow | None:
+        result = await session.execute(
+            text(
+                """
+                SELECT run_id, seq, payload
+                FROM coding_events
+                WHERE task_id = :task_id
+                  AND event_type = 'model.refused'
+                ORDER BY seq DESC
+                LIMIT 1
+                """
+            ),
+            {"task_id": task_id},
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return CodingRefusalRow(
+            run_id=row[0],
+            seq=int(row[1]),
+            payload=dict(row[2]) if row[2] is not None else {},
+        )
+
+    async def _child_events(
+        self, session, task_id: str
+    ) -> tuple[CodingChildEventRow, ...]:
+        # Bound: the latest event of each *type* per child -- at most five rows
+        # per child however long it ran. A child emits one `subagent.step` per
+        # turn, so reading them all grows with the run; reading only the latest
+        # event overall would drop `subagent.started`, and old
+        # `failed`/`cancelled` rows (before 27674084) carry no spec or counts.
+        # Per-type latest keeps `started` (spec), the last `step` (counts --
+        # every step carries all of them) and the terminal event, so folding
+        # these rows gives the same child as folding the whole stream: every
+        # dropped row is an earlier step, overwritten by the step we kept.
+        result = await session.execute(
+            text(
+                """
+                SELECT event_type, seq, payload
+                FROM (
+                    SELECT DISTINCT ON (payload->>'run_id', event_type)
+                           event_type, seq, payload
+                    FROM coding_events
+                    WHERE task_id = :task_id
+                      AND event_type IN :event_types
+                      AND payload->>'run_id' IS NOT NULL
+                    ORDER BY payload->>'run_id', event_type, seq DESC
+                ) latest
+                ORDER BY seq DESC
+                LIMIT :row_cap
+                """
+            ).bindparams(bindparam("event_types", expanding=True)),
+            {
+                "task_id": task_id,
+                "event_types": list(CHILD_EVENT_TYPES),
+                "row_cap": CHILD_EVENT_ROW_CAP,
+            },
+        )
+        rows = [
+            # Positional: `event_type=` is how the event-kind scanner
+            # recognises a ledger *write*, and this is a read.
+            CodingChildEventRow(
+                row[0],
+                int(row[1]),
+                dict(row[2]) if row[2] is not None else {},
+            )
+            for row in result.all()
+        ]
+        # Newest-first for the cap; the client folds in ledger order.
+        rows.sort(key=lambda row: row.seq)
+        return tuple(rows)
 
     async def _approvals(
         self, session, task_id: str, owner_id: str

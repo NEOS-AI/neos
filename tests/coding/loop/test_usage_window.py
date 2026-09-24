@@ -68,9 +68,12 @@ def test_usage_budget_counts_cache_and_reasoning() -> None:
 
     with pytest.raises(CodingLoopFailure) as caught:
         h.loop._check_usage_budgets(
-            replace(state, cache_read_tokens=6, cache_write_tokens=4, reasoning_tokens=1)
+            replace(state, cache_read_tokens=6, cache_write_tokens=5)
         )
     assert caught.value.code == "token_budget_exceeded"
+
+    # reasoning 은 output_tokens 의 내역이다 -- 더하면 thinking 을 두 번 센다.
+    h.loop._check_usage_budgets(replace(state, reasoning_tokens=10))
 
 
 def test_cost_prices_cache_from_config_rates() -> None:

@@ -109,7 +109,7 @@ def test_note_followed_by_an_assistant_turn_stays_a_system_message() -> None:
 
 def test_other_providers_render_the_note_as_user_text() -> None:
     openai_payload = _to_openai_request(
-        _request(TOOL_ROUND + (NOTE,), model="gpt-5.6-terra")
+        _request(TOOL_ROUND + (NOTE,), model="gpt-6-sol")
     )
 
     assert openai_payload["messages"][-1] == {

@@ -21,6 +21,7 @@ from neos.coding.domain.approvals import (
     evaluate_approval,
 )
 from neos.coding.domain.phases import CodingCheckpoint
+from neos.jev.gate import evaluate_approval_with_jev
 from neos.coding.harness import fold_model_event, iter_model_turn
 from neos.coding.instructions import (
     INSTRUCTION_CANDIDATES,
@@ -76,6 +77,7 @@ from neos.coding.sandbox.observability import (
 from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import (
+    _CONTROL_PLANE_TOOLS as _CONTROL_PLANE_TOOLS,
     CodingToolRegistry,
     ToolRisk,
 )
@@ -94,7 +96,6 @@ from neos.coding.loop._durable.state import (
     SpawnWork as SpawnWork,
     _AppliedPendingCommand as _AppliedPendingCommand,
     _BRIEF_PLACEHOLDER_RE as _BRIEF_PLACEHOLDER_RE,
-    _CONTROL_PLANE_TOOLS as _CONTROL_PLANE_TOOLS,
     _EPOCH_STAMP as _EPOCH_STAMP,
     _STALE_SLACK_SEC as _STALE_SLACK_SEC,
     _STUB_GOALS as _STUB_GOALS,
@@ -204,6 +205,7 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         approval_evaluator: Callable[..., ApprovalPolicyOutcome] = evaluate_approval,
         hooks: CodingHookPort | None = None,
         subagents=None,
+        jev=None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -216,6 +218,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
         self._subagents = subagents
+        # `None` 이 off 다. 루프는 설정을 읽지 않는다 -- 조립하는 쪽이 정한다.
+        self._jev = jev
 
     def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
         try:
@@ -232,12 +236,74 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             unattended=self._config.approval_unattended,
         )
 
-    def _evaluate_call(self, validated, state: AgentLoopState) -> ApprovalPolicyOutcome:
+    def _evaluate_static_call(
+        self, validated, state: AgentLoopState
+    ) -> ApprovalPolicyOutcome:
+        """주입된 평가기로 내는 판정. Jev 가 꺼져 있을 때의 유일한 경로다."""
         gate = self._approval_gate(state)
         try:
             return self._approval_evaluator(validated, gate)
         except TypeError:
             return self._approval_evaluator(validated)
+
+    async def _evaluate_call(
+        self,
+        validated,
+        state: AgentLoopState,
+        deps=None,
+        task_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> ApprovalPolicyOutcome:
+        """정적 판정에 Jev 밴딩을 얹는다. 꺼져 있으면 정적 판정 그대로다.
+
+        이벤트는 **부르는 쪽이 아니라 여기서** 단다. 판정이 만들어지는 자리와
+        그 판정을 기록하는 자리가 갈라지면, 호출부 하나가 기록을 빠뜨려도
+        아무것도 빨개지지 않는다 -- 이 저장소의 전례가 정확히 그것이다.
+        """
+        if self._jev is None:
+            return self._evaluate_static_call(validated, state)
+
+        decision = await evaluate_approval_with_jev(
+            validated,
+            self._approval_gate(state),
+            scorer=self._jev.scorer,
+            thresholds=self._jev.thresholds,
+            enforce=self._jev.enforce,
+            static_evaluator=lambda call, _gate: self._evaluate_static_call(
+                call, state
+            ),
+        )
+        if decision.event is not None and deps is not None and task_id is not None:
+            payload = dict(decision.event)
+            kind = payload.pop("kind")
+            await deps.events.append(
+                task_id=task_id,
+                event_type=kind,
+                payload={
+                    **payload,
+                    "tool": validated.name,
+                    # 어느 호출의 점수인가. 없으면 원장은 점수를 세지만
+                    # 그것을 호출에 붙이지 못하고, 중복이 생겨도 보이지 않는다.
+                    "tool_call_id": tool_call_id,
+                },
+                tool_call_id=tool_call_id,
+            )
+        return decision.outcome
+
+    def _jev_blocks_speculation(self) -> bool:
+        """투기적 경로(읽기 전용 배치 · prefetch)를 포기해야 하는가.
+
+        둘 다 **본 판정 전에** 움직인다. prefetch 는 도구를 먼저 실행하고,
+        배치는 자기 검사로 통과시킨 뒤 본 경로를 건너뛴다. 게이트가 실제로
+        차단하는 중이라면 둘 다 Jev 를 앞지르는 구멍이다.
+
+        배치를 살려 두면 또 하나 새는 곳이 있다 -- 배치 검사에서 막힌 호출이
+        본 경로로 떨어져 **같은 호출이 두 번 채점된다**(실측: 호출 2건에
+        점수 3건). 한 건이 두 줄로 보이면 L3 을 켤지 보는 사람의 분모가 틀린다.
+
+        섀도에서는 행동이 바뀌지 않으므로 둘 다 그대로 둔다.
+        """
+        return self._jev is not None and self._jev.enforce
 
     @staticmethod
     def _with_approval_answers(validated, approval) -> Any:
@@ -276,6 +342,11 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
+        # The safe point (K3). Before anything is built for this turn, every
+        # detached child gets one step and every finished one hands its report
+        # to the transcript -- so the report is in the request this turn sends,
+        # and it lands as an append, ahead of the thinking guard below.
+        state = await self._advance_detached_children(state, bound, deps)
         if not state.instructions_loaded:
             state = await self._load_workspace_instructions(state, bound)
         note = await invoke_pre_generate(self._hooks, state.transcript)
@@ -524,6 +595,8 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
             if completion.stop_reason not in {"end_turn", "unknown"}:
                 raise CodingLoopFailure("model_output_incomplete", retryable=False)
             held = self._hold_incomplete_phase(next_state, public_text)
+            if held is None:
+                held = self._hold_for_detached_children(next_state)
             if held is not None:
                 committed = await deps.repository.commit_model_checkpoint(
                     lease=deps.lease,
@@ -994,12 +1067,14 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         )
 
     def _check_usage_budgets(self, state):
+        # reasoning 은 output 안에 있다(`ModelUsage.reasoning_tokens`). 어댑터가
+        # 그것을 늘 0 으로 읽던 동안에는 더해도 무해했다 -- 읽기를 고치자 두 번
+        # 세게 됐다(2026-09-24).
         spent = (
             state.input_tokens
             + state.output_tokens
             + state.cache_read_tokens
             + state.cache_write_tokens
-            + state.reasoning_tokens
         )
         if spent > self._config.max_total_tokens:
             raise CodingLoopFailure("token_budget_exceeded", retryable=False)

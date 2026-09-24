@@ -23,25 +23,37 @@ pytestmark = pytest.mark.no_db
 
 CURRENT_PICKER_IDS = {
     "anthropic/claude-sonnet-5",
-    "anthropic/claude-opus-5",
+    "anthropic/claude-opus-5.5",
     "anthropic/claude-haiku-4.5",
     "anthropic/claude-sonnet-4.5",
     "anthropic/claude-sonnet-4.5-thinking",
-    "openai/gpt-5.6-terra",
-    "openai/gpt-5.6-sol",
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna",
 }
 
 RETIRED_REMAPS = {
-    "openai/gpt-4o": "gpt-5.6-sol",
-    "openai/gpt-4o-mini": "gpt-5.6-terra",
-    "openai/gpt-4.1": "gpt-5.6-sol",
-    "openai/gpt-4.1-mini": "gpt-5.6-terra",
+    "openai/gpt-4o": "gpt-6-sol",
+    "openai/gpt-4o-mini": "gpt-6-sol",
+    "openai/gpt-4.1": "gpt-6-sol",
+    "openai/gpt-4.1-mini": "gpt-6-sol",
     "anthropic/claude-3.7-sonnet-thinking": "claude-sonnet-4-5-20250929",
-    "anthropic/claude-opus-4.5": "claude-opus-5",
+    "anthropic/claude-opus-4.5": "claude-opus-5-5",
     "google/gemini-2.5-flash-lite": "claude-sonnet-5",
     "google/gemini-3-pro-preview": "claude-sonnet-5",
     "xai/grok-4.1-fast-non-reasoning": "claude-sonnet-5",
     "xai/grok-code-fast-1-thinking": "claude-sonnet-5",
+    # 2026-09-24 은퇴한 모델의 옛 피커 쿠키
+    "anthropic/claude-opus-5": "claude-opus-5-5",
+    "openai/gpt-5.6-sol": "gpt-6-sol",
+    "openai/gpt-5.6-terra": "gpt-6-sol",
+}
+
+# 은퇴한 핀 · 역할 별칭. remaps 와 달리 저장된 대화 핀에도 걸린다.
+RETIRED_PINS = {
+    "claude-opus-5": "claude-opus-5-5",
+    "opus-5": "claude-opus-5-5",
+    "gpt-5.6-sol": "gpt-6-sol",
+    "gpt-5.6-terra": "gpt-6-sol",
 }
 
 
@@ -145,26 +157,26 @@ def test_remap_hops_to_the_catalog_pin_and_stops() -> None:
     catalog = _catalog(
         {
             "models": {
-                "claude-opus-5": _pin(gateway_id="anthropic/claude-opus-5"),
+                "claude-opus-5-5": _pin(gateway_id="anthropic/claude-opus-5.5"),
                 "claude-sonnet-5": _pin(),
             },
-            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5-5"},
         }
     )
 
     ident = canonicalize("anthropic/claude-opus-4.5", catalog=catalog)
 
     assert ident is not None
-    assert ident.catalog_id == "claude-opus-5"
+    assert ident.catalog_id == "claude-opus-5-5"
     assert ident.source == "remap"
-    assert ident.gateway_id == "anthropic/claude-opus-5"
+    assert ident.gateway_id == "anthropic/claude-opus-5.5"
 
 
 def test_apply_remap_false_does_not_follow_a_raw_cookie() -> None:
     catalog = _catalog(
         {
-            "models": {"claude-opus-5": _pin(gateway_id="anthropic/claude-opus-5")},
-            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+            "models": {"claude-opus-5-5": _pin(gateway_id="anthropic/claude-opus-5.5")},
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5-5"},
         }
     )
 
@@ -375,8 +387,8 @@ def _three_row_remap_catalog() -> ModelCatalog:
                     picker=_picker("Haiku 4.5", "fast", "anthropic"),
                     vision=True,
                 ),
-                "claude-opus-5": _pin(
-                    gateway_id="anthropic/claude-opus-5",
+                "claude-opus-5-5": _pin(
+                    gateway_id="anthropic/claude-opus-5.5",
                     picker=_picker("Opus 5", "powerful", "anthropic"),
                     thinking="adaptive",
                     vision=True,
@@ -392,7 +404,7 @@ def _three_row_remap_catalog() -> ModelCatalog:
             },
             "role_aliases": {"sonnet-5": {"current": "claude-sonnet-5-1"}},
             "remaps": {
-                "anthropic/claude-opus-4.5": "claude-opus-5",
+                "anthropic/claude-opus-4.5": "claude-opus-5-5",
                 "anthropic/claude-sonnet-5": "claude-sonnet-5-1",
             },
         }
@@ -405,7 +417,7 @@ def test_three_row_remap_fixture_projects_pins_to_gateway_ids() -> None:
         {
             "anthropic": {
                 "everyday": "claude-sonnet-5-1",
-                "powerful": "claude-opus-5",
+                "powerful": "claude-opus-5-5",
             }
         }
     )
@@ -417,7 +429,7 @@ def test_three_row_remap_fixture_projects_pins_to_gateway_ids() -> None:
     assert haiku.catalog_id == "claude-haiku-4-5-20251001"
     assert "anthropic/claude-haiku-4.5" not in payload.remaps
 
-    assert payload.remaps["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5"
+    assert payload.remaps["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5.5"
     assert payload.remaps["anthropic/claude-sonnet-5"] == "anthropic/claude-sonnet-5-1"
     assert payload.default_id == "anthropic/claude-sonnet-5-1"
 
@@ -491,7 +503,7 @@ def test_committed_remaps_match_retired_model_map_pins() -> None:
 
 def test_legacy_llm_aliases_stay_pin_valued() -> None:
     assert model_config.catalog.aliases["llm"]["claude_sonnet"] == "claude-sonnet-5"
-    assert model_config.catalog.aliases["llm"]["claude_opus"] == "claude-opus-5"
+    assert model_config.catalog.aliases["llm"]["claude_opus"] == "claude-opus-5-5"
     assert (
         model_config.catalog.aliases["llm"]["claude_haiku"]
         == "claude-haiku-4-5-20251001"
@@ -643,14 +655,14 @@ def test_canonicalize_increments_resolve_total_by_source_only() -> None:
 def test_remap_total_increments_without_raw_id_label() -> None:
     catalog = _catalog(
         {
-            "models": {"claude-opus-5": _pin()},
-            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5"},
+            "models": {"claude-opus-5-5": _pin()},
+            "remaps": {"anthropic/claude-opus-4.5": "claude-opus-5-5"},
         }
     )
 
     before = _remap_count()
     canonicalize("anthropic/claude-opus-4.5", catalog=catalog)
-    canonicalize("claude-opus-5", catalog=catalog)
+    canonicalize("claude-opus-5-5", catalog=catalog)
     after = _remap_count()
 
     assert after == before + 1
@@ -661,3 +673,47 @@ def test_remap_total_increments_without_raw_id_label() -> None:
     )
     for metric in sample.samples:
         assert "id" not in metric.labels
+
+
+@pytest.mark.parametrize("old, successor", sorted(RETIRED_PINS.items()))
+def test_retired_pins_resolve_to_their_successor_from_every_source(
+    old: str, successor: str
+) -> None:
+    """저장된 대화 핀도 후계로 간다 -- remaps 는 거기에 걸리지 않는다.
+
+    안 걸면 `claude-opus-5` 는 미등록 모델이 되어 BUDGETED 계약으로
+    `budget_tokens` 를 보내고, Opus 5 는 그것을 400 으로 거절한다.
+    """
+    from neos.config.model_routing import ResolutionSource, resolve_model
+    from neos.config.schema import ModelRoutingConfig
+
+    catalog = model_config.catalog
+    assert old not in catalog.models
+    assert old not in catalog.remaps
+    for apply_remap in (True, False):
+        ident = canonicalize(old, catalog=catalog, apply_remap=apply_remap)
+        assert ident is not None and ident.catalog_id == successor
+        assert ident.source == "retired"
+
+    provider = catalog.models[successor].provider
+    resolved = resolve_model(
+        config=ModelRoutingConfig(),
+        provider=provider,
+        role="everyday",
+        conversation_model=old,
+    )
+    assert resolved.source is ResolutionSource.CONVERSATION
+    assert resolved.model == successor
+    assert model_config.catalog.thinking_contract(old) is (
+        catalog.models[successor].thinking
+    )
+
+
+def test_retired_rejects_a_live_key_or_an_unknown_target() -> None:
+    base = {
+        "models": {"m-new": {"provider": "anthropic"}},
+    }
+    with pytest.raises(ValueError, match="still a live catalog key"):
+        _catalog({**base, "retired": {"m-new": "m-new"}})
+    with pytest.raises(ValueError, match="unknown model"):
+        _catalog({**base, "retired": {"m-old": "m-gone"}})

@@ -111,6 +111,11 @@ class ModelSpec(StrictConfigModel):
     # 한 모델이 두 티어를 겸할 수 있다 — Ollama llama3.1:8b가 fast와 balanced를 겸한다.
     tiers: list[Tier] = Field(default_factory=list)
     thinking: ThinkingContract = ThinkingContract.BUDGETED
+    # thinking 을 끌 수 없는 모델인가 (adaptive 계약 안의 하위 사실).
+    # true 면 `{type: "disabled"}` 가 400 이므로 `normalize_anthropic_request`
+    # 가 끄기 요청을 다르게 번역한다. 모르면 false -- 끌 수 있다는 가정이
+    # 지금까지의 동작이다.
+    thinking_always_on: bool = False
     # list_models() 노출 여부. 가격만 아는 레거시 모델은 false.
     selectable: bool = True
     max_tokens: int | None = None
@@ -127,6 +132,11 @@ class ModelSpec(StrictConfigModel):
     # 블록)은 모든 모델에서 유효하지만 네이티브 형태는 미지원 모델에서 400 이다.
     mid_conversation_system: bool = False
     mid_conversation_tools: bool = False
+    # adaptive thinking 의 `display` (K4b). 비면 **키를 보내지 않는다** -- 서버
+    # 기본은 `omitted`(thinking 본문이 빈다)이고, SDK 독스트링의 `summarized` 는
+    # 틀렸다(2026-09-24 실측, `artifacts/fable-k1b/`). 유일한 독자는 코딩
+    # Anthropic 어댑터다. 모르는 값은 400 이므로 서버가 받는 셋만 허용한다.
+    thinking_display: Literal["summarized", "omitted", "updates"] | None = None
     # 모델의 **사고량**(Anthropic `output_config.effort`) 중 이 모델이 받는
     # 레벨들. DA 의 `Effort`(조사 깊이)와 다른 축이다 -- 이름만 같다.
     #
@@ -137,6 +147,12 @@ class ModelSpec(StrictConfigModel):
     effort_levels: list[str] = Field(default_factory=list)
     dimension: int | None = None
     pricing: ModelPricing | None = None
+
+    @model_validator(mode="after")
+    def _display_needs_adaptive(self) -> "ModelSpec":
+        if self.thinking_display is not None and self.thinking is not ThinkingContract.ADAPTIVE:
+            raise ValueError("thinking_display applies only to adaptive thinking models")
+        return self
     # role_aliases: 키만. anthropic_families[].family 가 아니다.
     role_alias: str | None = None
     # 쿠키 / 피커 id. `provider/catalog_key` 로 추론하지 않는다.
@@ -210,6 +226,12 @@ class ModelCatalog(StrictConfigModel):
     # YAML 에서는 anthropic_families: 뒤에 둔다 (FE 정규식 잠금).
     role_aliases: dict[str, RoleAlias] = Field(default_factory=dict)
     remaps: dict[str, str] = Field(default_factory=dict)
+    # 은퇴한 핀 · 역할 별칭 → 후계 핀. remaps 와 달리 **모든 출처**(저장된
+    # 대화 핀, 기능 오버라이드 포함)에 적용된다. remaps 가 사용자 문자열에만
+    # 걸리는 이유는 gateway id 가 같은 철자의 핀을 덮어쓰지 않게 하려는 것인데,
+    # 은퇴한 핀은 카탈로그 키가 아니므로 그 충돌이 없다. 안 걸면 저장된
+    # `claude-opus-5` 가 미등록 모델로 BUDGETED 계약을 받아 400 이 된다.
+    retired: dict[str, str] = Field(default_factory=dict)
     # Optional helper slots (fast / title / artifact) → catalog pin.
     aux: dict[str, str] = Field(default_factory=dict)
 
@@ -291,6 +313,16 @@ class ModelCatalog(StrictConfigModel):
             if not self.models[pin].selectable:
                 raise ValueError(
                     f"remap {raw!r} targets non-selectable pin {pin!r}"
+                )
+
+        for old, pin in self.retired.items():
+            if old in self.models or old in self.role_aliases:
+                raise ValueError(
+                    f"retired {old!r} is still a live catalog key or role alias"
+                )
+            if pin not in self.models:
+                raise ValueError(
+                    f"retired {old!r} points to unknown model {pin!r}"
                 )
 
         claimed_lookup: dict[str, str] = {}
@@ -760,6 +792,12 @@ def supports_mid_conversation_tools(model: str) -> bool:
     """
     spec = model_config.catalog.get_model_spec(model)
     return bool(spec and spec.mid_conversation_tools)
+
+
+def thinking_display_for(model: str) -> str | None:
+    """이 모델에 보낼 adaptive thinking `display`. 카탈로그만 본다. 미등록·미선언은 None."""
+    spec = model_config.catalog.get_model_spec(model)
+    return spec.thinking_display if spec else None
 
 
 def supports_effort(model: str) -> bool:

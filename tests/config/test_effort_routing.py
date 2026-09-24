@@ -28,7 +28,7 @@ from neos.config.model_routing import ResolutionSource
 
 pytestmark = pytest.mark.no_db
 
-_KNOWN = "claude-opus-5"
+_KNOWN = "claude-opus-5-5"
 
 
 def _resolve(**kwargs):

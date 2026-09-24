@@ -34,7 +34,7 @@ def collected(monkeypatch):
 def test_a_deep_analysis_call_becomes_a_canonical_record(collected):
     record_llm_call(
         provider="anthropic",
-        model="claude-opus-5",
+        model="claude-opus-5-5",
         workflow_step="report_assembly",
         input_messages=[{"role": "user", "content": "질문"}],
         output_text="답",
@@ -44,7 +44,7 @@ def test_a_deep_analysis_call_becomes_a_canonical_record(collected):
 
     assert len(collected) == 1
     record = collected[0]
-    assert record.model == "claude-opus-5"
+    assert record.model == "claude-opus-5-5"
     assert record.workflow_step == "report_assembly"
     assert record.prompt_tokens == 120
     assert record.completion_tokens == 45
@@ -120,12 +120,12 @@ async def test_a_deep_analysis_dispatch_is_instrumented(collected):
             text="조립된 리포트",
             input_tokens=77,
             output_tokens=33,
-            model="claude-opus-5",
+            model="claude-opus-5-5",
             stop_reason="end_turn",
         )
 
     await _budgeted_dispatch(
-        model="claude-opus-5",
+        model="claude-opus-5-5",
         request={"messages": [{"role": "user", "content": "프롬프트"}]},
         max_tokens=1200,
         stage="report_assembly",
@@ -135,7 +135,7 @@ async def test_a_deep_analysis_dispatch_is_instrumented(collected):
     assert len(collected) == 1
     record = collected[0]
     assert record.workflow_step == "report_assembly"
-    assert record.model == "claude-opus-5"
+    assert record.model == "claude-opus-5-5"
     assert record.provider == "anthropic"
     assert record.prompt_tokens == 77
 

@@ -130,7 +130,7 @@ def test_the_judge_is_not_the_model_it_judges():
     }
 
     # **워커 전부와 달라야 한다.** scout 만 보면 부족하다 -- 2026-08-29 에
-    # judge 를 `claude-opus-5` 로 넣었다가 되돌렸는데, dig·synth 가 이미
+    # judge 를 `claude-opus-5-5` 로 넣었다가 되돌렸는데, dig·synth 가 이미
     # powerful 역할로 opus-5 라 위반의 위치가 scout 에서 dig 로 옮겨갔을 뿐이다.
     # dig 도 클레임을 만드는 워커다.
     collisions = {n: m for n, m in workers.items() if m == judge.model}

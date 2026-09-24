@@ -133,7 +133,7 @@ describe("POST /api/chat — 매 메시지 metadata.model", () => {
     assert.equal(response.status, 200);
     assert.equal(
       capturedStreamBody.metadata.model,
-      "claude-opus-5",
+      "claude-opus-5-5",
       "은퇴한 모델 id가 매핑 없이 그대로 나가면 BE 카탈로그에 없는 이름이 도달한다"
     );
   });

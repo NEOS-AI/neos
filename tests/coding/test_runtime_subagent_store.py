@@ -131,6 +131,51 @@ async def test_parent_sink_adapter_forwards_allowlisted_payload_only() -> None:
     assert "checkpoint_id" not in step
 
 
+@pytest.mark.asyncio
+async def test_parent_sink_adapter_forwards_terminal_child_events() -> None:
+    """A stall or a cancel ends a child without a `subagent.step`.
+
+    Before these two were forwarded, a detached child that stalled stayed
+    "running" in the parent's ledger -- and so on screen -- forever.
+    """
+    parent = _RecordingParentSink()
+    adapter = ParentSubagentEventAdapter(parent)
+    common = {
+        "spec": "explore",
+        "parent_kind": "coding",
+        "parent_id": "ct_1",
+        "parent_run_id": "cr_1",
+        "parent_tool_call_id": "s1",
+        "turn_count": 3,
+        "tool_count": 4,
+    }
+    await adapter.emit(
+        "subagent.failed",
+        {**common, "run_id": "sa_1", "status": "failed", "error_code": "stalled"},
+    )
+    await adapter.emit(
+        "subagent.cancelled",
+        {
+            **common,
+            "run_id": "sa_2",
+            "status": "killed",
+            "reason": "cancelled",
+            "brief": "secret brief",
+        },
+    )
+    assert [item["event_type"] for item in parent.items] == [
+        "subagent.failed",
+        "subagent.cancelled",
+    ]
+    failed, cancelled = (item["payload"] for item in parent.items)
+    assert failed["error_code"] == "stalled"
+    assert failed["status"] == "failed"
+    assert cancelled["reason"] == "cancelled"
+    assert "brief" not in cancelled
+    assert parent.items[1]["task_id"] == "ct_1"
+    assert parent.items[1]["ids"]["tool_call_id"] == "s1"
+
+
 class _BoomParentSink:
     async def append(self, **kwargs) -> None:
         raise RuntimeError("sink down")

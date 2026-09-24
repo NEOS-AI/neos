@@ -19,12 +19,12 @@ pytestmark = pytest.mark.no_db
 
 CURRENT_PICKER_IDS = {
     "anthropic/claude-sonnet-5",
-    "anthropic/claude-opus-5",
+    "anthropic/claude-opus-5.5",
     "anthropic/claude-haiku-4.5",
     "anthropic/claude-sonnet-4.5",
     "anthropic/claude-sonnet-4.5-thinking",
-    "openai/gpt-5.6-terra",
-    "openai/gpt-5.6-sol",
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna",
 }
 
 HIDDEN_FROM_PICKER = {
@@ -124,8 +124,8 @@ def test_flag_on_returns_seven_picker_rows_and_gateway_remaps(monkeypatch) -> No
         assert hidden not in by_id
         assert hidden not in {row["catalog_id"] for row in payload["models"]}
 
-    assert payload["remaps"]["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5"
-    assert payload["remaps"]["openai/gpt-4o"] == "openai/gpt-5.6-sol"
+    assert payload["remaps"]["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5.5"
+    assert payload["remaps"]["openai/gpt-4o"] == "openai/gpt-6-sol"
     assert "anthropic/claude-haiku-4.5" not in payload["remaps"]
     visible = set(by_id)
     assert set(payload["remaps"].values()) <= visible
@@ -139,13 +139,13 @@ def test_etag_includes_routing_defaults(monkeypatch) -> None:
         monkeypatch.setattr(
             catalog_handlers.settings.config.model_routing.anthropic,
             "everyday",
-            "opus-5",
+            "opus-5.5",
         )
         second = client.get("/models")
 
     assert first.status_code == second.status_code == 200
     assert first.json()["etag"] != second.json()["etag"]
-    assert second.json()["default_id"] == "anthropic/claude-opus-5"
+    assert second.json()["default_id"] == "anthropic/claude-opus-5.5"
 
 
 def test_etag_includes_yaml_identity(monkeypatch) -> None:

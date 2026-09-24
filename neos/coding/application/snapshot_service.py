@@ -6,7 +6,11 @@ from neos.coding.domain.approvals import ApprovalStatus
 from neos.coding.domain.phases import CodingPhaseKind
 from neos.coding.domain.text_parts import TextPartStatus
 from neos.coding.tools.registry import ToolRisk
-from neos.coding.repositories.projection_repository import CodingProjectionRows
+from neos.coding.repositories.projection_repository import (
+    CodingProjectionRows,
+    CodingRefusalRow,
+    CodingRunRow,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +110,48 @@ class CodingActiveChildProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class CodingToolRiskProjection:
+    """A Jev verdict, shaped like the live event it came from.
+
+    `kind` and `payload` are the event's own type and payload so the client
+    folds a snapshot and a live event through one function -- two decoders
+    are two places for the band to be read differently.
+    """
+
+    tool_call_id: str
+    kind: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CodingRefusalProjection:
+    """A `model.refused` event, shaped like the live event it came from.
+
+    Same reason as `CodingToolRiskProjection`: the client decodes the payload
+    with the function the live branch uses.
+    """
+
+    run_id: str | None
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CodingChildEventProjection:
+    """A child lifecycle event, shaped like the live event it came from.
+
+    The client folds these after `active_children`, in seq order, through the
+    same function as live `subagent.*` events -- so the ledger's terminal
+    event wins over a checkpoint that still lists the child as running.
+    """
+
+    type: str
+    seq: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingProjectionSnapshot:
     task: CodingTaskProjection
     active_run: CodingRunProjection | None
@@ -119,6 +165,9 @@ class CodingProjectionSnapshot:
     head_seq: int
     connection_basis: str = "checkpoint"
     active_children: tuple[CodingActiveChildProjection, ...] = ()
+    tool_risks: tuple[CodingToolRiskProjection, ...] = ()
+    refusal: CodingRefusalProjection | None = None
+    child_events: tuple[CodingChildEventProjection, ...] = ()
 
 
 class ProjectionRepository(Protocol):
@@ -251,7 +300,41 @@ class CodingSnapshotService:
             latest_checkpoint=checkpoint,
             head_seq=rows.head_seq,
             active_children=_active_children(loop_state),
+            tool_risks=tuple(
+                CodingToolRiskProjection(
+                    tool_call_id=row.tool_call_id,
+                    kind=row.kind,
+                    seq=row.seq,
+                    payload=dict(row.payload),
+                )
+                for row in rows.tool_risks
+            ),
+            refusal=_refusal_on_latest_run(rows.refusal, rows.runs),
+            child_events=tuple(
+                CodingChildEventProjection(
+                    type=row.event_type, seq=row.seq, payload=dict(row.payload)
+                )
+                for row in sorted(rows.child_events, key=lambda row: row.seq)
+            ),
         )
+
+
+def _refusal_on_latest_run(
+    refusal: CodingRefusalRow | None, runs: tuple[CodingRunRow, ...]
+) -> CodingRefusalProjection | None:
+    """Keep the refusal only while no newer run has started.
+
+    The live projection clears `refusal` on `run.started`; a snapshot must
+    agree, or a reconnect resurrects a banner the stream already took down.
+    """
+    if refusal is None:
+        return None
+    latest = max(runs, key=lambda run: run.attempt, default=None)
+    if latest is not None and refusal.run_id != latest.run_id:
+        return None
+    return CodingRefusalProjection(
+        run_id=refusal.run_id, seq=refusal.seq, payload=dict(refusal.payload)
+    )
 
 
 def _active_children(

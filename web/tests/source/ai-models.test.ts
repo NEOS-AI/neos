@@ -43,7 +43,7 @@ const liveAfter51: CatalogPayload = {
   default_id: "anthropic/claude-sonnet-5-1",
   remaps: {
     "anthropic/claude-sonnet-5": "anthropic/claude-sonnet-5-1",
-    "anthropic/claude-opus-4.5": "anthropic/claude-opus-5",
+    "anthropic/claude-opus-4.5": "anthropic/claude-opus-5.5",
     "old/no-longer-in-picker": "missing/gateway",
   },
   models: [
@@ -52,9 +52,9 @@ const liveAfter51: CatalogPayload = {
       default: true,
       role_alias: "sonnet-5",
     }),
-    row("anthropic/claude-opus-5", "claude-opus-5", {
-      name: "Claude Opus 5",
-      role_alias: "opus-5",
+    row("anthropic/claude-opus-5.5", "claude-opus-5-5", {
+      name: "Claude Opus 5.5",
+      role_alias: "opus-5.5",
     }),
   ],
 };
@@ -74,18 +74,18 @@ describe("mapToBackendModelName", () => {
     );
     assert.equal(
       mapToBackendModelName("anthropic/claude-opus-4.5", liveAfter51),
-      "claude-opus-5"
+      "claude-opus-5-5"
     );
   });
 
   test("3. generated fallback map covers ids the live payload has not seen", () => {
     assert.equal(
       mapToBackendModelName("openai/gpt-4o", liveAfter51),
-      "gpt-5.6-sol"
+      "gpt-6-sol"
     );
     assert.equal(
       mapToBackendModelName("openai/gpt-4.1-mini", liveAfter51),
-      "gpt-5.6-terra"
+      "gpt-6-sol"
     );
   });
 
@@ -157,9 +157,9 @@ describe("generated catalog fallback", () => {
 
     assert.equal(byId.get("anthropic/claude-sonnet-5")?.name, "Claude Sonnet 5");
     assert.equal(byId.get("anthropic/claude-sonnet-5")?.provider, "anthropic");
-    assert.equal(byId.get("anthropic/claude-opus-5")?.name, "Claude Opus 5");
-    assert.equal(byId.get("openai/gpt-5.6-terra")?.name, "GPT-5.6 Terra");
-    assert.equal(byId.get("openai/gpt-5.6-sol")?.name, "GPT-5.6 Sol");
+    assert.equal(byId.get("anthropic/claude-opus-5.5")?.name, "Claude Opus 5.5");
+    assert.equal(byId.get("openai/gpt-6-sol")?.name, "GPT-6 Sol");
+    assert.equal(byId.get("openai/gpt-6-luna")?.name, "GPT-6 Luna");
     assert.equal(
       byId.get("anthropic/claude-sonnet-4.5-thinking")?.name,
       "Claude Sonnet 4.5 (Thinking)"
@@ -172,7 +172,7 @@ describe("generated catalog fallback", () => {
       false
     );
     assert.notEqual(
-      generatedCatalog.models.find((m) => m.id === "anthropic/claude-opus-5")
+      generatedCatalog.models.find((m) => m.id === "anthropic/claude-opus-5.5")
         ?.name,
       "Claude Opus 4.6"
     );
@@ -219,11 +219,11 @@ describe("generated catalog fallback", () => {
   });
 
   test("generated fallback map still lands retired cookies on current pins", () => {
-    assert.equal(generatedFallbackMap["anthropic/claude-opus-4.5"], "claude-opus-5");
-    assert.equal(generatedFallbackMap["openai/gpt-4o"], "gpt-5.6-sol");
-    assert.equal(generatedFallbackMap["openai/gpt-4o-mini"], "gpt-5.6-terra");
-    assert.equal(generatedFallbackMap["openai/gpt-4.1"], "gpt-5.6-sol");
-    assert.equal(generatedFallbackMap["openai/gpt-4.1-mini"], "gpt-5.6-terra");
+    assert.equal(generatedFallbackMap["anthropic/claude-opus-4.5"], "claude-opus-5-5");
+    assert.equal(generatedFallbackMap["openai/gpt-4o"], "gpt-6-sol");
+    assert.equal(generatedFallbackMap["openai/gpt-4o-mini"], "gpt-6-sol");
+    assert.equal(generatedFallbackMap["openai/gpt-4.1"], "gpt-6-sol");
+    assert.equal(generatedFallbackMap["openai/gpt-4.1-mini"], "gpt-6-sol");
     assert.equal(
       generatedFallbackMap["anthropic/claude-3.7-sonnet-thinking"],
       "claude-sonnet-4-5-20250929"
@@ -250,15 +250,15 @@ describe("generated catalog fallback", () => {
     assert.deepEqual(
       [
         "anthropic/claude-sonnet-5",
-        "anthropic/claude-opus-5",
-        "openai/gpt-5.6-terra",
-        "openai/gpt-5.6-sol",
+        "anthropic/claude-opus-5.5",
+        "openai/gpt-6-sol",
+        "openai/gpt-6-luna",
       ].map((id) => [id, mapToBackendModelName(id, generatedCatalog)]),
       [
         ["anthropic/claude-sonnet-5", "claude-sonnet-5"],
-        ["anthropic/claude-opus-5", "claude-opus-5"],
-        ["openai/gpt-5.6-terra", "gpt-5.6-terra"],
-        ["openai/gpt-5.6-sol", "gpt-5.6-sol"],
+        ["anthropic/claude-opus-5.5", "claude-opus-5-5"],
+        ["openai/gpt-6-sol", "gpt-6-sol"],
+        ["openai/gpt-6-luna", "gpt-6-luna"],
       ]
     );
   });
@@ -270,8 +270,8 @@ describe("cookie remaps", () => {
       "anthropic/claude-opus-4.5",
       generatedCatalog
     );
-    assert.equal(result.modelId, "anthropic/claude-opus-5");
-    assert.equal(result.rewriteTo, "anthropic/claude-opus-5");
+    assert.equal(result.modelId, "anthropic/claude-opus-5.5");
+    assert.equal(result.rewriteTo, "anthropic/claude-opus-5.5");
   });
 
   test("uses default_id when the remapped gateway is not in models[]", () => {

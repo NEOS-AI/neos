@@ -274,3 +274,39 @@ async def test_a_script_that_is_not_in_the_ledger_is_refused_loudly(tmp_path) ->
 
     # 원장부터 읽으므로 샌드박스는 만들지도 않았다 -- 샌드박스는 비싸다.
     assert provider.created == []
+
+
+@pytest.mark.asyncio
+async def test_reexecution_opens_the_profile_it_was_given(tmp_path) -> None:
+    """워커가 돈 것과 같은 profile 에서 다시 돌린다.
+
+    다른 격리에서 같은 digest 가 나와도 그것은 재현이 아니라 우연이다.
+    증거는 provider 의 `write_evidence` 로 간다 -- 워커 세션이 아니다.
+    """
+    seen: list[dict[str, Any]] = []
+    written: list[str] = []
+
+    class _Readonly(_SpyProvider):
+        readonly_evidence = True
+
+        async def create(self, **kwargs):
+            seen.append(kwargs)
+            return await super().create(
+                owner_id=kwargs["owner_id"], limits=kwargs["limits"]
+            )
+
+        async def write_evidence(self, sandbox_id, name, data) -> None:
+            written.append(name)
+
+    ledger = _FakeLedger({SCRIPT_REF: "print(1)", INPUT_REF: "input"})
+    provider = _Readonly(MemorySandboxProvider(root=tmp_path / "reexec"))
+
+    run = await _reexecutor(ledger, provider, profile="research-offline-v1").run(
+        _computation(inputs=[INPUT_REF])
+    )
+
+    assert run.stdout == "1"
+    assert [(kwargs["profile"], kwargs["evidence"]) for kwargs in seen] == [
+        ("research-offline-v1", True)
+    ]
+    assert written == [f"{INPUT_REF}.txt"]

@@ -21,6 +21,11 @@ def isolate_repo_dotenv(tmp_path, monkeypatch):
     monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
     for env_key in loader.LEGACY_ENV_KEYS | YAML_ONLY_FEATURE_FLAGS:
         monkeypatch.delenv(env_key, raising=False)
+    # development 프로파일은 실제 코딩 루프를 켜고, 켜진 루프는 크리덴셜을
+    # 요구한다(fail-closed). `.env` 를 가렸으니 키가 올 곳은 프로세스 env 뿐인데,
+    # 거기에 키가 있는지는 **앞서 돈 테스트**가 정했다 -- 이 파일만 돌리면 10건이
+    # 깨지고 전체 스위트에서는 통과했다. CI 가 주는 것과 같은 자리표시자를 준다.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
 
 
 def write_yaml(path: Path, content: str) -> Path:

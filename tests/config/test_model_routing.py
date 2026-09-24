@@ -21,7 +21,7 @@ def test_role_defaults_map_to_current_models() -> None:
     catalog = model_config.catalog
 
     assert config.anthropic.everyday == "sonnet-5"
-    assert config.anthropic.powerful == "opus-5"
+    assert config.anthropic.powerful == "opus-5.5"
 
     everyday = resolve_model(config=config, provider="anthropic", role="everyday")
     assert everyday.model == catalog.role_aliases["sonnet-5"].current
@@ -29,17 +29,17 @@ def test_role_defaults_map_to_current_models() -> None:
     assert everyday.source is ResolutionSource.ROLE_DEFAULT
 
     powerful = resolve_model(config=config, provider="anthropic", role="powerful")
-    assert powerful.model == catalog.role_aliases["opus-5"].current
-    assert powerful.role_alias == "opus-5"
+    assert powerful.model == catalog.role_aliases["opus-5.5"].current
+    assert powerful.role_alias == "opus-5.5"
     assert powerful.source is ResolutionSource.ROLE_DEFAULT
 
     assert (
         resolve_model(config=config, provider="openai", role="everyday").model
-        == "gpt-5.6-terra"
+        == "gpt-6-sol"
     )
     assert (
         resolve_model(config=config, provider="openai", role="powerful").model
-        == "gpt-5.6-sol"
+        == "gpt-6-sol"
     )
 
 
@@ -48,11 +48,11 @@ def test_dated_env_yaml_overrides_still_resolve() -> None:
         {
             "anthropic": {
                 "everyday": "claude-sonnet-5",
-                "powerful": "claude-opus-5",
+                "powerful": "claude-opus-5-5",
             },
             "openai": {
-                "everyday": "gpt-5.6-terra",
-                "powerful": "gpt-5.6-sol",
+                "everyday": "gpt-6-sol",
+                "powerful": "gpt-6-sol",
             },
         }
     )
@@ -66,8 +66,8 @@ def test_dated_env_yaml_overrides_still_resolve() -> None:
 def test_unknown_role_default_is_not_replaced_with_a_hardcoded_pin() -> None:
     config = ModelRoutingConfig.model_validate(
         {
-            "anthropic": {"everyday": "sonnet-9", "powerful": "opus-5"},
-            "openai": {"everyday": "gpt-5.6-terra", "powerful": "gpt-5.6-sol"},
+            "anthropic": {"everyday": "sonnet-9", "powerful": "opus-5.5"},
+            "openai": {"everyday": "gpt-6-sol", "powerful": "gpt-6-sol"},
         }
     )
 
@@ -84,9 +84,9 @@ def test_user_source_applies_remaps() -> None:
         user_model="anthropic/claude-opus-4.5",
     )
 
-    assert result.model == "claude-opus-5"
+    assert result.model == "claude-opus-5-5"
     assert result.source is ResolutionSource.USER
-    assert result.role_alias == "opus-5"
+    assert result.role_alias == "opus-5.5"
 
 
 def test_conversation_and_feature_sources_do_not_apply_remaps() -> None:
@@ -118,7 +118,7 @@ def test_user_selection_has_stable_highest_precedence() -> None:
         role="powerful",
         user_model="claude-sonnet-4-6",
         conversation_model="claude-opus-4-8",
-        feature_override="claude-opus-5",
+        feature_override="claude-opus-5-5",
     )
 
     assert result.model == "claude-sonnet-4-6"
@@ -132,11 +132,11 @@ def test_conversation_selection_overrides_feature_selection() -> None:
         config=ModelRoutingConfig(),
         provider="openai",
         role="everyday",
-        conversation_model="gpt-5.6-sol",
-        feature_override="gpt-5.6-terra",
+        conversation_model="gpt-6-sol",
+        feature_override="gpt-6-sol",
     )
 
-    assert result.model == "gpt-5.6-sol"
+    assert result.model == "gpt-6-sol"
     assert result.source is ResolutionSource.CONVERSATION
 
 
@@ -145,10 +145,10 @@ def test_feature_selection_overrides_role_default() -> None:
         config=ModelRoutingConfig(),
         provider="openai",
         role="everyday",
-        feature_override="gpt-5.6-sol",
+        feature_override="gpt-6-sol",
     )
 
-    assert result.model == "gpt-5.6-sol"
+    assert result.model == "gpt-6-sol"
     assert result.source is ResolutionSource.FEATURE_OVERRIDE
 
 

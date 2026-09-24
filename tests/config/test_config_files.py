@@ -51,7 +51,7 @@ def test_committed_config_profiles_exist_and_validate():
             path.name == "neos.development.yaml"
         ), f"{path.name}: only development enables the real coding loop"
         assert config.model_routing.anthropic.everyday == "sonnet-5"
-        assert config.model_routing.openai.powerful == "gpt-5.6-sol"
+        assert config.model_routing.openai.powerful == "gpt-6-sol"
         assert config.coding_model.model is None
         assert config.recursive_agent.planner_model is None
         assert config.deep_analysis.models.scout is None

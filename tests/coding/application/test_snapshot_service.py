@@ -263,3 +263,167 @@ async def test_postgres_projection_uses_repeatable_read_and_owner_scope() -> Non
     sql = "\n".join(session.sql)
     assert "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" in sql
     assert "owner_id = :owner_id" in sql
+
+
+@pytest.mark.no_db
+async def test_snapshot_carries_jev_verdicts_shaped_like_their_events() -> None:
+    """A reconnect starts from the snapshot, so a verdict only the live stream
+    carried would vanish on refresh. The verdict for a call parked on approval
+    has no execution row, so it must survive without one.
+    """
+    from dataclasses import replace
+
+    from neos.coding.repositories.projection_repository import CodingToolRiskRow
+
+    scored = {
+        "probability": 0.62,
+        "band": "mid",
+        "low_below": 0.3,
+        "high_at_or_above": 0.8,
+        "rubric_digest": "f5faf377",
+        "model": "jev-1.13.0",
+        "static_outcome": "allow",
+        "would_be_outcome": "require_approval",
+        "enforced": False,
+        "tool": "execute.v1",
+        "tool_call_id": "t_parked",
+    }
+
+    class RiskRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(
+                rows,
+                tool_risks=(
+                    CodingToolRiskRow("t_parked", "jev_risk_scored", 9, scored),
+                    CodingToolRiskRow(
+                        "t_down",
+                        "jev_unavailable",
+                        11,
+                        {"reason": "TimeoutError", "enforced": False},
+                    ),
+                ),
+            )
+
+    snapshot = await CodingSnapshotService(RiskRepository(head_seq=14)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    by_id = {risk.tool_call_id: risk for risk in snapshot.tool_risks}
+    assert sorted(by_id) == ["t_down", "t_parked"]
+    assert by_id["t_parked"].kind == "jev_risk_scored"
+    assert by_id["t_parked"].payload == scored
+    assert by_id["t_down"].kind == "jev_unavailable"
+    assert by_id["t_down"].seq == 11
+    # No execution row for either call -- the verdict stands on its own.
+    assert not {t.tool_call_id for t in snapshot.tools} & set(by_id)
+
+
+def test_projection_reads_the_same_kinds_the_gate_writes() -> None:
+    from neos.coding.repositories.projection_repository import TOOL_RISK_EVENT_TYPES
+    from neos.jev.gate import JEV_RISK_SCORED, JEV_UNAVAILABLE
+
+    assert set(TOOL_RISK_EVENT_TYPES) == {JEV_RISK_SCORED, JEV_UNAVAILABLE}
+
+
+def _refusal_repository(refusal):
+    from dataclasses import replace
+
+    class RefusalRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(rows, refusal=refusal)
+
+    return RefusalRepository(head_seq=14)
+
+
+@pytest.mark.no_db
+async def test_snapshot_carries_a_refusal_on_the_latest_run() -> None:
+    """A refused run fails and is never retried, so the refusal is the last
+    thing the user is told -- a refresh must not erase it.
+    """
+    from neos.coding.repositories.projection_repository import CodingRefusalRow
+
+    payload = {"stop_reason": "refusal", "stop_category": "cyber"}
+    snapshot = await CodingSnapshotService(
+        _refusal_repository(CodingRefusalRow("cr_2", 13, payload))
+    ).get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.refusal is not None
+    assert snapshot.refusal.run_id == "cr_2"
+    assert snapshot.refusal.seq == 13
+    assert snapshot.refusal.payload == payload
+
+
+@pytest.mark.no_db
+async def test_snapshot_drops_a_refusal_a_newer_run_has_cleared() -> None:
+    """Live, `run.started` clears the refusal. A snapshot taken after a newer
+    run started must agree, or a reconnect resurrects the banner.
+    """
+    from neos.coding.repositories.projection_repository import CodingRefusalRow
+
+    snapshot = await CodingSnapshotService(
+        _refusal_repository(CodingRefusalRow("cr_1", 7, {"stop_reason": "refusal"}))
+    ).get_owned("ct_1", "u1")
+
+    assert snapshot is not None
+    assert snapshot.refusal is None
+
+
+@pytest.mark.no_db
+async def test_snapshot_without_a_refusal_has_none() -> None:
+    snapshot = await CodingSnapshotService(_refusal_repository(None)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    assert snapshot.refusal is None
+
+
+@pytest.mark.no_db
+async def test_snapshot_carries_child_events_in_seq_order() -> None:
+    """A child that ended after the checkpoint lives only in the ledger. The
+    snapshot must carry its events as written, oldest first, so the client can
+    fold them after `active_children` and let the terminal event win.
+    """
+    from dataclasses import replace
+
+    from neos.coding.repositories.projection_repository import CodingChildEventRow
+
+    started = {"run_id": "sa_1", "spec": "explore", "status": "pending"}
+    stalled = {"run_id": "sa_1", "status": "failed", "error_code": "stalled"}
+    done = {"run_id": "sa_2", "turn_count": 3, "tool_count": 2}
+
+    class ChildRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(
+                rows,
+                child_events=(
+                    CodingChildEventRow("subagent.failed", 12, stalled),
+                    CodingChildEventRow("subagent.started", 5, started),
+                    CodingChildEventRow("subagent.completed", 9, done),
+                ),
+            )
+
+    snapshot = await CodingSnapshotService(ChildRepository(head_seq=14)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    assert [(e.type, e.seq) for e in snapshot.child_events] == [
+        ("subagent.started", 5),
+        ("subagent.completed", 9),
+        ("subagent.failed", 12),
+    ]
+    assert snapshot.child_events[0].payload == started
+    assert snapshot.child_events[2].payload == stalled
+
+
+def test_projection_reads_the_kinds_the_parent_sink_forwards() -> None:
+    from neos.coding.repositories.projection_repository import CHILD_EVENT_TYPES
+    from neos.coding.runtime import _PARENT_SINK_EVENTS
+
+    assert set(CHILD_EVENT_TYPES) == set(_PARENT_SINK_EVENTS)

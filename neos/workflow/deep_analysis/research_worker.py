@@ -21,6 +21,7 @@ from neos.subagent.types import StepKind
 
 from .models import Assignment, WorkerResult
 from .research_session import open_research_session
+from .sandbox import RESEARCH_PROFILE
 from .subagent_adapter import build_research_ticket
 
 #: 제출 없이 턴이 끝났다. 계약 §3.4 는 이것을 `partial` 로 처리하고 **이유를
@@ -50,6 +51,7 @@ async def run_research_worker(
     parent_id: str,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
+    profile: str = RESEARCH_PROFILE,
 ) -> WorkerResult:
     """샌드박스를 열고, 자식을 한 걸음 돌리고, 제출을 거둔다.
 
@@ -65,6 +67,7 @@ async def run_research_worker(
         fetch_fn=fetch_fn,
         limits=limits,
         grader=grader,
+        profile=profile,
     )
     ticket = build_research_ticket(
         assignment,

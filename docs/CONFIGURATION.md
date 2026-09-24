@@ -150,8 +150,8 @@ payloads. The default is `240`.
 ### Model Catalog
 
 `neos/config/models.yaml` is the operator bump surface for facts, role-alias
-current-pins, remaps, and picker projection. Roles in `schema.py` already
-point at `sonnet-5` / `opus-5`. The chat picker fetches
+current-pins, remaps, retirements, and picker projection. Roles in `schema.py`
+point at `sonnet-5` / `opus-5.5`. The chat picker fetches
 `GET /api/v1/models` at runtime, so a YAML deploy moves the live picker
 without a web rebuild. Do **not** hand-edit `web/lib/ai/models.ts` maps or
 `web/lib/ai/catalog.generated.ts`.
@@ -243,7 +243,7 @@ Tests that hit `GET /api/v1/models` must enable `picker_api`. The
 production default remains false.
 
 Custom catalogs (`NEOS_MODEL_CONFIG_PATH`) must ship `role_aliases:` (the
-schema defaults are now `sonnet-5` / `opus-5`, not dated pins). A file
+schema defaults are now `sonnet-5` / `opus-5.5`, not dated pins). A file
 without that block will not resolve those roles: boot logs the existing
 unknown-routed-model warning and everyday traffic has no pin. The
 alternative is a dated `model_routing` override in env YAML
@@ -329,7 +329,8 @@ two separate Python tables were in: they used different prefix vocabularies,
 and merging them preserved that asymmetry rather than inventing entries to
 erase it.
 
-> **Known gap — `claude-opus-5` has no generation facts.** It is the deep
+> **Known gap — `claude-opus-5-5` has no generation facts** (inherited from
+> the retired `claude-opus-5`). It is the deep
 > analysis `powerful` worker and the `powerful` picker tier, but the table this
 > block replaced only ever knew opus-4.5 through 4.8. With Advisor enabled it
 > is skipped as `unknown_executor_model`, and its cache floor is the unverified
@@ -415,6 +416,36 @@ Six models used to violate that and were retired:
 `gpt-5.6-terra` — so terra now fills both `fast` and `balanced`, the same
 one-model-two-tiers shape Gemini and Ollama already use.
 
+#### 2026-09-24: Opus 5.5 and GPT-6
+
+| Retired | Replaced by |
+|---|---|
+| `claude-opus-5` | `claude-opus-5-5` |
+| `gpt-5.6-sol` | `gpt-6-sol` |
+| `gpt-5.6-terra` | `gpt-6-sol` |
+
+GPT-6 has no Terra-class model, so `gpt-6-sol` fills both OpenAI roles
+(`everyday` and `powerful`) and the `balanced`/`powerful` tiers.
+`gpt-6-luna` takes the `fast` tier. The role alias `opus-5` became `opus-5.5`.
+
+Old picker cookies go through `remaps:`. Old **pins and role aliases** go
+through `retired:`, which applies to every resolution source, including stored
+conversation pins and feature overrides. `remaps:` apply only to user/cookie
+strings. Without `retired:`, a conversation stored on `claude-opus-5` would
+resolve as an unknown model. An unknown Claude model gets the `budgeted`
+thinking contract, and Opus 5 rejects `budget_tokens` with a 400.
+
+`claude-opus-5-5` and `claude-fable-5-1` declare `thinking_always_on: true`:
+`{type: "disabled"}` is a 400 on them at every effort level, so
+`normalize_anthropic_request` never sends it there (the search agents'
+`DISABLE_THINKING_FOR_SEARCH` is on by default). Opus 5.5 also rejects forced
+`tool_choice` (`any`/`tool`). The only forced call today
+(`ui_frame_generator`, A2UI) runs on Haiku.
+
+Prices are in the catalog and in `db/migrations/062_llm_pricing_opus55_gpt6.sql`
+(the DB outranks the catalog). OpenAI rates are the short-context tier; input
+over 272K tokens costs 2x and is not modelled.
+
 `test_every_selectable_model_is_priced` enforces the invariant, and
 `test_retired_models_are_gone_from_the_catalog` stops the six coming back
 without a `pricing:` block.
@@ -470,7 +501,7 @@ Converted entries have no tier and no price, and fall back to
 `thinking: budgeted`. Provider `google` is normalized to `gemini`.
 
 Custom catalogs must ship `role_aliases:` (the schema defaults are now
-`sonnet-5` / `opus-5`, not dated pins). A file without that block will not
+`sonnet-5` / `opus-5.5`, not dated pins). A file without that block will not
 resolve those roles: boot logs the existing unknown-routed-model warning and
 everyday traffic has no pin. The alternative is a dated `model_routing`
 override in env YAML (`everyday: claude-sonnet-5`). Legacy conversion does
@@ -490,10 +521,10 @@ role default.
 model_routing:
   anthropic:
     everyday: sonnet-5
-    powerful: opus-5
+    powerful: opus-5.5
   openai:
-    everyday: gpt-5.6-terra
-    powerful: gpt-5.6-sol
+    everyday: gpt-6-sol
+    powerful: gpt-6-sol
 ```
 
 Resolution follows a strict precedence, and the winner is reported as
@@ -589,8 +620,8 @@ to fully automatic calls:
 
 | Call | Behavior on provider failure |
 |---|---|
-| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-5.6-terra`) |
-| `create_llm(model="claude-opus-5")` | raises — an explicit model is never replaced |
+| `create_llm(temperature=0.3)` | falls back to OpenAI `everyday` (`gpt-6-sol`) |
+| `create_llm(model="claude-opus-5-5")` | raises — an explicit model is never replaced |
 | `create_llm(provider="anthropic")` | raises — an explicit provider is never replaced |
 | any `provider="ollama"` call | raises — Ollama is an explicit local service |
 
@@ -613,7 +644,7 @@ Advisor while retaining prompt caching.
 
 That compatibility table lives in the catalog, not in code — see *Generation
 facts (Anthropic)* above. **Before enabling this, check that the executor
-models you actually route to have a `family` there.** `claude-opus-5` does not,
+models you actually route to have a `family` there.** `claude-opus-5-5` does not,
 so with the default role routing turning Advisor on today changes nothing at
 all: every deep analysis worker would be skipped as `unknown_executor_model`,
 and a feature that silently does nothing is worse than one that is off.
@@ -623,6 +654,74 @@ defaults to `3`, preventing an indefinite server-tool loop. Advisor-side prompt
 caching is separately disabled by default because `max_uses` defaults to `2`;
 enable it only when observed requests regularly make at least three Advisor
 calls, Anthropic's approximate cache break-even threshold.
+### Jev probabilistic risk banding
+
+`jev` puts a probability from TypeSafe AI's System One model on top of the
+static tool-approval policy. Everything is off by default; when off, the coding
+loop takes the exact path it took before the feature existed.
+
+```yaml
+jev:
+  enabled: false                   # master switch; sub-flags require it
+  tool_risk_shadow_enabled: false  # score and record, change nothing
+  tool_risk_gate_enabled: false    # actually narrow the outcome
+  judge_shadow_enabled: false      # judge-side shadow (not yet wired)
+  model: null                      # a resolved id, e.g. jev-1.13.0
+  tool_risk_rubric: tool_risk_split  # neos/jev/rubrics/<name>.yaml
+  question_thresholds: {}          # per question of a split rubric, no defaults:
+  #   irreversible: {low_below: ..., high_at_or_above: ...}
+  #   exfiltration: {low_below: ..., high_at_or_above: ...}
+  low_below: null                  # single-question rubrics only
+  high_at_or_above: null           #   (e.g. tool_risk_rubric: tool_risk)
+  timeout_sec: 5.0
+```
+
+**The default rubric asks two questions** (`irreversible`, `exfiltration`).
+Each question is banded against its own thresholds, and the call takes the
+strictest resulting outcome. Probabilities are never combined into one number:
+a combination rule would be one more unmeasured constant, and the ledger would
+lose which axis was high. The keys of `question_thresholds` must match the
+rubric's questions exactly -- a missing or extra key fails at assembly. Giving
+both `question_thresholds` and the single `low_below`/`high_at_or_above` pair
+is rejected, because the ledger could not tell which one was used.
+
+The key is `TYPESAFE_API_KEY`, read from the process environment or `.env` with
+the same precedence as every other secret (process wins).
+
+**The band thresholds have no defaults.** Turning banding on without both of
+them fails validation rather than falling back to a number nobody measured.
+Pick them from a measured baseline, not from a vendor cookbook: the measured
+run-to-run spread is widest exactly where the thresholds matter (see the Jev
+section of `docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md`), so a threshold placed
+where real calls cluster makes the same call flip bands between runs.
+
+**`model` must be a resolved id.** Validation rejects anything containing
+`latest`: the SDK would otherwise default to the `jev-latest` alias, and a run
+answered by an alias cannot say which model answered it.
+
+Three properties are enforced rather than documented:
+
+- **Narrowing only.** The probability can make an outcome stricter, never
+  looser; `DENY` never becomes `ALLOW`. A static `DENY` does not call Jev at
+  all, so no availability fallback can open it.
+- **Loud fallback.** If Jev times out or errors, the static outcome stands and
+  a `jev_unavailable` event records it. Watch that event's rate: making Jev
+  unreachable is the cheapest way to remove the gate.
+- **A provider block is not a fallback.** TypeSafe's edge WAF rejects request
+  bodies containing strings it treats as attack payloads -- including text in a
+  tool's input. Such a 403 (no `x-typesafe-request-id`, HTML body) is recorded
+  as `jev_unavailable` with `reason: provider_blocked`, and when enforcing it
+  narrows one step like the middle band instead of letting the static outcome
+  stand. Otherwise anyone who can put that string into a tool input could turn
+  the gate off for that call. Rubric text is sent with every request, so a
+  rubric must not contain such strings either; a test checks the known ones.
+- **Misconfiguration is not "off".** Enabling banding without a key, a pinned
+  model, or thresholds raises at assembly time instead of quietly running
+  ungated.
+
+While enforcement is on, the loop stops speculatively prefetching read-only
+tools: that path executes a tool before the decision and would outrun the gate.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

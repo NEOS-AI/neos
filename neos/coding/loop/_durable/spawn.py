@@ -38,6 +38,25 @@ from neos.coding.loop._durable.support import (
 logger = logging.getLogger("neos.coding.loop.durable")
 
 
+def _detached_report_text(ref: ActiveChildRef, report: Mapping[str, Any]) -> str:
+    """The child's report, labelled so the parent can tell it from a user.
+
+    It is a user message because that is the only append-only slot the parent
+    has -- K1's thinking guard strips every block behind a non-append edit, and
+    re-opening a settled tool result is exactly that. The label is what keeps
+    the model from reading a subagent's words as its operator's.
+    """
+    status = str(report.get("child_status") or report.get("reason_code") or "")
+    head = f"[subagent {ref.spec} {ref.run_id} {status}]".rstrip()
+    body = str(report.get("summary") or "").strip()
+    if not body:
+        body = f"(no report: {report.get('exit_reason') or status or 'unknown'})"
+    merge = str(report.get("merge_status") or "")
+    if merge:
+        body = f"{body}\n[merge {merge}]"
+    return f"{head}\n{body}"
+
+
 class SubagentSpawnMixin:
     def _spawn_spec_name(self, call) -> str:
         raw = call.input if isinstance(getattr(call, "input", None), Mapping) else {}
@@ -510,6 +529,77 @@ class SubagentSpawnMixin:
         )
         return self._apply_child_usage_delta(state, in_delta, out_delta)
 
+    @property
+    def _async_spawn(self) -> bool:
+        return bool(
+            self._config.subagent_enabled
+            and getattr(self._config, "subagent_async_spawn", False)
+        )
+
+    def _detached_spawn_result(
+        self,
+        bound,
+        state,
+        call,
+        outcome,
+        *,
+        spec_name: str,
+        spawn_depth: int,
+        lease,
+    ) -> dict[str, Any]:
+        """Write the tool result now; the report comes back as a user message.
+
+        The child took its first step already -- that is what minted the run id
+        the parent is about to hand the model. What changes is only who waits:
+        nobody. `delivery="user_message"` is the whole switch, and the safe
+        point in `_advance_one_model_turn` reads it.
+
+        No summary here, deliberately. A child one step in has nothing to
+        report, and an empty `summary` key would read like an empty report
+        rather than a pending one.
+        """
+        existing = self._child_ref(state, call.tool_call_id)
+        in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
+            existing, outcome.input_tokens, outcome.output_tokens
+        )
+        updated = self._upsert_active_child(
+            self._apply_child_usage_delta(state, in_delta, out_delta),
+            ActiveChildRef(
+                run_id=outcome.run_id,
+                checkpoint_id=outcome.checkpoint_id,
+                tool_call_id=call.tool_call_id,
+                last_advanced_at=self._utc_stamp(),
+                rolled_input_tokens=rolled_in,
+                rolled_output_tokens=rolled_out,
+                pending_steer=existing.pending_steer if existing else "",
+                spec=spec_name,
+                spawn_depth=spawn_depth,
+                worktree_repo=str(lease.repo) if lease else "",
+                worktree_path=str(lease.path) if lease else "",
+                worktree_branch=lease.branch if lease else "",
+                worktree_base_sha=lease.base_sha if lease else "",
+                delivery="user_message",
+            ),
+        )
+        result = dict(
+            ToolResult.ok(
+                workspace_revision=str(bound.binding.workspace_revision),
+                entries=(
+                    {
+                        "run_id": outcome.run_id,
+                        "spec": spec_name,
+                        "delivery": "user_message",
+                    },
+                ),
+            ).to_mapping()
+        )
+        result["reason_code"] = "spawned"
+        result["run_id"] = outcome.run_id
+        result["spec"] = spec_name
+        result["delivery"] = "user_message"
+        result["_loop_state"] = updated
+        return result
+
     def _folded_spawn_result(self, bound, folded) -> dict[str, Any]:
         from neos.subagent.types import SubagentStatus
 
@@ -771,6 +861,16 @@ class SubagentSpawnMixin:
                 state, reason="aborted", task_id=input.task_id
             )
             raise
+        if outcome.kind is StepKind.CONTINUING and self._async_spawn:
+            return self._detached_spawn_result(
+                bound,
+                state,
+                call,
+                outcome,
+                spec_name=spec_name,
+                spawn_depth=ticket.spawn_depth,
+                lease=lease,
+            )
         if outcome.kind is StepKind.CONTINUING:
             return DelegatedSpawn(
                 run_id=outcome.run_id,
@@ -787,6 +887,192 @@ class SubagentSpawnMixin:
             )
         folded = await self._fold_child(outcome.run_id, state)
         return self._finish_implement_child(bound, folded, lease)
+
+    async def _run_await_subagent(
+        self, call, bound, state, *, input=None, deps=None
+    ) -> dict[str, Any] | DelegatedSpawn:
+        """The explicit park: wait for one child, take its report here.
+
+        Async spawn's default delivery is an append at the safe point, which
+        the model does not get to ask for. This is the other half of R-03 --
+        the model says it wants to wait, so the report becomes this call's
+        result instead of a message, and nothing is appended for it.
+
+        Parking reuses the machinery `spawn_agent.v1` already had: returning a
+        `DelegatedSpawn` ends the durable step with the claim still open, and
+        the next step re-enters this same call. What it does *not* reuse is the
+        ref identity -- `tool_call_id` points the update back at the ref this
+        child already has, or the run ends up with two.
+        """
+        if not self._async_spawn or self._subagents is None:
+            return self._spawn_tool_error(bound, "subagent_disabled")
+        from neos.subagent.types import StepKind
+
+        raw = call.input if isinstance(call.input, Mapping) else {}
+        run_id = str(raw.get("run_id") or "")
+        if not run_id:
+            return self._spawn_tool_error(bound, "policy_schema_invalid")
+        ref = self._child_ref_by_run(state, run_id)
+        if ref is None or not ref.detached:
+            # The safe point may have delivered this child already, or it was
+            # never this parent's. Saying "not live" beats silence: the model
+            # can go look for the report it was handed.
+            return self._spawn_tool_error(bound, "policy_not_live")
+        await self._renew_parent_lease(deps)
+        outcome = await self._subagents.resume(
+            ref.run_id,
+            expected_checkpoint_id=ref.checkpoint_id,
+            pending_steer=ref.pending_steer,
+            spawn_depth=ref.spawn_depth,
+        )
+        await self._renew_parent_lease(deps)
+        if outcome.kind is StepKind.CONTINUING:
+            return DelegatedSpawn(
+                run_id=outcome.run_id,
+                checkpoint_id=outcome.checkpoint_id,
+                step_kind=outcome.kind.value,
+                input_tokens=int(outcome.input_tokens or 0),
+                output_tokens=int(outcome.output_tokens or 0),
+                spec=ref.spec,
+                spawn_depth=ref.spawn_depth,
+                worktree_repo=ref.worktree_repo,
+                worktree_path=ref.worktree_path,
+                worktree_branch=ref.worktree_branch,
+                worktree_base_sha=ref.worktree_base_sha,
+                tool_call_id=ref.tool_call_id,
+            )
+        folded = await self._fold_child(outcome.run_id, state)
+        result = self._finish_implement_child(
+            bound, folded, _lease_from_ref(ref)
+        )
+        result["_loop_state"] = self._sync_active_children(
+            state,
+            tuple(
+                child
+                for child in state.active_children
+                if child.tool_call_id != ref.tool_call_id
+            ),
+        )
+        return result
+
+    def _hold_for_detached_children(self, state):
+        """Don't let the parent walk away from a report it asked for.
+
+        Park could never reach this state -- the parent was blocked on the
+        child. Async spawn can: the model says "done" while a child it started
+        is still running, and the report lands in a transcript nobody reads.
+
+        The hold is bounded without a counter. Each held turn costs one parent
+        turn and pushes every child one step at the safe point, so a child with
+        `max_turns` steps left can hold the parent at most that many times, and
+        `max_turns` on the parent is the backstop underneath that. That is the
+        difference between this and a drain loop: the parent keeps taking real
+        turns and may still call tools, steer, or give up.
+        """
+        live = [child for child in state.active_children if child.detached]
+        if not live:
+            return None
+        names = ", ".join(f"{child.spec}:{child.run_id}" for child in live)
+        note = (
+            f"Still running: {names}. Their reports arrive as messages here. "
+            "Wait for them, or say what you concluded without them."
+        )
+        transcript = self._append_user_meta(state.transcript, note)
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+            terminal_pending=False,
+        )
+
+    async def _advance_detached_children(self, state, bound, deps):
+        """The safe point: push every detached child one step, deliver the done.
+
+        This is the whole of K3's "parent keeps working". There is no loop and
+        no mailbox -- the parent's own durable step pushes its children once on
+        the way to its next turn, which is why children still live and die
+        under the parent lease.
+
+        A child advances at most one step per parent turn on purpose. The
+        alternative, draining a child to completion here, is the `while(true)`
+        parent loop PLAN_260913 §2.1 still forbids.
+
+        Crash safety rides on the CAS. If this step dies after a child commits
+        but before the parent does, the retry resumes from a stale checkpoint
+        id, the store refuses the step, and `_outcome` hands back where the
+        child actually is -- so the ref re-syncs and the next turn moves it.
+        `last_advanced_at` only moves when the checkpoint does, so a child that
+        stops progressing still goes stale on schedule.
+        """
+        if self._subagents is None or not self._async_spawn:
+            return state
+        # An awaited child never reaches here: parking leaves the tool call
+        # pending, so the loop re-enters the tool path and no model turn --
+        # and so no safe point -- happens until the await resolves.
+        detached = [child for child in state.active_children if child.detached]
+        if not detached:
+            return state
+        for ref in detached:
+            state = await self._advance_one_detached_child(ref, state, bound, deps)
+        return state
+
+    async def _advance_one_detached_child(self, ref, state, bound, deps):
+        from neos.subagent.types import StepKind
+
+        await self._renew_parent_lease(deps)
+        try:
+            outcome = await self._subagents.resume(
+                ref.run_id,
+                expected_checkpoint_id=ref.checkpoint_id,
+                pending_steer=ref.pending_steer,
+                spawn_depth=ref.spawn_depth,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A child that cannot be stepped must not take the parent's turn
+            # down with it. Leaving the ref alone lets the staleness clock
+            # reach it.
+            logger.warning(
+                "detached child resume failed run_id=%s", ref.run_id, exc_info=True
+            )
+            return state
+        in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
+            ref, outcome.input_tokens, outcome.output_tokens
+        )
+        state = self._apply_child_usage_delta(state, in_delta, out_delta)
+        if outcome.kind is StepKind.CONTINUING:
+            moved = outcome.checkpoint_id != ref.checkpoint_id
+            return self._upsert_active_child(
+                state,
+                replace(
+                    ref,
+                    checkpoint_id=outcome.checkpoint_id,
+                    last_advanced_at=(
+                        self._utc_stamp() if moved else ref.last_advanced_at
+                    ),
+                    rolled_input_tokens=rolled_in,
+                    rolled_output_tokens=rolled_out,
+                ),
+            )
+        folded = await self._fold_child(outcome.run_id, state)
+        report = self._finish_implement_child(bound, folded, _lease_from_ref(ref))
+        state = self._sync_active_children(
+            state,
+            tuple(
+                child
+                for child in state.active_children
+                if child.tool_call_id != ref.tool_call_id
+            ),
+        )
+        transcript = self._append_user_meta(
+            state.transcript, _detached_report_text(ref, report)
+        )
+        return replace(
+            state,
+            transcript=transcript,
+            transcript_digest=self._digest(transcript),
+        )
 
     def _finish_implement_child(self, bound, folded, lease) -> dict[str, Any]:
         if isinstance(folded, dict):

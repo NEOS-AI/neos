@@ -186,7 +186,7 @@ def test_sessions_scored_under_different_configs_are_refused_not_averaged():
             _session("a", total=16, verified=0, runs=("r1",),
                      fp={"judge_model": "claude-opus-4-8"}),
             _session("b", total=20, verified=0, runs=("r2",),
-                     fp={"judge_model": "gpt-5.6-sol"}),
+                     fp={"judge_model": "gpt-6-sol"}),
         ]
     )
 

@@ -164,13 +164,13 @@ class ModelRoutingConfig(StrictConfigModel):
     anthropic: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
             everyday="sonnet-5",
-            powerful="opus-5",
+            powerful="opus-5.5",
         )
     )
     openai: ProviderModelRolesConfig = Field(
         default_factory=lambda: ProviderModelRolesConfig(
-            everyday="gpt-5.6-terra",
-            powerful="gpt-5.6-sol",
+            everyday="gpt-6-sol",
+            powerful="gpt-6-sol",
         )
     )
 
@@ -1103,6 +1103,12 @@ class DeepAnalysisConfig(StrictConfigModel):
     # Measured: node_reduction input_bound ran 1,225 / 1,369 / 6,480
     # (min/median/max) against synthesis_max_tokens=4000 -> 6480/4000 = 1.62.
     reduction_input_ratio: float = Field(default=1.6, gt=0.0)
+    # BUDGET2 (b7932522): 리덕션 클램프가 티어 잔량을 알고, 마커가 전부 잘린
+    # 프롬프트는 모델에 보내지 않는다. **켜진 것이 기본이다** -- 기전이 코드에서
+    # 확정된 고침이다. 끄는 이유는 하나뿐이다: D-14(2026-09-24 결정, 분리)에
+    # 따라 표본 #23 은 CITE1 의 원인을 **고치기 전 코드로** 판별한다. 끄면
+    # 허용치와 가드 둘 다 BUDGET2 이전과 정확히 같다. 런 매니페스트에 실린다.
+    budget_aware_reduction: bool = True
     # Never measured -- report_assembly has never received a reservation in
     # 574 runs. This is not an estimate but a CLAMP: `prompt_clamp` shrinks
     # the assembly's child blocks and caveats until `prompt_input_bound`
@@ -1568,6 +1574,97 @@ class SandboxMemoryConfig(StrictConfigModel):
 _CLAIM_LEASE_CREATE_STEPS = 6
 
 
+class JevBandThresholds(StrictConfigModel):
+    """질문 하나의 밴드 경계. 기본값이 없다 -- `JevConfig` 와 같은 이유다."""
+
+    low_below: float = Field(ge=0.0, le=1.0)
+    high_at_or_above: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def ordered(self) -> "JevBandThresholds":
+        if self.low_below > self.high_at_or_above:
+            raise ValueError(
+                "high_at_or_above 는 low_below 보다 작을 수 없다: "
+                f"{self.low_below} > {self.high_at_or_above}"
+            )
+        return self
+
+
+class JevConfig(StrictConfigModel):
+    """Jev 확률 판정 층 -- 로드맵 §12(트랙 L).
+
+    **임계값에 기본값이 없다.** 쿡북의 `<0.30 / >0.70` 을 여기 적지 않는 것이
+    §9(매직넘버 금지)이고 §12.4 다 -- 기본값은 L1 일관성 기준선과 L2 섀도의
+    실측이 정한다. 그때까지 밴딩을 켜려면 값을 **명시해야** 하고, 명시하지
+    않으면 기동이 실패한다. 조용히 도는 것보다 낫다.
+    """
+
+    enabled: bool = False
+    #: L2. 정적 정책 판정 직후 Jev 에 묻되 행동은 바꾸지 않고 기록만 한다.
+    tool_risk_shadow_enabled: bool = False
+    #: L3. 실제로 차단한다. 섀도 불일치의 건별 리뷰가 선행이다.
+    tool_risk_gate_enabled: bool = False
+    #: L5. 판정자 섀도. 원장의 판정은 여전히 AgenticGrader 다.
+    judge_shadow_enabled: bool = False
+
+    #: 해소된 모델 id. 별칭(`jev-latest`)은 받지 않는다 -- §12.5 L0.
+    model: str | None = None
+    #: `p < low_below` 가 LOW 밴드. 기본값 없음.
+    low_below: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: `p >= high_at_or_above` 가 HIGH 밴드. 기본값 없음.
+    high_at_or_above: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: 쪼갠 루브릭(D-L2)의 질문별 경계. 키는 루브릭의 noul 질문 이름과
+    #: **정확히** 같아야 한다(조립이 확인한다). 기본값 없음 -- 질문마다 둘이다.
+    question_thresholds: dict[str, JevBandThresholds] = Field(default_factory=dict)
+    #: 도구 위험 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    #: D-L2(2026-09-24): 쪼갠 루브릭이 기본이다. 단일 질문은 `cat ~/.aws/credentials`
+    #: 를 0.10 으로 읽는 맹점이 있었다(로드맵 §12.11 ①).
+    tool_risk_rubric: str = "tool_risk_split"
+    #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
+    timeout_sec: float = Field(default=5.0, gt=0, le=60)
+
+    @field_validator("model")
+    @classmethod
+    def reject_floating_aliases(cls, value: str | None) -> str | None:
+        """`jev-latest` 로 돈 런은 어떤 모델이 답했는지 모른다 = 표본이 아니다."""
+        if value is not None and "latest" in value:
+            raise ValueError(
+                "jev.model 은 해소된 id 여야 한다. 'latest' 별칭은 판정을 "
+                f"재현할 수 없게 만든다: {value!r}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_banding_policy(self) -> "JevConfig":
+        banding_on = self.tool_risk_shadow_enabled or self.tool_risk_gate_enabled
+        single = self.low_below is not None or self.high_at_or_above is not None
+        if single and self.question_thresholds:
+            raise ValueError(
+                "jev.low_below/high_at_or_above 와 jev.question_thresholds 를 함께 "
+                "줄 수 없다. 어느 경계가 쓰였는지 원장만 보고 알 수 없게 된다."
+            )
+        if banding_on and not self.question_thresholds:
+            if self.low_below is None or self.high_at_or_above is None:
+                raise ValueError(
+                    "Jev 밴딩을 켜려면 jev.question_thresholds(쪼갠 루브릭) 또는 "
+                    "jev.low_below 와 jev.high_at_or_above(질문 하나짜리 루브릭)를 "
+                    "명시해야 한다. 기본값은 없다 -- L1·L2 실측이 정한다."
+                )
+            if self.low_below > self.high_at_or_above:
+                raise ValueError(
+                    "jev.high_at_or_above 는 jev.low_below 보다 작을 수 없다: "
+                    f"{self.low_below} > {self.high_at_or_above}"
+                )
+        if not self.enabled and (
+            banding_on or self.judge_shadow_enabled
+        ):
+            raise ValueError(
+                "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "
+                "플래그는 읽는 사람을 틀리게 만든다."
+            )
+        return self
+
+
 class ManagedSandboxConfig(StrictConfigModel):
     enabled: bool = False
     shadow_admission: bool = True
@@ -1772,6 +1869,15 @@ class CodingModelConfig(StrictConfigModel):
     subagent_enabled: bool = False
     subagent_report_budget_chars: int = Field(default=4000, ge=256, le=16384)
     subagent_max_active: int = Field(default=1, ge=1, le=4)
+    subagent_async_spawn: bool = Field(
+        default=False,
+        description=(
+            "spawn_agent.v1 이 자식을 기다리지 않고 즉시 run_id 를 돌려줄지 "
+            "(로드맵 K3). 끄면 park/fold -- 도구 결과가 곧 fold 다. 켜면 "
+            "보고서가 다음 safe point 에 user 메시지로 붙는다. 켜는 것은 코딩 "
+            "에이전트 지표의 표본 경계이므로 A1·A2 숫자 전에는 켜지 않는다."
+        ),
+    )
     file_watch: bool = False
 
     @model_validator(mode="before")
@@ -1981,6 +2087,7 @@ class AppConfig(StrictConfigModel):
     ray: RayConfig = Field(default_factory=RayConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     coding_model: CodingModelConfig = Field(default_factory=CodingModelConfig)
+    jev: JevConfig = Field(default_factory=JevConfig)
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
@@ -2040,12 +2147,15 @@ class AppConfig(StrictConfigModel):
         """
         if not self.deep_analysis.code_research_enabled:
             return self
-        # `research-offline-v1` 은 레지스트리에서 DENY_ALL 이지만 Docker
-        # provider 는 profile 을 **읽지 않는다**(`docker.py` 에 그 단어가 없다).
-        # 그 경로의 격리는 오직 이 설정에서 오고, 필드는 제약 없는 문자열이다.
-        # 묶어 두지 않으면 프로파일에 "네트워크 없음" 이라고 적힌 채 컨테이너에
-        # 네트워크가 붙는다. development 에서도 적용된다 -- 조사 워커가 도는
-        # 곳이 바로 거기다.
+        # 심층 방어. 2026-09-23 부터 Docker provider 는 조사 샌드박스를
+        # `profile` 과 함께 열고 그 네트워크 정책을 **스스로** 강제한다
+        # (설정이 bridge 여도 none, create 뒤 inspect 로 확인). 게다가
+        # `build_create_args` 는 처음(33064654)부터 none 이 아닌 값을 거절했다.
+        # 그래도 이 검증을 남기는 이유: 그 둘은 **질문마다 create 시점**에
+        # 터지고, 이것은 **기동 시점**에 터진다 -- 켜 두고 첫 질문에서야 모든
+        # 질문이 `sandbox_error` 로 죽는 것보다 앞에서 막는 편이 낫다. 그리고
+        # 누가 코딩 루프를 위해 `build_create_args` 를 느슨하게 풀어도 조사
+        # 경로의 설정 약속은 따로 남는다.
         if (
             self.sandbox.provider == "docker"
             and self.sandbox.docker.network_mode != "none"
@@ -2053,8 +2163,9 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "code research on docker requires "
                 "sandbox.docker.network_mode=none: the research-offline-v1 "
-                "profile denies all network, but the Docker provider never "
-                "reads profiles, so the container would still get one."
+                "profile denies all network, and the Docker provider refuses "
+                "any other network mode at sandbox creation -- fail at startup "
+                "instead of on every question."
             )
         if self.environment == "development":
             return self

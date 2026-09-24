@@ -124,6 +124,20 @@ def get_profile(name: str) -> SandboxProfile:
 
 def negotiate_profile(profile: SandboxProfile, capabilities: ProviderCapabilities) -> None:
     """Raise `profile_unsupported` unless every requirement is provable."""
+    negotiate_profile_requirements(profile, capabilities)
+    if not capabilities.sandboxd_stdio_exec:
+        raise _unsupported(profile.name, "sandboxd_channel_unavailable")
+
+
+def negotiate_profile_requirements(
+    profile: SandboxProfile, capabilities: ProviderCapabilities
+) -> None:
+    """profile 자체의 요구만 따진다 -- 관리형 평면의 sandboxd 채널은 빼고.
+
+    Docker provider 가 이 함수를 부른다. sandboxd 는 관리형 평면의 운반
+    채널이지 profile 의 요구가 아니다 -- Docker 는 `docker exec` 로 같은
+    자리를 채운다. 사유 문자열을 둘로 나누지 않으려고 한 함수를 공유한다.
+    """
     network = profile.network
     if network.outbound == "deny" and not capabilities.outbound_block_all:
         raise _unsupported(profile.name, "outbound_deny_unenforceable")
@@ -140,8 +154,6 @@ def negotiate_profile(profile: SandboxProfile, capabilities: ProviderCapabilitie
         raise _unsupported(profile.name, "hard_workspace_quota_unavailable")
     if profile.requires_process_continuity and not capabilities.suspend_preserves_processes:
         raise _unsupported(profile.name, "process_continuity_unavailable")
-    if not capabilities.sandboxd_stdio_exec:
-        raise _unsupported(profile.name, "sandboxd_channel_unavailable")
 
 
 def verify_applied_network(profile: SandboxProfile, applied: NetworkPolicy | None) -> None:
