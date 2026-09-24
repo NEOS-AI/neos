@@ -8,12 +8,15 @@ Chat LLM Service
 from typing import Dict, Any, List, Optional, AsyncGenerator
 import json
 import time
+from dataclasses import dataclass
 import anthropic
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from neos.database.repositories.chat_repository import ChatRepository
 from neos.utils.anthropic_client import build_async_anthropic
 from neos.utils.llm_factory import create_llm
+from neos.providers.effort import effort_request_fields
+from neos.services.chat_effort import resolve_chat_effort
 from neos.utils.llm_wrapper import extract_text_from_response
 from neos.utils.cost_calculator import cost_calculator
 from neos.utils.logger import get_logger
@@ -91,11 +94,41 @@ def resolve_conversation_chat_model(model_name: str | None) -> str:
     ).model
 
 
+@dataclass(frozen=True, slots=True)
+class TurnModel:
+    """한 턴의 모델 · 프로바이더 · 사고량. `_resolve_turn` 만 만든다."""
+
+    model: str
+    provider: str
+    effort: str | None
+
+
 class ChatLLMService:
     """채팅 LLM 서비스"""
 
     def __init__(self):
         self.default_provider = "anthropic"
+
+    async def _resolve_turn(
+        self,
+        model_name: str | None,
+        conversation_id: str,
+        *,
+        effort_resolved: str | None = None,
+        effort_known: bool = False,
+    ) -> TurnModel:
+        """모델 · 프로바이더 · effort 를 한 번에. 네 진입점이 모두 이것을 부른다.
+
+        소유자 조회를 부르지 않는다 -- 선호 조회가 conversation_id 로 조인한다
+        (Fix round 2 Item 2). tool 경로가 비-Anthropic 모델을 위임할 때는
+        `effort_known=True` 로 해석된 값을 넘겨 두 번 해석하지 않는다.
+        """
+        model = resolve_conversation_chat_model(model_name)
+        provider = self._extract_provider_from_model(model)
+        if effort_known:
+            return TurnModel(model, provider, effort_resolved)
+        resolution = await resolve_chat_effort(model, conversation_id)
+        return TurnModel(model, provider, resolution.effort)
 
     def _extract_provider_from_model(self, model_name: str) -> str:
         """모델의 provider를 결정한다.
@@ -252,6 +285,8 @@ class ChatLLMService:
         max_tokens: Optional[int] = None,
         workflow_type: str = "chat",
         enable_context_optimization: bool = True,
+        effort_resolved: Optional[str] = None,
+        effort_known: bool = False,
     ) -> Dict[str, Any]:
         """
         채팅 응답 생성 (비스트리밍)
@@ -267,8 +302,13 @@ class ChatLLMService:
                 "finish_reason": str
             }
         """
-        model = resolve_conversation_chat_model(model_name)
-        provider = self._extract_provider_from_model(model)
+        turn = await self._resolve_turn(
+            model_name,
+            conversation_id,
+            effort_resolved=effort_resolved,
+            effort_known=effort_known,
+        )
+        model, provider = turn.model, turn.provider
         prompt_cache_config = settings.config.llm.prompt_caching
         cache_control = build_cache_control(prompt_cache_config)
 
@@ -310,6 +350,8 @@ class ChatLLMService:
 
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature}
+            if turn.effort is not None:
+                llm_params["effort"] = turn.effort
             if max_tokens:
                 llm_params["max_tokens"] = max_tokens
 
@@ -391,6 +433,8 @@ class ChatLLMService:
         max_tokens: Optional[int] = None,
         workflow_type: str = "chat",
         enable_context_optimization: bool = True,
+        effort_resolved: Optional[str] = None,
+        effort_known: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         채팅 응답 스트리밍 생성
@@ -404,8 +448,13 @@ class ChatLLMService:
                 "error": str (type=error인 경우)
             }
         """
-        model = resolve_conversation_chat_model(model_name)
-        provider = self._extract_provider_from_model(model)
+        turn = await self._resolve_turn(
+            model_name,
+            conversation_id,
+            effort_resolved=effort_resolved,
+            effort_known=effort_known,
+        )
+        model, provider = turn.model, turn.provider
         prompt_cache_config = settings.config.llm.prompt_caching
         cache_control = build_cache_control(prompt_cache_config)
 
@@ -445,6 +494,8 @@ class ChatLLMService:
 
             # LLM 생성
             llm_params = {"model": model, "temperature": temperature, "streaming": True}
+            if turn.effort is not None:
+                llm_params["effort"] = turn.effort
             if max_tokens:
                 llm_params["max_tokens"] = max_tokens
 
@@ -595,6 +646,8 @@ class ChatLLMService:
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        effort_resolved: Optional[str] = None,
+        effort_known: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Tool calling을 지원하는 채팅 응답 스트리밍 생성
@@ -621,8 +674,13 @@ class ChatLLMService:
                 "cost": {...} (type=complete인 경우),
             }
         """
-        model = resolve_conversation_chat_model(model_name)
-        provider = self._extract_provider_from_model(model)
+        turn = await self._resolve_turn(
+            model_name,
+            conversation_id,
+            effort_resolved=effort_resolved,
+            effort_known=effort_known,
+        )
+        model, provider = turn.model, turn.provider
         prompt_cache_config = settings.config.llm.prompt_caching
         cache_control = build_cache_control(prompt_cache_config)
         start_time = time.time()
@@ -639,6 +697,8 @@ class ChatLLMService:
                     system_prompt=system_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    effort_resolved=turn.effort,
+                    effort_known=True,
                 ):
                     yield event
                 return
@@ -683,6 +743,7 @@ class ChatLLMService:
                     "system": system_prompt or "",
                     "temperature": temperature,
                     "max_tokens": max_tokens or 4096,
+                    **effort_request_fields(provider, turn.effort),
                 },
                 thinking_enabled=True,
             )
@@ -815,6 +876,8 @@ class ChatLLMService:
         max_tokens: Optional[int] = None,
         max_tool_rounds: int = 3,
         user_id: Optional[str] = None,
+        effort_resolved: Optional[str] = None,
+        effort_known: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Advanced Tool Search 패턴의 멀티턴 도구 호출 루프 스트리밍
@@ -838,8 +901,13 @@ class ChatLLMService:
         Yields:
             기존 generate_response_stream_with_tools()와 동일한 이벤트 형식
         """
-        model = resolve_conversation_chat_model(model_name)
-        provider = self._extract_provider_from_model(model)
+        turn = await self._resolve_turn(
+            model_name,
+            conversation_id,
+            effort_resolved=effort_resolved,
+            effort_known=effort_known,
+        )
+        model, provider = turn.model, turn.provider
         prompt_cache_config = settings.config.llm.prompt_caching.model_copy(deep=True)
         advisor_config = settings.config.llm.advisor.model_copy(deep=True)
         cache_control = build_cache_control(prompt_cache_config)
@@ -866,6 +934,8 @@ class ChatLLMService:
                     system_prompt=system_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    effort_resolved=turn.effort,
+                    effort_known=True,
                 ):
                     yield event
                 return
@@ -923,6 +993,7 @@ class ChatLLMService:
                         "system": system_prompt or "",
                         "temperature": temperature,
                         "max_tokens": max_tokens or 4096,
+                        **effort_request_fields(provider, turn.effort),
                     },
                     thinking_enabled=True,
                 )

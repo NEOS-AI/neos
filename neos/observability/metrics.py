@@ -420,6 +420,13 @@ class EnterpriseMetricsCollector:
             ["source"],
             registry=self.registry,
         )
+        # Chat effort source per turn. Label is the source only, never a model id.
+        self.chat_effort_resolved_total = Counter(
+            "neos_chat_effort_resolved_total",
+            "Chat turns by where their effort came from",
+            ["source"],
+            registry=self.registry,
+        )
         self.catalog_remap_total = Counter(
             "neos_catalog_remap_total",
             "Catalog remaps applied to a user/cookie string",
