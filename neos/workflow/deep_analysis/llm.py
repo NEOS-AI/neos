@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, TypeVar
 
 from neos.providers.anthropic import normalize_anthropic_request
+from neos.providers.effort import effort_request_fields
 from neos.workflow.deep_analysis.prompt_loader import (
     UnfilledPlaceholder,
     unfilled_placeholders,
@@ -178,6 +179,7 @@ async def _call_provider(
     temperature: float,
     client,
     tools: list[dict[str, Any]] | None = None,
+    effort: str | None = None,
 ) -> LLMResponse:
     # Injected SDK only. Live 경로는 하네스가 벤더를 고른다.
     if _is_anthropic_model(model):
@@ -189,6 +191,9 @@ async def _call_provider(
         }
         if tools:
             kwargs["tools"] = tools
+        # 번역은 한 곳(`effort_request_fields`)이다. None 이면 키가 없다 --
+        # 배선이 들어와도 값이 없는 요청은 예전과 바이트가 같다(K5 ④).
+        kwargs.update(effort_request_fields("anthropic", effort))
         kwargs = normalize_anthropic_request(
             model,
             kwargs,
@@ -216,6 +221,7 @@ async def _call_provider(
         max_tokens=max_tokens,
         temperature=temperature,
         messages=messages,
+        **effort_request_fields("openai", effort),
     )
     text = response.choices[0].message.content or ""
     return LLMResponse(
@@ -309,6 +315,19 @@ def _record_dataset_call(
     )
 
 
+def _key_effort(payload: dict[str, Any], effort: str | None) -> None:
+    """사고량을 카세트 키에 넣는다 -- **보냈을 때만.**
+
+    사고량은 답을 바꾼다. 키에 없으면 low 로 녹음한 호출이 high 요청에서
+    적중한다(`cassette_model._key` 가 코딩 경로에서 같은 이유로 넣었다).
+
+    None 이면 키를 건드리지 않는다. 기존 golden 카세트는 effort 를 보내지
+    않던 때 녹음됐고, 그 키가 바뀌면 D19 golden 게이트가 전부 빗나간다.
+    """
+    if effort is not None:
+        payload["effort"] = effort
+
+
 async def _budgeted_dispatch(
     *,
     model: str,
@@ -367,6 +386,7 @@ async def call_messages(
     client=None,
     cassette=None,
     stage: str = "llm",
+    effort: str | None = None,
 ) -> LLMResponse:
     async def invoke(limit: int, dispatch: _DispatchState) -> LLMResponse:
         async def produce() -> dict[str, Any]:
@@ -385,6 +405,7 @@ async def call_messages(
                         client=resolved,
                         tools=tools,
                         stage=stage,
+                        effort=effort,
                     )
                 )
                 return asdict(response)
@@ -395,6 +416,7 @@ async def call_messages(
                 temperature=temperature,
                 client=resolved,
                 tools=tools,
+                effort=effort,
             )
             return asdict(response)
 
@@ -408,6 +430,7 @@ async def call_messages(
             "max_tokens": limit,
             "temperature": temperature,
         }
+        _key_effort(payload, effort)
         recorded = await cassette.remember("llm", payload, produce)
         return LLMResponse(**recorded)
 
@@ -429,6 +452,7 @@ async def call_llm(
     client=None,
     cassette=None,
     stage: str = "llm",
+    effort: str | None = None,
 ) -> LLMResponse:
     # 채워지지 않은 치환 자리를 가진 프롬프트는 모델에 보내지 않는다.
     #
@@ -463,6 +487,7 @@ async def call_llm(
                         max_tokens=limit,
                         client=resolved,
                         stage=stage,
+                        effort=effort,
                     )
                 )
                 return asdict(response)
@@ -472,6 +497,7 @@ async def call_llm(
                 max_tokens=limit,
                 temperature=temperature,
                 client=resolved,
+                effort=effort,
             )
             return asdict(response)
 
@@ -485,6 +511,7 @@ async def call_llm(
             "max_tokens": limit,
             "temperature": temperature,
         }
+        _key_effort(payload, effort)
         recorded = await cassette.remember("llm", payload, produce)
         return LLMResponse(**recorded)
 
@@ -528,6 +555,7 @@ async def call_text(
     client=None,
     cassette=None,
     stage: str = "llm",
+    effort: str | None = None,
 ) -> LLMResponse:
     """A prose call that earns one larger attempt when it hits its ceiling.
 
@@ -556,6 +584,7 @@ async def call_text(
         client=client,
         cassette=cassette,
         stage=stage,
+        effort=effort,
     )
     if response.stop_reason != "max_tokens":
         return response
@@ -583,6 +612,7 @@ async def call_text(
             client=client,
             cassette=cassette,
             stage=stage,
+            effort=effort,
         )
     except TokenBudgetExhausted:
         # No room for the bigger attempt. The cut text still stands.
@@ -624,6 +654,7 @@ async def call_json(
     cassette=None,
     retries: int = 1,
     stage: str = "llm",
+    effort: str | None = None,
 ) -> tuple[dict[str, Any], LLMResponse]:
     """Call the model and parse one JSON object out of its response.
 
@@ -669,6 +700,7 @@ async def call_json(
                 client=client,
                 cassette=cassette,
                 stage=stage,
+                effort=effort,
             )
         except (LLMProviderError, TokenBudgetExhausted) as exc:
             # This attempt produced no `usage`, so it adds nothing (§A5 forbids

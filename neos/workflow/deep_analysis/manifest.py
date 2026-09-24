@@ -18,7 +18,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from neos.config.model_routing import ModelResolution
+from neos.config.model_routing import EffortResolution, ModelResolution
 
 MANIFEST_KIND = "run_manifest"
 MANIFEST_VERSION = 1
@@ -92,22 +92,43 @@ def component_id(obj: object | None) -> str | None:
     return component_id_for_class(type(obj))
 
 
+def _effort_entry(resolution: EffortResolution) -> dict[str, Any]:
+    """한 역할의 사고량을 매니페스트에 적는 모양.
+
+    셋을 가른다 -- 보냈다(`level`) · 아무도 정하지 않았다(`source` 없음) ·
+    정했는데 모델이 받지 않아 보내지 않았다(`refused`). 뒤의 둘은 요청
+    바이트가 같아도 **다른 구성**이다.
+    """
+    return {
+        "level": resolution.effort,
+        "source": None if resolution.source is None else resolution.source.value,
+        "refused": resolution.refused or None,
+    }
+
+
 def build_manifest(
     *,
     profile: str,
     models: dict[str, ModelResolution],
+    efforts: dict[str, EffortResolution],
     budget: dict[str, int | float],
     prompts: dict[str, str],
     skills: list[dict[str, str]] | None,
     components: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    """호출자가 이미 가진 값을 매니페스트 모양으로 정렬한다. 계산 없음."""
+    """호출자가 이미 가진 값을 매니페스트 모양으로 정렬한다. 계산 없음.
+
+    `efforts` 는 필수다 -- 로드맵 §10.1 이 구성 지문에 사고량을 요구한다.
+    기본값을 두면 호출자가 빠뜨린 런이 "아무도 정하지 않았다" 와 같은
+    모양으로 찍히고, 재생성할 수 없는 아티팩트에서 둘을 가를 방법이 없다.
+    """
     resolved = {
         name: {
             "role": resolution.role,
             "model": resolution.model,
             "source": resolution.source.value,
+            "effort": _effort_entry(efforts[name]),
         }
         for name, resolution in sorted(models.items())
     }

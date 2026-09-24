@@ -396,6 +396,8 @@ async def _probe_model(model: str) -> None:
         "ping",
         max_tokens=PROBE_MAX_TOKENS,
         stage="preflight",
+        # 모델 단위 프로브다 -- 역할마다 다를 수 있는 사고량은 여기서 묻지 않는다.
+        effort=None,
     )
 
 

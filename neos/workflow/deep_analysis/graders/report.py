@@ -235,9 +235,12 @@ class ReportGrader:
         llm_client=None,
         cassette=None,
         json_call=call_json,
+        judge_effort: str | None = None,
     ) -> None:
         self.ledger = ledger
         self.judge_model = judge_model
+        # 모델과 짝으로 주입받는다 -- 이 판정자가 부르는 모델에 대해 해석된 값이다.
+        self.judge_effort = judge_effort
         self.llm_client = llm_client
         self.cassette = cassette
         self.json_call = json_call
@@ -338,6 +341,7 @@ class ReportGrader:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_grading",
+                effort=self.judge_effort,
             )
         except TruncatedResponseError:
             # Rejecting here sends the orchestrator back to re-assemble the

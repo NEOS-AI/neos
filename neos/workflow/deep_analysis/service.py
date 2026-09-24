@@ -16,7 +16,12 @@ from .manifest import (
     component_id_for_class,
     prompt_hashes,
 )
-from .model_roles import resolve_all, resolve_harness_model
+from .model_roles import (
+    resolve_all,
+    resolve_all_effort,
+    resolve_harness_effort,
+    resolve_harness_model,
+)
 from .orchestrator import Orchestrator
 from .reexecutor import SandboxReexecutor
 from .skill_selector import SkillSelector
@@ -67,6 +72,7 @@ async def build_orchestrator(
 ) -> Orchestrator:
     config = settings.config.deep_analysis
     judge_model = resolve_harness_model("judge").model
+    judge_effort = resolve_harness_effort("judge").effort
     ledger = Ledger(session, run_id)
 
     # 트랙 J. 플래그가 켜졌을 때만 만든다 -- 꺼져 있으면 이 블록은 통째로
@@ -124,12 +130,14 @@ async def build_orchestrator(
         max_output_tokens=config.judge_max_output_tokens,
         llm_client=llm_client,
         cassette=cassette,
+        judge_effort=judge_effort,
     )
     report_grader = ReportGrader(
         ledger,
         judge_model=judge_model,
         llm_client=llm_client,
         cassette=cassette,
+        judge_effort=judge_effort,
     )
 
     skill_selector = (
@@ -184,6 +192,7 @@ async def build_orchestrator(
     manifest = build_manifest(
         profile=profile,
         models=resolve_all(),
+        efforts=resolve_all_effort(),
         budget={
             "global_token_cap": global_token_cap,
             "synthesis_max_tokens": synthesis_max_tokens,

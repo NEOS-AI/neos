@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from neos.config.model_routing import ModelResolution, ResolutionSource
+from neos.config.model_routing import (
+    EffortResolution,
+    ModelResolution,
+    ResolutionSource,
+)
 from neos.workflow.deep_analysis.manifest import (
     MANIFEST_KIND,
     MANIFEST_VERSION,
@@ -30,6 +34,7 @@ _MODELS = {
     "synth": _resolution("claude-opus-5-5", "powerful"),
     "judge": _resolution("claude-sonnet-5", "everyday"),
 }
+_EFFORTS = {name: EffortResolution(effort=None) for name in _MODELS}
 _BUDGET = {
     "global_token_cap": 140000,
     "synthesis_max_tokens": 2000,
@@ -46,6 +51,7 @@ def _build(**overrides):
     kwargs = {
         "profile": "dev",
         "models": _MODELS,
+        "efforts": _EFFORTS,
         "budget": _BUDGET,
         "prompts": {"decompose": "sha256:abc"},
         "skills": [{"name": "web-search", "version": "1.0.0"}],
@@ -87,6 +93,42 @@ def test_build_manifest_writes_resolution_not_config():
         "role": "powerful",
         "model": "claude-opus-5-5",
         "source": "role_default",
+        "effort": {"level": None, "source": None, "refused": None},
+    }
+
+
+def test_build_manifest_tells_the_three_effort_states_apart():
+    """보냈다 · 아무도 정하지 않았다 · 정했는데 거절됐다.
+
+    뒤의 둘은 요청 바이트가 같다. 그래도 다른 구성이고, 매니페스트는
+    재생성할 수 없으므로 여기서 갈라 적지 않으면 영영 가를 수 없다.
+    """
+    manifest = _build(
+        efforts={
+            "scout": EffortResolution(effort=None),
+            "dig": EffortResolution(
+                effort="high", source=ResolutionSource.FEATURE_OVERRIDE
+            ),
+            "synth": EffortResolution(
+                effort=None,
+                source=ResolutionSource.MODEL_DEFAULT,
+                refused="level_not_supported",
+            ),
+            "judge": EffortResolution(effort=None),
+        }
+    )
+
+    efforts = {name: entry["effort"] for name, entry in manifest["models"].items()}
+    assert efforts["scout"] == {"level": None, "source": None, "refused": None}
+    assert efforts["dig"] == {
+        "level": "high",
+        "source": "feature_override",
+        "refused": None,
+    }
+    assert efforts["synth"] == {
+        "level": None,
+        "source": "model_default",
+        "refused": "level_not_supported",
     }
 
 

@@ -98,6 +98,7 @@ async def run_discovery(
     client=None,
     cassette=None,
     max_turns: int = 3,
+    effort: str | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     tools = build_tool_defs(skills)
     skills_by_tool = {f"search_{s.name}": s for s in skills}
@@ -117,6 +118,7 @@ async def run_discovery(
             client=client,
             cassette=cassette,
             stage="discovery",
+            effort=effort,
         )
         tokens += response.input_tokens + response.output_tokens
 

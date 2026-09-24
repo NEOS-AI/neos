@@ -17,8 +17,10 @@ _MAP = {
 
 class AgenticGrader:
     def __init__(self, *, judge_model, threshold, sample_rate, max_output_tokens,
-                 llm_client=None, cassette=None, sampler=None):
+                 llm_client=None, cassette=None, sampler=None, judge_effort=None):
         self.judge_model = judge_model
+        # 모델과 짝으로 주입받는다 -- 이 판정자가 부르는 모델에 대해 해석된 값이다.
+        self.judge_effort = judge_effort
         self.threshold = threshold
         self.sample_rate = sample_rate
         self.max_output_tokens = max_output_tokens
@@ -116,6 +118,7 @@ class AgenticGrader:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_grading",
+                effort=self.judge_effort,
             )
         except TruncatedResponseError as exc:
             # D24: a cut judgement is unfinished, not absent. D14's fail-open
