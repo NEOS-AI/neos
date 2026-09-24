@@ -39,10 +39,12 @@ def test_no_role_asks_for_effort_yet() -> None:
         if value is not None
     }
     defaults = settings.config.model_routing.effort
+    # 빈 `models: {}` 는 아무것도 요구하지 않는다. 채워지면 이 가드가 잡는다 --
+    # 모델별 기본값도 역할 기본값과 같은 표본 경계다.
     asked_defaults = {
         role: value
         for role, value in defaults.model_dump().items()
-        if value is not None
+        if value
     }
 
     assert asked == {}, f"DA 역할이 사고량을 요구한다: {asked} -- 경계 행을 더할 것"

@@ -151,3 +151,30 @@ def test_a_refusal_still_reports_where_the_value_came_from() -> None:
     resolution = _resolve(feature_override="xhigh")
 
     assert resolution.source is ResolutionSource.FEATURE_OVERRIDE
+
+
+# ---- 모델별 기본값 칸 (2026-09-24) --------------------------------------------------
+
+
+def test_the_model_default_wins_over_the_role_default() -> None:
+    resolution = _resolve(model_default="medium", role_default="high")
+
+    assert resolution.effort == "medium"
+    assert resolution.source is ResolutionSource.MODEL_DEFAULT
+
+
+def test_the_feature_override_wins_over_the_model_default() -> None:
+    resolution = _resolve(feature_override="high", model_default="low")
+
+    assert resolution.effort == "high"
+    assert resolution.source is ResolutionSource.FEATURE_OVERRIDE
+
+
+def test_an_openai_level_passes_the_gate_when_the_model_takes_it() -> None:
+    resolution = _resolve(
+        model="gpt-6-sol",
+        user_effort="none",
+        supported_levels=("none", "low", "high"),
+    )
+
+    assert resolution.effort == "none"

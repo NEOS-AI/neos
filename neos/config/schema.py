@@ -157,6 +157,10 @@ class RoleEffortConfig(StrictConfigModel):
 
     everyday: str | None = None
     powerful: str | None = None
+    # 모델별 기본값 {카탈로그 핀: 레벨}. 역할 기본값보다 구체적이므로 사슬에서
+    # 그 위다. 키와 레벨은 AppConfig.validate_effort_model_defaults 가 부팅 때
+    # 카탈로그와 맞대 본다 -- 오타는 부팅 실패다.
+    models: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelRoutingConfig(StrictConfigModel):
@@ -2264,6 +2268,26 @@ class AppConfig(StrictConfigModel):
                 "coding real loop requires a Docker or managed sandbox in "
                 "staging and production"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_effort_model_defaults(self) -> "AppConfig":
+        defaults = self.model_routing.effort.models
+        if not defaults:
+            return self
+        from neos.config.model_config import effort_levels_for, model_config
+
+        for pin, level in defaults.items():
+            if pin not in model_config.catalog.models:
+                raise ValueError(
+                    f"model_routing.effort.models: {pin!r} is not a catalog model"
+                )
+            levels = effort_levels_for(pin)
+            if level not in levels:
+                raise ValueError(
+                    f"model_routing.effort.models: {pin!r} does not take "
+                    f"{level!r}; it takes {list(levels)}"
+                )
         return self
 
     @model_validator(mode="after")
