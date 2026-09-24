@@ -125,9 +125,13 @@ user×모델 (DB) → 대화 → 기능 오버라이드 → **모델별 기본�
 
 ### 5.1 해석기 하나 — `neos/services/chat_effort.py`
 
-`resolve_chat_effort(model, user_id) -> EffortResolution`
+`resolve_chat_effort(model, conversation_id) -> EffortResolution`
 
-1. `user_model_preferences` 에서 (user_id, model) 을 조회한다 → `user_effort`.
+1. `conversations` 와 `user_model_preferences` 를 `conversation_id` 로 조인해 한 번에 읽는다 →
+   `user_effort`. 소유자 조회(`ChatRepository.get_conversation`)를 따로 하지 않는다 — 첨부 없는
+   턴이 conversations 를 읽지 않는다는 기존 보장(Fix round 2 Item 2, `tests/services/
+   test_chat_llm_owner_lazy_resolution.py`)을 지키기 위해서다. 모델이 `effort_levels` 를
+   선언하지 않았으면 조회하지 않는다.
 2. 모델별 기본값은 `config.model_routing.effort.models[model]`, 역할 기본값은 기존 설정에서 읽는다.
 3. 둘을 기존 `resolve_effort()` 에 넣는다. 같은 사슬, 같은 `_gate_effort` 가 모르는·미지원
    레벨을 처리한다. **두 번째 사슬을 만들지 않는다.**
@@ -152,8 +156,8 @@ user×모델 (DB) → 대화 → 기능 오버라이드 → **모델별 기본�
 
 네 진입점이 각자 `resolve_conversation_chat_model` + `_extract_provider_from_model` 을 부른다.
 그 둘에 effort 해석을 더한 `_resolve_turn(model_name, conversation_id) -> TurnModel(model,
-provider, effort)` 을 하나 두고 넷이 모두 그것을 쓰게 한다. 사용자 id 는 기존
-`_resolve_owner_user_id` 로 얻는다.
+provider, effort)` 을 하나 두고 넷이 모두 그것을 쓰게 한다. tool 경로가 비-Anthropic 모델을
+`generate_response_stream` 으로 위임할 때는 해석된 값을 넘겨 두 번 해석하지 않는다.
 
 ### 5.4 thinking 과의 관계
 
@@ -167,11 +171,12 @@ provider, effort)` 을 하나 두고 넷이 모두 그것을 쓰게 한다. 사�
 ### 5.5 관측
 
 턴마다 effort 의 출처(user / conversation / feature_override / model_default /
-role_default / none)와 거절 사유를 로그로 남긴다. 메트릭 라벨은 출처만 쓴다.
+role_default / none)와 거절 사유를 로그로 남긴다. 메트릭 `neos_chat_effort_resolved_total`
+의 라벨은 출처만 쓴다.
 
 ## 6. API
 
-새 라우터 `neos/api/model_preference_routes.py`. 인증은 `get_current_user`.
+새 라우터 `neos/api/handlers/model_preference_handlers.py` (기존 `autonomy_handlers.py` 와 같은 자리). 인증은 `get_current_user`.
 
 | 메서드 · 경로 | 동작 |
 |---|---|
