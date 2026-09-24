@@ -93,6 +93,9 @@ models:
     # 로컬에서 확인할 수 없으므로 켜지 않는다 -- 꺼져 있으면 배열에서
     # 걸러내는 옛 경로가 그대로 맞다.
     mid_conversation_tools: true
+    # K4b (2026-09-24 실측). 보내지 않으면 thinking 본문이 **빈다**(서버 기본 omitted)
+    # -- K4a 상태 줄이 이 모델에서 죽어 있었다. 스펙 R-04 대로 updates 를 받는다.
+    thinking_display: updates
     pricing: {input: 10.00, output: 50.00, cache_creation: 12.50, cache_read: 0.25}
 
   # 심층분석 판정자 전용 (E3, 2026-08-30). 피커에 올리지 않으므로 tiers 없이

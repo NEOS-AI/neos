@@ -47,6 +47,9 @@ class ModelUsage:
     output_tokens: int
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # `output_tokens` 의 **내역**이지 별도 합계가 아니다. Anthropic 은 thinking 을
+    # 출력으로 청구하고 `output_tokens` 에 이미 넣는다(실측: 54 중 thinking 13).
+    # 더하면 두 번 센다.
     reasoning_tokens: int = 0
 
     def __post_init__(self) -> None:

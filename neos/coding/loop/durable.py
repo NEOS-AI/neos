@@ -1067,12 +1067,14 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         )
 
     def _check_usage_budgets(self, state):
+        # reasoning 은 output 안에 있다(`ModelUsage.reasoning_tokens`). 어댑터가
+        # 그것을 늘 0 으로 읽던 동안에는 더해도 무해했다 -- 읽기를 고치자 두 번
+        # 세게 됐다(2026-09-24).
         spent = (
             state.input_tokens
             + state.output_tokens
             + state.cache_read_tokens
             + state.cache_write_tokens
-            + state.reasoning_tokens
         )
         if spent > self._config.max_total_tokens:
             raise CodingLoopFailure("token_budget_exceeded", retryable=False)

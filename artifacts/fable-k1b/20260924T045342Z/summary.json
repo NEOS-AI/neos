@@ -1,0 +1,101 @@
+{
+  "model": "claude-fable-5-1",
+  "measured_at": "2026-09-24T04:54:04.945198+00:00",
+  "B_neos_path": [
+    {
+      "label": "B.turn0",
+      "status": 200,
+      "input_transformations": [
+        []
+      ],
+      "blocks": [
+        "thinking",
+        "text",
+        "tool_use"
+      ],
+      "thinking_interleaved": false
+    },
+    {
+      "label": "B.turn1",
+      "status": 200,
+      "input_transformations": [
+        []
+      ],
+      "blocks": [
+        "text",
+        "tool_use",
+        "tool_use"
+      ],
+      "thinking_interleaved": false
+    },
+    {
+      "label": "B.turn2",
+      "status": 200,
+      "input_transformations": [
+        []
+      ],
+      "blocks": [
+        "text"
+      ],
+      "thinking_interleaved": false
+    },
+    {
+      "label": "B.follow_up",
+      "status": 200,
+      "input_transformations": [
+        []
+      ],
+      "blocks": [
+        "text"
+      ],
+      "thinking_interleaved": false
+    }
+  ],
+  "A_raw_replay": {
+    "status": 200,
+    "input_transformations": [
+      []
+    ]
+  },
+  "C_control_drop_block": {
+    "status": 200,
+    "input_transformations": [
+      [
+        {
+          "type": "thinking_dropped",
+          "path": "messages.1.content.0",
+          "reason": "prefix_binding_mismatch"
+        }
+      ]
+    ]
+  },
+  "C0_control_default": {
+    "status": 200,
+    "error": null
+  },
+  "K4b": {
+    "updates_thinking_blocks": [
+      [
+        {
+          "type": "thinking",
+          "chars": 0,
+          "signed": true,
+          "preview": ""
+        }
+      ],
+      [],
+      [],
+      []
+    ],
+    "display_unset_status": 200,
+    "display_unset_thinking_blocks": [
+      {
+        "type": "thinking",
+        "chars": 0,
+        "signed": true,
+        "preview": ""
+      }
+    ]
+  },
+  "redacted_thinking_seen": false
+}

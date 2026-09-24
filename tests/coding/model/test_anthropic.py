@@ -185,6 +185,31 @@ async def test_usage_extracts_cache_window_tokens() -> None:
 
 
 @pytest.mark.asyncio
+async def test_thinking_tokens_are_read_where_the_api_puts_them() -> None:
+    """실 API 의 `message_delta.usage` 모양 그대로(2026-09-24 실측).
+
+    위 테스트의 `reasoning_tokens` 는 API 에 없는 필드다 -- 그 가짜 하나로
+    reasoning 이 실제로는 늘 0 인 것이 가려져 있었다.
+    """
+    client = FakeAnthropicClient(
+        [
+            event(
+                "message_delta",
+                delta=SimpleNamespace(stop_reason="end_turn"),
+                usage=SimpleNamespace(
+                    output_tokens=54,
+                    output_tokens_details=SimpleNamespace(thinking_tokens=13),
+                ),
+            ),
+        ]
+    )
+    events = [
+        item async for item in AnthropicCodingModel(client).stream(request())
+    ]
+    assert events[-1].usage.reasoning_tokens == 13
+
+
+@pytest.mark.asyncio
 async def test_text_delta_is_normalized() -> None:
     client = FakeAnthropicClient(
         [

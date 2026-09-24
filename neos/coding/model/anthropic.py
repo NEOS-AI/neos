@@ -32,6 +32,7 @@ __all__ = ["AnthropicCodingModel", "CodingModelError"]
 
 CLEAR_AT_BETA = "mid-conversation-system-clear-at-2026-08-21"
 TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01"
+THINKING_UPDATES_BETA = "thinking-display-updates-2026-08-18"
 
 
 class AnthropicCodingModel:
@@ -154,11 +155,7 @@ class AnthropicCodingModel:
                                     output_tokens=output_tokens,
                                     cache_read_tokens=cache_read_tokens,
                                     cache_write_tokens=cache_write_tokens,
-                                    reasoning_tokens=int(
-                                        getattr(usage, "reasoning_tokens", 0)
-                                        or getattr(usage, "thinking_tokens", 0)
-                                        or 0
-                                    ),
+                                    reasoning_tokens=_thinking_tokens(usage),
                                 ),
                             )
         except CodingModelError:
@@ -187,6 +184,23 @@ class AnthropicCodingModel:
             ) from error
 
 
+def _thinking_tokens(usage: object) -> int:
+    """API 가 실제로 싣는 자리는 `usage.output_tokens_details.thinking_tokens` 다.
+
+    전에는 `usage.reasoning_tokens` 만 읽었고 그런 필드는 없다 -- 실 API 에서
+    reasoning 이 **늘 0** 으로 집계됐다(2026-09-24, K1b 세션에서 발견). 가짜
+    클라이언트 테스트가 없는 필드를 지어내 초록이었다. 옛 자리는 다른 모양의
+    클라이언트를 위해 폴백으로 남긴다.
+    """
+    details = getattr(usage, "output_tokens_details", None)
+    return int(
+        getattr(details, "thinking_tokens", 0)
+        or getattr(usage, "reasoning_tokens", 0)
+        or getattr(usage, "thinking_tokens", 0)
+        or 0
+    )
+
+
 def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
     rendered: dict[str, object] = {
         "name": tool.name,
@@ -202,6 +216,8 @@ def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
 
 
 def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
+    from neos.config.model_config import thinking_display_for
+
     messages, betas = _messages_to_anthropic(request.model, request.messages)
     payload: dict[str, object] = {
         "model": request.model,
@@ -216,6 +232,14 @@ def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
         # 배선 커밋들이 "요청이 예전과 바이트가 같다" 를 주장하려면 후자여야
         # 한다. 게이트는 `resolve_effort` 에 있다 -- 여기서 다시 묻지 않는다.
         payload["output_config"] = {"effort": request.limits.effort}
+    display = thinking_display_for(request.model)
+    if display:
+        # 선언한 모델에만 싣는다 -- 나머지 모델의 요청은 예전과 바이트가 같다.
+        # 이 키는 thinking 바인딩과 무관하다: 텍스트가 실린 thinking 을 NEOS
+        # 경로로 재전송해도 `input_transformations` 가 비었다(K1b 실측).
+        payload["thinking"] = {"type": "adaptive", "display": display}
+        if display == "updates":
+            betas.add(THINKING_UPDATES_BETA)
     if any(tool.deferred for tool in request.tools):
         betas.add(TOOL_CHANGES_BETA)
     if betas:
