@@ -15,6 +15,8 @@ class CatalogModelOut(BaseModel):
     vision: bool
     role_alias: str | None
     default: bool
+    effort_levels: list[str] = []
+    effort_default: str | None = None
 
 
 class CatalogResponse(BaseModel):

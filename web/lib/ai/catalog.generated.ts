@@ -10,6 +10,8 @@ export type GeneratedPickerRow = {
   vision: boolean;
   role_alias: string | null;
   default: boolean;
+  effort_levels: string[];
+  effort_default: string | null;
 };
 
 export const generatedDefaultId = "anthropic/claude-sonnet-5";
@@ -26,6 +28,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: "sonnet-5",
     default: true,
+    effort_levels: ["low", "medium", "high", "xhigh", "max"],
+    effort_default: null,
   },
   {
     id: "anthropic/claude-opus-5.5",
@@ -37,6 +41,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: "opus-5.5",
     default: false,
+    effort_levels: ["low", "medium", "high", "xhigh", "max"],
+    effort_default: null,
   },
   {
     id: "anthropic/claude-haiku-4.5",
@@ -48,6 +54,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: "haiku-4.5",
     default: false,
+    effort_levels: [],
+    effort_default: null,
   },
   {
     id: "anthropic/claude-sonnet-4.5",
@@ -59,6 +67,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: null,
     default: false,
+    effort_levels: [],
+    effort_default: null,
   },
   {
     id: "anthropic/claude-sonnet-4.5-thinking",
@@ -70,6 +80,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: null,
     default: false,
+    effort_levels: [],
+    effort_default: null,
   },
   {
     id: "openai/gpt-6-sol",
@@ -81,6 +93,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: null,
     default: false,
+    effort_levels: ["none", "low", "medium", "high", "xhigh", "max"],
+    effort_default: null,
   },
   {
     id: "openai/gpt-6-luna",
@@ -92,6 +106,8 @@ export const generatedModels: GeneratedPickerRow[] = [
     vision: true,
     role_alias: null,
     default: false,
+    effort_levels: ["none", "low", "medium", "high", "xhigh", "max"],
+    effort_default: null,
   },
 ];
 

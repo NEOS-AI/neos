@@ -15,6 +15,8 @@ export type CatalogModelOut = {
   vision: boolean;
   role_alias: string | null;
   default: boolean;
+  effort_levels: string[];
+  effort_default: string | null;
 };
 
 export type ChatModel = CatalogModelOut;
