@@ -112,9 +112,14 @@ def test_a_role_default_is_read_from_model_routing(monkeypatch) -> None:
 
 
 def test_an_unsupported_level_is_refused_not_downgraded(monkeypatch) -> None:
-    """카탈로그가 비어 있는 지금은 **모든** 역할이 여기 해당한다."""
+    """모델이 받지 않는 레벨은 가장 가까운 레벨로 낮추지 않고 거절한다.
+
+    카탈로그가 비어 있던 동안은 모든 역할이 `model_declares_no_effort` 였다.
+    2026-09-24 에 실측 레벨이 채워졌으므로 일부만 받는 모델을 세워 둔다.
+    """
     from neos.workflow.deep_analysis import model_roles
 
+    monkeypatch.setattr(model_roles, "_supported_levels", lambda model: ("low", "high"))
     monkeypatch.setattr(
         settings.config.deep_analysis.model_effort, "judge", "max", raising=False
     )
@@ -122,4 +127,17 @@ def test_an_unsupported_level_is_refused_not_downgraded(monkeypatch) -> None:
     resolution = model_roles.resolve_harness_effort("judge")
 
     assert resolution.effort is None
+    assert resolution.refused == "level_not_supported"
+
+
+def test_a_model_that_declares_nothing_is_refused(monkeypatch) -> None:
+    from neos.workflow.deep_analysis import model_roles
+
+    monkeypatch.setattr(model_roles, "_supported_levels", lambda model: ())
+    monkeypatch.setattr(
+        settings.config.deep_analysis.model_effort, "judge", "max", raising=False
+    )
+
+    resolution = model_roles.resolve_harness_effort("judge")
+
     assert resolution.refused == "model_declares_no_effort"
