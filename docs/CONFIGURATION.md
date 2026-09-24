@@ -567,9 +567,19 @@ Two things make effort different from the model:
   differ, with nothing recording the difference. `EffortResolution.refused`
   carries the reason so an operator who set a level and saw nothing happen can
   tell a config mistake from a code one.
-- **Every level is unset today.** No catalog model declares `effort_levels`,
-  because per-model support is reported by the models API (`ModelCapabilities.
-  effort`) and reading it needs a key. Nothing is sent until that is measured.
+- **Every configured value is empty today.** The catalog now declares measured
+  `effort_levels` (see *Effort (per model and per user)* below), but no role,
+  harness role or model default asks for a level, so nothing is sent.
+
+Deep analysis reads the chain once per harness role through
+`resolve_harness_effort` (`neos/workflow/deep_analysis/model_roles.py`), with
+`deep_analysis.model_effort.<role>` as the feature override and
+`model_routing.effort.models[<resolved model>]` as the per-model default — the
+same slot chat uses, so a per-model default is a deep analysis sample boundary.
+Every deep analysis call site passes the resolved value as `effort=`; a test
+walks the package's AST and fails on a call that omits it. The run manifest
+records each role's `effort: {level, source, refused}`. The coding loop does
+not send effort yet — it has no configuration slot for it.
 
 ⚠️ `deep_analysis.model_effort` and `deep_analysis.effort` are **different
 axes**. The latter is investigation depth (`token_cap`, `wall_clock_cap`); the
