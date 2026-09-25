@@ -1,0 +1,41 @@
+slug: kyc-screener
+mode: B
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - kyc-doc-parse
+  - kyc-rules
+  - xlsx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: kyc-doc-reader
+    catalog_template: fsi-reader
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    output_schema_ref: kyc-doc-reader
+  - name: kyc-rules-engine
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    output_schema_ref: null
+  - name: kyc-escalator
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    output_schema_ref: null
