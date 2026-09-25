@@ -18,6 +18,11 @@ _INVALID = {"ok": False, "error": "invalid_content"}
 _NO_TOOL = {"ok": False, "error": "tool_not_allowed"}
 _NOT_ALLOWLISTED = {"ok": False, "error": "command_not_allowlisted"}
 _MUTATION = {"ok": False, "error": "mutation_forbidden"}
+_FORMULA_WAIT = "univer.formula_wait.v1"
+_RANGE_GET = "univer.range_get.v1"
+_RANGE_SET = "univer.range_set.v1"
+_INSPECT = "univer.inspect.v1"
+_SAVE = "univer.save.v1"
 
 _READ = "read_file.v1"
 _WRITE = "write_file.v1"
@@ -196,8 +201,13 @@ class UniverSessionPort:
 
 
 class UniverToolPort:
-    def __init__(self, sidecar: SidecarClient | InMemorySidecar) -> None:
+    def __init__(
+        self,
+        sidecar: SidecarClient | InMemorySidecar,
+        flags: object | None = None,
+    ) -> None:
         self._sidecar = sidecar
+        self._flags = flags
 
     def definitions(self) -> tuple[str, ...]:
         return _SIDECAR_TOOLS
@@ -216,6 +226,9 @@ class UniverToolPort:
     def _execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
+        flagged = self._check_flags(name)
+        if flagged is not None:
+            return flagged
         if name not in self.definitions():
             return dict(_NO_TOOL)
         if name == _EXECUTE_COMMAND:
@@ -226,6 +239,21 @@ class UniverToolPort:
         if method is None:
             return dict(_NO_TOOL)
         return self._dispatch(method, dict(input))
+
+    def _check_flags(self, name: str) -> Mapping[str, Any] | None:
+        flags = self._flags
+        if flags is None:
+            return None
+        if not getattr(flags, "enabled", True):
+            return {"ok": False, "error": "flag_disabled", "flag": "enabled"}
+        if name == _FORMULA_WAIT and not getattr(flags, "formula_enabled", True):
+            return {"ok": False, "error": "flag_disabled", "flag": "formula_enabled"}
+        kind = _sidecar_kind(self._sidecar)
+        if kind == "doc" and not getattr(flags, "docs_enabled", True):
+            return {"ok": False, "error": "flag_disabled", "flag": "docs_enabled"}
+        if _sheet_tool(name, kind) and not getattr(flags, "sheets_enabled", True):
+            return {"ok": False, "error": "flag_disabled", "flag": "sheets_enabled"}
+        return None
 
     def _dispatch(
         self, method: str, params: Mapping[str, object]
@@ -256,6 +284,29 @@ def wrap_untrusted_document(text: str, source: str) -> str:
         f"{safe}\n"
         "</untrusted_document>"
     )
+
+
+def _sidecar_kind(sidecar: object) -> str | None:
+    kind = getattr(sidecar, "kind", None)
+    if isinstance(kind, str):
+        return kind
+    kind = getattr(sidecar, "_kind", None)
+    if isinstance(kind, str):
+        return kind
+    return None
+
+
+def _sheet_tool(name: str, kind: str | None) -> bool:
+    if kind == "doc":
+        return name in {_RANGE_GET, _RANGE_SET}
+    return name in {
+        _INSPECT,
+        _RANGE_GET,
+        _RANGE_SET,
+        _EXECUTE_COMMAND,
+        _SAVE,
+        _FORMULA_WAIT,
+    }
 
 
 def _binding_denied(name: str) -> Mapping[str, Any] | None:
