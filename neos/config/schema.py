@@ -2011,6 +2011,21 @@ class ChannelConfig(StrictConfigModel):
         return _split_csv(value)
 
 
+class FsiConfig(StrictConfigModel):
+    enabled: bool = False
+    mode_b_enabled: bool = False
+    mode_a_enabled: bool = False
+    partner_mcp: bool = False
+
+    @model_validator(mode="after")
+    def child_requires_master(self) -> "FsiConfig":
+        if (
+            self.mode_b_enabled or self.mode_a_enabled or self.partner_mcp
+        ) and not self.enabled:
+            raise ValueError("fsi.mode_* / partner_mcp require fsi.enabled")
+        return self
+
+
 class ContextAssemblyConfig(StrictConfigModel):
     max_tokens: int = 8000
     short_term_ratio: float = 0.50
@@ -2112,6 +2127,7 @@ class AppConfig(StrictConfigModel):
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
+    fsi: FsiConfig = Field(default_factory=FsiConfig)
     context_assembly: ContextAssemblyConfig = Field(default_factory=ContextAssemblyConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     model_providers: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
