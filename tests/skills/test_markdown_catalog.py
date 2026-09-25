@@ -6,6 +6,7 @@ import pytest
 
 from neos.skills.markdown_catalog import (
     MarkdownSkillCatalog,
+    default_catalog,
     default_skill_roots,
     research_skill_roots,
 )
@@ -31,6 +32,7 @@ def test_default_skill_roots_are_coding_only() -> None:
     assert (REPO_ROOT / "neos" / "coding" / "skills").resolve() in paths
     assert (REPO_ROOT / "skills").resolve() not in paths
     assert all(source != "repo" for source, _path in roots)
+    assert default_catalog().get("xlsx-author") is None
 
 
 def test_coding_catalog_excludes_research_only_names() -> None:
@@ -363,6 +365,60 @@ def test_load_markdown_reference_is_jailed_to_skill_dir(tmp_path: Path) -> None:
     assert catalog.load_markdown("guided", path="../../secret.md") is None
     assert catalog.load_markdown("guided", reference="missing.md") is None
     assert catalog.load_markdown("guided", reference="hooks.md/../secret.md") is None
+    assert catalog.load_markdown("guided", reference="../x") is None
+
+
+def _write_repo_skill(root: Path, name: str) -> Path:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: Demo\n---\n\n# {name}\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_load_markdown_references_alias(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    skill_dir = _write_repo_skill(root, "demo")
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "foo.md").write_text("# Foo\nPlural references body.\n", encoding="utf-8")
+    catalog = MarkdownSkillCatalog(roots=(("repo", root),))
+
+    body = catalog.load_markdown("demo", reference="foo")
+    assert body is not None and "Plural references body" in body
+    assert catalog.load_markdown("demo", reference="../x") is None
+
+
+def test_load_markdown_reference_wins_over_references(tmp_path: Path) -> None:
+    root = tmp_path / "skills"
+    skill_dir = _write_repo_skill(root, "demo")
+    singular = skill_dir / "reference"
+    plural = skill_dir / "references"
+    singular.mkdir()
+    plural.mkdir()
+    (singular / "foo.md").write_text("SINGULAR\n", encoding="utf-8")
+    (plural / "foo.md").write_text("PLURAL\n", encoding="utf-8")
+    catalog = MarkdownSkillCatalog(roots=(("repo", root),))
+
+    assert catalog.load_markdown("demo", reference="foo") == "SINGULAR\n"
+
+
+def test_nested_fsi_pack_needs_per_vertical_root(tmp_path: Path) -> None:
+    pack = tmp_path / "skills" / "financial-services"
+    skill_dir = pack / "financial-analysis" / "dcf-model"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: dcf-model\ndescription: DCF\n---\n\n# DCF\n",
+        encoding="utf-8",
+    )
+    shallow = MarkdownSkillCatalog(roots=(("repo", tmp_path / "skills"),))
+    vertical = MarkdownSkillCatalog(
+        roots=(("repo", pack / "financial-analysis"),)
+    )
+    assert shallow.get("dcf-model") is None
+    assert vertical.get("dcf-model") is not None
 
 
 def test_load_skill_denies_disabled_and_returns_allowed_tools(
