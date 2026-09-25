@@ -18,6 +18,8 @@ _SEARCH = "search_text.v1"
 
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9 ._/:#-]+$")
 _SOURCE_MAX = 256
+_UNTRUSTED_CLOSE = "</untrusted_document>"
+_UNTRUSTED_CLOSE_RE = re.compile(re.escape(_UNTRUSTED_CLOSE), re.IGNORECASE)
 
 
 class FsiParentWorkspacePort:
@@ -114,9 +116,10 @@ class FsiParentWorkspacePort:
 def wrap_untrusted_document(text: str, source: str) -> str:
     if len(source) > _SOURCE_MAX or not _SOURCE_RE.fullmatch(source):
         source = "unknown"
+    safe = _UNTRUSTED_CLOSE_RE.sub("</untrusted-document>", text)
     return (
         f'<untrusted_document source="{source}">\n'
-        f"{text}\n"
+        f"{safe}\n"
         "</untrusted_document>"
     )
 
