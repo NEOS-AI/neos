@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
-from neos.univer.sidecar import SidecarClient
+from neos.univer.sidecar import InMemorySidecar, SidecarClient
 
 _DENIED = {"ok": False, "error": "path_denied"}
 _XLSX = {"ok": False, "error": "xlsx_forbidden"}
@@ -30,6 +30,14 @@ _SIDECAR_TOOLS = (
     "univer.save.v1",
 )
 _EXECUTE_COMMAND = "univer.execute_command.v1"
+_RPC_METHODS = {
+    "univer.inspect.v1": "inspect",
+    "univer.range_get.v1": "range_get",
+    "univer.range_set.v1": "range_set",
+    "univer.execute_command.v1": "execute_command",
+    "univer.formula_wait.v1": "formula_wait",
+    "univer.save.v1": "save",
+}
 _XLSX_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
 
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9 ._/:#-]+$")
@@ -130,7 +138,7 @@ class UniverParentWorkspacePort:
 
 
 class UniverToolPort:
-    def __init__(self, sidecar: SidecarClient) -> None:
+    def __init__(self, sidecar: SidecarClient | InMemorySidecar) -> None:
         self._sidecar = sidecar
 
     def definitions(self) -> tuple[str, ...]:
@@ -142,7 +150,7 @@ class UniverToolPort:
         try:
             return self._execute(name, input)
         except Exception:
-            return {"ok": False, "error": self._sidecar.unavailable_error()}
+            return {"ok": False, "error": self._unavailable()}
 
     def _execute(
         self, name: str, input: Mapping[str, object]
@@ -153,7 +161,29 @@ class UniverToolPort:
             gated = _gate_execute_command(input)
             if gated is not None:
                 return gated
-        return {"ok": False, "error": self._sidecar.unavailable_error()}
+        method = _RPC_METHODS.get(name)
+        if method is None:
+            return dict(_NO_TOOL)
+        return self._dispatch(method, dict(input))
+
+    def _dispatch(
+        self, method: str, params: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        caller = getattr(self._sidecar, "call", None)
+        if callable(caller):
+            result = caller(method, params)
+            return _as_tool_result(result, self._unavailable())
+        dedicated = getattr(self._sidecar, method, None)
+        if callable(dedicated):
+            result = dedicated(params)
+            return _as_tool_result(result, self._unavailable())
+        return {"ok": False, "error": self._unavailable()}
+
+    def _unavailable(self) -> str:
+        unavailable = getattr(self._sidecar, "unavailable_error", None)
+        if callable(unavailable):
+            return str(unavailable())
+        return "sidecar_unavailable"
 
 
 def wrap_untrusted_document(text: str, source: str) -> str:
@@ -188,3 +218,9 @@ def _is_xlsx(raw: object, resolved: Path) -> bool:
     if isinstance(raw, str) and Path(raw).suffix.lower() in _XLSX_SUFFIXES:
         return True
     return False
+
+
+def _as_tool_result(result: object, fallback: str) -> Mapping[str, Any]:
+    if isinstance(result, Mapping) and "ok" in result:
+        return dict(result)
+    return {"ok": False, "error": fallback}
