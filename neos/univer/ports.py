@@ -137,6 +137,31 @@ class UniverParentWorkspacePort:
         return resolved
 
 
+class UniverSessionPort:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        write: bool,
+        sidecar: SidecarClient | InMemorySidecar,
+    ) -> None:
+        self._files = UniverParentWorkspacePort(workspace, write=write)
+        self._sidecar = UniverToolPort(sidecar)
+
+    def definitions(self) -> tuple[str, ...]:
+        return self._files.definitions() + self._sidecar.definitions()
+
+    async def execute(
+        self, name: str, input: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        try:
+            if name.startswith("univer.") or name in self._sidecar.definitions():
+                return await self._sidecar.execute(name, input)
+            return await self._files.execute(name, input)
+        except Exception:
+            return dict(_NO_TOOL)
+
+
 class UniverToolPort:
     def __init__(self, sidecar: SidecarClient | InMemorySidecar) -> None:
         self._sidecar = sidecar

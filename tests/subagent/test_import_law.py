@@ -17,6 +17,7 @@ _FORBIDDEN = (
     "neos.api.channels",
     "neos.workflow.deep_analysis",
     "neos.agents",
+    "neos.univer",
 )
 
 _PACKAGE = Path("neos/subagent")
