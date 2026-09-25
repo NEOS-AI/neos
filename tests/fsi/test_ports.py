@@ -20,7 +20,12 @@ def _writer(workspace: Path) -> FsiParentWorkspacePort:
 @pytest.mark.asyncio
 async def test_reader_cannot_write(tmp_path: Path) -> None:
     port = _reader(tmp_path)
-    assert port.definitions() == ("read_file.v1", "search_text.v1")
+    assert port.definitions() == (
+        "read_file.v1",
+        "search_text.v1",
+        "glob_files.v1",
+        "stage_xlsx.v1",
+    )
     target = tmp_path / "out" / "_spec" / "packet.json"
     result = await port.execute(
         "write_file.v1",

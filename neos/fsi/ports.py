@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import fnmatch
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from neos.fsi.mcp_attach import SCREENING_SEARCH, screening_search
 from neos.fsi.profile import SCREENING_STUB_TOOLS, skill_permitted
 from neos.fsi.safety import binding_error, policy_binding_denied
+from neos.fsi.stage_xlsx import stage_xlsx
 from neos.skills.markdown_catalog import fsi_catalog
 
 _DENIED = {"ok": False, "error": "path_denied"}
@@ -21,6 +23,8 @@ _UNKNOWN_SKILL = {"ok": False, "error": "unknown_skill"}
 _READ = "read_file.v1"
 _WRITE = "write_file.v1"
 _SEARCH = "search_text.v1"
+_GLOB = "glob_files.v1"
+_STAGE = "stage_xlsx.v1"
 _LOAD_SKILL = "load_skill.v1"
 
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9 ._/:#-]+$")
@@ -38,7 +42,7 @@ class FsiParentWorkspacePort:
     def definitions(self) -> tuple[str, ...]:
         if self._write:
             return (_READ, _WRITE)
-        return (_READ, _SEARCH)
+        return (_READ, _SEARCH, _GLOB, _STAGE)
 
     async def execute(
         self, name: str, input: Mapping[str, object]
@@ -52,6 +56,10 @@ class FsiParentWorkspacePort:
             return self._read(payload)
         if name == _WRITE:
             return self._write_file(payload)
+        if name == _GLOB:
+            return self._glob(payload)
+        if name == _STAGE:
+            return self._stage(payload)
         return self._search(payload)
 
     def _read(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
@@ -109,6 +117,43 @@ class FsiParentWorkspacePort:
             rel = path.relative_to(self._workspace).as_posix()
             matches.append({"path": rel, "snippet": query})
         return {"ok": True, "matches": matches}
+
+    def _glob(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        raw = payload.get("pattern", "**/*")
+        pattern = raw if isinstance(raw, str) and raw else "**/*"
+        if self._confine(pattern) is None:
+            return dict(_DENIED)
+        matches: list[dict[str, object]] = []
+        for path in self._workspace.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if not resolved.is_relative_to(self._workspace):
+                    continue
+                rel = path.relative_to(self._workspace).as_posix()
+                if self._confine(rel) is None:
+                    continue
+                if not _glob_match(rel, pattern):
+                    continue
+            except (OSError, ValueError):
+                continue
+            matches.append({"path": rel})
+        return {"ok": True, "matches": matches}
+
+    def _stage(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        path = payload.get("path")
+        rows = payload.get("rows", ())
+        if not isinstance(path, str):
+            return dict(_DENIED)
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return dict(_INVALID)
+        normalized: list[Sequence[object]] = []
+        for row in rows:
+            if not isinstance(row, Sequence) or isinstance(row, (str, bytes)):
+                return dict(_INVALID)
+            normalized.append(row)
+        return dict(stage_xlsx(self._workspace, path=path, rows=normalized))
 
     def _confine(self, raw: object) -> Path | None:
         if not isinstance(raw, str) or not raw or "\0" in raw:
@@ -197,3 +242,21 @@ def _is_xlsx(raw: object, resolved: Path) -> bool:
     if isinstance(raw, str) and raw.lower().endswith(".xlsx"):
         return True
     return False
+
+
+def _glob_match(rel: str, pattern: str) -> bool:
+    return _glob_parts(rel.split("/"), pattern.split("/"))
+
+
+def _glob_parts(parts: list[str], pat: list[str]) -> bool:
+    if not pat:
+        return not parts
+    if pat[0] == "**":
+        if _glob_parts(parts, pat[1:]):
+            return True
+        return bool(parts) and _glob_parts(parts[1:], pat)
+    if not parts:
+        return False
+    if not fnmatch.fnmatch(parts[0], pat[0]):
+        return False
+    return _glob_parts(parts[1:], pat[1:])
