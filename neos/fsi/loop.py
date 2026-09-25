@@ -40,5 +40,7 @@ async def run_leaf(*, runtime: SubagentRuntime, ticket: SubagentTicket) -> Folde
             )
         )
     folded = await runtime.fold(outcome.run_id)
-    validate_child_fold(ticket.spec, folded.summary)
+    if folded.exit_reason == "completed":
+        text = folded.full_summary if folded.truncated else folded.summary
+        validate_child_fold(ticket.spec, text)
     return folded

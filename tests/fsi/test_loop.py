@@ -6,13 +6,14 @@ from pathlib import Path
 import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
+from neos.coding.model.errors import CodingModelError
 from neos.fsi.loop import make_fsi_runtime, run_leaf
 from neos.fsi.ports import FsiParentWorkspacePort
 from neos.fsi.profile import compile_leaf_spec, load_profile
 from neos.fsi.schemas import FoldRefused
 from neos.subagent.catalog import SpecRegistry, UnknownSpec, lookup_spec
 from neos.subagent.prompts import build_explore_system_prompt, build_fsi_system_prompt_for
-from neos.subagent.types import ModelPin, ParentBriefing, ParentKind, SubagentTicket
+from neos.subagent.types import ModelPin, ParentBriefing, ParentKind, SubagentStatus, SubagentTicket
 from tests.fsi.fakes import ScriptedCodingModel
 
 pytestmark = pytest.mark.no_db
@@ -59,7 +60,7 @@ def _text(text: str = _LEAF_TEXT):
 
 
 def _runtime(tmp_path: Path, *, catalog: SpecRegistry, script=None):
-    model = ScriptedCodingModel(script or [_text()])
+    model = ScriptedCodingModel([_text()] if script is None else script)
     tools = FsiParentWorkspacePort(tmp_path, write=False)
     runtime = make_fsi_runtime(model=model, tools=tools, catalog=catalog)
     return runtime, model
@@ -138,3 +139,32 @@ async def test_critic_fold_is_not_schema_gated(tmp_path: Path) -> None:
         runtime=runtime, ticket=_ticket(spec="kyc-rules-engine")
     )
     assert folded.summary == "rule R1 fail; escalate-EDD"
+
+
+@pytest.mark.asyncio
+async def test_truncated_valid_reader_fold_is_accepted(tmp_path: Path) -> None:
+    ubos = [{"name": f"Person {i:03d} Lovelace", "pct": 0.1} for i in range(90)]
+    payload = {
+        "packet_id": "PKT-1",
+        "entity": {"legal_name": "Acme Ltd", "country": "US"},
+        "ubos": ubos,
+    }
+    text = json.dumps(payload)
+    assert len(text) > 4000
+    overlay = _overlay()
+    runtime, _model = _runtime(tmp_path, catalog=overlay, script=[_text(text)])
+    folded = await run_leaf(runtime=runtime, ticket=_ticket())
+    assert folded.truncated is True
+    assert "\n…\n" in folded.summary
+    assert folded.full_summary == text
+    assert folded.exit_reason == "completed"
+
+
+@pytest.mark.asyncio
+async def test_failed_reader_is_not_schema_invalid(tmp_path: Path) -> None:
+    overlay = _overlay()
+    runtime, _model = _runtime(tmp_path, catalog=overlay, script=[])
+    folded = await run_leaf(runtime=runtime, ticket=_ticket())
+    assert folded.status is SubagentStatus.FAILED
+    assert folded.exit_reason == "failed"
+    assert folded.summary == "failed"
