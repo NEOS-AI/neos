@@ -1,4 +1,4 @@
-"""Fail-closed subagent spec registry. Explore plus isolated implement."""
+"""Fail-closed subagent spec registry. Explore, implement, research, FSI leaves."""
 
 from __future__ import annotations
 
@@ -155,6 +155,109 @@ COMPOSE = SubagentSpec(
 )
 
 
+FSI_READER = SubagentSpec(
+    name="fsi-reader",
+    description=(
+        "FSI untrusted-document reader. Extract schema-validated JSON. "
+        "Report only. Do not edit. No MCP. No bash."
+    ),
+    allowed_tools=frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+FSI_WRITER = SubagentSpec(
+    name="fsi-writer",
+    description=(
+        "FSI writer leaf. Only worker with Write. "
+        "Author ./out artifacts. Do not spawn. No untrusted MCP."
+    ),
+    allowed_tools=frozenset(
+        {
+            "read_file.v1",
+            "write_file.v1",
+            "edit_file.v1",
+            "load_skill.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+FSI_CRITIC = SubagentSpec(
+    name="fsi-critic",
+    description=(
+        "FSI critic. Re-verify against trusted MCP. "
+        "Read-only. Do not edit. Do not spawn. No output_schema."
+    ),
+    allowed_tools=frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+FSI_PULLER = SubagentSpec(
+    name="fsi-puller",
+    description=(
+        "FSI trusted market-data puller. Read + MCP. "
+        "Schema-validated JSON. Do not write. Do not spawn."
+    ),
+    allowed_tools=frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+FSI_MODELER = SubagentSpec(
+    name="fsi-modeler",
+    description=(
+        "FSI modeler leaf (pitch-modeler). Bash allowed, no Write. "
+        "Do not spawn."
+    ),
+    allowed_tools=frozenset(
+        {
+            "read_file.v1",
+            "search_text.v1",
+            "execute.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
 _MAX_SPAWN_DEPTH = 0
 
 
@@ -170,7 +273,19 @@ class SpecRegistry:
 #: 이름 -> 스펙. if 사슬이 다섯 갈래가 되면 하나를 빠뜨려도 조용하다 --
 #: 매핑이면 등록과 조회가 같은 자리에 있다. fail-closed 는 그대로다.
 _SPECS: dict[str, SubagentSpec] = {
-    spec.name: spec for spec in (EXPLORE, IMPLEMENT, RESEARCH, ANALYZE, COMPOSE)
+    spec.name: spec
+    for spec in (
+        EXPLORE,
+        IMPLEMENT,
+        RESEARCH,
+        ANALYZE,
+        COMPOSE,
+        FSI_READER,
+        FSI_WRITER,
+        FSI_CRITIC,
+        FSI_PULLER,
+        FSI_MODELER,
+    )
 }
 
 
