@@ -35,6 +35,8 @@ function row(
     vision: extras.vision ?? true,
     role_alias: extras.role_alias ?? null,
     default: extras.default ?? false,
+    effort_levels: extras.effort_levels ?? [],
+    effort_default: extras.effort_default ?? null,
   };
 }
 
