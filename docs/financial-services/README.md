@@ -21,6 +21,7 @@ Anthropic `financial-services` 리포지토리(`../financial-services`, Apache 2
 | [08-ms365-and-safety.md](./08-ms365-and-safety.md) | Microsoft 365 add-in 설치 + 안전장치 |
 | [08b-safety-hooks-ci.md](./08b-safety-hooks-ci.md) | 훅/CI/untrusted 격리 교차검증 |
 | [09-neos-migration-map.md](./09-neos-migration-map.md) | Neos 대응 지점과 이식 순서 |
+| [10-merge-status.md](./10-merge-status.md) | 2026-09-25 원본 vs 착륙 커널 재감사 (구현 계약을 대체하지 않음) |
 
 에이전트별 심층 노트는 [`agents/`](./agents/) (10개 slug 전부). 스킬 클러스터 노트는 [`skills/`](./skills/).
 
@@ -52,3 +53,5 @@ Anthropic `financial-services` 리포지토리(`../financial-services`, Apache 2
 
 Marketplace 이름: `claude-for-financial-services`.
 조사 기준일: 2026-09-25.
+
+커널 착륙 이후의 **병합 여부**는 [10-merge-status.md](./10-merge-status.md). 스펙이 목표이고, 10은 코드가 그 목표를 어디까지 채웠는지다.

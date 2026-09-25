@@ -6,6 +6,8 @@ DreamNum `univer` 클론(`/Users/yeonwoosung/Desktop/univer`, Apache 2.0, **v1.0
 
 조사 기준일: 2026-09-25. 클론 HEAD: `1defaf4ab67a63186331d37fbaec2958acd77680` (`chore(release): release v1.0.2`).
 
+커널 착륙 이후의 **병합 여부**는 [15-merge-status.md](./15-merge-status.md). `00`–`14`는 원본, `spec/`은 부착 계약, 15는 코드가 그 계약을 어디까지 채웠는지다.
+
 ## 읽는 순서
 
 | 문서 | 내용 |
@@ -32,6 +34,7 @@ DreamNum `univer` 클론(`/Users/yeonwoosung/Desktop/univer`, Apache 2.0, **v1.0
 | [spec/02-skills-safety.md](./spec/02-skills-safety.md) | 스킬 팩 + 4층 안전 |
 | [spec/agents/office-session.md](./spec/agents/office-session.md) | v0 오케스트레이터 그래프 |
 | [spec/MIGRATION_PROCESS.md](./spec/MIGRATION_PROCESS.md) | live 트리 기준 착륙 순서 |
+| [15-merge-status.md](./15-merge-status.md) | 2026-09-25 OSS vs 착륙 커널 재감사 (구현 계약을 대체하지 않음) |
 
 ## 한 줄 요약
 
