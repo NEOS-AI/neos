@@ -254,3 +254,15 @@ def test_mode_a_puller_uses_fsi_puller_template() -> None:
     assert reader.sandbox_mode is SandboxMode.PARENT_RO
     assert reader.allowed_tools <= lookup_spec("fsi-puller").allowed_tools
 
+
+def test_reader_name_must_match_schema_ref() -> None:
+    profile = copy.deepcopy(_kyc())
+    leaves = profile["leaves"]
+    assert isinstance(leaves, list)
+    reader = leaves[0]
+    assert isinstance(reader, dict)
+    reader["name"] = "packet-reader"
+    reader["output_schema_ref"] = "kyc-doc-reader"
+    with pytest.raises(ProfileError, match="output_schema_ref"):
+        compile_leaf_spec(profile, "packet-reader")
+

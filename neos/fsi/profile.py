@@ -158,6 +158,8 @@ def _validate_leaf_schema_ref(leaf: Mapping[str, object]) -> None:
     if template in _SCHEMA_TEMPLATES:
         if not isinstance(ref, str) or ref not in READER_SCHEMAS:
             raise ProfileError("output_schema_ref must be a READER_SCHEMAS key")
+        if leaf.get("name") != ref:
+            raise ProfileError("output_schema_ref must match leaf name")
         return
     if template in _NULL_SCHEMA_TEMPLATES and ref is not None:
         raise ProfileError("output_schema_ref must be null")
