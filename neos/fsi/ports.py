@@ -5,7 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from neos.fsi.profile import skill_permitted
+from neos.fsi.mcp_attach import SCREENING_SEARCH, screening_search
+from neos.fsi.profile import SCREENING_STUB_TOOLS, skill_permitted
 from neos.fsi.safety import binding_error, policy_binding_denied
 from neos.skills.markdown_catalog import fsi_catalog
 
@@ -128,14 +129,18 @@ class FsiSessionPort:
         *,
         write: bool,
         skill_allowlist: frozenset[str] = frozenset(),
+        mcp_allowlist: frozenset[str] = frozenset(),
     ) -> None:
         self._files = FsiParentWorkspacePort(workspace, write=write)
         self._skill_allowlist = skill_allowlist
+        self._mcp_allowlist = mcp_allowlist
 
     def definitions(self) -> tuple[str, ...]:
         names = self._files.definitions()
         if self._skill_allowlist:
-            return names + (_LOAD_SKILL,)
+            names = names + (_LOAD_SKILL,)
+        if "screening" in self._mcp_allowlist:
+            names = names + tuple(sorted(SCREENING_STUB_TOOLS))
         return names
 
     async def execute(
@@ -147,6 +152,10 @@ class FsiSessionPort:
             if _LOAD_SKILL not in self.definitions():
                 return dict(_NO_TOOL)
             return self._load_skill(input)
+        if name == SCREENING_SEARCH:
+            if SCREENING_SEARCH not in self.definitions():
+                return dict(_NO_TOOL)
+            return dict(screening_search(input))
         try:
             return await self._files.execute(name, input)
         except Exception:
