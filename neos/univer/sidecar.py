@@ -21,6 +21,7 @@ _A1_RANGE = re.compile(
 _INSPECT_CELL_LIMIT = 400
 _SAVE_SHEET = "draft/workbook.json"
 _SAVE_DOC = "draft/document.json"
+_EMPTY_DOC_STREAM = "\r\n"
 _EMPTY_ROW_COUNT = 1000
 _EMPTY_COLUMN_COUNT = 20
 _EMPTY_ROW_HEIGHT = 24
@@ -107,6 +108,7 @@ class InMemorySidecar:
         self._column_count = _EMPTY_COLUMN_COUNT
         self._merge_data: list[dict[str, int]] = []
         self._resources: list[dict[str, str]] = []
+        self._data_stream = _EMPTY_DOC_STREAM
         self._in_flight = False
         self._created = True
 
@@ -294,6 +296,10 @@ class InMemorySidecar:
         if plugin is not None:
             self._resources.append({"name": plugin, "data": json.dumps(dict(body))})
             return {"ok": True}
+        if command_id == "doc.command.insert-text":
+            return self._insert_text(body)
+        if command_id == "doc.command.update-text":
+            return self._update_text(body)
         return {"ok": True}
 
     def formula_wait(self, params: Mapping[str, object]) -> Mapping[str, Any]:
@@ -327,17 +333,39 @@ class InMemorySidecar:
         return {"ok": True, "path": path, "bytes": len(encoded)}
 
     def _inspect_doc(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        paragraphs = _doc_paragraphs(self._data_stream)
+        section_index = max(len(self._data_stream) - 1, 0)
         return {
             "ok": True,
             "unit": self._unit_payload(),
             "outline": {
                 "title": self._unit_name,
-                "data_stream_length": 2,
-                "paragraph_count": 1,
-                "sections": [{"startIndex": 1}],
+                "data_stream_length": len(self._data_stream),
+                "paragraph_count": len(paragraphs),
+                "sections": [{"startIndex": section_index}],
             },
-            "paragraphs": [{"startIndex": 0, "text": "", "length": 0}],
+            "paragraphs": paragraphs,
         }
+
+    def _insert_text(self, body: Mapping[str, object]) -> Mapping[str, Any]:
+        text = body.get("text")
+        if not isinstance(text, str):
+            return {"ok": False, "error": "command_failed"}
+        stream = self._data_stream
+        if stream.endswith("\r\n"):
+            self._data_stream = stream[:-2] + text + "\r\n"
+        elif stream.endswith("\n"):
+            self._data_stream = stream[:-1] + text + "\r\n"
+        else:
+            self._data_stream = stream + text + "\r\n"
+        return {"ok": True}
+
+    def _update_text(self, body: Mapping[str, object]) -> Mapping[str, Any]:
+        text = body.get("text")
+        if not isinstance(text, str):
+            return {"ok": False, "error": "command_failed"}
+        self._data_stream = text + "\r\n"
+        return {"ok": True}
 
     def _set_range_values(self, body: Mapping[str, object]) -> Mapping[str, Any]:
         parsed = _parse_range(body.get("range") or body.get("a1"))
@@ -609,6 +637,7 @@ class InMemorySidecar:
         self._column_count = _EMPTY_COLUMN_COUNT
         self._merge_data = []
         self._resources = []
+        self._data_stream = _EMPTY_DOC_STREAM
 
     def _apply_snapshot(self, snapshot: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if self._kind == "sheet" and "body" in snapshot and "sheets" not in snapshot:
@@ -627,6 +656,11 @@ class InMemorySidecar:
             title = snapshot.get("title")
             if isinstance(title, str) and title:
                 self._unit_name = title
+            body = snapshot.get("body")
+            if isinstance(body, Mapping):
+                data_stream = body.get("dataStream")
+                if isinstance(data_stream, str):
+                    self._data_stream = data_stream
             return None
         name = snapshot.get("name")
         if isinstance(name, str) and name:
@@ -703,14 +737,19 @@ class InMemorySidecar:
 
     def _snapshot(self) -> dict[str, Any]:
         if self._kind == "doc":
+            paragraphs = _doc_paragraphs(self._data_stream)
+            section_index = max(len(self._data_stream) - 1, 0)
             return {
                 "id": self._unit_id,
                 "title": self._unit_name,
                 "appVersion": _APP_VERSION,
+                "documentStyle": {},
                 "body": {
-                    "dataStream": "\r\n",
-                    "paragraphs": [{"startIndex": 0}],
-                    "sectionBreaks": [{"startIndex": 1}],
+                    "dataStream": self._data_stream,
+                    "paragraphs": [
+                        {"startIndex": item["startIndex"]} for item in paragraphs
+                    ],
+                    "sectionBreaks": [{"startIndex": section_index}],
                 },
                 "resources": [],
             }
@@ -738,6 +777,23 @@ class InMemorySidecar:
             },
             "resources": [dict(item) for item in self._resources],
         }
+
+
+def _doc_paragraphs(data_stream: str) -> list[dict[str, Any]]:
+    body = data_stream
+    if body.endswith("\r\n"):
+        body = body[:-2]
+    elif body.endswith("\n"):
+        body = body[:-1]
+    parts = body.split("\r")
+    paragraphs: list[dict[str, Any]] = []
+    offset = 0
+    for part in parts:
+        paragraphs.append(
+            {"startIndex": offset, "text": part, "length": len(part)}
+        )
+        offset += len(part) + 1
+    return paragraphs or [{"startIndex": 0, "text": "", "length": 0}]
 
 
 def _confine(session_dir: Path, raw: object) -> Path | None:

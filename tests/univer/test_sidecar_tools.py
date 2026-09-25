@@ -512,3 +512,54 @@ async def test_sum_empty_range_is_zero(tmp_path: Path) -> None:
     got = await port.execute("univer.range_get.v1", {"a1": "B1"})
     assert got["ok"] is True
     assert got["cells"][0]["v"] == 0
+
+
+@pytest.mark.asyncio
+async def test_doc_empty_inspect_is_crlf_paragraph(tmp_path: Path) -> None:
+    port = UniverToolPort(InMemorySidecar(session_dir=tmp_path, kind="doc"))
+    inspect = await port.execute("univer.inspect.v1", {})
+    assert inspect["ok"] is True
+    assert inspect["outline"]["data_stream_length"] == 2
+    assert inspect["outline"]["paragraph_count"] == 1
+    assert inspect["paragraphs"][0]["text"] == ""
+    assert inspect["paragraphs"][0]["length"] == 0
+
+
+@pytest.mark.asyncio
+async def test_doc_insert_text_round_trip(tmp_path: Path) -> None:
+    port = UniverToolPort(InMemorySidecar(session_dir=tmp_path, kind="doc"))
+    inserted = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "doc.command.insert-text", "params": {"text": "Hello"}},
+    )
+    assert inserted["ok"] is True
+    inspect = await port.execute("univer.inspect.v1", {})
+    assert inspect["ok"] is True
+    assert inspect["paragraphs"][0]["text"] == "Hello"
+    saved = await port.execute("univer.save.v1", {})
+    assert saved["ok"] is True
+    snapshot = json.loads((tmp_path / "draft" / "document.json").read_text(encoding="utf-8"))
+    assert "Hello" in snapshot["body"]["dataStream"]
+
+
+@pytest.mark.asyncio
+async def test_doc_update_text_replaces_paragraph(tmp_path: Path) -> None:
+    port = UniverToolPort(InMemorySidecar(session_dir=tmp_path, kind="doc"))
+    await port.execute(
+        "univer.execute_command.v1",
+        {"id": "doc.command.insert-text", "params": {"text": "Hello"}},
+    )
+    updated = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "doc.command.update-text", "params": {"text": "Hi"}},
+    )
+    assert updated["ok"] is True
+    inspect = await port.execute("univer.inspect.v1", {})
+    assert inspect["ok"] is True
+    assert inspect["paragraphs"][0]["text"] == "Hi"
+    assert inspect["outline"]["data_stream_length"] == 4
+    saved = await port.execute("univer.save.v1", {})
+    assert saved["ok"] is True
+    snapshot = json.loads((tmp_path / "draft" / "document.json").read_text(encoding="utf-8"))
+    assert snapshot["body"]["dataStream"] == "Hi\r\n"
+    assert "Hello" not in snapshot["body"]["dataStream"]
