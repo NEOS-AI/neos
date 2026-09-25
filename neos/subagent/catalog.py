@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from neos.subagent.types import SandboxMode
@@ -266,8 +267,17 @@ def may_spawn(spec: SubagentSpec, spawn_depth: int) -> bool:
 
 
 class SpecRegistry:
+    def __init__(self, specs: Mapping[str, SubagentSpec] | None = None) -> None:
+        self._specs = dict(_SPECS if specs is None else specs)
+
     def lookup_spec(self, name: str) -> SubagentSpec:
-        return lookup_spec(name)
+        spec = self._specs.get(name)
+        if spec is None:
+            raise UnknownSpec(name)
+        return spec
+
+    def register(self, spec: SubagentSpec) -> None:
+        self._specs[spec.name] = spec
 
 
 #: 이름 -> 스펙. if 사슬이 다섯 갈래가 되면 하나를 빠뜨려도 조용하다 --
