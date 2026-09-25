@@ -9,7 +9,9 @@ from neos.univer.ports import (
     UniverParentWorkspacePort,
     UniverSessionPort,
     UniverToolPort,
+    merge_draft_to_trunk,
 )
+from neos.univer.safety import SUCCESS_ARTIFACT_STATUS
 from neos.univer.sidecar import InMemorySidecar, SidecarClient
 
 pytestmark = pytest.mark.no_db
@@ -478,3 +480,60 @@ async def test_node_present_without_process_is_sidecar_unavailable() -> None:
     result = await port.execute("univer.inspect.v1", {})
     assert result == {"ok": False, "error": "sidecar_unavailable"}
     assert result.get("ok") is not True
+
+
+def test_merge_draft_workbook_to_trunk(tmp_path: Path) -> None:
+    draft = tmp_path / "draft"
+    draft.mkdir()
+    payload = b'{"unit_id":"wb-1"}'
+    (draft / "workbook.json").write_bytes(payload)
+    result = merge_draft_to_trunk(tmp_path)
+    trunk = tmp_path / "trunk" / "workbook.json"
+    assert trunk.is_file()
+    assert trunk.read_bytes() == payload
+    assert result["ok"] is True
+    assert result["status"] == SUCCESS_ARTIFACT_STATUS
+    assert "draft/workbook.json" in result["copied"]
+
+
+def test_merge_empty_workspace_is_not_found(tmp_path: Path) -> None:
+    result = merge_draft_to_trunk(tmp_path)
+    assert result == {"ok": False, "error": "not_found"}
+    assert not (tmp_path / "trunk" / "workbook.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_session_load_skill_permitted_univer_qc(tmp_path: Path) -> None:
+    port = UniverSessionPort(
+        tmp_path,
+        write=False,
+        sidecar=InMemorySidecar(session_dir=tmp_path),
+        skill_allowlist=frozenset({"univer-qc"}),
+    )
+    assert "load_skill.v1" in port.definitions()
+    result = await port.execute("load_skill.v1", {"name": "univer-qc"})
+    assert result["ok"] is True
+    assert result["name"] == "univer-qc"
+    assert "Univer QC" in result["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_session_load_skill_unknown_outside_allowlist(tmp_path: Path) -> None:
+    port = UniverSessionPort(
+        tmp_path,
+        write=False,
+        sidecar=InMemorySidecar(session_dir=tmp_path),
+        skill_allowlist=frozenset({"univer-qc"}),
+    )
+    result = await port.execute(
+        "load_skill.v1", {"name": "univer-sheets-headless"}
+    )
+    assert result == {"ok": False, "error": "unknown_skill"}
+
+
+@pytest.mark.asyncio
+async def test_default_session_load_skill_is_tool_not_allowed(tmp_path: Path) -> None:
+    port = _session(tmp_path, write=False)
+    assert "load_skill.v1" not in port.definitions()
+    result = await port.execute("load_skill.v1", {"name": "univer-qc"})
+    assert result == {"ok": False, "error": "tool_not_allowed"}

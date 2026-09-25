@@ -6,8 +6,14 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from neos.skills.markdown_catalog import univer_catalog
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
-from neos.univer.safety import binding_error, policy_binding_denied
+from neos.univer.profile import skill_permitted
+from neos.univer.safety import (
+    SUCCESS_ARTIFACT_STATUS,
+    binding_error,
+    policy_binding_denied,
+)
 from neos.univer.sidecar import InMemorySidecar, SidecarClient
 
 _DENIED = {"ok": False, "error": "path_denied"}
@@ -16,6 +22,7 @@ _MISSING = {"ok": False, "error": "not_found"}
 _DECODE = {"ok": False, "error": "decode_error"}
 _INVALID = {"ok": False, "error": "invalid_content"}
 _NO_TOOL = {"ok": False, "error": "tool_not_allowed"}
+_UNKNOWN_SKILL = {"ok": False, "error": "unknown_skill"}
 _NOT_ALLOWLISTED = {"ok": False, "error": "command_not_allowlisted"}
 _MUTATION = {"ok": False, "error": "mutation_forbidden"}
 _FORMULA_WAIT = "univer.formula_wait.v1"
@@ -28,6 +35,8 @@ _READ = "read_file.v1"
 _WRITE = "write_file.v1"
 _SEARCH = "search_text.v1"
 _GLOB = "glob_files.v1"
+_LOAD_SKILL = "load_skill.v1"
+_DRAFT_SNAPSHOTS = ("draft/workbook.json", "draft/document.json")
 
 _SIDECAR_TOOLS = (
     "univer.inspect.v1",
@@ -179,12 +188,17 @@ class UniverSessionPort:
         *,
         write: bool,
         sidecar: SidecarClient | InMemorySidecar,
+        skill_allowlist: frozenset[str] = frozenset(),
     ) -> None:
         self._files = UniverParentWorkspacePort(workspace, write=write)
         self._sidecar = UniverToolPort(sidecar)
+        self._skill_allowlist = skill_allowlist
 
     def definitions(self) -> tuple[str, ...]:
-        return self._files.definitions() + self._sidecar.definitions()
+        names = self._files.definitions() + self._sidecar.definitions()
+        if self._skill_allowlist:
+            return names + (_LOAD_SKILL,)
+        return names
 
     async def execute(
         self, name: str, input: Mapping[str, object]
@@ -192,12 +206,30 @@ class UniverSessionPort:
         denied = _binding_denied(name)
         if denied is not None:
             return denied
+        if name == _LOAD_SKILL:
+            if _LOAD_SKILL not in self.definitions():
+                return dict(_NO_TOOL)
+            return self._load_skill(input)
         try:
             if name.startswith("univer.") or name in self._sidecar.definitions():
                 return await self._sidecar.execute(name, input)
             return await self._files.execute(name, input)
         except Exception:
             return dict(_NO_TOOL)
+
+    def _load_skill(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        name = payload.get("name")
+        if not isinstance(name, str) or not skill_permitted(
+            name, self._skill_allowlist
+        ):
+            return dict(_UNKNOWN_SKILL)
+        catalog = univer_catalog()
+        if catalog.get(name) is None:
+            return dict(_UNKNOWN_SKILL)
+        markdown = catalog.load_markdown(name)
+        if markdown is None:
+            return dict(_UNKNOWN_SKILL)
+        return {"ok": True, "name": name, "markdown": markdown}
 
 
 class UniverToolPort:
@@ -273,6 +305,25 @@ class UniverToolPort:
         if callable(unavailable):
             return str(unavailable())
         return "sidecar_unavailable"
+
+
+def merge_draft_to_trunk(workspace: Path) -> Mapping[str, Any]:
+    copied: list[str] = []
+    for rel in _DRAFT_SNAPSHOTS:
+        src = workspace / rel
+        if not src.is_file():
+            continue
+        dest = workspace / "trunk" / Path(rel).name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        copied.append(rel)
+    if not copied:
+        return dict(_MISSING)
+    return {
+        "ok": True,
+        "status": SUCCESS_ARTIFACT_STATUS,
+        "copied": copied,
+    }
 
 
 def wrap_untrusted_document(text: str, source: str) -> str:
