@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from neos.coding.model.base import CodingModel
+from neos.fsi.schemas import validate_child_fold
 from neos.subagent.catalog import SpecRegistry
 from neos.subagent.memory import InMemorySubagentStore
 from neos.subagent.ports import SystemClock
@@ -38,4 +39,6 @@ async def run_leaf(*, runtime: SubagentRuntime, ticket: SubagentTicket) -> Folde
                 expected_checkpoint_id=outcome.checkpoint_id,
             )
         )
-    return await runtime.fold(outcome.run_id)
+    folded = await runtime.fold(outcome.run_id)
+    validate_child_fold(ticket.spec, folded.summary)
+    return folded
