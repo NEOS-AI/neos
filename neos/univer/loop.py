@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 from neos.coding.model.base import CodingModel
@@ -10,17 +11,62 @@ from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
 from neos.subagent.types import (
     FoldedResult,
+    ModelPin,
+    ParentBriefing,
     ParentKind,
     StepKind,
     SubagentTicket,
     ToolPort,
 )
+from neos.univer.profile import compile_leaf_spec
 from neos.univer.schemas import validate_child_fold
+
+
+class FlagDisabled(RuntimeError):
+    pass
 
 
 class _NullSink:
     async def emit(self, event_type: str, payload) -> None:
         return None
+
+
+def overlay_catalog(profile: Mapping[str, object]) -> SpecRegistry:
+    """Register every compiled leaf on a fresh overlay. Do not touch module _SPECS."""
+    overlay = SpecRegistry({})
+    leaves = profile.get("leaves")
+    if isinstance(leaves, list):
+        for leaf in leaves:
+            if isinstance(leaf, dict) and isinstance(leaf.get("name"), str):
+                overlay.register(compile_leaf_spec(profile, leaf["name"]))
+    return overlay
+
+
+async def run_parent_spawn(
+    *,
+    runtime: SubagentRuntime,
+    profile: Mapping[str, object],
+    spec: str,
+    briefing: ParentBriefing,
+    parent_id: str,
+    parent_run_id: str,
+    parent_tool_call_id: str,
+    model: ModelPin,
+    enabled: bool,
+) -> FoldedResult:
+    if not enabled:
+        raise FlagDisabled("flag_disabled")
+    overlay_catalog(profile).lookup_spec(spec)
+    ticket = SubagentTicket(
+        parent_kind=ParentKind.UNIVER,
+        parent_id=parent_id,
+        parent_run_id=parent_run_id,
+        parent_tool_call_id=parent_tool_call_id,
+        spec=spec,
+        briefing=briefing,
+        model=model,
+    )
+    return await run_leaf(runtime=runtime, ticket=ticket)
 
 
 def make_univer_runtime(
