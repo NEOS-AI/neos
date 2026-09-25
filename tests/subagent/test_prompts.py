@@ -70,6 +70,12 @@ def test_fsi_critic_prompt_is_not_json_only() -> None:
     assert "you may call spawn_agent" not in prompt.lower()
 
 
+def test_fsi_puller_prompt_demands_schema_json() -> None:
+    prompt = build_fsi_system_prompt_for(lookup_spec("fsi-puller"))
+    assert "Return only schema-validated JSON; no free text." in prompt
+    assert "you may call spawn_agent" not in prompt.lower()
+
+
 def test_implement_system_prompt_allows_worktree_writes() -> None:
     prompt = build_implement_system_prompt()
     lowered = prompt.lower()

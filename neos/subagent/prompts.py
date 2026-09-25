@@ -37,7 +37,7 @@ def build_fsi_system_prompt_for(spec: SubagentSpec) -> str:
             "You are the ONLY worker with Write.\n"
             + base
         )
-    if "schema-validated JSON" in spec.description:
+    if "schema-validated json" in spec.description.casefold():
         return (
             base
             + "\nReturn only schema-validated JSON; no free text."
