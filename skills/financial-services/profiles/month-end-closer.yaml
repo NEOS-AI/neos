@@ -1,0 +1,45 @@
+slug: month-end-closer
+mode: B
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - accrual-schedule
+  - roll-forward
+  - xlsx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: close-ledger-reader
+    catalog_template: fsi-reader
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist: []
+    output_schema_ref: close-ledger-reader
+  - name: close-rollforward
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist:
+      - internal-gl
+    output_schema_ref: null
+  - name: close-poster
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    mcp_allowlist: []
+    output_schema_ref: null
