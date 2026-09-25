@@ -709,6 +709,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         subagent_enabled=coding.subagent_enabled,
         subagent_max_active=coding.subagent_max_active,
         subagent_async_spawn=coding.subagent_async_spawn,
+        compaction_preserving_summary=coding.compaction_preserving_summary,
+        compaction_summary_max_tokens=coding.compaction_summary_max_tokens,
     )
     subagents = _build_subagent_runtime(
         model=model,

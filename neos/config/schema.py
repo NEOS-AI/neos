@@ -1883,6 +1883,23 @@ class CodingModelConfig(StrictConfigModel):
         ),
     )
     file_watch: bool = False
+    compaction_preserving_summary: bool = Field(
+        default=False,
+        description=(
+            "LLM 컴팩션 요약에 공식 보존 지시(스펙 P-05)를 쓸지. 끄면 예전 "
+            "요약(`facts only. <= 200 words`, 출력 512)과 바이트가 같다. 켜는 "
+            "것은 코딩 에이전트 지표의 표본 경계다(로드맵 §8 행 11)."
+        ),
+    )
+    compaction_summary_max_tokens: int = Field(
+        default=4096,
+        gt=0,
+        description=(
+            "보존 요약의 출력 상한. 켜졌을 때만 쓴다. 공식 지시가 '6항목은 "
+            "길어지더라도 완전하게' 를 요구하므로 512 로는 지킬 수 없다. "
+            "adaptive thinking 모델에서는 사고 토큰도 이 안에 든다."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
