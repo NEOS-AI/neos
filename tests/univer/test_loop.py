@@ -5,15 +5,28 @@ from pathlib import Path
 
 import pytest
 
-from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
+from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta, ToolCallCompleted
 from neos.subagent.catalog import SpecRegistry, UnknownSpec, lookup_spec
 from neos.subagent.prompts import (
     build_explore_system_prompt,
     build_fsi_system_prompt_for,
     build_univer_system_prompt_for,
 )
-from neos.subagent.types import ModelPin, ParentBriefing, ParentKind, SubagentStatus, SubagentTicket
-from neos.univer.loop import make_univer_runtime, run_leaf
+from neos.subagent.types import (
+    ModelPin,
+    ParentBriefing,
+    ParentKind,
+    StepKind,
+    SubagentStatus,
+    SubagentTicket,
+)
+from neos.univer.loop import (
+    artifact_status_for,
+    cancel_univer_children,
+    make_univer_runtime,
+    run_leaf,
+)
+from neos.univer.safety import SUCCESS_ARTIFACT_STATUS
 from neos.univer.schemas import FoldRefused
 from tests.univer.fakes import ScriptedCodingModel
 
@@ -72,6 +85,14 @@ def _ticket(**overrides) -> SubagentTicket:
 
 def _text(text: str = _LEAF_TEXT):
     return (TextDelta(text), ModelCompleted("end_turn", ModelUsage(3, 2)))
+
+
+def _tool(name: str = "read_file.v1", **input):
+    return (
+        TextDelta("looking"),
+        ToolCallCompleted("call_1", name, input or {"path": "draft/workbook.json"}),
+        ModelCompleted("tool_use", ModelUsage(4, 1)),
+    )
 
 
 def _runtime(*, catalog: SpecRegistry, script=None):
@@ -194,3 +215,57 @@ async def test_failed_reader_is_not_schema_invalid() -> None:
     assert folded.status is SubagentStatus.FAILED
     assert folded.exit_reason == "failed"
     assert folded.summary == "failed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_univer_children_when_disabled() -> None:
+    overlay = _overlay("univer-reader")
+    runtime, _model = _runtime(catalog=overlay, script=[])
+    snaps = await cancel_univer_children(runtime, "office-1", enabled=False)
+    assert snaps == []
+    snaps_on = await cancel_univer_children(runtime, "office-1", enabled=True)
+    assert snaps_on == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_univer_children_kills_continuing_child() -> None:
+    overlay = _overlay("univer-reader")
+    runtime, _model = _runtime(catalog=overlay, script=[_tool()])
+    ticket = _ticket(parent_id="office-1")
+    outcome = await runtime.advance(ticket)
+    assert outcome.kind is StepKind.CONTINUING
+    skipped = await cancel_univer_children(runtime, "office-1", enabled=True)
+    assert skipped == []
+    live = await runtime._store.get(outcome.run_id)
+    assert live.status is SubagentStatus.RUNNING
+    snaps = await cancel_univer_children(runtime, "office-1", enabled=False)
+    assert len(snaps) == 1
+    assert snaps[0].run_id == outcome.run_id
+    assert snaps[0].status is SubagentStatus.KILLED
+    assert snaps[0].error_code == "flag_disabled"
+
+
+@pytest.mark.asyncio
+async def test_artifact_status_for_writer_completed_is_staged() -> None:
+    overlay = _overlay("univer-writer")
+    runtime, _model = _runtime(
+        catalog=overlay, script=[_text("wrote draft/workbook.json")]
+    )
+    folded = await run_leaf(
+        runtime=runtime, ticket=_ticket(spec="univer-writer")
+    )
+    assert folded.exit_reason == "completed"
+    assert artifact_status_for(folded, "univer-writer") == SUCCESS_ARTIFACT_STATUS
+    assert artifact_status_for(folded, "univer-writer") == "staged_for_signoff"
+
+    overlay_r = _overlay("univer-reader")
+    runtime_r, _ = _runtime(catalog=overlay_r)
+    reader = await run_leaf(runtime=runtime_r, ticket=_ticket())
+    assert reader.exit_reason == "completed"
+    assert artifact_status_for(reader, "univer-reader") is None
+
+    overlay_f = _overlay()
+    runtime_f, _ = _runtime(catalog=overlay_f, script=[])
+    failed = await run_leaf(runtime=runtime_f, ticket=_ticket())
+    assert failed.exit_reason == "failed"
+    assert artifact_status_for(failed, "univer-writer") is None
