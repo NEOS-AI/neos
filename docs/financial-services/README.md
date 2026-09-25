@@ -4,6 +4,8 @@ Anthropic `financial-services` 리포지토리(`../financial-services`, Apache 2
 
 이 디렉터리는 마이그레이션 전에 원본이 무엇을 하는지, 어떤 안전장치를 쓰는지, Neos에 무엇을 옮겨야 하는지를 고정한다.
 
+구현 계약은 [`spec/FSI_NEOS_MIGRATION_SPEC.md`](./spec/FSI_NEOS_MIGRATION_SPEC.md) (하네스·안전·스킬·10 에이전트 스펙 스위트). Neos 소스 기준 이식 순서는 [`spec/MIGRATION_PROCESS.md`](./spec/MIGRATION_PROCESS.md).
+
 ## 읽는 순서
 
 | 문서 | 내용 |
