@@ -51,6 +51,18 @@ def research_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
     )
 
 
+UNIVER_PACK = _REPO_ROOT / "skills" / "univer"
+
+
+def univer_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under skills/univer."""
+    return (("repo", UNIVER_PACK),)
+
+
+def univer_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=univer_skill_roots())
+
+
 _REQUIRED_SECTION_HEADINGS = ("## When to Use", "## Boundaries")
 
 

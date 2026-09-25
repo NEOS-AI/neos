@@ -75,6 +75,11 @@ class ProfileError(ValueError):
     pass
 
 
+def skill_permitted(name: str, allowlist: frozenset[str]) -> bool:
+    """Empty allowlist is none, not all."""
+    return name in allowlist
+
+
 def load_profile(slug: str, *, profiles_dir: Path) -> Mapping[str, object]:
     path = profiles_dir / f"{slug}.yaml"
     if not path.is_file():
