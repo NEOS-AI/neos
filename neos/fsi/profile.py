@@ -20,6 +20,9 @@ _ORCH_TOKENS = frozenset(
         "handoff.v1",
     }
 )
+SCREENING_STUB_TOOLS = frozenset({"mcp.screening.search"})
+_SCREENING_TEMPLATES = frozenset({"fsi-critic", "fsi-puller", "fsi-modeler"})
+_NO_SCREENING_TEMPLATES = frozenset({"fsi-reader", "fsi-writer"})
 _ISOLATION_SURFACES = frozenset({"cma_leaves", "cowork_inline"})
 _SCHEMA_TEMPLATES = frozenset({"fsi-reader", "fsi-puller"})
 _NULL_SCHEMA_TEMPLATES = frozenset({"fsi-critic", "fsi-writer", "fsi-modeler"})
@@ -87,15 +90,23 @@ def _compile_leaf_tool_policy(
     profile: Mapping[str, object],
     leaf: Mapping[str, object],
 ) -> frozenset[str]:
-    del profile  # MCP attach is a later task
     template = _template(leaf)
     requested = _str_list(leaf.get("tools_allow"))
+    mcp_allowlist = _str_list(leaf.get("mcp_allowlist"))
+    for name in (*requested, *mcp_allowlist):
+        if "*" in name:
+            raise ProfileError(f"mcp glob is not allowed: {name}")
     for name in requested:
         if name not in template.allowed_tools:
             raise ProfileError(
                 f"tool {name!r} is not allowed on template {template.name}"
             )
     tools = frozenset(template.allowed_tools)
+    if "screening" in mcp_allowlist:
+        if template.name in _NO_SCREENING_TEMPLATES:
+            raise ProfileError("reader/writer must not receive screening")
+        if template.name in _SCREENING_TEMPLATES:
+            tools = frozenset(template.allowed_tools) | SCREENING_STUB_TOOLS
     write = bool(leaf.get("write"))
     if write and "write_file.v1" not in tools:
         raise ProfileError("writer must include write_file.v1")

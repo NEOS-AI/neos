@@ -18,7 +18,11 @@ from neos.subagent.catalog import (
 from neos.subagent.memory import InMemorySubagentStore
 from neos.subagent.metrics import record_subagent_event
 from neos.subagent.ports import SystemClock
-from neos.subagent.prompts import build_explore_system_prompt, build_fsi_system_prompt
+from neos.subagent.prompts import (
+    build_explore_system_prompt,
+    build_fsi_system_prompt,
+    build_fsi_system_prompt_for,
+)
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
 from neos.subagent.types import (
@@ -186,7 +190,9 @@ async def test_fsi_reader_advance_uses_fsi_prompt_not_explore() -> None:
     await runtime.advance(
         _ticket(spec="fsi-reader", parent_kind=ParentKind.FSI)
     )
-    assert model.requests[0].system == build_fsi_system_prompt()
+    assert model.requests[0].system == build_fsi_system_prompt_for(
+        lookup_spec("fsi-reader")
+    )
     assert "spawn_agent" not in model.requests[0].system
     assert "spawn_agent.v1" not in model.requests[0].system
     assert "you may call spawn_agent" not in model.requests[0].system.lower()

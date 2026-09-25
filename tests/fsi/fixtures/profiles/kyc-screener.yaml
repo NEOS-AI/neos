@@ -22,6 +22,7 @@ leaves:
     tools_allow:
       - read_file.v1
       - search_text.v1
+    mcp_allowlist: []
     output_schema_ref: kyc-doc-reader
   - name: kyc-rules-engine
     catalog_template: fsi-critic
@@ -29,6 +30,8 @@ leaves:
     tools_allow:
       - read_file.v1
       - search_text.v1
+    mcp_allowlist:
+      - screening
     output_schema_ref: null
   - name: kyc-escalator
     catalog_template: fsi-writer
@@ -38,4 +41,5 @@ leaves:
       - write_file.v1
       - edit_file.v1
       - load_skill.v1
+    mcp_allowlist: []
     output_schema_ref: null

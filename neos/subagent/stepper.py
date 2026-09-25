@@ -23,7 +23,7 @@ from neos.coding.model.errors import CodingModelError
 from neos.subagent.catalog import SubagentSpec, may_spawn
 from neos.subagent.prompts import (
     build_explore_system_prompt,
-    build_fsi_system_prompt,
+    build_fsi_system_prompt_for,
     build_implement_system_prompt,
     render_brief,
 )
@@ -117,7 +117,7 @@ class ChildStepper:
             system=(
                 _CODING_PROMPTS[spec.name]()
                 if spec.name in _CODING_PROMPTS
-                else build_fsi_system_prompt()
+                else build_fsi_system_prompt_for(spec)
             ),
             messages=_canonical_messages(state),
             tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),

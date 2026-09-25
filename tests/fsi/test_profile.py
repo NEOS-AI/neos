@@ -206,6 +206,27 @@ def test_mcp_glob_on_allow_refuses() -> None:
         compile_tool_policy(profile)
 
 
+def test_kyc_rules_engine_unions_screening_stub() -> None:
+    spec = compile_leaf_spec(_kyc(), "kyc-rules-engine")
+    assert "mcp.screening.search" in spec.allowed_tools
+    assert "mcp.screening.*" not in spec.allowed_tools
+    assert "write_file.v1" not in spec.allowed_tools
+    assert lookup_spec("fsi-critic").allowed_tools == frozenset(
+        {"read_file.v1", "search_text.v1"}
+    )
+
+
+def test_reader_must_not_receive_screening() -> None:
+    profile = copy.deepcopy(_kyc())
+    leaves = profile["leaves"]
+    assert isinstance(leaves, list)
+    reader = leaves[0]
+    assert isinstance(reader, dict)
+    reader["mcp_allowlist"] = ["screening"]
+    with pytest.raises(ProfileError):
+        compile_leaf_spec(profile, "kyc-doc-reader")
+
+
 def test_mode_a_puller_uses_fsi_puller_template() -> None:
     profile = {
         "mode": "A",

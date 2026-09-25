@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from neos.subagent.catalog import SubagentSpec
 from neos.subagent.types import ParentBriefing
 
 _FENCE_MARKERS = ("AGENTS.md", "CLAUDE.md", "ignore previous")
@@ -27,6 +28,21 @@ def build_fsi_system_prompt() -> str:
         "Stop when the briefing's success condition is met or max_turns is exhausted.\n"
         "Final assistant text is the report. Stay within the report budget."
     )
+
+
+def build_fsi_system_prompt_for(spec: SubagentSpec) -> str:
+    base = build_fsi_system_prompt()
+    if "write_file.v1" in spec.allowed_tools:
+        return (
+            "You are the ONLY worker with Write.\n"
+            + base
+        )
+    if "schema-validated JSON" in spec.description:
+        return (
+            base
+            + "\nReturn only schema-validated JSON; no free text."
+        )
+    return base
 
 
 def build_implement_system_prompt() -> str:

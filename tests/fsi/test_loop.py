@@ -11,7 +11,7 @@ from neos.fsi.ports import FsiParentWorkspacePort
 from neos.fsi.profile import compile_leaf_spec, load_profile
 from neos.fsi.schemas import FoldRefused
 from neos.subagent.catalog import SpecRegistry, UnknownSpec, lookup_spec
-from neos.subagent.prompts import build_explore_system_prompt, build_fsi_system_prompt
+from neos.subagent.prompts import build_explore_system_prompt, build_fsi_system_prompt_for
 from neos.subagent.types import ModelPin, ParentBriefing, ParentKind, SubagentTicket
 from tests.fsi.fakes import ScriptedCodingModel
 
@@ -103,9 +103,12 @@ def test_loop_does_not_import_durable_coding_loop() -> None:
 
 @pytest.mark.asyncio
 async def test_fsi_leaf_system_prompt_is_not_explore(tmp_path: Path) -> None:
-    runtime, model = _runtime(tmp_path, catalog=_overlay())
+    overlay = _overlay()
+    runtime, model = _runtime(tmp_path, catalog=overlay)
     await run_leaf(runtime=runtime, ticket=_ticket())
-    assert model.requests[0].system == build_fsi_system_prompt()
+    assert model.requests[0].system == build_fsi_system_prompt_for(
+        overlay.lookup_spec("kyc-doc-reader")
+    )
     assert model.requests[0].system != build_explore_system_prompt()
     assert "you may call spawn_agent" not in model.requests[0].system.lower()
 
