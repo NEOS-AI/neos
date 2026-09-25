@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-_PARENTS = frozenset({"coding", "deep_analysis", "workflow"})
+_PARENTS = frozenset({"coding", "deep_analysis", "workflow", "fsi"})
 _SPECS = frozenset({"explore"})
 _OUTCOMES = frozenset(
     {"continuing", "completed", "failed", "cancelled", "unknown_spec"}

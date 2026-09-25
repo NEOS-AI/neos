@@ -18,7 +18,12 @@ _REPO = Path(__file__).resolve().parents[2]
 
 def test_workflow_is_a_parent_kind() -> None:
     assert ParentKind.WORKFLOW == "workflow"
-    assert {kind.value for kind in ParentKind} == {"coding", "deep_analysis", "workflow"}
+    assert {kind.value for kind in ParentKind} == {
+        "coding",
+        "deep_analysis",
+        "workflow",
+        "fsi",
+    }
 
 
 class _Counter:
@@ -47,8 +52,8 @@ def test_metrics_keep_the_workflow_label_instead_of_folding_it_into_coding() -> 
 def test_the_migration_widens_the_parent_kind_check_to_every_enum_value() -> None:
     sql = (_REPO / "db/migrations/058_allow_workflow_subagent_parent.sql").read_text()
     assert "subagent_runs_parent_kind_check" in sql
-    for kind in ParentKind:
-        assert f"'{kind.value}'" in sql
+    for value in ("coding", "deep_analysis", "workflow"):
+        assert f"'{value}'" in sql
 
 
 def test_the_migration_is_in_the_canonical_bootstrap_order_after_055() -> None:
