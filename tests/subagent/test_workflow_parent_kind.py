@@ -23,6 +23,7 @@ def test_workflow_is_a_parent_kind() -> None:
         "deep_analysis",
         "workflow",
         "fsi",
+        "univer",
     }
 
 

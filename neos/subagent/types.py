@@ -15,6 +15,7 @@ class ParentKind(StrEnum):
     # folds are unverified reports. Never bound to a channel session.
     WORKFLOW = "workflow"
     FSI = "fsi"
+    UNIVER = "univer"
 
 
 class LineageKind(StrEnum):
