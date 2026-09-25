@@ -13,6 +13,10 @@ _SPECS = frozenset(
         "fsi-critic",
         "fsi-puller",
         "fsi-modeler",
+        "univer-reader",
+        "univer-writer",
+        "univer-critic",
+        "univer-formula",
     }
 )
 _FSI_ALIASES = frozenset(

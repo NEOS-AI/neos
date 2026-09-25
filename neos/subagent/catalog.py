@@ -1,4 +1,4 @@
-"""Fail-closed subagent spec registry. Explore, implement, research, FSI leaves."""
+"""Fail-closed subagent spec registry. Explore, implement, research, FSI, Univer leaves."""
 
 from __future__ import annotations
 
@@ -259,6 +259,100 @@ FSI_MODELER = SubagentSpec(
 )
 
 
+UNIVER_READER = SubagentSpec(
+    name="univer-reader",
+    description=(
+        "Univer untrusted-snapshot reader. Extract schema-validated JSON. "
+        "Report only. Do not edit. No MCP. No bash."
+    ),
+    allowed_tools=frozenset(
+        {
+            "univer.inspect.v1",
+            "univer.range_get.v1",
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+UNIVER_WRITER = SubagentSpec(
+    name="univer-writer",
+    description=(
+        "Univer writer leaf. Only worker with Write. "
+        "Mutate ./draft. Do not spawn. No MCP. No bash."
+    ),
+    allowed_tools=frozenset(
+        {
+            "univer.inspect.v1",
+            "univer.range_get.v1",
+            "univer.range_set.v1",
+            "univer.execute_command.v1",
+            "univer.save.v1",
+            "univer.formula_wait.v1",
+            "read_file.v1",
+            "write_file.v1",
+            "load_skill.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+UNIVER_CRITIC = SubagentSpec(
+    name="univer-critic",
+    description=(
+        "Univer critic. Re-verify draft against trunk. "
+        "Read-only. Do not edit. Do not spawn. No output_schema."
+    ),
+    allowed_tools=frozenset(
+        {
+            "univer.inspect.v1",
+            "univer.range_get.v1",
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+UNIVER_FORMULA = SubagentSpec(
+    name="univer-formula",
+    description=(
+        "Univer formula leaf. Wait for engine-formula and return "
+        "schema-validated JSON. Do not write. Do not spawn."
+    ),
+    allowed_tools=frozenset(
+        {
+            "univer.inspect.v1",
+            "univer.range_get.v1",
+            "univer.formula_wait.v1",
+            "read_file.v1",
+            "search_text.v1",
+        }
+    ),
+    sandbox_mode=SandboxMode.NONE,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
 _MAX_SPAWN_DEPTH = 0
 
 
@@ -295,6 +389,10 @@ _SPECS: dict[str, SubagentSpec] = {
         FSI_CRITIC,
         FSI_PULLER,
         FSI_MODELER,
+        UNIVER_READER,
+        UNIVER_WRITER,
+        UNIVER_CRITIC,
+        UNIVER_FORMULA,
     )
 }
 

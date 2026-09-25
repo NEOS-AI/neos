@@ -25,6 +25,7 @@ from neos.subagent.prompts import (
     build_explore_system_prompt,
     build_fsi_system_prompt_for,
     build_implement_system_prompt,
+    build_univer_system_prompt_for,
     render_brief,
 )
 from neos.subagent.store import CasReservation, CheckpointWrite, is_placeholder
@@ -113,12 +114,14 @@ class ChildStepper:
     ) -> CheckpointWrite:
         run_id = reservation.run.run_id
         _apply_pending_steer(state)
+        if spec.name in _CODING_PROMPTS:
+            system = _CODING_PROMPTS[spec.name]()
+        elif spec.name.startswith("univer-"):
+            system = build_univer_system_prompt_for(spec)
+        else:
+            system = build_fsi_system_prompt_for(spec)
         request = ModelRequest(
-            system=(
-                _CODING_PROMPTS[spec.name]()
-                if spec.name in _CODING_PROMPTS
-                else build_fsi_system_prompt_for(spec)
-            ),
+            system=system,
             messages=_canonical_messages(state),
             tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),
             model=ticket.model.alias or ticket.model.model,
