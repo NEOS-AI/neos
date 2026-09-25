@@ -791,6 +791,8 @@ class SubagentSpawnMixin:
 
         raw = call.input if isinstance(call.input, Mapping) else {}
         spec_name = str(raw.get("spec") or "explore")
+        if spec_name.startswith("fsi-") or spec_name.startswith("univer-"):
+            return self._spawn_tool_error(bound, "policy_unknown_spec")
         try:
             spec = lookup_spec(spec_name)
         except UnknownSpec:
