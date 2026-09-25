@@ -312,3 +312,31 @@ async def test_inspect_unknown_formula_is_name_error(tmp_path: Path) -> None:
     got = await port.execute("univer.range_get.v1", {"a1": "A1"})
     assert got["ok"] is True
     assert got["cells"][0]["v"] == "#NAME?"
+
+
+@pytest.mark.asyncio
+async def test_sum_range_and_if_after_wait(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 1})
+    await port.execute("univer.range_set.v1", {"a1": "A2", "value": 2})
+    await port.execute("univer.range_set.v1", {"a1": "B1", "formula": "=SUM(A1:A2)"})
+    await port.execute("univer.range_set.v1", {"a1": "C1", "formula": "=IF(A1>0,1,0)"})
+    await port.execute("univer.formula_wait.v1", {})
+    b1 = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    c1 = await port.execute("univer.range_get.v1", {"a1": "C1"})
+    assert b1["cells"][0]["v"] == 3
+    assert c1["cells"][0]["v"] == 1
+    await port.execute("univer.range_set.v1", {"a1": "D1", "formula": "=FOO()"})
+    await port.execute("univer.formula_wait.v1", {})
+    inspect = await port.execute("univer.inspect.v1", {"include_values": True})
+    assert any(item["code"] == "#NAME?" and item["a1"] == "D1" for item in inspect["formula_errors"])
+
+
+@pytest.mark.asyncio
+async def test_sum_empty_range_is_zero(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "B1", "formula": "=SUM(Z1:Z2)"})
+    await port.execute("univer.formula_wait.v1", {})
+    got = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    assert got["ok"] is True
+    assert got["cells"][0]["v"] == 0

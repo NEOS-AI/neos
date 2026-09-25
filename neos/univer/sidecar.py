@@ -12,6 +12,9 @@ from typing import Any
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
 
 _CELL_REF = re.compile(r"\$?([A-Za-z]+)\$?([0-9]+)")
+_RANGE_REF = re.compile(
+    r"\$?[A-Za-z]+\$?[0-9]+:\$?[A-Za-z]+\$?[0-9]+"
+)
 _A1_RANGE = re.compile(
     r"^\$?([A-Za-z]+)\$?([0-9]+)(?::\$?([A-Za-z]+)\$?([0-9]+))?$"
 )
@@ -30,6 +33,14 @@ _OPS: dict[type, Any] = {
     ast.Div: operator.truediv,
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
+}
+_CMP: dict[type, Any] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
 }
 _ERROR_TYPES = frozenset(
     {
@@ -679,26 +690,138 @@ def _expand_command_values(
 
 def _eval_formula(formula: str, cells: Mapping[tuple[int, int], Mapping[str, Any]]) -> Any:
     expr = formula[1:] if formula.startswith("=") else formula
-
-    def replace_ref(match: re.Match[str]) -> str:
-        col = _col_index(match.group(1))
-        row = int(match.group(2)) - 1
-        cell = cells.get((row, col), {})
-        if "v" not in cell:
-            raise ValueError("missing")
-        value = cell["v"]
-        return str(value)
-
-    replaced = _CELL_REF.sub(replace_ref, expr)
-    tree = ast.parse(replaced, mode="eval")
-    return _eval_node(tree.body)
+    rewritten, tokens = _rewrite_formula(expr)
+    tree = ast.parse(rewritten, mode="eval")
+    return _eval_node(tree.body, cells, tokens)
 
 
-def _eval_node(node: ast.AST) -> Any:
+def _rewrite_formula(expr: str) -> tuple[str, list[str]]:
+    tokens: list[str] = []
+
+    def replace_range(match: re.Match[str]) -> str:
+        tokens.append(match.group(0))
+        return f"__RANGE__({len(tokens) - 1})"
+
+    def replace_cell(match: re.Match[str]) -> str:
+        tokens.append(match.group(0))
+        return f"__CELL__({len(tokens) - 1})"
+
+    rewritten = _RANGE_REF.sub(replace_range, expr)
+    rewritten = _CELL_REF.sub(replace_cell, rewritten)
+    return rewritten, tokens
+
+
+def _eval_node(
+    node: ast.AST,
+    cells: Mapping[tuple[int, int], Mapping[str, Any]],
+    tokens: list[str],
+) -> Any:
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.UnaryOp) and type(node.op) in _OPS:
-        return _OPS[type(node.op)](_eval_node(node.operand))
+        return _OPS[type(node.op)](_eval_node(node.operand, cells, tokens))
     if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
-        return _OPS[type(node.op)](_eval_node(node.left), _eval_node(node.right))
+        return _OPS[type(node.op)](
+            _eval_node(node.left, cells, tokens),
+            _eval_node(node.right, cells, tokens),
+        )
+    if isinstance(node, ast.Compare):
+        left = _eval_node(node.left, cells, tokens)
+        for op, comparator in zip(node.ops, node.comparators, strict=True):
+            fn = _CMP.get(type(op))
+            if fn is None:
+                raise ValueError("unsupported formula")
+            right = _eval_node(comparator, cells, tokens)
+            if not fn(left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.Call):
+        return _eval_call(node, cells, tokens)
     raise ValueError("unsupported formula")
+
+
+def _eval_call(
+    node: ast.Call,
+    cells: Mapping[tuple[int, int], Mapping[str, Any]],
+    tokens: list[str],
+) -> Any:
+    if not isinstance(node.func, ast.Name) or node.keywords:
+        raise ValueError("unsupported formula")
+    name = node.func.id
+    args = [_eval_node(arg, cells, tokens) for arg in node.args]
+    if name == "__CELL__":
+        return _scalar_cell(cells, tokens[args[0]])
+    if name == "__RANGE__":
+        return _range_values(cells, tokens[args[0]])
+    folded = name.upper()
+    if folded == "SUM":
+        return _fn_sum(args)
+    if folded == "IF":
+        return _fn_if(args)
+    raise ValueError("unsupported formula")
+
+
+def _scalar_cell(
+    cells: Mapping[tuple[int, int], Mapping[str, Any]], a1: str
+) -> Any:
+    parsed = _parse_range(a1)
+    if parsed is None:
+        raise ValueError("unsupported formula")
+    row, col, _, _ = parsed
+    cell = cells.get((row, col), {})
+    if "v" not in cell:
+        raise ValueError("missing")
+    return cell["v"]
+
+
+def _range_values(
+    cells: Mapping[tuple[int, int], Mapping[str, Any]], a1: str
+) -> list[Any]:
+    parsed = _parse_range(a1)
+    if parsed is None:
+        raise ValueError("unsupported formula")
+    start_row, start_col, end_row, end_col = parsed
+    values: list[Any] = []
+    for row in range(start_row, end_row + 1):
+        for col in range(start_col, end_col + 1):
+            cell = cells.get((row, col), {})
+            if "v" not in cell:
+                if cell.get("f"):
+                    raise ValueError("missing")
+                values.append(0)
+                continue
+            value = cell["v"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                values.append(0)
+            else:
+                values.append(value)
+    return values
+
+
+def _fn_sum(args: list[Any]) -> int | float:
+    total: int | float = 0
+    for arg in args:
+        if isinstance(arg, list):
+            total += _fn_sum(arg)
+        elif arg is None or isinstance(arg, bool) or not isinstance(arg, (int, float)):
+            continue
+        else:
+            total += arg
+    return total
+
+
+def _fn_if(args: list[Any]) -> Any:
+    if len(args) < 2 or len(args) > 3:
+        raise ValueError("unsupported formula")
+    if _truthy(args[0]):
+        return args[1]
+    return args[2] if len(args) == 3 else False
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
