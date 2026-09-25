@@ -47,6 +47,7 @@ REFUSED_TOOLS = frozenset(
         "todo_write.v1",
         "web_fetch.v1",
         "search_tools.v1",
+        "handoff.v1",
     }
 )
 #: Output ceiling of one child model turn. Public because the workflow cost
