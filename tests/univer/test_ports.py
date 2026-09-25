@@ -372,6 +372,43 @@ async def test_session_port_denies_binding_actions(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_port_denies_merge_and_xlsx_export(tmp_path: Path) -> None:
+    port = UniverToolPort(InMemorySidecar(session_dir=tmp_path))
+    merge = await port.execute("univer.merge.v1", {})
+    assert merge == {
+        "ok": False,
+        "error": "policy_binding_denied",
+        "action": "merge_trunk",
+    }
+    export = await port.execute("xlsx_export", {})
+    assert export == {
+        "ok": False,
+        "error": "policy_binding_denied",
+        "action": "xlsx_export",
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_port_denies_remaining_binding_actions(tmp_path: Path) -> None:
+    port = _session(tmp_path, write=True)
+    for action in (
+        "send",
+        "email",
+        "merge_trunk",
+        "merge_worktree",
+        "xlsx_export",
+        "mcp_univer_ai",
+        "register_pro_license",
+    ):
+        denied = await port.execute(action, {})
+        assert denied == {
+            "ok": False,
+            "error": "policy_binding_denied",
+            "action": action,
+        }
+
+
+@pytest.mark.asyncio
 async def test_session_port_never_raises(tmp_path: Path) -> None:
     class _Boom:
         def call(self, method: str, params: object) -> object:
