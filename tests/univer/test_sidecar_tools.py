@@ -283,3 +283,32 @@ def test_load_replaces_existing_unit(tmp_path: Path) -> None:
     assert got["cells"][0]["v"] == 2
     a1 = sidecar.call("range_get", {"a1": "A1"})
     assert a1["cells"][0]["v"] == 1
+
+
+@pytest.mark.asyncio
+async def test_inspect_formula_errors_after_wait(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 0})
+    await port.execute("univer.range_set.v1", {"a1": "B1", "formula": "=1/A1"})
+    await port.execute("univer.formula_wait.v1", {})
+    inspect = await port.execute("univer.inspect.v1", {"include_values": True})
+    assert inspect["ok"] is True
+    codes = {item["code"] for item in inspect["formula_errors"]}
+    assert "#DIV/0!" in codes
+    assert any(item["a1"] == "B1" for item in inspect["formula_errors"])
+
+
+@pytest.mark.asyncio
+async def test_inspect_unknown_formula_is_name_error(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "formula": "=FOO()"})
+    await port.execute("univer.formula_wait.v1", {})
+    inspect = await port.execute("univer.inspect.v1", {"include_values": True})
+    assert inspect["ok"] is True
+    assert any(
+        item["code"] == "#NAME?" and item["a1"] == "A1"
+        for item in inspect["formula_errors"]
+    )
+    got = await port.execute("univer.range_get.v1", {"a1": "A1"})
+    assert got["ok"] is True
+    assert got["cells"][0]["v"] == "#NAME?"

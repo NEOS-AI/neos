@@ -31,6 +31,22 @@ _OPS: dict[type, Any] = {
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
 }
+_ERROR_TYPES = frozenset(
+    {
+        "#DIV/0!",
+        "#NAME?",
+        "#VALUE!",
+        "#NUM!",
+        "#N/A",
+        "#CYCLE!",
+        "#REF!",
+        "#SPILL!",
+        "#CALC!",
+        "#ERROR!",
+        "#GETTING_DATA",
+        "#NULL!",
+    }
+)
 
 
 def node_binary() -> Path | None:
@@ -152,6 +168,8 @@ class InMemorySidecar:
             "unit": self._unit_payload(),
             "outline": outline,
         }
+        if params.get("include_formula_errors", True):
+            payload["formula_errors"] = self._formula_errors()
         if not include_values:
             return payload
         parsed = _parse_range(params.get("range"))
@@ -378,6 +396,21 @@ class InMemorySidecar:
     def _has_formulas(self) -> bool:
         return any(cell.get("f") for cell in self._cells.values())
 
+    def _formula_errors(self) -> list[dict[str, str]]:
+        errors: list[dict[str, str]] = []
+        for (row, col), cell in sorted(self._cells.items()):
+            value = cell.get("v")
+            if value not in _ERROR_TYPES:
+                continue
+            errors.append(
+                {
+                    "code": value,
+                    "a1": _to_a1(row, col, row, col),
+                    "sheet": self._sheet_name,
+                }
+            )
+        return errors
+
     def _apply_formulas(self) -> None:
         pending = [
             (coord, cell["f"])
@@ -390,6 +423,15 @@ class InMemorySidecar:
             for coord, formula in pending:
                 try:
                     value = _eval_formula(formula, self._cells)
+                except ZeroDivisionError:
+                    value = "#DIV/0!"
+                except ValueError as exc:
+                    if str(exc) == "missing":
+                        remaining.append((coord, formula))
+                        continue
+                    value = "#NAME?"
+                except SyntaxError:
+                    value = "#NAME?"
                 except Exception:
                     remaining.append((coord, formula))
                     continue
