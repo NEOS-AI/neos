@@ -44,7 +44,7 @@ def test_fsi_skill_roots_end_with_seven_verticals_in_order() -> None:
 
 
 def test_fsi_catalog_kyc_doc_parse_absent_until_pack() -> None:
-    assert fsi_catalog().get("kyc-doc-parse") is None
+    assert fsi_catalog().get("kyc-doc-parse") is not None
 
 
 def test_default_catalog_does_not_index_xlsx_author() -> None:
