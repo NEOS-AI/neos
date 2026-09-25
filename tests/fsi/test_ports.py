@@ -103,3 +103,26 @@ async def test_writer_json_outside_out_spec_is_denied(tmp_path: Path) -> None:
     assert not (tmp_path / "notes.json").exists()
     assert not (tmp_path / "leak.json").exists()
     assert not (tmp_path / "workspace.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_search_text_skips_symlink_escape(tmp_path: Path) -> None:
+    inside = tmp_path / "notes.txt"
+    inside.write_text("find-me in workspace", encoding="utf-8")
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("find-me classified", encoding="utf-8")
+    leak = tmp_path / "leak.txt"
+    leak.symlink_to(outside)
+    nested = tmp_path / "vendor"
+    nested.mkdir()
+    (nested / "escape").symlink_to(tmp_path.parent)
+    port = _reader(tmp_path)
+    result = await port.execute("search_text.v1", {"query": "find-me"})
+    assert result["ok"] is True
+    matches = result["matches"]
+    assert matches == [{"path": "notes.txt", "snippet": "find-me"}]
+    leaked = " ".join(str(item) for item in matches)
+    assert "classified" not in leaked
+    assert "outside-secret" not in leaked
+    assert "leak.txt" not in leaked
+    assert str(outside) not in leaked

@@ -66,12 +66,13 @@ class FsiParentWorkspacePort:
         if not query:
             return {"ok": True, "matches": matches}
         for path in self._workspace.rglob("*"):
-            if not path.is_file():
-                continue
-            if not path.is_relative_to(self._workspace):
-                continue
             try:
-                text = path.read_text(encoding="utf-8")
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if not resolved.is_relative_to(self._workspace):
+                    continue
+                text = resolved.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             if query not in text:
