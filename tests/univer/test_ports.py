@@ -48,7 +48,7 @@ def _names(port: UniverToolPort) -> tuple[str, ...]:
 @pytest.mark.asyncio
 async def test_reader_cannot_write(tmp_path: Path) -> None:
     port = _reader(tmp_path)
-    assert port.definitions() == ("read_file.v1", "search_text.v1")
+    assert port.definitions() == ("read_file.v1", "search_text.v1", "glob_files.v1")
     target = tmp_path / "draft" / "book.json"
     result = await port.execute(
         "write_file.v1",
@@ -56,6 +56,27 @@ async def test_reader_cannot_write(tmp_path: Path) -> None:
     )
     assert result == {"ok": False, "error": "tool_not_allowed"}
     assert not target.exists()
+
+
+@pytest.mark.asyncio
+async def test_reader_glob_lists_draft_json(tmp_path: Path) -> None:
+    (tmp_path / "draft").mkdir()
+    (tmp_path / "draft" / "workbook.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "trunk").mkdir()
+    (tmp_path / "trunk" / "workbook.json").write_text("{}", encoding="utf-8")
+    port = _reader(tmp_path)
+    assert port.definitions() == ("read_file.v1", "search_text.v1", "glob_files.v1")
+    result = await port.execute("glob_files.v1", {"pattern": "draft/*.json"})
+    assert result["ok"] is True
+    assert {"path": "draft/workbook.json"} in result["matches"]
+    assert {"path": "trunk/workbook.json"} not in result["matches"]
+
+
+@pytest.mark.asyncio
+async def test_writer_glob_is_tool_not_allowed(tmp_path: Path) -> None:
+    port = _writer(tmp_path)
+    result = await port.execute("glob_files.v1", {"pattern": "**/*"})
+    assert result == {"ok": False, "error": "tool_not_allowed"}
 
 
 @pytest.mark.asyncio
@@ -298,7 +319,11 @@ async def test_session_port_definitions_are_file_plus_sidecar(tmp_path: Path) ->
     reader = _session(tmp_path, write=False)
     writer = _session(tmp_path, write=True)
     sidecar = UniverToolPort(InMemorySidecar(session_dir=tmp_path)).definitions()
-    assert reader.definitions() == ("read_file.v1", "search_text.v1") + sidecar
+    assert reader.definitions() == (
+        "read_file.v1",
+        "search_text.v1",
+        "glob_files.v1",
+    ) + sidecar
     assert writer.definitions() == ("read_file.v1", "write_file.v1") + sidecar
     assert "univer.inspect.v1" in reader.definitions()
     assert "write_file.v1" not in reader.definitions()

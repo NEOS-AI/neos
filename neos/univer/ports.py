@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
@@ -20,6 +21,7 @@ _MUTATION = {"ok": False, "error": "mutation_forbidden"}
 _READ = "read_file.v1"
 _WRITE = "write_file.v1"
 _SEARCH = "search_text.v1"
+_GLOB = "glob_files.v1"
 
 _SIDECAR_TOOLS = (
     "univer.inspect.v1",
@@ -55,7 +57,7 @@ class UniverParentWorkspacePort:
     def definitions(self) -> tuple[str, ...]:
         if self._write:
             return (_READ, _WRITE)
-        return (_READ, _SEARCH)
+        return (_READ, _SEARCH, _GLOB)
 
     async def execute(
         self, name: str, input: Mapping[str, object]
@@ -67,6 +69,8 @@ class UniverParentWorkspacePort:
             return self._read(payload)
         if name == _WRITE:
             return self._write_file(payload)
+        if name == _GLOB:
+            return self._glob(payload)
         return self._search(payload)
 
     def _read(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
@@ -123,6 +127,31 @@ class UniverParentWorkspacePort:
                 continue
             rel = path.relative_to(self._workspace).as_posix()
             matches.append({"path": rel, "snippet": query})
+        return {"ok": True, "matches": matches}
+
+    def _glob(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        raw = payload.get("pattern", "**/*")
+        pattern = raw if isinstance(raw, str) and raw else "**/*"
+        if self._confine(pattern) is None:
+            return dict(_DENIED)
+        matches: list[dict[str, object]] = []
+        for path in self._workspace.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if not resolved.is_relative_to(self._workspace):
+                    continue
+                rel = path.relative_to(self._workspace).as_posix()
+                if self._confine(rel) is None:
+                    continue
+                if not (
+                    PurePosixPath(rel).match(pattern) or fnmatch.fnmatch(rel, pattern)
+                ):
+                    continue
+            except (OSError, ValueError):
+                continue
+            matches.append({"path": rel})
         return {"ok": True, "matches": matches}
 
     def _confine(self, raw: object) -> Path | None:
