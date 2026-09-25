@@ -6,8 +6,23 @@ from pathlib import Path
 
 import yaml
 
+from neos.fsi.schemas import READER_SCHEMAS
 from neos.subagent.catalog import SubagentSpec, UnknownSpec, lookup_spec
 from neos.subagent.types import SandboxMode
+
+_ORCH_TOKENS = frozenset(
+    {
+        "read_file.v1",
+        "search_text.v1",
+        "glob_files.v1",
+        "spawn_agent.v1",
+        "load_skill.v1",
+        "handoff.v1",
+    }
+)
+_ISOLATION_SURFACES = frozenset({"cma_leaves", "cowork_inline"})
+_SCHEMA_TEMPLATES = frozenset({"fsi-reader", "fsi-puller"})
+_NULL_SCHEMA_TEMPLATES = frozenset({"fsi-critic", "fsi-writer", "fsi-modeler"})
 
 _CMA_ORCH_DROP = frozenset(
     {
@@ -103,6 +118,15 @@ def _stamp_sandbox(
 
 
 def _validate_profile(profile: Mapping[str, object]) -> None:
+    if "output_schema" in profile:
+        raise ProfileError("output_schema must not be inlined")
+    if profile.get("isolation_surface") not in _ISOLATION_SURFACES:
+        raise ProfileError("isolation_surface required")
+    tools = profile.get("tools")
+    if isinstance(tools, dict):
+        for name in _str_list(tools.get("orchestrator_allow")):
+            if name not in _ORCH_TOKENS:
+                raise ProfileError(f"unknown orchestrator token: {name}")
     leaves = profile.get("leaves")
     if not isinstance(leaves, list):
         raise ProfileError("leaves must be a list")
@@ -112,8 +136,20 @@ def _validate_profile(profile: Mapping[str, object]) -> None:
             raise ProfileError("invalid leaf")
         if leaf.get("write"):
             writers += 1
+        _validate_leaf_schema_ref(leaf)
     if writers != 1:
         raise ProfileError("exactly one writer leaf required")
+
+
+def _validate_leaf_schema_ref(leaf: Mapping[str, object]) -> None:
+    template = leaf.get("catalog_template")
+    ref = leaf.get("output_schema_ref")
+    if template in _SCHEMA_TEMPLATES:
+        if not isinstance(ref, str) or ref not in READER_SCHEMAS:
+            raise ProfileError("output_schema_ref must be a READER_SCHEMAS key")
+        return
+    if template in _NULL_SCHEMA_TEMPLATES and ref is not None:
+        raise ProfileError("output_schema_ref must be null")
 
 
 def _find_leaf(profile: Mapping[str, object], leaf_name: str) -> Mapping[str, object]:

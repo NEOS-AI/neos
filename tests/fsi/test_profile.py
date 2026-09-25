@@ -117,12 +117,14 @@ def test_writer_count_must_be_one() -> None:
 def test_mode_a_non_writer_stamps_parent_ro() -> None:
     profile = {
         "mode": "A",
+        "isolation_surface": "cma_leaves",
         "leaves": [
             {
                 "name": "pitch-researcher",
-                "catalog_template": "fsi-reader",
+                "catalog_template": "fsi-puller",
                 "write": False,
                 "tools_allow": ["read_file.v1", "search_text.v1"],
+                "output_schema_ref": "pitch-researcher",
             },
             {
                 "name": "pitch-deck-writer",
@@ -134,6 +136,7 @@ def test_mode_a_non_writer_stamps_parent_ro() -> None:
                     "edit_file.v1",
                     "load_skill.v1",
                 ],
+                "output_schema_ref": None,
             },
         ],
     }
@@ -143,3 +146,90 @@ def test_mode_a_non_writer_stamps_parent_ro() -> None:
     writer = compile_leaf_spec(profile, "pitch-deck-writer")
     assert writer.name == "pitch-deck-writer"
     assert writer.sandbox_mode is SandboxMode.WORKTREE
+
+
+def test_inlined_output_schema_key_refuses() -> None:
+    profile = copy.deepcopy(_kyc())
+    profile["output_schema"] = {"type": "object"}
+    with pytest.raises(ProfileError):
+        compile_tool_policy(profile)
+
+
+def test_reader_ref_must_exist() -> None:
+    profile = copy.deepcopy(_kyc())
+    leaves = profile["leaves"]
+    assert isinstance(leaves, list)
+    reader = leaves[0]
+    assert isinstance(reader, dict)
+    reader["output_schema_ref"] = "not-a-schema"
+    with pytest.raises(ProfileError):
+        compile_leaf_spec(profile, "kyc-doc-reader")
+
+
+def test_critic_must_not_carry_a_schema_ref() -> None:
+    profile = copy.deepcopy(_kyc())
+    leaves = profile["leaves"]
+    assert isinstance(leaves, list)
+    critic = leaves[1]
+    assert isinstance(critic, dict)
+    critic["output_schema_ref"] = "kyc-doc-reader"
+    with pytest.raises(ProfileError):
+        compile_leaf_spec(profile, "kyc-rules-engine")
+
+
+def test_missing_isolation_surface_refuses() -> None:
+    profile = copy.deepcopy(_kyc())
+    del profile["isolation_surface"]
+    with pytest.raises(ProfileError):
+        compile_tool_policy(profile)
+
+
+def test_unknown_orchestrator_token_refuses() -> None:
+    profile = copy.deepcopy(_kyc())
+    tools = profile["tools"]
+    assert isinstance(tools, dict)
+    allow = tools["orchestrator_allow"]
+    assert isinstance(allow, list)
+    allow.append("Bash")
+    with pytest.raises(ProfileError):
+        compile_tool_policy(profile)
+
+
+def test_mcp_glob_on_allow_refuses() -> None:
+    profile = copy.deepcopy(_kyc())
+    tools = profile["tools"]
+    assert isinstance(tools, dict)
+    allow = tools["orchestrator_allow"]
+    assert isinstance(allow, list)
+    allow.append("mcp.screening.*")
+    with pytest.raises(ProfileError):
+        compile_tool_policy(profile)
+
+
+def test_mode_a_puller_uses_fsi_puller_template() -> None:
+    profile = {
+        "mode": "A",
+        "isolation_surface": "cma_leaves",
+        "tools": {"default": "deny", "orchestrator_allow": ["read_file.v1"]},
+        "handoff_allowlist": [],
+        "leaves": [
+            {
+                "name": "pitch-researcher",
+                "catalog_template": "fsi-puller",
+                "write": False,
+                "tools_allow": ["read_file.v1", "search_text.v1"],
+                "output_schema_ref": "pitch-researcher",
+            },
+            {
+                "name": "pitch-deck-writer",
+                "catalog_template": "fsi-writer",
+                "write": True,
+                "tools_allow": ["read_file.v1", "write_file.v1"],
+                "output_schema_ref": None,
+            },
+        ],
+    }
+    reader = compile_leaf_spec(profile, "pitch-researcher")
+    assert reader.sandbox_mode is SandboxMode.PARENT_RO
+    assert reader.allowed_tools <= lookup_spec("fsi-puller").allowed_tools
+
