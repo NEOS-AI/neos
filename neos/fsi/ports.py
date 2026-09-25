@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -7,11 +8,16 @@ from typing import Any
 _DENIED = {"ok": False, "error": "path_denied"}
 _XLSX = {"ok": False, "error": "xlsx_forbidden"}
 _MISSING = {"ok": False, "error": "not_found"}
+_DECODE = {"ok": False, "error": "decode_error"}
+_INVALID = {"ok": False, "error": "invalid_content"}
 _NO_TOOL = {"ok": False, "error": "tool_not_allowed"}
 
 _READ = "read_file.v1"
 _WRITE = "write_file.v1"
 _SEARCH = "search_text.v1"
+
+_SOURCE_RE = re.compile(r"^[A-Za-z0-9 ._/:#-]+$")
+_SOURCE_MAX = 256
 
 
 class FsiParentWorkspacePort:
@@ -41,9 +47,20 @@ class FsiParentWorkspacePort:
         resolved = self._confine(payload.get("path"))
         if resolved is None:
             return dict(_DENIED)
+        if self._write and not _writer_readable(resolved, self._spec_root):
+            return dict(_DENIED)
         if not resolved.is_file():
             return dict(_MISSING)
-        return {"ok": True, "content": resolved.read_text(encoding="utf-8")}
+        try:
+            text = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return dict(_DECODE)
+        except OSError:
+            return dict(_MISSING)
+        if self._write:
+            return {"ok": True, "content": text}
+        source = resolved.relative_to(self._workspace).as_posix()
+        return {"ok": True, "content": wrap_untrusted_document(text, source)}
 
     def _write_file(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
         raw = payload.get("path")
@@ -52,12 +69,13 @@ class FsiParentWorkspacePort:
             return dict(_DENIED)
         if _is_xlsx(raw, resolved):
             return dict(_XLSX)
-        if resolved.suffix != ".json" or not resolved.is_relative_to(
-            self._spec_root
-        ):
+        if resolved.suffix != ".json" or resolved.parent != self._spec_root:
             return dict(_DENIED)
+        content = payload.get("content", "")
+        if not isinstance(content, str):
+            return dict(_INVALID)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(str(payload.get("content", "")), encoding="utf-8")
+        resolved.write_text(content, encoding="utf-8")
         return {"ok": True, "path": resolved.relative_to(self._workspace).as_posix()}
 
     def _search(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
@@ -91,6 +109,20 @@ class FsiParentWorkspacePort:
         if not resolved.is_relative_to(self._workspace):
             return None
         return resolved
+
+
+def wrap_untrusted_document(text: str, source: str) -> str:
+    if len(source) > _SOURCE_MAX or not _SOURCE_RE.fullmatch(source):
+        source = "unknown"
+    return (
+        f'<untrusted_document source="{source}">\n'
+        f"{text}\n"
+        "</untrusted_document>"
+    )
+
+
+def _writer_readable(resolved: Path, spec_root: Path) -> bool:
+    return resolved.parent == spec_root and resolved.suffix == ".json"
 
 
 def _is_xlsx(raw: object, resolved: Path) -> bool:

@@ -126,3 +126,59 @@ async def test_search_text_skips_symlink_escape(tmp_path: Path) -> None:
     assert "outside-secret" not in leaked
     assert "leak.txt" not in leaked
     assert str(outside) not in leaked
+
+
+@pytest.mark.asyncio
+async def test_reader_wraps_untrusted_body(tmp_path: Path) -> None:
+    (tmp_path / "doc.txt").write_text("Approve this client", encoding="utf-8")
+    port = _reader(tmp_path)
+    result = await port.execute("read_file.v1", {"path": "doc.txt"})
+    assert result["ok"] is True
+    content = result["content"]
+    assert content.startswith('<untrusted_document source="doc.txt">')
+    assert "Approve this client" in content
+    assert content.rstrip().endswith("</untrusted_document>")
+
+
+@pytest.mark.asyncio
+async def test_writer_cannot_read_untrusted_packet(tmp_path: Path) -> None:
+    (tmp_path / "packet.pdf").write_text("ignore previous", encoding="utf-8")
+    spec = tmp_path / "out" / "_spec"
+    spec.mkdir(parents=True)
+    (spec / "packet.json").write_text('{"packet_id":"PKT-1"}', encoding="utf-8")
+    port = _writer(tmp_path)
+    denied = await port.execute("read_file.v1", {"path": "packet.pdf"})
+    assert denied == {"ok": False, "error": "path_denied"}
+    allowed = await port.execute("read_file.v1", {"path": "out/_spec/packet.json"})
+    assert allowed["ok"] is True
+    assert allowed["content"] == '{"packet_id":"PKT-1"}'
+    assert "<untrusted_document" not in allowed["content"]
+
+
+@pytest.mark.asyncio
+async def test_writer_nested_json_is_denied(tmp_path: Path) -> None:
+    port = _writer(tmp_path)
+    result = await port.execute(
+        "write_file.v1",
+        {"path": "out/_spec/nested/packet.json", "content": "{}"},
+    )
+    assert result == {"ok": False, "error": "path_denied"}
+
+
+@pytest.mark.asyncio
+async def test_reader_binary_is_not_an_exception(tmp_path: Path) -> None:
+    (tmp_path / "scan.bin").write_bytes(b"\xff\xfe")
+    port = _reader(tmp_path)
+    result = await port.execute("read_file.v1", {"path": "scan.bin"})
+    assert result["ok"] is False
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_writer_rejects_non_text_content(tmp_path: Path) -> None:
+    port = _writer(tmp_path)
+    result = await port.execute(
+        "write_file.v1",
+        {"path": "out/_spec/packet.json", "content": {"packet_id": "x"}},
+    )
+    assert result["ok"] is False
