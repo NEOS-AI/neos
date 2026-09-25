@@ -2026,6 +2026,25 @@ class FsiConfig(StrictConfigModel):
         return self
 
 
+class UniverConfig(StrictConfigModel):
+    enabled: bool = False
+    sheets_enabled: bool = False
+    docs_enabled: bool = False
+    formula_enabled: bool = False
+
+    @model_validator(mode="after")
+    def child_requires_master(self) -> "UniverConfig":
+        if (
+            self.sheets_enabled or self.docs_enabled or self.formula_enabled
+        ) and not self.enabled:
+            raise ValueError(
+                "univer.sheets_enabled / docs_enabled / formula_enabled require univer.enabled"
+            )
+        if self.formula_enabled and not self.sheets_enabled:
+            raise ValueError("univer.formula_enabled requires univer.sheets_enabled")
+        return self
+
+
 class ContextAssemblyConfig(StrictConfigModel):
     max_tokens: int = 8000
     short_term_ratio: float = 0.50
@@ -2128,6 +2147,7 @@ class AppConfig(StrictConfigModel):
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
     fsi: FsiConfig = Field(default_factory=FsiConfig)
+    univer: UniverConfig = Field(default_factory=UniverConfig)
     context_assembly: ContextAssemblyConfig = Field(default_factory=ContextAssemblyConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     model_providers: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
