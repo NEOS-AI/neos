@@ -356,6 +356,22 @@ async def test_session_port_write_false_cannot_write_file(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_session_port_denies_binding_actions(tmp_path: Path) -> None:
+    port = _session(tmp_path, write=True)
+    denied = await port.execute("publish", {})
+    assert denied["error"] == "policy_binding_denied"
+    assert denied["action"] == "publish"
+    merge = await port.execute("univer.merge.v1", {})
+    assert merge == {
+        "ok": False,
+        "error": "policy_binding_denied",
+        "action": "merge_trunk",
+    }
+    inspect = await port.execute("univer.inspect.v1", {})
+    assert inspect["ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_session_port_never_raises(tmp_path: Path) -> None:
     class _Boom:
         def call(self, method: str, params: object) -> object:

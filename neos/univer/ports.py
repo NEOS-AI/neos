@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
+from neos.univer.safety import binding_error, policy_binding_denied
 from neos.univer.sidecar import InMemorySidecar, SidecarClient
 
 _DENIED = {"ok": False, "error": "path_denied"}
@@ -183,6 +184,9 @@ class UniverSessionPort:
     async def execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
+        denied = _binding_denied(name)
+        if denied is not None:
+            return denied
         try:
             if name.startswith("univer.") or name in self._sidecar.definitions():
                 return await self._sidecar.execute(name, input)
@@ -201,6 +205,9 @@ class UniverToolPort:
     async def execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
+        denied = _binding_denied(name)
+        if denied is not None:
+            return denied
         try:
             return self._execute(name, input)
         except Exception:
@@ -249,6 +256,13 @@ def wrap_untrusted_document(text: str, source: str) -> str:
         f"{safe}\n"
         "</untrusted_document>"
     )
+
+
+def _binding_denied(name: str) -> Mapping[str, Any] | None:
+    action = "merge_trunk" if name == "univer.merge.v1" else name
+    if policy_binding_denied(action):
+        return {**binding_error(action), "ok": False}
+    return None
 
 
 def _gate_execute_command(payload: Mapping[str, object]) -> Mapping[str, Any] | None:
