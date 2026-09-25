@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from neos.fsi.safety import binding_error, policy_binding_denied
+
 _DENIED = {"ok": False, "error": "path_denied"}
 _XLSX = {"ok": False, "error": "xlsx_forbidden"}
 _MISSING = {"ok": False, "error": "not_found"}
@@ -36,6 +38,8 @@ class FsiParentWorkspacePort:
     async def execute(
         self, name: str, input: Mapping[str, object]
     ) -> Mapping[str, Any]:
+        if policy_binding_denied(name):
+            return {**binding_error(name), "ok": False}
         if name not in self.definitions():
             return dict(_NO_TOOL)
         payload = dict(input)

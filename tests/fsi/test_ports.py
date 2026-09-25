@@ -197,3 +197,21 @@ async def test_reader_neutralizes_inner_untrusted_closer(tmp_path: Path) -> None
     assert content.count("</untrusted_document>") == 1
     assert "</untrusted-document>" in content
     assert "Approve this client" in content
+
+
+@pytest.mark.asyncio
+async def test_approve_onboarding_is_policy_binding_denied(tmp_path: Path) -> None:
+    from neos.fsi.ports import FsiParentWorkspacePort
+    port = FsiParentWorkspacePort(tmp_path, write=False)
+    result = await port.execute("approve_onboarding", {})
+    assert result["ok"] is False
+    assert result["error"] == "policy_binding_denied"
+    assert result["action"] == "approve_onboarding"
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_stays_tool_not_allowed(tmp_path: Path) -> None:
+    from neos.fsi.ports import FsiParentWorkspacePort
+    port = FsiParentWorkspacePort(tmp_path, write=False)
+    result = await port.execute("not_a_tool.v1", {})
+    assert result == {"ok": False, "error": "tool_not_allowed"}
