@@ -1,43 +1,36 @@
 ---
 name: univer-docs-headless
-description: Headless Univer Docs via FDocument.insertText and save(). Use for plain-text edits on IDocumentData JSON snapshots. Do not hand-edit dataStream or OT. Not for DOCX exchange, Slides, or Pro collaboration.
+description: Headless Univer Docs via structured univer.*.v1 tools on the Python InMemorySidecar. Use univer.execute_command.v1 with doc.command.insert-text {text} splice on IDocumentData-shaped JSON. Do not hand-edit dataStream. Not for DOCX exchange, Slides, or Pro collaboration.
 ---
 
 # Univer Docs (headless)
 
-## Boot
+## Runtime
 
-Use `preset-docs-node-core`. `univerAPI.createDocument(data)` returns `FDocument`.
+Live engine is Python `InMemorySidecar`. Node `@univerjs` presets are deferred. Parent owns the sidecar.
+
+Call structured tools:
+
+- `univer.inspect.v1` — title, dataStream length, paragraphs
+- `univer.execute_command.v1` — allowlisted doc COMMANDs
+- `univer.save.v1` — write `draft/document.json` only
+
+Sheet tools (`range_get` / `range_set`) do not apply to a doc unit.
 
 ## Write
 
-`FDocument.insertText(index, text, segmentId?)`. Paragraphs go through `insertParagraph` / `appendParagraph`. The canonical mutation is `doc.mutation.rich-text-editing` (JSONX/TextX).
+Live insert path is `doc.command.insert-text` with params `{text}`. The sidecar splices `text` in front of the trailing paragraph/section terminator. Empty body is `\r\n`. After insert `"Hello"`, the stream is `"Hello\r\n"`.
+
+`doc.command.update-text` with `{text}` replaces the whole body with `text + "\r\n"`.
+
+Do not hand-edit `body` or `dataStream`. Offsets and paragraph ids are not a live OT API this wave.
+
+Sheet COMMANDs on a doc unit return `unit_kind_mismatch`. MUTATION ids are `mutation_forbidden`.
 
 ## Save
 
-`FDocument.save()` returns `IDocumentData` plus plugin resources.
-
-## dataStream
-
-The implementation enum is canonical (`DataStreamTreeTokenType`):
-
-| Token | Value |
-| --- | --- |
-| PARAGRAPH | `\r` |
-| SECTION_BREAK | `\n` |
-| TABLE | `\x1A` … `\x0F` |
-| custom range START / END | `\x1F` / `\x1E` |
-
-`IDocumentBody` JSDoc that marks table ends as `\x1E` / `\x1F` is **stale** — those codes are custom range.
-
-## OT
-
-Do not hand-edit `body` or `dataStream`. `paragraphId` and JSONX invert break. An empty body is `dataStream: '\r\n'`.
-
-## Lookup
-
-`getParagraphs` / `findParagraphByText`. `FDocumentTextRange.describe()` is the agent-facing serializable summary. Offsets are frozen at creation — if you edit before a range, recapture it.
+`univer.save.v1` writes `draft/document.json`. Snapshot is a subset (`id`, `title`, `appVersion`, `body.dataStream`, placeholder `documentStyle` / `paragraphs`). It is not a round-trip `IDocumentData`.
 
 ## Forbidden
 
-DOCX round-trip (Pro), Slides (`createSlide` / Facade do not exist), and patching headers or footers by writing `dataStream` directly.
+DOCX round-trip (Pro), Slides, header/footer `dataStream` patches, and merging trunk.

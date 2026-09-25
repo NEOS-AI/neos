@@ -1,11 +1,15 @@
 ---
 name: univer-formula-audit
-description: Audit Univer formula-engine results. Use to wait on dirty calculation, list ErrorType literals, and read getFormulaError/getAllFormulaError. Never register custom RPC functions. Not for writing cells to disk.
+description: Audit Univer formula-engine results on the Python InMemorySidecar. Use univer.formula_wait.v1 then inspect. SUM, IF, and arithmetic compute; other functions are #NAME?. Never register custom RPC functions. Not for writing cells to disk.
 ---
 
 # Univer formula audit
 
-A formula leaf that loads this skill has no `write_file.v1`. Engine mutations apply only in sidecar memory through `univer.formula_wait.v1`.
+A formula leaf that loads this skill has no `write_file.v1`. Engine mutations apply only in sidecar memory through `univer.formula_wait.v1`. Live runtime is Python `InMemorySidecar`. Node `@univerjs` formula worker is deferred.
+
+## Supported this wave
+
+`SUM`, `IF`, and arithmetic (`+ - * /`, comparisons, A1 and ranges). Other function names evaluate to `#NAME?`. Division by zero is `#DIV/0!`. Lowercase `if` is `#NAME?`.
 
 ## ErrorType
 
@@ -15,21 +19,17 @@ Twelve literals from `engine-formula` `basics/error-type.ts`. List them all:
 
 `#CYCLE!` is defined but is not applied automatically to every cyclic graph. `#NULL!` is for space-intersection comments. Do not teach that every cycle is `#CYCLE!`.
 
-## Dirty
-
-`ActiveDirtyController` watches sheet mutations. **Style-only** `SetRangeValues` is skipped. The trigger is a 10ms debounce. Results land on cell `v` / `t` via `SetRangeValuesMutation`.
-
 ## Wait
 
-`onCalculationResultApplied(timeout?)`. If the model was touched from outside, call `executeCalculation()`. `getValue()` before wait finishes may be stale.
+Call `univer.formula_wait.v1` after dirty writes. Response is `{ok, formula_dirty}` or `formula_timeout` / `unit_busy`. `wait_status` / `error_count` belong to the formula fold schema, not the tool payload.
 
-## Error lookup
+Inspect with `univer.inspect.v1` (`include_formula_errors`) and `univer.range_get.v1` after wait. Values read before wait may be stale; inspect-with-values while dirty is `formula_dirty`.
 
-`FRange.getFormulaError()`, `FWorkbook.getAllFormulaError()`.
+Style-only range writes do not dirty formulas.
 
 ## Custom functions
 
-`sheets-formula.remote-register-function.service` deserialization throws (`unsafe`). Facade `registerFunction` is main-thread only. **v0 does not register custom functions.** Do not send function source over RPC.
+v0 does not register custom functions. Do not send function source over RPC.
 
 ## Disk
 
