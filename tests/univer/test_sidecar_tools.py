@@ -143,6 +143,178 @@ async def test_mutation_forbidden(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_insert_row_shifts_cells(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 1})
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "sheet.command.insert-row", "params": {"startRow": 0, "count": 1}},
+    )
+    assert result["ok"] is True
+    a1 = await port.execute("univer.range_get.v1", {"a1": "A1"})
+    a2 = await port.execute("univer.range_get.v1", {"a1": "A2"})
+    assert a1.get("cells") == [] or a1["cells"][0].get("v") in (None, [])
+    assert a2["cells"][0]["v"] == 1
+    outline = await port.execute("univer.inspect.v1", {})
+    assert outline["outline"]["sheets"][0]["row_count"] == 1001
+
+
+@pytest.mark.asyncio
+async def test_remove_row_shifts_cells_up(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 1})
+    await port.execute("univer.range_set.v1", {"a1": "A2", "value": 2})
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "sheet.command.remove-row", "params": {"startRow": 0, "count": 1}},
+    )
+    assert result["ok"] is True
+    a1 = await port.execute("univer.range_get.v1", {"a1": "A1"})
+    a2 = await port.execute("univer.range_get.v1", {"a1": "A2"})
+    assert a1["cells"][0]["v"] == 2
+    assert a2.get("cells") == [] or a2["cells"][0].get("v") in (None, [])
+    outline = await port.execute("univer.inspect.v1", {})
+    assert outline["outline"]["sheets"][0]["row_count"] == 999
+
+
+@pytest.mark.asyncio
+async def test_insert_col_shifts_cells(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 1})
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.insert-col",
+            "params": {"startColumn": 0, "count": 1},
+        },
+    )
+    assert result["ok"] is True
+    a1 = await port.execute("univer.range_get.v1", {"a1": "A1"})
+    b1 = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    assert a1.get("cells") == [] or a1["cells"][0].get("v") in (None, [])
+    assert b1["cells"][0]["v"] == 1
+    outline = await port.execute("univer.inspect.v1", {})
+    assert outline["outline"]["sheets"][0]["column_count"] == 21
+
+
+@pytest.mark.asyncio
+async def test_remove_col_floor_is_one(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.remove-col",
+            "params": {"startColumn": 0, "count": 100},
+        },
+    )
+    assert result["ok"] is True
+    outline = await port.execute("univer.inspect.v1", {})
+    assert outline["outline"]["sheets"][0]["column_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_add_merge_lands_in_snapshot(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.add-worksheet-merge",
+            "params": {
+                "startRow": 0,
+                "startColumn": 0,
+                "endRow": 1,
+                "endColumn": 1,
+            },
+        },
+    )
+    assert result["ok"] is True
+    await port.execute("univer.save.v1", {})
+    snapshot = json.loads((tmp_path / "draft" / "workbook.json").read_text(encoding="utf-8"))
+    merge = snapshot["sheets"]["sheet-01"]["mergeData"]
+    assert {
+        "startRow": 0,
+        "startColumn": 0,
+        "endRow": 1,
+        "endColumn": 1,
+    } in merge
+
+
+@pytest.mark.asyncio
+async def test_sort_range_numeric_then_string(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": "b"})
+    await port.execute("univer.range_set.v1", {"a1": "B1", "value": 9})
+    await port.execute("univer.range_set.v1", {"a1": "A2", "value": 10})
+    await port.execute("univer.range_set.v1", {"a1": "B2", "value": 8})
+    await port.execute("univer.range_set.v1", {"a1": "A3", "value": 2})
+    await port.execute("univer.range_set.v1", {"a1": "B3", "value": 7})
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "sheet.command.sort-range", "params": {"range": "A1:B3"}},
+    )
+    assert result["ok"] is True
+    a1 = await port.execute("univer.range_get.v1", {"a1": "A1"})
+    a2 = await port.execute("univer.range_get.v1", {"a1": "A2"})
+    a3 = await port.execute("univer.range_get.v1", {"a1": "A3"})
+    b1 = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    assert a1["cells"][0]["v"] == 2
+    assert a2["cells"][0]["v"] == 10
+    assert a3["cells"][0]["v"] == "b"
+    assert b1["cells"][0]["v"] == 7
+
+
+@pytest.mark.asyncio
+async def test_add_validation_lands_in_resources(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute(
+        "univer.execute_command.v1",
+        {"id": "sheet.command.addDataValidation", "params": {"ranges": ["A1"]}},
+    )
+    await port.execute("univer.save.v1", {})
+    snapshot = json.loads((tmp_path / "draft" / "workbook.json").read_text(encoding="utf-8"))
+    names = [item["name"] for item in snapshot["resources"]]
+    assert "SHEET_DATA_VALIDATION_PLUGIN" in names
+    item = next(
+        entry
+        for entry in snapshot["resources"]
+        if entry["name"] == "SHEET_DATA_VALIDATION_PLUGIN"
+    )
+    assert item["data"] == json.dumps({"ranges": ["A1"]})
+
+
+@pytest.mark.asyncio
+async def test_conditional_and_table_plugin_names(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    cf = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.add-conditional-rule",
+            "params": {"range": "A1", "type": "colorScale"},
+        },
+    )
+    table = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.add-table",
+            "params": {"name": "T1", "range": "A1:B2"},
+        },
+    )
+    assert cf["ok"] is True
+    assert table["ok"] is True
+    await port.execute("univer.save.v1", {})
+    snapshot = json.loads((tmp_path / "draft" / "workbook.json").read_text(encoding="utf-8"))
+    by_name = {item["name"]: item["data"] for item in snapshot["resources"]}
+    assert "SHEET_CONDITIONAL_FORMATTING_PLUGIN" in by_name
+    assert "SHEET_TABLE_PLUGIN" in by_name
+    assert by_name["SHEET_CONDITIONAL_FORMATTING_PLUGIN"] == json.dumps(
+        {"range": "A1", "type": "colorScale"}
+    )
+    assert by_name["SHEET_TABLE_PLUGIN"] == json.dumps(
+        {"name": "T1", "range": "A1:B2"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_save_outside_draft_is_path_denied(tmp_path: Path) -> None:
     port = _port(tmp_path)
     trunk = await port.execute("univer.save.v1", {"path": "trunk/workbook.json"})

@@ -58,6 +58,11 @@ _ERROR_TYPES = frozenset(
         "#NULL!",
     }
 )
+_RESOURCE_PLUGINS = {
+    "sheet.command.addDataValidation": "SHEET_DATA_VALIDATION_PLUGIN",
+    "sheet.command.add-conditional-rule": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "sheet.command.add-table": "SHEET_TABLE_PLUGIN",
+}
 
 
 def node_binary() -> Path | None:
@@ -100,6 +105,8 @@ class InMemorySidecar:
         self._unit_name = "Workbook" if kind == "sheet" else "Document1"
         self._row_count = _EMPTY_ROW_COUNT
         self._column_count = _EMPTY_COLUMN_COUNT
+        self._merge_data: list[dict[str, int]] = []
+        self._resources: list[dict[str, str]] = []
         self._in_flight = False
         self._created = True
 
@@ -271,13 +278,22 @@ class InMemorySidecar:
             return {"ok": False, "error": "command_failed"}
         if command_id == "sheet.command.set-range-values":
             return self._set_range_values(body)
-        if command_id in {
-            "sheet.command.insert-row",
-            "sheet.command.insert-col",
-            "sheet.command.remove-row",
-            "sheet.command.remove-col",
-        }:
-            self._dirty = True
+        if command_id == "sheet.command.insert-row":
+            return self._insert_axis(body, axis="row")
+        if command_id == "sheet.command.insert-col":
+            return self._insert_axis(body, axis="col")
+        if command_id == "sheet.command.remove-row":
+            return self._remove_axis(body, axis="row")
+        if command_id == "sheet.command.remove-col":
+            return self._remove_axis(body, axis="col")
+        if command_id == "sheet.command.add-worksheet-merge":
+            return self._add_merge(body)
+        if command_id == "sheet.command.sort-range":
+            return self._sort_range(body)
+        plugin = _RESOURCE_PLUGINS.get(command_id)
+        if plugin is not None:
+            self._resources.append({"name": plugin, "data": json.dumps(dict(body))})
+            return {"ok": True}
         return {"ok": True}
 
     def formula_wait(self, params: Mapping[str, object]) -> Mapping[str, Any]:
@@ -340,6 +356,131 @@ class InMemorySidecar:
         if dirty:
             self._dirty = True
         return {"ok": True}
+
+    def _insert_axis(
+        self, body: Mapping[str, object], *, axis: str
+    ) -> Mapping[str, Any]:
+        start, count = _axis_span(body, axis=axis)
+        if start is None or count is None:
+            return {"ok": False, "error": "command_failed"}
+        shifted: dict[tuple[int, int], dict[str, Any]] = {}
+        for (row, col), cell in self._cells.items():
+            if axis == "row" and row >= start:
+                shifted[(row + count, col)] = cell
+            elif axis == "col" and col >= start:
+                shifted[(row, col + count)] = cell
+            else:
+                shifted[(row, col)] = cell
+        self._cells = shifted
+        if axis == "row":
+            self._row_count += count
+            self._shift_merges(start_row=start, row_delta=count)
+        else:
+            self._column_count += count
+            self._shift_merges(start_col=start, col_delta=count)
+        self._dirty = True
+        return {"ok": True}
+
+    def _remove_axis(
+        self, body: Mapping[str, object], *, axis: str
+    ) -> Mapping[str, Any]:
+        start, count = _axis_span(body, axis=axis)
+        if start is None or count is None:
+            return {"ok": False, "error": "command_failed"}
+        end = start + count
+        kept: dict[tuple[int, int], dict[str, Any]] = {}
+        for (row, col), cell in self._cells.items():
+            if axis == "row":
+                if start <= row < end:
+                    continue
+                kept[(row - count if row >= end else row, col)] = cell
+            else:
+                if start <= col < end:
+                    continue
+                kept[(row, col - count if col >= end else col)] = cell
+        self._cells = kept
+        if axis == "row":
+            self._row_count = max(1, self._row_count - count)
+            self._shift_merges(start_row=start, row_delta=-count)
+        else:
+            self._column_count = max(1, self._column_count - count)
+            self._shift_merges(start_col=start, col_delta=-count)
+        self._dirty = True
+        return {"ok": True}
+
+    def _add_merge(self, body: Mapping[str, object]) -> Mapping[str, Any]:
+        parsed = _parse_range(body.get("range") or body.get("a1") or body)
+        if parsed is None:
+            selections = body.get("selections")
+            if isinstance(selections, list) and selections:
+                parsed = _parse_range(selections[0])
+        if parsed is None:
+            return {"ok": False, "error": "command_failed"}
+        start_row, start_col, end_row, end_col = parsed
+        self._merge_data.append(
+            {
+                "startRow": start_row,
+                "startColumn": start_col,
+                "endRow": end_row,
+                "endColumn": end_col,
+            }
+        )
+        return {"ok": True}
+
+    def _sort_range(self, body: Mapping[str, object]) -> Mapping[str, Any]:
+        parsed = _parse_range(body.get("range") or body.get("a1") or body)
+        if parsed is None:
+            return {"ok": False, "error": "command_failed"}
+        start_row, start_col, end_row, end_col = parsed
+        rows: list[list[dict[str, Any] | None]] = []
+        for row in range(start_row, end_row + 1):
+            rows.append(
+                [
+                    dict(self._cells[row, col]) if (row, col) in self._cells else None
+                    for col in range(start_col, end_col + 1)
+                ]
+            )
+        rows.sort(key=_row_sort_key)
+        for r_off, row_cells in enumerate(rows):
+            row = start_row + r_off
+            for c_off, cell in enumerate(row_cells):
+                coord = (row, start_col + c_off)
+                if cell is None:
+                    self._cells.pop(coord, None)
+                else:
+                    self._cells[coord] = cell
+        self._dirty = True
+        return {"ok": True}
+
+    def _shift_merges(
+        self,
+        *,
+        start_row: int | None = None,
+        start_col: int | None = None,
+        row_delta: int = 0,
+        col_delta: int = 0,
+    ) -> None:
+        updated: list[dict[str, int]] = []
+        for merge in self._merge_data:
+            item = dict(merge)
+            if start_row is not None and row_delta:
+                if item["startRow"] >= start_row:
+                    item["startRow"] += row_delta
+                    item["endRow"] += row_delta
+                elif item["endRow"] >= start_row:
+                    item["endRow"] += row_delta
+            if start_col is not None and col_delta:
+                if item["startColumn"] >= start_col:
+                    item["startColumn"] += col_delta
+                    item["endColumn"] += col_delta
+                elif item["endColumn"] >= start_col:
+                    item["endColumn"] += col_delta
+            if item["endRow"] < item["startRow"] or item["endColumn"] < item["startColumn"]:
+                continue
+            if min(item.values()) < 0:
+                continue
+            updated.append(item)
+        self._merge_data = updated
 
     def _put_cell(self, row: int, col: int, cell: Mapping[str, Any]) -> None:
         stored = dict(self._cells.get((row, col), {}))
@@ -466,6 +607,8 @@ class InMemorySidecar:
         self._unit_name = "Workbook" if self._kind == "sheet" else "Document1"
         self._row_count = _EMPTY_ROW_COUNT
         self._column_count = _EMPTY_COLUMN_COUNT
+        self._merge_data = []
+        self._resources = []
 
     def _apply_snapshot(self, snapshot: Mapping[str, Any]) -> Mapping[str, Any] | None:
         if self._kind == "sheet" and "body" in snapshot and "sheets" not in snapshot:
@@ -528,6 +671,34 @@ class InMemorySidecar:
                         continue
                     if isinstance(cell, Mapping):
                         self._cells[(row_i, col_i)] = dict(cell)
+        merge_data = sheet.get("mergeData")
+        if isinstance(merge_data, list):
+            restored: list[dict[str, int]] = []
+            for item in merge_data:
+                parsed = _parse_range(item)
+                if parsed is None:
+                    continue
+                start_row, start_col, end_row, end_col = parsed
+                restored.append(
+                    {
+                        "startRow": start_row,
+                        "startColumn": start_col,
+                        "endRow": end_row,
+                        "endColumn": end_col,
+                    }
+                )
+            self._merge_data = restored
+        resources = snapshot.get("resources")
+        if isinstance(resources, list):
+            loaded: list[dict[str, str]] = []
+            for item in resources:
+                if not isinstance(item, Mapping):
+                    continue
+                name = item.get("name")
+                data = item.get("data")
+                if isinstance(name, str) and isinstance(data, str):
+                    loaded.append({"name": name, "data": data})
+            self._resources = loaded
         return None
 
     def _snapshot(self) -> dict[str, Any]:
@@ -561,10 +732,11 @@ class InMemorySidecar:
                     "columnCount": self._column_count,
                     "defaultRowHeight": _EMPTY_ROW_HEIGHT,
                     "defaultColumnWidth": _EMPTY_COLUMN_WIDTH,
+                    "mergeData": [dict(item) for item in self._merge_data],
                     "cellData": cell_data,
                 }
             },
-            "resources": [],
+            "resources": [dict(item) for item in self._resources],
         }
 
 
@@ -635,6 +807,57 @@ def _parse_range(raw: object) -> tuple[int, int, int, int] | None:
     if end_col < start_col:
         start_col, end_col = end_col, start_col
     return start_row, start_col, end_row, end_col
+
+
+def _axis_span(
+    body: Mapping[str, object], *, axis: str
+) -> tuple[int | None, int | None]:
+    start_key = "startRow" if axis == "row" else "startColumn"
+    end_key = "endRow" if axis == "row" else "endColumn"
+    raw_range = body.get("range")
+    if raw_range is not None:
+        parsed = _parse_range(raw_range)
+        if parsed is None:
+            return None, None
+        start_row, start_col, end_row, end_col = parsed
+        if axis == "row":
+            return start_row, end_row - start_row + 1
+        return start_col, end_col - start_col + 1
+    start = _int_param(body, start_key, default=0)
+    count = _int_param(body, "count")
+    if count is None:
+        end = _int_param(body, end_key)
+        if end is not None and start is not None:
+            count = end - start + 1
+        else:
+            count = 1
+    if start is None or count is None or start < 0 or count < 1:
+        return None, None
+    return start, count
+
+
+def _int_param(
+    body: Mapping[str, object], key: str, *, default: int | None = None
+) -> int | None:
+    if key not in body:
+        return default
+    raw = body[key]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_sort_key(row: list[dict[str, Any] | None]) -> tuple[int, float, str]:
+    cell = row[0] if row else None
+    value = None if cell is None else cell.get("v")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if value is None:
+            return (2, 0.0, "")
+        return (1, 0.0, str(value))
+    return (0, float(value), "")
 
 
 def _cell_from_value(value: object) -> dict[str, Any]:
