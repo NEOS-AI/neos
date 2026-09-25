@@ -3,7 +3,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from neos.skills.markdown_catalog import univer_catalog
@@ -160,9 +160,7 @@ class UniverParentWorkspacePort:
                 rel = path.relative_to(self._workspace).as_posix()
                 if self._confine(rel) is None:
                     continue
-                if not (
-                    PurePosixPath(rel).match(pattern) or fnmatch.fnmatch(rel, pattern)
-                ):
+                if not _glob_match(rel, pattern):
                     continue
             except (OSError, ValueError):
                 continue
@@ -189,9 +187,10 @@ class UniverSessionPort:
         write: bool,
         sidecar: SidecarClient | InMemorySidecar,
         skill_allowlist: frozenset[str] = frozenset(),
+        flags: object | None = None,
     ) -> None:
         self._files = UniverParentWorkspacePort(workspace, write=write)
-        self._sidecar = UniverToolPort(sidecar)
+        self._sidecar = UniverToolPort(sidecar, flags=flags)
         self._skill_allowlist = skill_allowlist
 
     def definitions(self) -> tuple[str, ...]:
@@ -394,3 +393,21 @@ def _as_tool_result(result: object, fallback: str) -> Mapping[str, Any]:
     if isinstance(result, Mapping) and "ok" in result:
         return dict(result)
     return {"ok": False, "error": fallback}
+
+
+def _glob_match(rel: str, pattern: str) -> bool:
+    return _glob_parts(rel.split("/"), pattern.split("/"))
+
+
+def _glob_parts(parts: list[str], pat: list[str]) -> bool:
+    if not pat:
+        return not parts
+    if pat[0] == "**":
+        if _glob_parts(parts, pat[1:]):
+            return True
+        return bool(parts) and _glob_parts(parts[1:], pat)
+    if not parts:
+        return False
+    if not fnmatch.fnmatch(parts[0], pat[0]):
+        return False
+    return _glob_parts(parts[1:], pat[1:])

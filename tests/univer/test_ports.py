@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from neos.config.schema import UniverConfig
 from neos.univer.allowlist import COMMAND_ALLOWLIST, mutation_id
 from neos.univer.ports import (
     UniverParentWorkspacePort,
@@ -72,6 +73,20 @@ async def test_reader_glob_lists_draft_json(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert {"path": "draft/workbook.json"} in result["matches"]
     assert {"path": "trunk/workbook.json"} not in result["matches"]
+
+
+@pytest.mark.asyncio
+async def test_reader_glob_star_is_one_path_segment(tmp_path: Path) -> None:
+    draft = tmp_path / "draft"
+    nested = draft / "nested"
+    nested.mkdir(parents=True)
+    (draft / "workbook.json").write_text("{}", encoding="utf-8")
+    (nested / "foo.json").write_text("{}", encoding="utf-8")
+    port = _reader(tmp_path)
+    result = await port.execute("glob_files.v1", {"pattern": "draft/*.json"})
+    assert result["ok"] is True
+    assert {"path": "draft/workbook.json"} in result["matches"]
+    assert {"path": "draft/nested/foo.json"} not in result["matches"]
 
 
 @pytest.mark.asyncio
@@ -275,6 +290,18 @@ def test_command_allowlist_is_ten_sheet_and_two_doc() -> None:
     assert mutation_id("doc.mutation.rich-text-editing") is True
     assert mutation_id("sheet.operation.scroll-to-range") is True
     assert mutation_id("sheet.command.set-range-values") is False
+
+
+@pytest.mark.asyncio
+async def test_session_port_disabled_flags_return_flag_disabled(tmp_path: Path) -> None:
+    port = UniverSessionPort(
+        tmp_path,
+        write=False,
+        sidecar=InMemorySidecar(session_dir=tmp_path),
+        flags=UniverConfig(enabled=False),
+    )
+    result = await port.execute("univer.inspect.v1", {})
+    assert result == {"ok": False, "error": "flag_disabled", "flag": "enabled"}
 
 
 @pytest.mark.asyncio

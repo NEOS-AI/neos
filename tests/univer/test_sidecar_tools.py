@@ -213,6 +213,37 @@ async def test_remove_col_floor_is_one(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_insert_row_shifts_merge_start_row(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    merged = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.add-worksheet-merge",
+            "params": {
+                "startRow": 0,
+                "startColumn": 0,
+                "endRow": 1,
+                "endColumn": 1,
+            },
+        },
+    )
+    assert merged["ok"] is True
+    inserted = await port.execute(
+        "univer.execute_command.v1",
+        {"id": "sheet.command.insert-row", "params": {"startRow": 0, "count": 1}},
+    )
+    assert inserted["ok"] is True
+    await port.execute("univer.save.v1", {})
+    snapshot = json.loads((tmp_path / "draft" / "workbook.json").read_text(encoding="utf-8"))
+    assert {
+        "startRow": 1,
+        "startColumn": 0,
+        "endRow": 2,
+        "endColumn": 1,
+    } in snapshot["sheets"]["sheet-01"]["mergeData"]
+
+
+@pytest.mark.asyncio
 async def test_add_merge_lands_in_snapshot(tmp_path: Path) -> None:
     port = _port(tmp_path)
     result = await port.execute(
@@ -558,6 +589,59 @@ async def test_sum_empty_range_is_zero(tmp_path: Path) -> None:
     got = await port.execute("univer.range_get.v1", {"a1": "B1"})
     assert got["ok"] is True
     assert got["cells"][0]["v"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sum_of_div0_cell_skips_to_zero(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 0})
+    await port.execute("univer.range_set.v1", {"a1": "B1", "formula": "=1/A1"})
+    await port.execute("univer.formula_wait.v1", {})
+    div0 = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    assert div0["cells"][0]["v"] == "#DIV/0!"
+    await port.execute("univer.range_set.v1", {"a1": "C1", "formula": "=SUM(B1)"})
+    await port.execute("univer.formula_wait.v1", {})
+    summed = await port.execute("univer.range_get.v1", {"a1": "C1"})
+    assert summed["ok"] is True
+    assert summed["cells"][0]["v"] == 0
+
+
+@pytest.mark.asyncio
+async def test_lowercase_if_is_name_error(tmp_path: Path) -> None:
+    port = _port(tmp_path)
+    await port.execute("univer.range_set.v1", {"a1": "A1", "value": 1})
+    await port.execute("univer.range_set.v1", {"a1": "B1", "formula": "=if(A1>0,1,0)"})
+    await port.execute("univer.formula_wait.v1", {})
+    got = await port.execute("univer.range_get.v1", {"a1": "B1"})
+    assert got["ok"] is True
+    assert got["cells"][0]["v"] == "#NAME?"
+    inspect = await port.execute("univer.inspect.v1", {"include_values": True})
+    assert inspect["ok"] is True
+    assert any(
+        item["code"] == "#NAME?" and item["a1"] == "B1"
+        for item in inspect["formula_errors"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_sheet_command_on_doc_is_unit_kind_mismatch(tmp_path: Path) -> None:
+    port = UniverToolPort(InMemorySidecar(session_dir=tmp_path, kind="doc"))
+    result = await port.execute(
+        "univer.execute_command.v1",
+        {
+            "id": "sheet.command.set-range-values",
+            "params": {
+                "range": {
+                    "startRow": 0,
+                    "startColumn": 0,
+                    "endRow": 0,
+                    "endColumn": 0,
+                },
+                "value": {"v": 9, "t": 2},
+            },
+        },
+    )
+    assert result == {"ok": False, "error": "unit_kind_mismatch"}
 
 
 @pytest.mark.asyncio
