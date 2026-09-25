@@ -322,14 +322,21 @@ class InMemorySidecar:
         allowed = _SAVE_SHEET if self._kind == "sheet" else _SAVE_DOC
         if path != allowed:
             return {"ok": False, "error": "path_denied"}
+        confined = _confine(self._session_dir, path)
+        draft_root = (self._session_dir / "draft").resolve()
+        if (
+            confined is None
+            or confined.parent != draft_root
+            or confined.name != Path(allowed).name
+        ):
+            return {"ok": False, "error": "path_denied"}
         if self._dirty and self._has_formulas():
             return {"ok": False, "error": "formula_dirty"}
         snapshot = self._snapshot()
         text = json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n"
         encoded = text.encode("utf-8")
-        target = self._session_dir / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(encoded)
+        confined.parent.mkdir(parents=True, exist_ok=True)
+        confined.write_bytes(encoded)
         return {"ok": True, "path": path, "bytes": len(encoded)}
 
     def _inspect_doc(self, params: Mapping[str, object]) -> Mapping[str, Any]:

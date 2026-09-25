@@ -333,6 +333,52 @@ async def test_save_outside_draft_is_path_denied(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_save_does_not_follow_symlink_into_trunk(tmp_path: Path) -> None:
+    draft = tmp_path / "draft"
+    trunk = tmp_path / "trunk"
+    draft.mkdir()
+    trunk.mkdir()
+    planted = trunk / "workbook.json"
+    planted.write_text("keep", encoding="utf-8")
+    (draft / "workbook.json").symlink_to(planted)
+    port = _port(tmp_path)
+    result = await port.execute("univer.save.v1", {})
+    assert result == {"ok": False, "error": "path_denied"}
+    assert planted.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+async def test_save_does_not_follow_symlink_outside_session(tmp_path: Path) -> None:
+    draft = tmp_path / "draft"
+    draft.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-workbook.json"
+    outside.write_text("keep-out", encoding="utf-8")
+    (draft / "workbook.json").symlink_to(outside)
+    try:
+        port = _port(tmp_path)
+        result = await port.execute("univer.save.v1", {})
+        assert result == {"ok": False, "error": "path_denied"}
+        assert outside.read_text(encoding="utf-8") == "keep-out"
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_save_does_not_follow_doc_symlink_into_trunk(tmp_path: Path) -> None:
+    draft = tmp_path / "draft"
+    trunk = tmp_path / "trunk"
+    draft.mkdir()
+    trunk.mkdir()
+    planted = trunk / "document.json"
+    planted.write_text("keep", encoding="utf-8")
+    (draft / "document.json").symlink_to(planted)
+    port = _port(tmp_path, kind="doc")
+    result = await port.execute("univer.save.v1", {})
+    assert result == {"ok": False, "error": "path_denied"}
+    assert planted.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
 async def test_formula_timeout(tmp_path: Path) -> None:
     port = _port(tmp_path, formula_timeout=True)
     await port.execute("univer.range_set.v1", {"a1": "A1", "formula": "=1+1"})
