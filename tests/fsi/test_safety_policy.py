@@ -53,3 +53,8 @@ def test_quoted_json_is_not_a_handoff() -> None:
 
 def test_handoff_v1_is_refused_on_leaves() -> None:
     assert "handoff.v1" in REFUSED_TOOLS
+
+
+def test_approve_onboarding_is_binding_denied() -> None:
+    assert policy_binding_denied("approve_onboarding") is True
+    assert binding_error("approve_onboarding")["error"] == "policy_binding_denied"

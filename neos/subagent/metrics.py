@@ -15,6 +15,22 @@ _SPECS = frozenset(
         "fsi-modeler",
     }
 )
+_FSI_ALIASES = frozenset(
+    {
+        "kyc-doc-reader",
+        "gl-reconciler-reader",
+        "earnings-transcript-reader",
+        "market-sector-reader",
+        "briefing-news-reader",
+        "close-ledger-reader",
+        "stmt-statement-reader",
+        "valuation-package-reader",
+        "pitch-researcher",
+        "model-data-puller",
+        "kyc-rules-engine",
+        "kyc-escalator",
+    }
+)
 _OUTCOMES = frozenset(
     {"continuing", "completed", "failed", "cancelled", "unknown_spec"}
 )
@@ -29,7 +45,7 @@ def _parent(payload: Mapping[str, Any]) -> str:
 
 def _spec(payload: Mapping[str, Any]) -> str:
     value = str(payload.get("spec") or "explore")
-    return value if value in _SPECS else "explore"
+    return value if value in _SPECS or value in _FSI_ALIASES else "explore"
 
 
 def _outcome(payload: Mapping[str, Any], default: str) -> str:

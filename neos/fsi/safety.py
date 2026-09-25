@@ -5,6 +5,7 @@ BINDING_ACTIONS = frozenset(
         "ledger_post",
         "post_je",
         "kyc_approve",
+        "approve_onboarding",
         "account_open",
         "publish",
         "send",
