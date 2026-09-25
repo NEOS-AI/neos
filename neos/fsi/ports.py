@@ -5,7 +5,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from neos.fsi.profile import skill_permitted
 from neos.fsi.safety import binding_error, policy_binding_denied
+from neos.skills.markdown_catalog import fsi_catalog
 
 _DENIED = {"ok": False, "error": "path_denied"}
 _XLSX = {"ok": False, "error": "xlsx_forbidden"}
@@ -13,10 +15,12 @@ _MISSING = {"ok": False, "error": "not_found"}
 _DECODE = {"ok": False, "error": "decode_error"}
 _INVALID = {"ok": False, "error": "invalid_content"}
 _NO_TOOL = {"ok": False, "error": "tool_not_allowed"}
+_UNKNOWN_SKILL = {"ok": False, "error": "unknown_skill"}
 
 _READ = "read_file.v1"
 _WRITE = "write_file.v1"
 _SEARCH = "search_text.v1"
+_LOAD_SKILL = "load_skill.v1"
 
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9 ._/:#-]+$")
 _SOURCE_MAX = 256
@@ -115,6 +119,52 @@ class FsiParentWorkspacePort:
         if not resolved.is_relative_to(self._workspace):
             return None
         return resolved
+
+
+class FsiSessionPort:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        write: bool,
+        skill_allowlist: frozenset[str] = frozenset(),
+    ) -> None:
+        self._files = FsiParentWorkspacePort(workspace, write=write)
+        self._skill_allowlist = skill_allowlist
+
+    def definitions(self) -> tuple[str, ...]:
+        names = self._files.definitions()
+        if self._skill_allowlist:
+            return names + (_LOAD_SKILL,)
+        return names
+
+    async def execute(
+        self, name: str, input: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        if policy_binding_denied(name):
+            return {**binding_error(name), "ok": False}
+        if name == _LOAD_SKILL:
+            if _LOAD_SKILL not in self.definitions():
+                return dict(_NO_TOOL)
+            return self._load_skill(input)
+        try:
+            return await self._files.execute(name, input)
+        except Exception:
+            return dict(_NO_TOOL)
+
+    def _load_skill(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        name = payload.get("name")
+        if not isinstance(name, str) or not skill_permitted(
+            name, self._skill_allowlist
+        ):
+            return dict(_UNKNOWN_SKILL)
+        catalog = fsi_catalog()
+        if catalog.get(name) is None:
+            return dict(_UNKNOWN_SKILL)
+        markdown = catalog.load_markdown(name)
+        if markdown is None:
+            return dict(_UNKNOWN_SKILL)
+        return {"ok": True, "name": name, "markdown": markdown}
 
 
 def wrap_untrusted_document(text: str, source: str) -> str:
