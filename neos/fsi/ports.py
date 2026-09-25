@@ -6,6 +6,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from neos.fsi.handoff import (
+    ALLOWED_TARGETS,
+    HANDOFF_TOOL_NAME,
+    HandoffCommand,
+    validate_handoff,
+)
 from neos.fsi.mcp_attach import SCREENING_SEARCH, screening_search
 from neos.fsi.profile import SCREENING_STUB_TOOLS, skill_permitted
 from neos.fsi.safety import binding_error, policy_binding_denied
@@ -175,10 +181,14 @@ class FsiSessionPort:
         write: bool,
         skill_allowlist: frozenset[str] = frozenset(),
         mcp_allowlist: frozenset[str] = frozenset(),
+        from_slug: str = "",
+        handoff_allowlist: frozenset[str] = frozenset(),
     ) -> None:
         self._files = FsiParentWorkspacePort(workspace, write=write)
         self._skill_allowlist = skill_allowlist
         self._mcp_allowlist = mcp_allowlist
+        self._from_slug = from_slug
+        self._handoff_allowlist = handoff_allowlist
 
     def definitions(self) -> tuple[str, ...]:
         names = self._files.definitions()
@@ -186,6 +196,8 @@ class FsiSessionPort:
             names = names + (_LOAD_SKILL,)
         if "screening" in self._mcp_allowlist:
             names = names + tuple(sorted(SCREENING_STUB_TOOLS))
+        if self._handoff_allowlist:
+            names = names + (HANDOFF_TOOL_NAME,)
         return names
 
     async def execute(
@@ -193,6 +205,10 @@ class FsiSessionPort:
     ) -> Mapping[str, Any]:
         if policy_binding_denied(name):
             return {**binding_error(name), "ok": False}
+        if name == HANDOFF_TOOL_NAME:
+            if HANDOFF_TOOL_NAME not in self.definitions():
+                return dict(_NO_TOOL)
+            return self._handoff(input)
         if name == _LOAD_SKILL:
             if _LOAD_SKILL not in self.definitions():
                 return dict(_NO_TOOL)
@@ -205,6 +221,22 @@ class FsiSessionPort:
             return await self._files.execute(name, input)
         except Exception:
             return dict(_NO_TOOL)
+
+    def _handoff(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
+        target = payload.get("target")
+        if not isinstance(target, str) or target not in self._handoff_allowlist:
+            return {"ok": False, "error": "policy_handoff_denied"}
+        if target not in ALLOWED_TARGETS:
+            return {"ok": False, "error": "policy_handoff_denied"}
+        result = validate_handoff(self._from_slug, payload)
+        if isinstance(result, HandoffCommand):
+            return {
+                "ok": True,
+                "target": result.target,
+                "event": result.event,
+                "context_ref": result.context_ref,
+            }
+        return dict(result)
 
     def _load_skill(self, payload: Mapping[str, object]) -> Mapping[str, Any]:
         name = payload.get("name")
