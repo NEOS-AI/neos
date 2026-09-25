@@ -73,15 +73,69 @@ class InMemorySidecar:
         self._unit_name = "Workbook" if kind == "sheet" else "Document1"
         self._row_count = _EMPTY_ROW_COUNT
         self._column_count = _EMPTY_COLUMN_COUNT
+        self._in_flight = False
+        self._created = True
 
     def unavailable_error(self) -> str:
         return "sidecar_unavailable"
 
     def call(self, method: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+        if self._in_flight:
+            return {"ok": False, "error": "unit_busy"}
         handler = getattr(self, method, None)
         if not callable(handler) or method.startswith("_"):
             return {"ok": False, "error": "tool_not_allowed"}
-        return handler(params)
+        self._in_flight = True
+        try:
+            return handler(params)
+        finally:
+            self._in_flight = False
+
+    def health(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        return {
+            "ok": True,
+            "pid": 0,
+            "kind": self._kind,
+            "lifecycle": "Steady",
+            "unit_id": self._unit_id,
+            "formula_dirty": self._dirty,
+            "in_flight": False,
+            "app_version": _APP_VERSION,
+        }
+
+    def create(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        if self._created:
+            return {"ok": False, "error": "one_unit_limit"}
+        self._reset_empty_unit()
+        self._created = True
+        return {"ok": True, "unit_id": self._unit_id}
+
+    def dispose(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        self._reset_empty_unit()
+        self._created = False
+        return {"ok": True}
+
+    def load(self, params: Mapping[str, object]) -> Mapping[str, Any]:
+        raw = params.get("path")
+        resolved = _confine(self._session_dir, raw)
+        if resolved is None:
+            return {"ok": False, "error": "path_denied"}
+        if not resolved.is_file():
+            self._reset_empty_unit()
+            self._created = True
+            return {"ok": True, "unit_id": self._unit_id}
+        try:
+            text = resolved.read_text(encoding="utf-8")
+            snapshot = json.loads(text)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return {"ok": False, "error": "snapshot_invalid"}
+        if not isinstance(snapshot, dict):
+            return {"ok": False, "error": "snapshot_invalid"}
+        applied = self._apply_snapshot(snapshot)
+        if applied is not None:
+            return applied
+        self._created = True
+        return {"ok": True, "unit_id": self._unit_id}
 
     def inspect(self, params: Mapping[str, object]) -> Mapping[str, Any]:
         if self._kind == "doc":
@@ -350,6 +404,79 @@ class InMemorySidecar:
             if not remaining or not progress:
                 break
 
+    def _reset_empty_unit(self) -> None:
+        self._cells.clear()
+        self._dirty = False
+        self._sheet_id = "sheet-01"
+        self._sheet_name = "Sheet1"
+        self._unit_id = "workbook-01" if self._kind == "sheet" else "document-01"
+        self._unit_name = "Workbook" if self._kind == "sheet" else "Document1"
+        self._row_count = _EMPTY_ROW_COUNT
+        self._column_count = _EMPTY_COLUMN_COUNT
+
+    def _apply_snapshot(self, snapshot: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if self._kind == "sheet" and "body" in snapshot and "sheets" not in snapshot:
+            return {"ok": False, "error": "snapshot_invalid"}
+        if self._kind == "doc" and "sheets" in snapshot and "body" not in snapshot:
+            return {"ok": False, "error": "snapshot_invalid"}
+        if self._kind == "sheet" and "sheets" in snapshot and not isinstance(
+            snapshot.get("sheets"), Mapping
+        ):
+            return {"ok": False, "error": "snapshot_invalid"}
+        self._reset_empty_unit()
+        unit_id = snapshot.get("id")
+        if isinstance(unit_id, str) and unit_id:
+            self._unit_id = unit_id
+        if self._kind == "doc":
+            title = snapshot.get("title")
+            if isinstance(title, str) and title:
+                self._unit_name = title
+            return None
+        name = snapshot.get("name")
+        if isinstance(name, str) and name:
+            self._unit_name = name
+        order = snapshot.get("sheetOrder")
+        sheets = snapshot.get("sheets")
+        if isinstance(order, list) and order and isinstance(order[0], str):
+            self._sheet_id = order[0]
+        if not isinstance(sheets, Mapping):
+            return None
+        sheet = sheets.get(self._sheet_id)
+        if not isinstance(sheet, Mapping) and sheets:
+            first = next(iter(sheets.values()), None)
+            sheet = first if isinstance(first, Mapping) else None
+        if not isinstance(sheet, Mapping):
+            return None
+        sheet_id = sheet.get("id")
+        if isinstance(sheet_id, str) and sheet_id:
+            self._sheet_id = sheet_id
+        sheet_name = sheet.get("name")
+        if isinstance(sheet_name, str) and sheet_name:
+            self._sheet_name = sheet_name
+        row_count = sheet.get("rowCount")
+        if isinstance(row_count, int) and row_count > 0:
+            self._row_count = row_count
+        column_count = sheet.get("columnCount")
+        if isinstance(column_count, int) and column_count > 0:
+            self._column_count = column_count
+        cell_data = sheet.get("cellData")
+        if isinstance(cell_data, Mapping):
+            for row_key, row in cell_data.items():
+                if not isinstance(row, Mapping):
+                    continue
+                try:
+                    row_i = int(row_key)
+                except (TypeError, ValueError):
+                    continue
+                for col_key, cell in row.items():
+                    try:
+                        col_i = int(col_key)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(cell, Mapping):
+                        self._cells[(row_i, col_i)] = dict(cell)
+        return None
+
     def _snapshot(self) -> dict[str, Any]:
         if self._kind == "doc":
             return {
@@ -386,6 +513,18 @@ class InMemorySidecar:
             },
             "resources": [],
         }
+
+
+def _confine(session_dir: Path, raw: object) -> Path | None:
+    if not isinstance(raw, str) or not raw or "\0" in raw:
+        return None
+    candidate = Path(raw)
+    if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
+        return None
+    resolved = (session_dir / candidate).resolve()
+    if not resolved.is_relative_to(session_dir.resolve()):
+        return None
+    return resolved
 
 
 def _col_index(letters: str) -> int:

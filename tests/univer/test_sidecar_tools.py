@@ -196,3 +196,90 @@ async def test_execute_never_raises(tmp_path: Path) -> None:
     result = await port.execute("univer.save.v1", {"path": object()})  # type: ignore[dict-item]
     assert result["ok"] is False
     assert "error" in result
+
+
+def test_health_reports_steady_empty_sheet(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    result = sidecar.call("health", {})
+    assert result["ok"] is True
+    assert result["pid"] == 0
+    assert result["kind"] == "sheet"
+    assert result["lifecycle"] == "Steady"
+    assert result["unit_id"] == "workbook-01"
+    assert result["formula_dirty"] is False
+    assert result["in_flight"] is False
+    assert result["app_version"] == "1.0.2"
+
+
+def test_load_invalid_json_is_snapshot_invalid(tmp_path: Path) -> None:
+    (tmp_path / "draft").mkdir()
+    (tmp_path / "draft" / "workbook.json").write_text("{", encoding="utf-8")
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    result = sidecar.call("load", {"path": "draft/workbook.json"})
+    assert result == {"ok": False, "error": "snapshot_invalid"}
+
+
+def test_create_second_unit_is_one_unit_limit(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    first = sidecar.call("create", {})
+    # Ruling: implicit boot counts as the one unit.
+    assert first == {"ok": False, "error": "one_unit_limit"}
+
+
+def test_in_flight_call_is_unit_busy(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    sidecar._in_flight = True
+    result = sidecar.call("inspect", {})
+    assert result == {"ok": False, "error": "unit_busy"}
+
+
+def test_dispose_then_create_allows_one_unit(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    sidecar.call("range_set", {"a1": "A1", "value": 9})
+    disposed = sidecar.call("dispose", {})
+    assert disposed["ok"] is True
+    empty = sidecar.call("range_get", {"a1": "A1"})
+    assert empty["ok"] is True
+    assert empty["cells"] == []
+    created = sidecar.call("create", {})
+    assert created["ok"] is True
+    second = sidecar.call("create", {})
+    assert second == {"ok": False, "error": "one_unit_limit"}
+
+
+def test_load_missing_file_keeps_empty_unit(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    sidecar.call("range_set", {"a1": "A1", "value": 9})
+    result = sidecar.call("load", {"path": "draft/workbook.json"})
+    assert result["ok"] is True
+    got = sidecar.call("range_get", {"a1": "A1"})
+    assert got["ok"] is True
+    assert got["cells"] == []
+    outline = sidecar.call("inspect", {})
+    assert outline["outline"]["sheets"][0]["row_count"] == 1000
+    assert outline["outline"]["sheets"][0]["column_count"] == 20
+
+
+def test_load_outside_session_is_path_denied(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    parent = sidecar.call("load", {"path": "../workbook.json"})
+    assert parent == {"ok": False, "error": "path_denied"}
+    absolute = sidecar.call("load", {"path": "/tmp/workbook.json"})
+    assert absolute == {"ok": False, "error": "path_denied"}
+
+
+def test_load_replaces_existing_unit(tmp_path: Path) -> None:
+    sidecar = InMemorySidecar(session_dir=tmp_path)
+    sidecar.call("range_set", {"a1": "A1", "value": 1})
+    sidecar.call("range_set", {"a1": "B1", "formula": "=A1+1"})
+    sidecar.call("formula_wait", {})
+    saved = sidecar.call("save", {})
+    assert saved["ok"] is True
+    sidecar.call("range_set", {"a1": "A1", "value": 99})
+    loaded = sidecar.call("load", {"path": "draft/workbook.json"})
+    assert loaded["ok"] is True
+    got = sidecar.call("range_get", {"a1": "B1"})
+    assert got["ok"] is True
+    assert got["cells"][0]["v"] == 2
+    a1 = sidecar.call("range_get", {"a1": "A1"})
+    assert a1["cells"][0]["v"] == 1
