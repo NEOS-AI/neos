@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
-from neos.coding.model.errors import CodingModelError
 from neos.fsi.loop import make_fsi_runtime, run_leaf
 from neos.fsi.ports import FsiParentWorkspacePort
 from neos.fsi.profile import compile_leaf_spec, load_profile

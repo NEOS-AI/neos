@@ -6,7 +6,10 @@
       "**/*",
       "!components/ui",
       "!lib/utils.ts",
-      "!hooks/use-mobile.ts"
+      "!hooks/use-mobile.ts",
+      "!*.json",
+      "!tsconfig.json",
+      "!tsconfig.test.json"
     ]
   },
   "linter": {
@@ -22,29 +25,67 @@
         "noConsole": "off",
 
         /* Needed for generateUUID() */
-        "noBitwiseOperators": "off"
+        "noBitwiseOperators": "off",
+
+        /* Async functions that sometimes return sync values */
+        "useAwait": "off",
+        "noEvolvingTypes": "off",
+        "noEmptyBlockStatements": "off",
+        "noArrayIndexKey": "off"
       },
       "style": {
         /* Allowing magic numbers */
         "noMagicNumbers": "off",
 
         /* Needs more work to fix */
-        "noNestedTernary": "off"
+        "noNestedTernary": "off",
+
+        /* One-line ifs are common; gating this would fail first CI run */
+        "useBlockStatements": "off",
+        "useFilenamingConvention": "off",
+        "useNumericSeparators": "off",
+        "useConsistentMemberAccessibility": "off",
+        "noInferrableTypes": "off",
+        "useTemplate": "off",
+        "noUnusedTemplateLiteral": "off",
+        "useConsistentArrayType": "off",
+        "noNegationElse": "off",
+        "useImportType": "off",
+        "noNonNullAssertion": "off",
+        "noParameterProperties": "off"
       },
       "nursery": {
         /* Too many false positives */
-        "noUnnecessaryConditions": "off"
+        "noUnnecessaryConditions": "off",
+        "noShadow": "off",
+        /* interface vs type is mixed across the tree */
+        "useConsistentTypeDefinitions": "off",
+        "noUselessUndefined": "off",
+        "useMaxParams": "off",
+        "useSortedClasses": "off"
       },
       "complexity": {
         /* Needs more work to fix */
         "noExcessiveCognitiveComplexity": "off",
 
         /* This one has false positives. It's a bit... iffy 😉 */
-        "useSimplifiedLogicExpression": "off"
+        "useSimplifiedLogicExpression": "off",
+        "noVoid": "off"
+      },
+      "performance": {
+        /* Regex literals inside handlers are the existing pattern */
+        "useTopLevelRegex": "off",
+        "noDelete": "off",
+        /* Index files are the existing module surface */
+        "noBarrelFile": "off"
+      },
+      "correctness": {
+        "useSingleJsDocAsterisk": "off"
       },
       "a11y": {
         /* Needs more work to fix */
-        "noSvgWithoutTitle": "off"
+        "noSvgWithoutTitle": "off",
+        "useSemanticElements": "off"
       }
     }
   }

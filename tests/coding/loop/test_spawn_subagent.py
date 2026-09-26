@@ -52,7 +52,6 @@ from tests.coding.loop.test_anthropic_loop import (
     LEASE,
     NOW,
     Bindings,
-    Session,
     collect,
     completed,
     harness,

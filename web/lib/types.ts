@@ -8,9 +8,7 @@ import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
 import type {
   ApprovalRequest,
-  ItemStatus,
   UIFramePayload,
-  InlineVisualization,
 } from "./open-responses-types";
 
 export type DataPart = { type: "append-message"; message: string };

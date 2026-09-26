@@ -438,6 +438,7 @@ function PureArtifact({
                 <div className="flex flex-row gap-1 overflow-x-auto border-b px-2 pt-2">
                   {artifacts.map((art, index) => (
                     <button
+                      type="button"
                       key={`${art.documentId}-${index}`}
                       onClick={() => selectArtifact(index)}
                       className={cn(
@@ -467,11 +468,11 @@ function PureArtifact({
                     <div className="text-muted-foreground text-sm">
                       Saving changes...
                     </div>
-                  ) : document && document.createdAt ? (
+                  ) : document?.createdAt ? (
                     <div className="text-muted-foreground text-sm">
                       {(() => {
                         const createdDate = new Date(document.createdAt);
-                        const isValidDate = !isNaN(createdDate.getTime());
+                        const isValidDate = !Number.isNaN(createdDate.getTime());
                         return isValidDate
                           ? `Updated ${formatDistance(createdDate, new Date(), {
                               addSuffix: true,

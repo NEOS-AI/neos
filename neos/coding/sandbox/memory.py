@@ -7,7 +7,6 @@ import hashlib
 import os
 import pty
 import re
-import signal
 import shutil
 import struct
 import tempfile

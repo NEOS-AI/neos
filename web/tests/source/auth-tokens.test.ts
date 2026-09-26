@@ -64,7 +64,6 @@ describe("백엔드 토큰 갱신 병합", () => {
   test("access_token이 없으면 갱신 실패로 처리한다", () => {
     assert.throws(
       () => mergeRefreshedTokens(baseToken, { refresh_token: "r" }, 0),
-      // biome-ignore lint/performance/useTopLevelRegex: 단언 1회용 리터럴
       /Missing access_token/
     );
   });

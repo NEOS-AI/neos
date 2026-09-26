@@ -11,7 +11,6 @@ from neos.coding.domain.approvals import (
     approval_remember_key,
     evaluate_approval,
 )
-from neos.coding.model.base import ModelCompleted, ModelUsage
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
 from tests.coding.loop.test_anthropic_loop import (
     NOW,
