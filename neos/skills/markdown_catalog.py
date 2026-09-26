@@ -63,6 +63,20 @@ def univer_catalog() -> MarkdownSkillCatalog:
     return MarkdownSkillCatalog(roots=univer_skill_roots())
 
 
+K_SKILL_PACK = _REPO_ROOT / "skills" / "k-skill"
+
+K_SKILL_EXCLUDED: frozenset[str] = frozenset({"k-skill-setup", "k-skill-cleaner"})
+
+
+def k_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under skills/k-skill."""
+    return (("repo", K_SKILL_PACK),)
+
+
+def k_skill_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=k_skill_roots())
+
+
 FSI_PACK = _REPO_ROOT / "skills" / "financial-services"
 
 FSI_ANTHROPIC_VERTICALS: tuple[str, ...] = (
