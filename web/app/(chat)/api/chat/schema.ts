@@ -64,7 +64,7 @@ const filePartSchema = z.object({
 /**
  * @deprecated Use openResponsesPartSchema instead
  */
-const legacyPartSchema = z.union([textPartSchema, filePartSchema]);
+const _legacyPartSchema = z.union([textPartSchema, filePartSchema]);
 
 // ============================================================================
 // Combined Part Schema (accepts both formats)

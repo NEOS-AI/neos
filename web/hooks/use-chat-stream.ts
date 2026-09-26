@@ -742,7 +742,7 @@ export function useChatStream({
    * 메시지 전송
    */
   const sendMessage = useCallback(
-    async (message?: any, options?: ChatRequestOptions) => {
+    async (message?: any, _options?: ChatRequestOptions) => {
       // message가 없으면 무시
       if (!message) return;
 

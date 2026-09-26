@@ -110,7 +110,6 @@ declare module "next-auth" {
     error?: string;
   }
 
-  // biome-ignore lint/nursery/useConsistentTypeDefinitions: "Required"
   interface User {
     id?: string;
     email?: string | null;

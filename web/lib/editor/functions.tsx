@@ -63,7 +63,7 @@ export const buildDocumentFromContent = (content: string) => {
   try {
     // Pre-process content to convert tables to code blocks for better display
     const processedContent = content.replace(
-      /\n\|(.+)\|\n\|[-:\| ]+\|\n(\|.+\|\n?)+/g,
+      /\n\|(.+)\|\n\|[-:| ]+\|\n(\|.+\|\n?)+/g,
       (match) => '\n```\n' + match.trim() + '\n```\n'
     );
 

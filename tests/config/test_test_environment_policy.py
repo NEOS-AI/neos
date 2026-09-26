@@ -157,10 +157,33 @@ _FRONTEND_WORKFLOW = pathlib.Path(".github/workflows/frontend-ci.yml")
 #: 단위 테스트에도 걸리지 않는다. 그리고 CI 가 build 를 안 돌려서, 배포할 수
 #: 없는 상태가 알려지지 않은 채였다(2026-09-03, §5.8).
 _REQUIRED_FRONTEND_COMMANDS = (
+    "pnpm lint",
     "pnpm test:source",
     "tsc --noEmit",
     "pnpm typecheck:tests",
     "pnpm build",
+)
+
+_RUFF_KERNEL_DIRS = (
+    "neos/workflow/deep_analysis",
+    "neos/coding",
+    "neos/subagent",
+    "neos/fsi",
+    "neos/univer",
+    "neos/config",
+    "neos/learn",
+    "neos/jev",
+    "tests/workflow/deep_analysis",
+    "tests/coding",
+    "tests/subagent",
+    "tests/fsi",
+    "tests/univer",
+    "tests/k_skill",
+    "tests/security_audit",
+    "tests/learn",
+    "tests/jev",
+    "tests/config",
+    "tests/conftest.py",
 )
 
 
@@ -218,6 +241,44 @@ def test_backend_ci_checks_catalog_fallback_is_fresh():
     assert matching, (
         f"{_WORKFLOW} quality 잡이 catalog.generated.ts 신선도 검사를 "
         "돌리지 않는다. YAML 만 바꾸고 생성된 폴백을 안 고치면 산다."
+    )
+
+
+def test_ci_quality_runs_ruff_on_kernel_dirs():
+    """quality 잡의 Ruff 가 커널 디렉터리를 디렉터리 단위로 도는가.
+
+    파일 목록은 새 파일이 생길 때 조용히 낡는다. 여기 적힌 경로는
+    현재 0건인 표면이고, 워크플로 `run:` 에 그대로 있어야 한다.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    quality_runs = [
+        step.get("run") or ""
+        for step in ((workflow.get("jobs") or {}).get("quality") or {}).get("steps") or []
+    ]
+    ruff_runs = [run for run in quality_runs if "ruff check" in run]
+    assert ruff_runs, f"{_WORKFLOW} quality 잡이 ruff check 를 돌리지 않는다"
+    blob = "\n".join(ruff_runs)
+    missing = [path for path in _RUFF_KERNEL_DIRS if path not in blob]
+    assert not missing, (
+        f"{_WORKFLOW} Ruff 대상에서 빠졌다: {missing}. "
+        "디렉터리를 워크플로에 넣거나 _RUFF_KERNEL_DIRS 를 고쳐라."
+    )
+
+
+def test_frontend_lint_script_uses_locked_biome():
+    import json
+
+    scripts = json.loads(pathlib.Path("web/package.json").read_text(encoding="utf-8"))[
+        "scripts"
+    ]
+    command = scripts.get("lint", "")
+    assert "biome check" in command, (
+        f"web/package.json lint 가 잠긴 biome 이 아니다: {command!r}"
+    )
+    assert "@latest" not in command, (
+        "lint 가 npx @latest 를 쓰면 CI 가 매 실행마다 다른 규칙을 가져온다"
     )
 
 

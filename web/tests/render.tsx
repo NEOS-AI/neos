@@ -34,7 +34,6 @@ export async function renderComponent(
   // 그 경로만이 이펙트가 시작한 promise 사슬(여기서는 이벤트 스트림 fetch)을
   // 비운다. 동기 콜백으로 바꾸면 라이브 이벤트가 하나도 적용되지 않은 채
   // 단언이 돈다. 즉 `async` 는 잉여가 아니라 이 호출의 목적이다.
-  // biome-ignore lint/suspicious/useAwait: 위 문단 -- act 의 비동기 경로를 고른다
   await act(async () => {
     root.render(node);
   });
@@ -46,7 +45,6 @@ afterEach(async () => {
   // 그 경로만이 이펙트가 시작한 promise 사슬(여기서는 이벤트 스트림 fetch)을
   // 비운다. 동기 콜백으로 바꾸면 라이브 이벤트가 하나도 적용되지 않은 채
   // 단언이 돈다. 즉 `async` 는 잉여가 아니라 이 호출의 목적이다.
-  // biome-ignore lint/suspicious/useAwait: 위 문단 -- act 의 비동기 경로를 고른다
   await act(async () => {
     for (const root of roots) {
       root.unmount();

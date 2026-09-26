@@ -1,4 +1,4 @@
-"""Fail-closed subagent spec registry. Explore, implement, research, FSI, Univer leaves."""
+"""Fail-closed subagent spec registry. Explore, implement, research, FSI, Univer, security-audit leaves."""
 
 from __future__ import annotations
 
@@ -353,6 +353,51 @@ UNIVER_FORMULA = SubagentSpec(
 )
 
 
+# Explore minus spawn_agent.v1 and DA search/fetch. No execute, no writes.
+_SECURITY_AUDIT_TOOLS = frozenset(
+    {
+        "read_file.v1",
+        "search_text.v1",
+        "glob_files.v1",
+        "list_tree.v1",
+        "stat.v1",
+        "git_status.v1",
+        "git_diff.v1",
+        "git_log.v1",
+    }
+)
+
+
+SECURITY_AUDIT_RESEARCH = SubagentSpec(
+    name="security-audit-research",
+    description=(
+        "Security-audit research leaf. Source exploration and verification. "
+        "Report JSON only. Do not edit, execute, or spawn."
+    ),
+    allowed_tools=_SECURITY_AUDIT_TOOLS,
+    sandbox_mode=SandboxMode.PARENT_RO,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
+SECURITY_AUDIT_GENERAL = SubagentSpec(
+    name="security-audit-general",
+    description=(
+        "Security-audit hunter/verifier leaf. Read-only in v0. "
+        "Report JSON only. Do not edit, execute, or spawn."
+    ),
+    allowed_tools=_SECURITY_AUDIT_TOOLS,
+    sandbox_mode=SandboxMode.PARENT_RO,
+    load_project_instructions=False,
+    can_spawn=False,
+    can_approve=False,
+    one_shot=True,
+)
+
+
 _MAX_SPAWN_DEPTH = 0
 
 
@@ -393,6 +438,8 @@ _SPECS: dict[str, SubagentSpec] = {
         UNIVER_WRITER,
         UNIVER_CRITIC,
         UNIVER_FORMULA,
+        SECURITY_AUDIT_RESEARCH,
+        SECURITY_AUDIT_GENERAL,
     )
 }
 

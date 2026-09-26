@@ -33,10 +33,11 @@ function extractUploadFileMapping(): (data: Record<string, unknown>) => {
   const match = source.match(
     /const data = await response\.json\(\);([\s\S]*?return \{[\s\S]*?\};)/
   );
-  assert.ok(
-    match,
-    "uploadFile의 응답→첨부 매핑 코드를 찾지 못했다 — multimodal-input.tsx 구조가 바뀌었다"
-  );
+  if (!match) {
+    throw new Error(
+      "uploadFile의 응답→첨부 매핑 코드를 찾지 못했다 — multimodal-input.tsx 구조가 바뀌었다"
+    );
+  }
 
   const body = match[1];
   // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func

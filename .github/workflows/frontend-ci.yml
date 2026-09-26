@@ -55,6 +55,9 @@ jobs:
       # 배운 것과 같다 -- 락과 매니페스트가 어긋난 채 머지되면 CI 는 그 사실을
       # 이름 그대로 말해주는 대신 엉뚱한 곳에서 터진다.
       - run: pnpm install --frozen-lockfile
+      # 잠긴 biome/ultracite. `npx ultracite@latest` 는 CI Node 와 어긋나고
+      # 매 실행마다 다른 규칙을 가져온다. `pnpm lint` 는 포맷이 아니라 린트다.
+      - run: pnpm lint
       # tsx --test 는 실패 시 exit 1 이다(2026-09-02 변이 테스트로 실측).
       # 게이트가 실제로 무는지 확인하지 않고 세우면 없느니만 못하다.
       - run: pnpm test:source
@@ -73,10 +76,5 @@ jobs:
       # 첫 실행부터 무시되는 신호가 하나 생긴다.
       - run: pnpm build
 
-      # 린트는 **일부러 없다.** `web/lib/deep-analysis/progress.ts` 에 biome
-      # 경고 2건이 남아 있어(한 줄 `if` 스타일) 지금 게이트로 세우면 첫 실행부터
-      # 빨갛다. 백엔드 CI 가 ruff 를 저장소 전체가 아니라 "현재 0건인 세
-      # 디렉터리" 에만 거는 것과 같은 판단이다 -- 정리한 뒤에 세운다.
-      #
-      # e2e(Playwright)도 없다. 실제 백엔드와 실제 LLM 을 요구하므로(감사 §5)
+      # e2e(Playwright)는 없다. 실제 백엔드와 실제 LLM 을 요구하므로(감사 §5)
       # CI 에서 상시 실행이 불가능하다.

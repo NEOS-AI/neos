@@ -8,7 +8,6 @@ from neos.learn.extract import extract_coding_lesson, extract_research_procedure
 from neos.learn.lessons import (
     LessonStatus,
     approved_texts,
-    get_lesson_store,
     new_lesson,
     reset_lesson_store,
 )

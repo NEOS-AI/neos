@@ -58,9 +58,9 @@ jobs:
       # 놓친 것이 아니라 -- 반대로, 그 좁은 목록에 없던 다른 파일들은 애초에
       # 검사된 적이 없다. 목록은 새 파일이 생길 때마다 조용히 낡는다.
       #
-      # 저장소 전체는 아직 343건이 남아 있어 게이트로 세울 수 없다. 여기 적힌
-      # 세 디렉터리는 **현재 0건**이며, 이 트랙이 실제로 작업하는 표면이다.
-      # 나머지는 정리되는 대로 추가한다.
+      # 저장소 전체는 아직 수백 건이 남아 있어 게이트로 세울 수 없다. 여기
+      # 적힌 디렉터리는 **현재 0건**인 커널 표면이다. 나머지는 정리되는 대로
+      # 추가한다. `test_ci_quality_runs_ruff_on_kernel_dirs` 가 이 목록을 고정한다.
       # 배포 스키마 선언이 저장소와 맞는지 본다. 테스트는 이것을 못 잡는다 --
       # tests/conftest.py 는 정본 순서가 아니라 ORM create_all() + 번호순으로 따로
       # 스키마를 세우므로 선언이 어긋나도 초록이다. 2026-09-20 에 그 틈으로
@@ -81,7 +81,22 @@ jobs:
         run: >-
           uv run --frozen ruff check
           neos/workflow/deep_analysis
+          neos/coding
+          neos/subagent
+          neos/fsi
+          neos/univer
+          neos/config
+          neos/learn
+          neos/jev
           tests/workflow/deep_analysis
+          tests/coding
+          tests/subagent
+          tests/fsi
+          tests/univer
+          tests/k_skill
+          tests/security_audit
+          tests/learn
+          tests/jev
           tests/config
           tests/conftest.py
       - name: Test CI environment policy

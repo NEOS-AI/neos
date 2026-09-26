@@ -25,6 +25,7 @@ from neos.subagent.prompts import (
     build_explore_system_prompt,
     build_fsi_system_prompt_for,
     build_implement_system_prompt,
+    build_security_audit_system_prompt,
     build_univer_system_prompt_for,
     render_brief,
 )
@@ -118,6 +119,8 @@ class ChildStepper:
             system = _CODING_PROMPTS[spec.name]()
         elif spec.name.startswith("univer-"):
             system = build_univer_system_prompt_for(spec)
+        elif spec.name.startswith("security-audit-"):
+            system = build_security_audit_system_prompt()
         else:
             system = build_fsi_system_prompt_for(spec)
         request = ModelRequest(
