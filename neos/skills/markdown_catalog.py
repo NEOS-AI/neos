@@ -77,6 +77,18 @@ def k_skill_catalog() -> MarkdownSkillCatalog:
     return MarkdownSkillCatalog(roots=k_skill_roots(), skip_names=K_SKILL_EXCLUDED)
 
 
+SECURITY_AUDIT_PACK = _REPO_ROOT / "skills" / "security-audit"
+
+
+def security_audit_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under skills/security-audit."""
+    return (("repo", SECURITY_AUDIT_PACK),)
+
+
+def security_audit_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=security_audit_roots())
+
+
 FSI_PACK = _REPO_ROOT / "skills" / "financial-services"
 
 FSI_ANTHROPIC_VERTICALS: tuple[str, ...] = (

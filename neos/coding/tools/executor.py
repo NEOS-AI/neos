@@ -1308,7 +1308,11 @@ class SandboxToolExecutor:
 
     @staticmethod
     def _load_skill(call: ValidatedToolCall) -> ToolResult:
-        from neos.skills.markdown_catalog import default_catalog, k_skill_catalog
+        from neos.skills.markdown_catalog import (
+            default_catalog,
+            k_skill_catalog,
+            security_audit_catalog,
+        )
 
         name = str(call.input.get("name", ""))
         reference = call.input.get("reference")
@@ -1316,8 +1320,24 @@ class SandboxToolExecutor:
         leaf = reference if isinstance(reference, str) and reference.strip() else path
         catalog = default_catalog()
         skill = catalog.get(name)
+        if (
+            skill is not None
+            and skill.source == "coding"
+            and skill.path.name.lower() != "skill.md"
+        ):
+            pack = security_audit_catalog()
+            pack_skill = pack.get(name)
+            if pack_skill is not None and not pack_skill.disable_model_invocation:
+                catalog = pack
+                skill = pack_skill
         if skill is None or skill.disable_model_invocation:
             pack = k_skill_catalog()
+            pack_skill = pack.get(name)
+            if pack_skill is not None and not pack_skill.disable_model_invocation:
+                catalog = pack
+                skill = pack_skill
+        if skill is None or skill.disable_model_invocation:
+            pack = security_audit_catalog()
             pack_skill = pack.get(name)
             if pack_skill is not None and not pack_skill.disable_model_invocation:
                 catalog = pack

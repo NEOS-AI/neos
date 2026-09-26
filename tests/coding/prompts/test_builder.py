@@ -100,6 +100,8 @@ def test_prompt_lists_k_skill_index_not_korea_weather() -> None:
     skills = prompt[prompt.index("## Skills") : prompt.index("## Tone")]
     assert "- k-skill:" in skills
     assert "- korea-weather:" not in skills
+    assert "- security-audit:" in skills
+    assert "- HUNTING:" not in skills
 
 
 def test_live_registry_descriptions_teach_search_over_execute() -> None:

@@ -2407,3 +2407,38 @@ async def test_coding_spawn_refuses_fsi_and_univer_kebabs(spec_name: str) -> Non
     assert result["status"] == "error"
     assert result["reason_code"] == "policy_unknown_spec"
     assert len(_subagent_store(runtime)._runs) == 0
+
+
+@pytest.mark.asyncio
+async def test_coding_spawn_allows_security_audit_research() -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {
+                        "prompt": "look around",
+                        "max_turns": 4,
+                        "spec": "security-audit-research",
+                    },
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    for event in completed_events:
+        result = event.payload["result"]
+        assert result.get("reason_code") != "policy_unknown_spec"
+    state = h.repository.checkpoints[-1].loop_state
+    run_id = state["active_child_run_id"]
+    assert run_id
+    store = _subagent_store(runtime)
+    assert len(store._runs) == 1
+    record = store._runs[run_id]
+    assert record.spec == "security-audit-research"

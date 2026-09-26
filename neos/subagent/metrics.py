@@ -17,6 +17,8 @@ _SPECS = frozenset(
         "univer-writer",
         "univer-critic",
         "univer-formula",
+        "security-audit-research",
+        "security-audit-general",
     }
 )
 _FSI_ALIASES = frozenset(
