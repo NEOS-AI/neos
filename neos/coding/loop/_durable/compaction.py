@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from uuid import uuid4
 
 from neos.coding.model.base import (
     CanonicalMessage,
+    ModelCompleted,
     ModelLimits,
     ModelRequest,
     TextContent,
@@ -23,6 +25,7 @@ from neos.coding.loop.hooks import (
     invoke_post_compact,
     invoke_pre_compact,
 )
+from neos.coding.prompts.official import COMPACTION_SUMMARY_INSTRUCTION
 from neos.coding.sandbox.paths import normalize_workspace_path
 from neos.coding.loop._durable.state import (
     AgentLoopState,
@@ -40,6 +43,8 @@ from neos.coding.loop._durable.support import (
 )
 
 logger = logging.getLogger("neos.coding.loop.durable")
+
+_SUMMARY_TAGS = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
 
 
 def _ref_tool_result(
@@ -74,6 +79,38 @@ def _ref_tool_result(
     shrunk["path"] = path
     return ToolResultContent(item.tool_call_id, item.status, shrunk)
 
+
+
+def extract_preserved_summary(text: str, stop_reason: str) -> str | None:
+    """보존 요약 응답에서 다음 컨텍스트에 실을 요약을 꺼낸다 (P-05).
+
+    공식 지시는 요약을 `<summary></summary>` 로 감싸라고 한다. 반환값이
+    `None` 이거나 비면 이 LLM 컴팩션은 실패로 센다 -- 호출부가 원래 transcript
+    를 그대로 두고 다음 단계(헤드 드롭 등)로 넘어간다. 반환한 문자열은
+    `inject_previous_summary` 로 매 턴 system 프롬프트에 실린다.
+
+    stop_reason 은 "end_turn" 이면 끝까지 쓴 것이고 "max_tokens" 면 상한에서
+    잘린 것이다.
+
+    위험은 형식이 아니라 **불완전성**이다. 잘린 요약은 여섯 항목의 뒤쪽 --
+    미해결·약속(5)과 구체값(6) -- 을 잃은 채 "완전한 요약" 처럼 매 턴 실린다.
+    그것은 조용한 실패다. 버리면 헤드 드롭으로 넘어가는 시끄러운 실패가 된다.
+
+    - 태그 쌍이 온전하다 → 안쪽. 닫는 태그 뒤에서 잘렸어도 요약은 완전하다
+    - 태그 쌍 없이 잘렸다 → 버린다
+    - 태그 없이 끝까지 썼다 → 전체. 형식을 어겼을 뿐 내용은 완전하다
+    """
+    match = _SUMMARY_TAGS.search(text)
+    if match is not None:
+        return match.group(1).strip()
+    if stop_reason == "max_tokens":
+        logger.warning(
+            "compaction summary cut at its ceiling without a closing tag; "
+            "discarding it (chars=%d)",
+            len(text),
+        )
+        return None
+    return text.strip()
 
 
 class CompactionMixin:
@@ -183,8 +220,20 @@ class CompactionMixin:
         prompt = f"Summarize this transcript prefix:\n{blob}"
         if previous:
             prompt = f"Previous summary:\n{previous}\n\n{prompt}"
+        preserving = self._config.compaction_preserving_summary
+        if preserving:
+            # P-05. 공식 지시는 "길어지더라도 완전하게" 를 요구한다 -- 상한도
+            # 시간도 예전 값(512 · 30초)으로는 지킬 수 없다.
+            system = COMPACTION_SUMMARY_INSTRUCTION
+            limits = ModelLimits(
+                self._config.compaction_summary_max_tokens,
+                self._config.timeout_sec,
+            )
+        else:
+            system = "Summarize prior coding context as facts only. <= 200 words."
+            limits = ModelLimits(512, min(self._config.timeout_sec, 30))
         request = ModelRequest(
-            system="Summarize prior coding context as facts only. <= 200 words.",
+            system=system,
             messages=(
                 CanonicalMessage(
                     "user",
@@ -193,19 +242,25 @@ class CompactionMixin:
             ),
             tools=(),
             model=self._config.model,
-            limits=ModelLimits(512, min(self._config.timeout_sec, 30)),
+            limits=limits,
             task_id="compact",
             run_id="compact",
             turn_id=f"compact_{uuid4().hex}",
         )
         parts: list[str] = []
+        stop_reason = ""
         try:
             async for event in self._model.stream(request):
                 if isinstance(event, TextDelta):
                     parts.append(event.text)
+                elif isinstance(event, ModelCompleted):
+                    stop_reason = event.stop_reason
         except Exception:
             return transcript, attempts + 1, previous
-        summary = "".join(parts).strip()
+        text = "".join(parts).strip()
+        summary = (
+            extract_preserved_summary(text, stop_reason) if preserving else text
+        )
         if not summary:
             return transcript, attempts + 1, previous
         compacted = (head,) + transcript[tail_start:]

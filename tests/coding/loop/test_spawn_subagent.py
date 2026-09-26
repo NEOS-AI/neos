@@ -2367,3 +2367,43 @@ async def test_subagent_steer_refuses_unowned_run() -> None:
     assert result["reason_code"] == "policy_not_owner"
     state = await inner._store.get_loop_state(foreign.run_id)
     assert "do not steer this" not in str(state)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spec_name",
+    [
+        "fsi-reader",
+        "fsi-writer",
+        "fsi-critic",
+        "fsi-puller",
+        "fsi-modeler",
+        "univer-reader",
+        "univer-writer",
+        "univer-critic",
+        "univer-formula",
+    ],
+)
+async def test_coding_spawn_refuses_fsi_and_univer_kebabs(spec_name: str) -> None:
+    runtime, _child = _make_runtime([_child_tool()])
+    h = harness(
+        [
+            [
+                tool_call(
+                    "s1",
+                    "spawn_agent.v1",
+                    {"prompt": "look around", "max_turns": 4, "spec": spec_name},
+                ),
+                completed(),
+            ]
+        ],
+        config=_flag_on(),
+        subagents=runtime,
+    )
+    events = await collect(h)
+    completed_events = [event for event in events if event.type == "tool.completed"]
+    assert completed_events
+    result = completed_events[-1].payload["result"]
+    assert result["status"] == "error"
+    assert result["reason_code"] == "policy_unknown_spec"
+    assert len(_subagent_store(runtime)._runs) == 0

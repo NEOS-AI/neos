@@ -157,6 +157,10 @@ class RoleEffortConfig(StrictConfigModel):
 
     everyday: str | None = None
     powerful: str | None = None
+    # 모델별 기본값 {카탈로그 핀: 레벨}. 역할 기본값보다 구체적이므로 사슬에서
+    # 그 위다. 키와 레벨은 AppConfig.validate_effort_model_defaults 가 부팅 때
+    # 카탈로그와 맞대 본다 -- 오타는 부팅 실패다.
+    models: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelRoutingConfig(StrictConfigModel):
@@ -1879,6 +1883,23 @@ class CodingModelConfig(StrictConfigModel):
         ),
     )
     file_watch: bool = False
+    compaction_preserving_summary: bool = Field(
+        default=False,
+        description=(
+            "LLM 컴팩션 요약에 공식 보존 지시(스펙 P-05)를 쓸지. 끄면 예전 "
+            "요약(`facts only. <= 200 words`, 출력 512)과 바이트가 같다. 켜는 "
+            "것은 코딩 에이전트 지표의 표본 경계다(로드맵 §8 행 11)."
+        ),
+    )
+    compaction_summary_max_tokens: int = Field(
+        default=4096,
+        gt=0,
+        description=(
+            "보존 요약의 출력 상한. 켜졌을 때만 쓴다. 공식 지시가 '6항목은 "
+            "길어지더라도 완전하게' 를 요구하므로 512 로는 지킬 수 없다. "
+            "adaptive thinking 모델에서는 사고 토큰도 이 안에 든다."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1990,6 +2011,40 @@ class ChannelConfig(StrictConfigModel):
         return _split_csv(value)
 
 
+class FsiConfig(StrictConfigModel):
+    enabled: bool = False
+    mode_b_enabled: bool = False
+    mode_a_enabled: bool = False
+    partner_mcp: bool = False
+
+    @model_validator(mode="after")
+    def child_requires_master(self) -> "FsiConfig":
+        if (
+            self.mode_b_enabled or self.mode_a_enabled or self.partner_mcp
+        ) and not self.enabled:
+            raise ValueError("fsi.mode_* / partner_mcp require fsi.enabled")
+        return self
+
+
+class UniverConfig(StrictConfigModel):
+    enabled: bool = False
+    sheets_enabled: bool = False
+    docs_enabled: bool = False
+    formula_enabled: bool = False
+
+    @model_validator(mode="after")
+    def child_requires_master(self) -> "UniverConfig":
+        if (
+            self.sheets_enabled or self.docs_enabled or self.formula_enabled
+        ) and not self.enabled:
+            raise ValueError(
+                "univer.sheets_enabled / docs_enabled / formula_enabled require univer.enabled"
+            )
+        if self.formula_enabled and not self.sheets_enabled:
+            raise ValueError("univer.formula_enabled requires univer.sheets_enabled")
+        return self
+
+
 class ContextAssemblyConfig(StrictConfigModel):
     max_tokens: int = 8000
     short_term_ratio: float = 0.50
@@ -2091,6 +2146,8 @@ class AppConfig(StrictConfigModel):
     contextual_retrieval: ContextualRetrievalConfig = Field(default_factory=ContextualRetrievalConfig)
     execution_approval: ExecutionApprovalConfig = Field(default_factory=ExecutionApprovalConfig)
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
+    fsi: FsiConfig = Field(default_factory=FsiConfig)
+    univer: UniverConfig = Field(default_factory=UniverConfig)
     context_assembly: ContextAssemblyConfig = Field(default_factory=ContextAssemblyConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     model_providers: ModelProviderConfig = Field(default_factory=ModelProviderConfig)
@@ -2264,6 +2321,26 @@ class AppConfig(StrictConfigModel):
                 "coding real loop requires a Docker or managed sandbox in "
                 "staging and production"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_effort_model_defaults(self) -> "AppConfig":
+        defaults = self.model_routing.effort.models
+        if not defaults:
+            return self
+        from neos.config.model_config import effort_levels_for, model_config
+
+        for pin, level in defaults.items():
+            if pin not in model_config.catalog.models:
+                raise ValueError(
+                    f"model_routing.effort.models: {pin!r} is not a catalog model"
+                )
+            levels = effort_levels_for(pin)
+            if level not in levels:
+                raise ValueError(
+                    f"model_routing.effort.models: {pin!r} does not take "
+                    f"{level!r}; it takes {list(levels)}"
+                )
         return self
 
     @model_validator(mode="after")

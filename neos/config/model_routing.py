@@ -16,6 +16,7 @@ class ResolutionSource(str, Enum):
     USER = "user"
     CONVERSATION = "conversation"
     FEATURE_OVERRIDE = "feature_override"
+    MODEL_DEFAULT = "model_default"
     ROLE_DEFAULT = "role_default"
 
 
@@ -125,6 +126,7 @@ def resolve_effort(
     user_effort: str | None = None,
     conversation_effort: str | None = None,
     feature_override: str | None = None,
+    model_default: str | None = None,
     role_default: str | None = None,
 ) -> EffortResolution:
     """`resolve_model` 과 **같은 사슬**로 사고량을 정한다 (로드맵 K5).
@@ -146,6 +148,7 @@ def resolve_effort(
         (user_effort, ResolutionSource.USER),
         (conversation_effort, ResolutionSource.CONVERSATION),
         (feature_override, ResolutionSource.FEATURE_OVERRIDE),
+        (model_default, ResolutionSource.MODEL_DEFAULT),
         (role_default, ResolutionSource.ROLE_DEFAULT),
     ):
         if not value:
@@ -163,15 +166,15 @@ def _gate_effort(
     model: str,
     supported_levels: tuple[str, ...],
 ) -> EffortResolution:
-    from neos.config.model_config import EFFORT_LEVELS
+    from neos.config.model_config import ALL_EFFORT_LEVELS
 
-    if value not in EFFORT_LEVELS:
+    if value not in ALL_EFFORT_LEVELS:
         # 설정 검증을 우회해 들어온 값(DB 의 옛 행, 쿠키)도 여기서 걸린다.
         return EffortResolution(
             effort=None,
             source=source,
             refused="unknown_level",
-            detail=f"{value!r} is not one of {list(EFFORT_LEVELS)}",
+            detail=f"{value!r} is not one of {list(ALL_EFFORT_LEVELS)}",
         )
     if not supported_levels:
         return EffortResolution(

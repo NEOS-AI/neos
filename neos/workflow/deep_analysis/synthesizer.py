@@ -7,7 +7,7 @@ import re
 from neos.config.settings import settings
 
 from .llm import call_json, call_text, prompt_input_bound
-from .model_roles import resolve_harness_model
+from .model_roles import resolve_harness_effort, resolve_harness_model
 from .models import ConflictNote, NodeSummary
 from .prompt_clamp import clamp_prompt, halve
 from .prompt_loader import render
@@ -334,6 +334,7 @@ class Synthesizer:
             client=self.llm_client,
             cassette=self.cassette,
             stage="report_assembly",
+            effort=resolve_harness_effort("synth").effort,
         )
         await self.ledger.log(
             "synth_pass",
@@ -447,6 +448,7 @@ class Synthesizer:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="report_assembly",
+                effort=resolve_harness_effort("synth").effort,
             )
         except TokenBudgetExhausted as exc:
             # Falling back to a template is correct -- no empty-handed exit
@@ -620,6 +622,7 @@ class Synthesizer:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="node_reduction",
+                effort=resolve_harness_effort("synth").effort,
             )
         except TokenBudgetExhausted as exc:
             return await self._degraded_summary(

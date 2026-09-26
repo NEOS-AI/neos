@@ -37,6 +37,7 @@ from neos.api.handlers.refinement_handlers import router as refinement_router
 from neos.api.handlers.template_handlers import router as template_router
 from neos.api.handlers.approval_handlers import router as approval_router  # Phase 2: Execution Approval
 from neos.api.handlers.autonomy_handlers import router as autonomy_router
+from neos.api.handlers.model_preference_handlers import router as model_preference_router
 from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks_router  # Phase 4: Cron 스케줄
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.handlers.coding_admin_handlers import router as coding_admin_router
@@ -613,6 +614,7 @@ _include_router_for_runtime(refinement_router, tags=["Research Refinement"])  # 
 _include_router_for_runtime(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
 _include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
 _include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
+_include_router_for_runtime(model_preference_router, prefix=settings.API_V1_PREFIX, tags=["Model Preferences"])
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 _include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])

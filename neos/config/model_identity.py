@@ -127,6 +127,10 @@ class PickerModel:
     vision: bool
     role_alias: str | None
     default: bool
+    # 이 모델이 받는 사고량 레벨(카탈로그)과 설정의 모델별 기본값. 프론트는
+    # 어떤 모델이 어떤 레벨을 받는지 하드코딩하지 않고 이것을 읽는다.
+    effort_levels: tuple[str, ...] = ()
+    effort_default: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +304,7 @@ def to_picker_payload(
             description=spec.picker.description,
             group=spec.picker.group,
             default=name == default_pin,
+            effort_default=routing.effort.models.get(name),
         )
         rows.append(primary)
         visible_ids.add(primary.id)
@@ -314,6 +319,7 @@ def to_picker_payload(
                 description=extra.description,
                 group=extra.group,
                 default=False,
+                effort_default=routing.effort.models.get(name),
             )
             rows.append(extra_row)
             visible_ids.add(extra_row.id)
@@ -344,6 +350,7 @@ def _picker_row(
     description: str,
     group: str,
     default: bool,
+    effort_default: str | None = None,
 ) -> PickerModel:
     return PickerModel(
         id=gateway_id,
@@ -355,4 +362,6 @@ def _picker_row(
         vision=spec.vision,
         role_alias=spec.role_alias,
         default=default,
+        effort_levels=tuple(spec.effort_levels),
+        effort_default=effort_default,
     )

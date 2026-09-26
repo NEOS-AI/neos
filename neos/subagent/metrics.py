@@ -4,8 +4,37 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-_PARENTS = frozenset({"coding", "deep_analysis", "workflow"})
-_SPECS = frozenset({"explore"})
+_PARENTS = frozenset({"coding", "deep_analysis", "workflow", "fsi", "univer"})
+_SPECS = frozenset(
+    {
+        "explore",
+        "fsi-reader",
+        "fsi-writer",
+        "fsi-critic",
+        "fsi-puller",
+        "fsi-modeler",
+        "univer-reader",
+        "univer-writer",
+        "univer-critic",
+        "univer-formula",
+    }
+)
+_FSI_ALIASES = frozenset(
+    {
+        "kyc-doc-reader",
+        "gl-reconciler-reader",
+        "earnings-transcript-reader",
+        "market-sector-reader",
+        "briefing-news-reader",
+        "close-ledger-reader",
+        "stmt-statement-reader",
+        "valuation-package-reader",
+        "pitch-researcher",
+        "model-data-puller",
+        "kyc-rules-engine",
+        "kyc-escalator",
+    }
+)
 _OUTCOMES = frozenset(
     {"continuing", "completed", "failed", "cancelled", "unknown_spec"}
 )
@@ -20,7 +49,7 @@ def _parent(payload: Mapping[str, Any]) -> str:
 
 def _spec(payload: Mapping[str, Any]) -> str:
     value = str(payload.get("spec") or "explore")
-    return value if value in _SPECS else "explore"
+    return value if value in _SPECS or value in _FSI_ALIASES else "explore"
 
 
 def _outcome(payload: Mapping[str, Any], default: str) -> str:

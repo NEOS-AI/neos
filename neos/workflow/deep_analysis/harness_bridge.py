@@ -184,6 +184,7 @@ async def call_via_harness(
     client=None,
     tools: list[dict[str, Any]] | None = None,
     stage: str = "llm",
+    effort: str | None = None,
 ):
     adapter = client if looks_like_coding_model(client) else None
     if adapter is None:
@@ -193,7 +194,10 @@ async def call_via_harness(
         messages=messages_to_canonical(messages),
         tools=tools_to_definitions(tools),
         model=model,
-        limits=ModelLimits(max_output_tokens=max_tokens, timeout_sec=120),
+        # `ModelLimits.effort` 는 빈 문자열이 "보내지 않음" 이다.
+        limits=ModelLimits(
+            max_output_tokens=max_tokens, timeout_sec=120, effort=effort or ""
+        ),
         task_id="da",
         run_id="da",
         turn_id=f"{stage}_{uuid4().hex}",

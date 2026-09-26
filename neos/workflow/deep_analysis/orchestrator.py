@@ -17,7 +17,7 @@ from .conflict import resolve_conflicts
 from .fetch import fetch_url
 from .ledger import Ledger
 from .llm import call_json
-from .model_roles import resolve_harness_model
+from .model_roles import resolve_harness_effort, resolve_harness_model
 from .assignment import build_assignment
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
@@ -831,6 +831,7 @@ class Orchestrator:
             client=self.llm_client,
             cassette=self.cassette,
             stage="decompose",
+            effort=resolve_harness_effort("dig").effort,
         )
         return list(data.get("subquestions", []))[:7]
 
@@ -850,6 +851,7 @@ class Orchestrator:
             client=self.llm_client,
             cassette=self.cassette,
             stage="split_decompose",
+            effort=resolve_harness_effort("dig").effort,
         )
         return list(data.get("subquestions", []))[:4]
 
@@ -958,6 +960,7 @@ class Orchestrator:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="subq_review",
+                effort=resolve_harness_effort("judge").effort,
             )
             reviewed = _apply_review(proposals, data.get("reviewed", []))
         except Exception as error:  # noqa: BLE001 -- 위 독스트링

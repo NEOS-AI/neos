@@ -109,6 +109,7 @@ def resolve_harness_effort(name: str) -> EffortResolution:
     """
     role = HARNESS_ROLES[name]
     resolved = resolve_harness_model(name)
+    routing = settings.config.model_routing.effort
     return resolve_effort(
         model=resolved.model,
         role=role,
@@ -116,5 +117,14 @@ def resolve_harness_effort(name: str) -> EffortResolution:
         feature_override=getattr(
             settings.config.deep_analysis.model_effort, name
         ),
-        role_default=getattr(settings.config.model_routing.effort, role),
+        # 채팅(`chat_effort.py`)과 같은 칸이다. 빠지면 운영자가 적은
+        # `claude-opus-5-5: high` 가 채팅에만 걸리고 DA 는 조용히 비껴 간다 --
+        # 그 블록의 주석이 "심층분석 표본 경계" 라고 적은 것이 거짓이 된다.
+        model_default=routing.models.get(resolved.model),
+        role_default=getattr(routing, role),
     )
+
+
+def resolve_all_effort() -> dict[str, EffortResolution]:
+    """`resolve_all` 의 짝. 매니페스트가 역할마다 실제로 보낸 사고량을 적는다."""
+    return {name: resolve_harness_effort(name) for name in HARNESS_ROLES}

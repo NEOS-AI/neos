@@ -1,0 +1,8 @@
+{
+  "name": "animal-pharmacy-search",
+  "description": "홍익메디케어 공개 MCP 서버로 지역별 동물약국 목록, 동물용의약품 검색, 최근 6개월 구매 이력 기반 취급 약국을 조회한다. 조회 전용.",
+  "profiles": [
+    "lookup"
+  ],
+  "frontmatter": "name: animal-pharmacy-search\ndescription: 홍익메디케어 공개 MCP 서버로 지역별 동물약국 목록, 동물용의약품 검색, 최근 6개월 구매 이력 기반 취급 약국을 조회한다. 조회 전용.\nlicense: MIT\nmetadata:\n  category: health\n  locale: ko-KR\n  phase: v1"
+}

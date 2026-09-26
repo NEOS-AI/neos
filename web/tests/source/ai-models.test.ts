@@ -35,6 +35,8 @@ function row(
     vision: extras.vision ?? true,
     role_alias: extras.role_alias ?? null,
     default: extras.default ?? false,
+    effort_levels: extras.effort_levels ?? [],
+    effort_default: extras.effort_default ?? null,
   };
 }
 
@@ -350,4 +352,13 @@ describe("catalog dual-read helpers", () => {
     assert.equal(parseCatalogResponse({ models: [], default_id: "x" }), null);
     assert.equal(parseCatalogResponse(null), null);
   });
+});
+
+test("generated rows carry effort fields", () => {
+  for (const row of generatedCatalog.models) {
+    assert.ok(Array.isArray(row.effort_levels));
+    assert.ok(
+      row.effort_default === null || typeof row.effort_default === "string"
+    );
+  }
 });

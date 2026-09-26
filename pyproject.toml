@@ -76,6 +76,7 @@ dependencies = [
     "youtube-transcript-api>=0.6.2",
     "google-api-python-client>=2.198.0",
     "isodate>=0.7.2",
+    "jsonschema>=4.23.0",
     "ray[default]>=2.57.0",
     "croniter>=2.0.0",
     "hiredis>=3.4.1",

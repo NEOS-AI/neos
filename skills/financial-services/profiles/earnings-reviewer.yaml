@@ -1,0 +1,46 @@
+slug: earnings-reviewer
+mode: A
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - model-update
+  - morning-note
+  - xlsx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: earnings-transcript-reader
+    catalog_template: fsi-reader
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist: []
+    output_schema_ref: earnings-transcript-reader
+  - name: earnings-model-updater
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist:
+      - factset
+      - daloopa
+    output_schema_ref: null
+  - name: earnings-note-writer
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    mcp_allowlist: []
+    output_schema_ref: null

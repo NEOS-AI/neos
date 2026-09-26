@@ -1,0 +1,10 @@
+{
+  "name": "kakao-bar-nearby",
+  "description": "Use when the user asks for nearby bars or 근처 술집. Ask for the user's location, search with the official Kakao Local API, then follow returned Kakao Map detail links for open-now, menu, and seating hints. 돌쇠에서는 공식 표면을 통한 후속 액션까지 진행한다.",
+  "profiles": [
+    "proxy",
+    "browser",
+    "action:booking"
+  ],
+  "frontmatter": "name: kakao-bar-nearby\ndescription: Use when the user asks for nearby bars or 근처 술집. Ask for the user's location, search with the official Kakao Local API, then follow returned Kakao Map detail links for open-now, menu, and seating hints. 돌쇠에서는 공식 표면을 통한 후속 액션까지 진행한다.\nlicense: MIT\nmetadata:\n  category: food\n  locale: ko-KR\n  phase: v1"
+}

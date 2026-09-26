@@ -41,3 +41,36 @@ def test_thinking_off_still_disables_on_a_model_that_allows_it() -> None:
         "claude-sonnet-5", {"model": "claude-sonnet-5"}, thinking_enabled=False
     )
     assert params["thinking"] == {"type": "disabled"}
+
+
+def test_thinking_off_becomes_low_effort_when_the_model_takes_low(monkeypatch) -> None:
+    from neos.providers import anthropic as mod
+
+    monkeypatch.setattr(mod, "effort_levels_for", lambda model: ("low", "high"))
+    params = normalize_anthropic_request(
+        "claude-opus-5-5", {"model": "claude-opus-5-5"}, thinking_enabled=False
+    )
+    assert params["thinking"] == {"type": "adaptive"}
+    assert params["output_config"] == {"effort": "low"}
+
+
+def test_thinking_off_leaves_effort_alone_when_low_is_not_declared(monkeypatch) -> None:
+    from neos.providers import anthropic as mod
+
+    monkeypatch.setattr(mod, "effort_levels_for", lambda model: ())
+    params = normalize_anthropic_request(
+        "claude-opus-5-5", {"model": "claude-opus-5-5"}, thinking_enabled=False
+    )
+    assert "output_config" not in params
+
+
+def test_an_explicit_effort_wins_over_thinking_off(monkeypatch) -> None:
+    from neos.providers import anthropic as mod
+
+    monkeypatch.setattr(mod, "effort_levels_for", lambda model: ("low", "high"))
+    params = normalize_anthropic_request(
+        "claude-opus-5-5",
+        {"model": "claude-opus-5-5", "output_config": {"effort": "high"}},
+        thinking_enabled=False,
+    )
+    assert params["output_config"] == {"effort": "high"}

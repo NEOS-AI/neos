@@ -14,6 +14,8 @@ class ParentKind(StrEnum):
     # specs only, one advance per node invocation, checkpointed paths only,
     # folds are unverified reports. Never bound to a channel session.
     WORKFLOW = "workflow"
+    FSI = "fsi"
+    UNIVER = "univer"
 
 
 class LineageKind(StrEnum):

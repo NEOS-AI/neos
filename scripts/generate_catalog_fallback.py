@@ -64,6 +64,8 @@ def render() -> str:
             f"    vision: {str(row.vision).lower()},\n"
             f"    role_alias: {role_alias},\n"
             f"    default: {str(row.default).lower()},\n"
+            f"    effort_levels: {json.dumps(list(row.effort_levels))},\n"
+            f"    effort_default: {'null' if row.effort_default is None else _ts_string(row.effort_default)},\n"
             "  },"
         )
 
@@ -80,6 +82,8 @@ def render() -> str:
         "  vision: boolean;\n"
         "  role_alias: string | null;\n"
         "  default: boolean;\n"
+        "  effort_levels: string[];\n"
+        "  effort_default: string | null;\n"
         "};\n"
         "\n"
         f"export const generatedDefaultId = {_ts_string(payload.default_id)};\n"

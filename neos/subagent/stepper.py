@@ -23,7 +23,9 @@ from neos.coding.model.errors import CodingModelError
 from neos.subagent.catalog import SubagentSpec, may_spawn
 from neos.subagent.prompts import (
     build_explore_system_prompt,
+    build_fsi_system_prompt_for,
     build_implement_system_prompt,
+    build_univer_system_prompt_for,
     render_brief,
 )
 from neos.subagent.store import CasReservation, CheckpointWrite, is_placeholder
@@ -47,11 +49,19 @@ REFUSED_TOOLS = frozenset(
         "todo_write.v1",
         "web_fetch.v1",
         "search_tools.v1",
+        "handoff.v1",
     }
 )
 #: Output ceiling of one child model turn. Public because the workflow cost
 #: ceiling (GS-K6) multiplies by it -- two copies of this number would drift.
 CHILD_MAX_OUTPUT_TOKENS = 4096
+_CODING_PROMPTS = {
+    "implement": build_implement_system_prompt,
+    "explore": build_explore_system_prompt,
+    "research": build_explore_system_prompt,
+    "analyze": build_explore_system_prompt,
+    "compose": build_explore_system_prompt,
+}
 _MAX_TOOL_BATCH = 10
 _MAX_TRANSCRIPT_BYTES = 1024 * 1024
 _MAX_TOOL_BODY = 32 * 1024
@@ -104,12 +114,14 @@ class ChildStepper:
     ) -> CheckpointWrite:
         run_id = reservation.run.run_id
         _apply_pending_steer(state)
+        if spec.name in _CODING_PROMPTS:
+            system = _CODING_PROMPTS[spec.name]()
+        elif spec.name.startswith("univer-"):
+            system = build_univer_system_prompt_for(spec)
+        else:
+            system = build_fsi_system_prompt_for(spec)
         request = ModelRequest(
-            system=(
-                build_implement_system_prompt()
-                if spec.name == "implement"
-                else build_explore_system_prompt()
-            ),
+            system=system,
             messages=_canonical_messages(state),
             tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),
             model=ticket.model.alias or ticket.model.model,

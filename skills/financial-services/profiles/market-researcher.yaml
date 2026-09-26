@@ -1,0 +1,46 @@
+slug: market-researcher
+mode: A
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - sector-overview
+  - comps-analysis
+  - pptx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: market-sector-reader
+    catalog_template: fsi-reader
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist: []
+    output_schema_ref: market-sector-reader
+  - name: market-comps-spreader
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist:
+      - capiq
+      - factset
+    output_schema_ref: null
+  - name: market-note-writer
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    mcp_allowlist: []
+    output_schema_ref: null

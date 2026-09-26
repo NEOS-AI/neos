@@ -25,7 +25,8 @@
 #                비면 "모른다" 이고 아무것도 보내지 않는다. 지원 여부를 말하는
 #                것은 models API 의 ModelCapabilities.effort 이므로 키 없이
 #                채우지 않는다 — 추측한 레벨은 미지원 모델에서 매 요청 400 이고,
-#                맞더라도 재 본 적 없는 사고량으로 도는 것이다.
+#                맞더라도 재 본 적 없는 사고량으로 도는 것이다. 프로바이더별
+#                어휘(EFFORT_VOCABULARY) 안에서만. 근거는 tests/config/test_model_effort.py.
 #   role_alias   role_aliases: 키. advisor family 가 아니다
 #   gateway_id   피커/쿠키 id. provider/키 로 추론하지 않는다
 #   picker       채팅 피커 노출. 없으면 selectable 이어도 피커에 안 오른다
@@ -44,6 +45,8 @@ models:
     provider: anthropic
     tiers: [balanced]
     thinking: adaptive
+    # models API 실호출 (2026-09-24, scripts/probe_anthropic_effort.py)
+    effort_levels: [low, medium, high, xhigh, max]
     description: "Anthropic Claude Sonnet 5"
     max_tokens: 8192
     context_window: 200000
@@ -66,6 +69,8 @@ models:
     provider: anthropic
     tiers: [powerful]
     thinking: adaptive
+    # models API 실호출 (2026-09-24, scripts/probe_anthropic_effort.py)
+    effort_levels: [low, medium, high, xhigh, max]
     thinking_always_on: true
     description: "Anthropic Claude Opus 5.5"
     max_tokens: 8192
@@ -91,6 +96,8 @@ models:
     provider: anthropic
     selectable: false
     thinking: adaptive
+    # models API 실호출 (2026-09-24, scripts/probe_anthropic_effort.py)
+    effort_levels: [low, medium, high, xhigh, max]
     thinking_always_on: true
     description: "Anthropic Claude Fable 5.1"
     max_tokens: 128000
@@ -126,6 +133,8 @@ models:
     provider: anthropic
     selectable: false
     thinking: adaptive
+    # models API 실호출 (2026-09-24, scripts/probe_anthropic_effort.py)
+    effort_levels: [low, medium, high, xhigh, max]
     description: "Anthropic Claude Opus 4.8 (deep-analysis judge)"
     max_tokens: 8192
     context_window: 200000
@@ -202,6 +211,8 @@ models:
     # 은퇴한 terra 보다 싸다.
     tiers: [balanced, powerful]
     thinking: none
+    # OpenAI 공식 models 문서 (2026-09-24)
+    effort_levels: [none, low, medium, high, xhigh, max]
     vision: true
     description: "OpenAI GPT-6 Sol"
     max_tokens: 128000
@@ -218,6 +229,8 @@ models:
     # gpt-5.6-terra 에게서 `fast` 를 넘겨받았다.
     tiers: [fast]
     thinking: none
+    # OpenAI 공식 models 문서 (2026-09-24)
+    effort_levels: [none, low, medium, high, xhigh, max]
     vision: true
     description: "OpenAI GPT-6 Luna"
     max_tokens: 128000

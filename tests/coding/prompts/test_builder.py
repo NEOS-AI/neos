@@ -95,6 +95,13 @@ def test_prompt_lists_catalog_skill_names_not_bodies() -> None:
     assert "from pypdf import PdfReader" not in prompt
 
 
+def test_prompt_lists_k_skill_index_not_korea_weather() -> None:
+    prompt = build_coding_system_prompt(_tools())
+    skills = prompt[prompt.index("## Skills") : prompt.index("## Tone")]
+    assert "- k-skill:" in skills
+    assert "- korea-weather:" not in skills
+
+
 def test_live_registry_descriptions_teach_search_over_execute() -> None:
     from neos.coding.tools.registry import CodingToolRegistry
 

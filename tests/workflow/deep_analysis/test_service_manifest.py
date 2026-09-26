@@ -130,3 +130,47 @@ async def test_manifest_skills_is_none_without_a_registry(fake_ledger):
     await build_orchestrator(object(), "run0006", profile="dev")
 
     assert _manifest(fake_ledger)["skills"] is None
+
+
+@pytest.mark.asyncio
+async def test_manifest_records_each_roles_effort(fake_ledger, monkeypatch):
+    """로드맵 §10.1: 구성 지문에 사고량. 네 역할 전부, 그리고 실제 해석값."""
+    from neos.config.settings import settings
+    from neos.workflow.deep_analysis import model_roles
+
+    monkeypatch.setattr(
+        model_roles, "_supported_levels", lambda model: ("low", "high")
+    )
+    monkeypatch.setattr(
+        settings.config.deep_analysis.model_effort, "dig", "high", raising=False
+    )
+
+    await build_orchestrator(object(), "run0001", profile="dev")
+
+    models = _manifest(fake_ledger)["models"]
+    assert set(models) == {"scout", "dig", "synth", "judge"}
+    assert models["dig"]["effort"] == {
+        "level": "high",
+        "source": "feature_override",
+        "refused": None,
+    }
+    assert models["synth"]["effort"]["level"] is None
+
+
+@pytest.mark.asyncio
+async def test_both_judges_receive_the_judge_effort(fake_ledger, monkeypatch):
+    """판정자는 effort 를 생성 시 주입받는다 -- AST 가드는 주입을 보지 못한다."""
+    from neos.config.settings import settings
+    from neos.workflow.deep_analysis import model_roles
+
+    monkeypatch.setattr(
+        model_roles, "_supported_levels", lambda model: ("low", "high")
+    )
+    monkeypatch.setattr(
+        settings.config.deep_analysis.model_effort, "judge", "low", raising=False
+    )
+
+    orchestrator = await build_orchestrator(object(), "run0001", profile="dev")
+
+    assert orchestrator.agentic_grader.judge_effort == "low"
+    assert orchestrator.report_grader.judge_effort == "low"

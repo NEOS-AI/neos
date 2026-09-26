@@ -1,0 +1,44 @@
+slug: meeting-prep-agent
+mode: A
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - pptx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: briefing-news-reader
+    catalog_template: fsi-reader
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist: []
+    output_schema_ref: briefing-news-reader
+  - name: briefing-profiler
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist:
+      - crm
+      - capiq
+    output_schema_ref: null
+  - name: briefing-pack-writer
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    mcp_allowlist: []
+    output_schema_ref: null

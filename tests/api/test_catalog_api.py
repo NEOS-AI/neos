@@ -126,6 +126,10 @@ def test_flag_on_returns_seven_picker_rows_and_gateway_remaps(monkeypatch) -> No
 
     assert payload["remaps"]["anthropic/claude-opus-4.5"] == "anthropic/claude-opus-5.5"
     assert payload["remaps"]["openai/gpt-4o"] == "openai/gpt-6-sol"
+    assert all(
+        "effort_levels" in row and "effort_default" in row
+        for row in payload["models"]
+    )
     assert "anthropic/claude-haiku-4.5" not in payload["remaps"]
     visible = set(by_id)
     assert set(payload["remaps"].values()) <= visible

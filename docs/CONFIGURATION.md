@@ -567,9 +567,19 @@ Two things make effort different from the model:
   differ, with nothing recording the difference. `EffortResolution.refused`
   carries the reason so an operator who set a level and saw nothing happen can
   tell a config mistake from a code one.
-- **Every level is unset today.** No catalog model declares `effort_levels`,
-  because per-model support is reported by the models API (`ModelCapabilities.
-  effort`) and reading it needs a key. Nothing is sent until that is measured.
+- **Every configured value is empty today.** The catalog now declares measured
+  `effort_levels` (see *Effort (per model and per user)* below), but no role,
+  harness role or model default asks for a level, so nothing is sent.
+
+Deep analysis reads the chain once per harness role through
+`resolve_harness_effort` (`neos/workflow/deep_analysis/model_roles.py`), with
+`deep_analysis.model_effort.<role>` as the feature override and
+`model_routing.effort.models[<resolved model>]` as the per-model default — the
+same slot chat uses, so a per-model default is a deep analysis sample boundary.
+Every deep analysis call site passes the resolved value as `effort=`; a test
+walks the package's AST and fails on a call that omits it. The run manifest
+records each role's `effort: {level, source, refused}`. The coding loop does
+not send effort yet — it has no configuration slot for it.
 
 ⚠️ `deep_analysis.model_effort` and `deep_analysis.effort` are **different
 axes**. The latter is investigation depth (`token_cap`, `wall_clock_cap`); the
@@ -629,6 +639,47 @@ Passing `model=` or `provider=` therefore means "use exactly this, or fail".
 Providers outside the routing policy (`gemini`, `ollama`) have no role mapping,
 so they require an explicit `model=` or a configured `llm.model`; otherwise
 `create_llm()` raises a `ValueError` naming the provider.
+
+#### Effort (per model and per user)
+
+Effort is the provider's thinking-depth parameter — Anthropic
+`output_config.effort`, OpenAI `reasoning_effort`. It is not deep analysis
+`Effort` (scout/dig/synth).
+
+- **Which levels a model takes** is a catalog fact: `effort_levels` in
+  `neos/config/models.yaml`, checked against each provider's SDK vocabulary
+  (`EFFORT_VOCABULARY`). Anthropic levels come from the models API
+  (`scripts/probe_anthropic_effort.py`); GPT-6 levels from OpenAI's models docs.
+  Empty means unknown, and nothing is sent.
+- **Per-model defaults** are policy: `model_routing.effort.models`
+  (`{pin: level}`, empty in `config/neos.default.yaml`). An unknown pin or a
+  level the model does not take fails boot. Setting one is a deep analysis
+  sample boundary.
+- **User choice** lives in `user_model_preferences` (migration 063), set via
+  `PUT /api/v1/users/me/model-preferences/{model}` and the selector next to
+  the chat picker. `{model}` accepts gateway ids and retired pins; they are
+  stored as the canonical pin. `DELETE` returns the model to its default.
+
+Precedence per chat turn: user × model → conversation → feature override →
+model default → role default → nothing sent. Resolution happens once, in
+`neos/services/chat_effort.py`, reading the preference with one query joined
+on `conversation_id` (no owner lookup), and only for models that declare
+levels. Translation to request fields happens once, in
+`neos/providers/effort.py`; when nothing is resolved no key is sent. A stored
+level the model no longer takes is refused with a warning and the next rung
+applies. A failed preference lookup never fails the turn.
+`neos_chat_effort_resolved_total{source}` counts turns by where their effort
+came from. Automatic jobs that go through `generate_response` with a
+non-`chat` `workflow_type` (title generation) get no effort at all — a
+50-token title must not be spent on thinking.
+
+On `thinking_always_on` models, a "thinking off" request becomes
+`effort: low` when the model declares `low`, unless an explicit effort was
+already resolved.
+
+OpenAI `reasoning_effort` has not been verified live (the OpenAI key returned
+401 when this shipped). Check that `temperature` is accepted alongside a
+non-`none` effort before relying on it.
 
 ### Anthropic prompt caching and Advisor
 

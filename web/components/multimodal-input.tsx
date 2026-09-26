@@ -33,6 +33,7 @@ import {
 } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { EffortSelector } from "./effort-selector";
 import {
   PromptInput,
   PromptInputSubmit,
@@ -379,6 +380,12 @@ function PureMultimodalInput({
               catalog={catalog}
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
+            />
+            <EffortSelector
+              model={
+                catalog.models.find((m) => m.id === selectedModelId) ??
+                catalog.models.find((m) => m.id === catalog.default_id)
+              }
             />
           </PromptInputTools>
 

@@ -72,6 +72,9 @@ class CodingLoopConfig:
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
     approval_unattended: bool = False
+    # P-05. 끄면 LLM 컴팩션 요청이 예전과 바이트가 같다.
+    compaction_preserving_summary: bool = False
+    compaction_summary_max_tokens: int = 4096
     subagent_enabled: bool = False
     subagent_max_active: int = 1
     # K3. Off is park/fold: `spawn_agent.v1` holds its tool result until the

@@ -18,7 +18,7 @@ from .llm import (
     TruncatedResponseError,
     call_json,
 )
-from .model_roles import resolve_harness_model
+from .model_roles import resolve_harness_effort, resolve_harness_model
 from .models import (
     ENTAILMENT_BUDGET_EXHAUSTED,
     ENTAILMENT_PROVIDER_FAILED,
@@ -166,6 +166,7 @@ class Worker:
         self._blobs: list[ProposedBlob] = []
         self._tokens = 0
         self._model = ""
+        self._model_effort: str | None = None
         self._confidence_clamped_by_source_count: dict[str, int] = {}
         self._entailment_skipped: str | None = None
         self._search_augmentation: dict[str, int] = {}
@@ -281,6 +282,7 @@ class Worker:
             limit=limit,
             client=self.llm_client,
             cassette=self.cassette,
+            effort=self._model_effort,
         )
         self._tokens += tokens
         if not items:
@@ -372,9 +374,11 @@ class Worker:
         self._fetch_outcomes = {}
 
         config = settings.config.deep_analysis
-        self._model = resolve_harness_model(
-            "scout" if effort == Effort.SCOUT else "dig"
-        ).model
+        role = "scout" if effort == Effort.SCOUT else "dig"
+        self._model = resolve_harness_model(role).model
+        # 모델과 같은 자리에서 한 번. 이 워커의 호출 넷(discovery·분석·수리·
+        # entailment)이 이 값 하나를 쓴다 -- 호출마다 해석하면 사본이 넷이다.
+        self._model_effort = resolve_harness_effort(role).effort
         effort_config = config.effort[effort.value]
 
         repairs = repairs or []
@@ -458,6 +462,7 @@ class Worker:
             client=self.llm_client,
             cassette=self.cassette,
             stage="worker_analysis",
+            effort=self._model_effort,
         )
 
         for raw_claim in data.get("claims", []):
@@ -571,6 +576,7 @@ class Worker:
                 client=self.llm_client,
                 cassette=self.cassette,
                 stage="claim_entailment",
+                effort=self._model_effort,
                 # This call never retried a malformed response and must not
                 # start: a second batch costs the same tokens for a response
                 # the first attempt already showed the model will not format.
@@ -700,6 +706,7 @@ class Worker:
             client=self.llm_client,
             cassette=self.cassette,
             stage="worker_repair",
+            effort=self._model_effort,
         )
 
         repair_results = []

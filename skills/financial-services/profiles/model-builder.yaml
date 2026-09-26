@@ -1,0 +1,48 @@
+slug: model-builder
+mode: A
+isolation_surface: cma_leaves
+artifact_surface:
+  default: headless
+tools:
+  default: deny
+  orchestrator_allow:
+    - read_file.v1
+    - search_text.v1
+    - glob_files.v1
+skill_allowlist:
+  - dcf-model
+  - lbo-model
+  - 3-statement-model
+  - comps-analysis
+  - xlsx-author
+mcp_allowlist: []
+handoff_allowlist: []
+leaves:
+  - name: model-data-puller
+    catalog_template: fsi-puller
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist:
+      - capiq
+      - daloopa
+    output_schema_ref: model-data-puller
+  - name: model-builder-builder
+    catalog_template: fsi-writer
+    write: true
+    tools_allow:
+      - read_file.v1
+      - write_file.v1
+      - edit_file.v1
+      - load_skill.v1
+    mcp_allowlist: []
+    output_schema_ref: null
+  - name: model-builder-auditor
+    catalog_template: fsi-critic
+    write: false
+    tools_allow:
+      - read_file.v1
+      - search_text.v1
+    mcp_allowlist: []
+    output_schema_ref: null

@@ -717,3 +717,22 @@ def test_retired_rejects_a_live_key_or_an_unknown_target() -> None:
         _catalog({**base, "retired": {"m-new": "m-new"}})
     with pytest.raises(ValueError, match="unknown model"):
         _catalog({**base, "retired": {"m-old": "m-gone"}})
+
+
+def test_picker_rows_carry_effort_levels_and_the_model_default() -> None:
+    from neos.config.model_config import effort_levels_for
+
+    routing = ModelRoutingConfig()
+    pin = next(
+        name for name in ("claude-opus-5-5", "gpt-6-sol") if effort_levels_for(name)
+    )
+    level = effort_levels_for(pin)[0]
+    routing.effort.models = {pin: level}
+
+    payload = to_picker_payload(model_config.catalog, routing)
+    row = next(r for r in payload.models if r.catalog_id == pin)
+
+    assert row.effort_levels == effort_levels_for(pin)
+    assert row.effort_default == level
+    others = [r for r in payload.models if r.catalog_id != pin]
+    assert all(r.effort_default is None for r in others)

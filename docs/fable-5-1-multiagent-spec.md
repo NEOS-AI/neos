@@ -335,6 +335,14 @@ end result, edit surgically rather than rewriting the whole file.
 
 추가 규칙: 위 6항목은 길어지더라도 완전하게, 그 외는 간결하게. **사용자 발화는 원래 표현에 가깝게 보존**하고, 어시스턴트 자신의 설명·추론은 결론과 산출물 수준으로 압축한다(단 6항목을 누락하지 않는 선에서).
 
+**공식 문구 (원문 대조 2026-09-25, "Tell the model what to preserve in compaction summaries" 절)** — 위 목록은 요지이고, 투입하는 것은 이 블록이다(`neos/coding/prompts/official.py`, 테스트가 바이트 일치를 건다):
+
+```text
+Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.
+```
+
+> ⚠️ 원문 대조에서 발견: **P-02 초안도 공식 문구와 다르다**(공식은 "If, while working or testing, you find …" 로 시작하고 여러 곳의 표현이 다르다). P-02 를 투입할 때 같은 대조를 거친다.
+
 ---
 
 ### P-06. low effort에서의 검색 유도 (P2)

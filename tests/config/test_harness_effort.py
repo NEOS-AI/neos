@@ -39,10 +39,12 @@ def test_no_role_asks_for_effort_yet() -> None:
         if value is not None
     }
     defaults = settings.config.model_routing.effort
+    # 빈 `models: {}` 는 아무것도 요구하지 않는다. 채워지면 이 가드가 잡는다 --
+    # 모델별 기본값도 역할 기본값과 같은 표본 경계다.
     asked_defaults = {
         role: value
         for role, value in defaults.model_dump().items()
-        if value is not None
+        if value
     }
 
     assert asked == {}, f"DA 역할이 사고량을 요구한다: {asked} -- 경계 행을 더할 것"
@@ -112,9 +114,14 @@ def test_a_role_default_is_read_from_model_routing(monkeypatch) -> None:
 
 
 def test_an_unsupported_level_is_refused_not_downgraded(monkeypatch) -> None:
-    """카탈로그가 비어 있는 지금은 **모든** 역할이 여기 해당한다."""
+    """모델이 받지 않는 레벨은 가장 가까운 레벨로 낮추지 않고 거절한다.
+
+    카탈로그가 비어 있던 동안은 모든 역할이 `model_declares_no_effort` 였다.
+    2026-09-24 에 실측 레벨이 채워졌으므로 일부만 받는 모델을 세워 둔다.
+    """
     from neos.workflow.deep_analysis import model_roles
 
+    monkeypatch.setattr(model_roles, "_supported_levels", lambda model: ("low", "high"))
     monkeypatch.setattr(
         settings.config.deep_analysis.model_effort, "judge", "max", raising=False
     )
@@ -122,4 +129,64 @@ def test_an_unsupported_level_is_refused_not_downgraded(monkeypatch) -> None:
     resolution = model_roles.resolve_harness_effort("judge")
 
     assert resolution.effort is None
+    assert resolution.refused == "level_not_supported"
+
+
+def test_a_model_that_declares_nothing_is_refused(monkeypatch) -> None:
+    from neos.workflow.deep_analysis import model_roles
+
+    monkeypatch.setattr(model_roles, "_supported_levels", lambda model: ())
+    monkeypatch.setattr(
+        settings.config.deep_analysis.model_effort, "judge", "max", raising=False
+    )
+
+    resolution = model_roles.resolve_harness_effort("judge")
+
     assert resolution.refused == "model_declares_no_effort"
+
+
+def test_a_per_model_default_reaches_the_harness(monkeypatch) -> None:
+    """`model_routing.effort.models` 는 채팅만의 것이 아니다.
+
+    그 블록의 주석이 "값을 바꾸는 것은 심층분석 표본 경계다" 라고 적는다 --
+    DA 가 그 칸을 읽지 않으면 그 문장이 거짓이고, 운영자가 적은 값이 채팅에만
+    걸린 채 DA 는 조용히 비껴 간다.
+    """
+    from neos.workflow.deep_analysis import model_roles
+
+    dig_model = model_roles.resolve_harness_model("dig").model
+    monkeypatch.setitem(
+        settings.config.model_routing.effort.models, dig_model, "high"
+    )
+    monkeypatch.setattr(
+        model_roles, "_supported_levels", lambda model: ("low", "high")
+    )
+
+    resolution = model_roles.resolve_harness_effort("dig")
+
+    assert resolution.effort == "high"
+    assert resolution.source is ResolutionSource.MODEL_DEFAULT
+
+
+def test_the_per_model_default_sits_between_override_and_role(monkeypatch) -> None:
+    """사슬의 순서: feature override > 모델별 기본값 > 역할 기본값."""
+    from neos.workflow.deep_analysis import model_roles
+
+    dig_model = model_roles.resolve_harness_model("dig").model
+    monkeypatch.setattr(
+        model_roles, "_supported_levels", lambda model: ("low", "medium", "high")
+    )
+    monkeypatch.setattr(
+        settings.config.model_routing.effort, "powerful", "low", raising=False
+    )
+    monkeypatch.setitem(
+        settings.config.model_routing.effort.models, dig_model, "medium"
+    )
+
+    assert model_roles.resolve_harness_effort("dig").effort == "medium"
+
+    monkeypatch.setattr(
+        settings.config.deep_analysis.model_effort, "dig", "high", raising=False
+    )
+
+    assert model_roles.resolve_harness_effort("dig").effort == "high"

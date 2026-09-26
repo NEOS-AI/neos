@@ -51,6 +51,73 @@ def research_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
     )
 
 
+UNIVER_PACK = _REPO_ROOT / "skills" / "univer"
+
+
+def univer_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under skills/univer."""
+    return (("repo", UNIVER_PACK),)
+
+
+def univer_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=univer_skill_roots())
+
+
+K_SKILL_PACK = _REPO_ROOT / "skills" / "k-skill"
+
+K_SKILL_EXCLUDED: frozenset[str] = frozenset({"k-skill-setup", "k-skill-cleaner"})
+
+
+def k_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under skills/k-skill."""
+    return (("repo", K_SKILL_PACK),)
+
+
+def k_skill_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=k_skill_roots(), skip_names=K_SKILL_EXCLUDED)
+
+
+FSI_PACK = _REPO_ROOT / "skills" / "financial-services"
+
+FSI_ANTHROPIC_VERTICALS: tuple[str, ...] = (
+    "financial-analysis",
+    "equity-research",
+    "investment-banking",
+    "private-equity",
+    "fund-admin",
+    "operations",
+    "wealth-management",
+)
+
+FSI_PARTNER_VERTICALS: tuple[str, ...] = ("lseg", "spglobal")
+
+
+def fsi_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under each Anthropic vertical."""
+    return tuple(("repo", FSI_PACK / vertical) for vertical in FSI_ANTHROPIC_VERTICALS)
+
+
+def fsi_partner_skill_roots(
+    vendor: Literal["lseg", "spglobal"],
+) -> tuple[tuple[SkillSource, Path], ...]:
+    """Immediate-child SKILL.md scan under one partner vertical."""
+    if vendor not in FSI_PARTNER_VERTICALS:
+        raise ValueError(f"unknown FSI partner vertical: {vendor}")
+    return (("repo", FSI_PACK / vendor),)
+
+
+def fsi_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=fsi_skill_roots())
+
+
+def fsi_lseg_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=fsi_partner_skill_roots("lseg"))
+
+
+def fsi_spglobal_catalog() -> MarkdownSkillCatalog:
+    return MarkdownSkillCatalog(roots=fsi_partner_skill_roots("spglobal"))
+
+
 _REQUIRED_SECTION_HEADINGS = ("## When to Use", "## Boundaries")
 
 
@@ -295,9 +362,11 @@ class MarkdownSkillCatalog:
     def __init__(
         self,
         roots: tuple[tuple[SkillSource, Path], ...] | None = None,
+        skip_names: frozenset[str] = frozenset(),
     ) -> None:
         raw = roots if roots is not None else default_skill_roots()
         self._roots = tuple((source, Path(path).resolve()) for source, path in raw)
+        self._skip_names = skip_names
         self._index: dict[str, MarkdownSkill] | None = None
 
     def reload(self) -> None:
@@ -349,31 +418,33 @@ class MarkdownSkillCatalog:
         skill_dir = _skill_directory(skill)
         if skill_dir is None:
             return None
-        try:
-            ref_dir = (skill_dir / "reference").resolve()
-            candidate = (ref_dir / name).resolve()
-        except OSError:
-            return None
-        if not candidate.is_relative_to(ref_dir):
-            return None
-        if not self._path_allowed(candidate):
-            logger.warning(
-                "Refusing to load skill %r reference outside catalog roots",
-                skill.name,
-            )
-            return None
-        try:
-            if not candidate.is_file():
+        for dirname in ("reference", "references"):
+            try:
+                ref_dir = (skill_dir / dirname).resolve()
+                candidate = (ref_dir / name).resolve()
+            except OSError:
+                continue
+            if not candidate.is_relative_to(ref_dir):
                 return None
-            return candidate.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "Failed to read skill %r reference %s: %s",
-                skill.name,
-                candidate,
-                exc,
-            )
-            return None
+            if not self._path_allowed(candidate):
+                logger.warning(
+                    "Refusing to load skill %r reference outside catalog roots",
+                    skill.name,
+                )
+                return None
+            try:
+                if not candidate.is_file():
+                    continue
+                return candidate.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read skill %r reference %s: %s",
+                    skill.name,
+                    candidate,
+                    exc,
+                )
+                return None
+        return None
 
     def _ensure_index(self) -> dict[str, MarkdownSkill]:
         if self._index is None:
@@ -423,6 +494,8 @@ class MarkdownSkillCatalog:
             return
         for child in children:
             if not child.is_dir() or child.name.startswith(("_", ".")):
+                continue
+            if child.name in self._skip_names:
                 continue
             skill_md = child / "SKILL.md"
             if not skill_md.is_file():
