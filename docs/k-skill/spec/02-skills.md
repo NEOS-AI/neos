@@ -41,7 +41,7 @@ def k_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
 
 
 def k_skill_catalog() -> MarkdownSkillCatalog:
-    return MarkdownSkillCatalog(roots=k_skill_roots())
+    return MarkdownSkillCatalog(roots=k_skill_roots(), skip_names=K_SKILL_EXCLUDED)
 ```
 
 Do not add a new `SkillSource`. Do not recurse. Do not put `K_SKILL_PACK` on `default_skill_roots()` or `research_skill_roots()`.
@@ -251,9 +251,9 @@ Pins:
 
 | File | Pins |
 |---|---|
-| `tests/k_skill/test_skill_catalog.py` | roots, 125 names, exclusions, isolation from default/research/FSI/Univer |
-| `tests/k_skill/test_skill_pack.py` | every dir has composed SKILL.md, name matches, instruction body present, no CLI stub heading |
-| `tests/coding/tools/test_k_skill_load.py` | executor fallback |
+| `tests/k_skill/test_skill_catalog.py` | roots, 125 names, exclusions, isolation from default/research/FSI/Univer, coding prompt pin |
+| `tests/k_skill/test_skill_pack.py` | every dir has composed SKILL.md, name matches, instruction body present, no CLI stub heading, sibling SOURCE.md |
+| `tests/k_skill/test_load_skill.py` | executor fallback |
 | `tests/coding/prompts/test_builder.py` (extend) | prompt lists `k-skill`, not `korea-weather` |
 
 ## 8. What does not live here

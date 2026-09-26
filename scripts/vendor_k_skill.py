@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -83,21 +84,35 @@ def vendor(source_root: Path, dest_root: Path) -> int:
     license_src = source_root / "LICENSE"
     if license_src.is_file():
         shutil.copy2(license_src, dest_root / "LICENSE")
-    (dest_root / "SOURCE.md").write_text(
-        "\n".join(
-            [
-                "# k-skill pack source",
-                "",
-                f"Vendored from `{source_root}` with `scripts/vendor_k_skill.py`.",
-                "Each `SKILL.md` is `skill.json` frontmatter plus `instruction.md`.",
-                "Excluded: `k-skill-setup`, `k-skill-cleaner`.",
-                "Do not copy `packages/` or `k-skill-proxy`.",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    (dest_root / "SOURCE.md").write_text(_source_md(source_root), encoding="utf-8")
     return count
+
+
+def _source_pin(source_root: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def _source_md(source_root: Path) -> str:
+    pin = _source_pin(source_root)
+    return "\n".join(
+        [
+            "# k-skill pack source",
+            "",
+            "Vendored from sibling `../k-skill` with `scripts/vendor_k_skill.py`.",
+            f"Source commit: `{pin}`.",
+            "Each `SKILL.md` is `skill.json` frontmatter plus `instruction.md`.",
+            "Excluded: `k-skill-setup`, `k-skill-cleaner`.",
+            "Do not copy `packages/` or `k-skill-proxy`.",
+            "",
+        ]
+    )
 
 
 def main(argv: list[str]) -> int:

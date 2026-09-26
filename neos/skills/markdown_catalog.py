@@ -74,7 +74,7 @@ def k_skill_roots() -> tuple[tuple[SkillSource, Path], ...]:
 
 
 def k_skill_catalog() -> MarkdownSkillCatalog:
-    return MarkdownSkillCatalog(roots=k_skill_roots())
+    return MarkdownSkillCatalog(roots=k_skill_roots(), skip_names=K_SKILL_EXCLUDED)
 
 
 FSI_PACK = _REPO_ROOT / "skills" / "financial-services"
@@ -362,9 +362,11 @@ class MarkdownSkillCatalog:
     def __init__(
         self,
         roots: tuple[tuple[SkillSource, Path], ...] | None = None,
+        skip_names: frozenset[str] = frozenset(),
     ) -> None:
         raw = roots if roots is not None else default_skill_roots()
         self._roots = tuple((source, Path(path).resolve()) for source, path in raw)
+        self._skip_names = skip_names
         self._index: dict[str, MarkdownSkill] | None = None
 
     def reload(self) -> None:
@@ -492,6 +494,8 @@ class MarkdownSkillCatalog:
             return
         for child in children:
             if not child.is_dir() or child.name.startswith(("_", ".")):
+                continue
+            if child.name in self._skip_names:
                 continue
             skill_md = child / "SKILL.md"
             if not skill_md.is_file():

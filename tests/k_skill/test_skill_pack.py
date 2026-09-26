@@ -180,6 +180,22 @@ def test_korea_weather_body_is_instruction_not_cli_stub() -> None:
     assert "When to use" in body or "When to Use" in body
 
 
+def test_every_pack_skill_body_is_instruction_not_cli_stub() -> None:
+    catalog = k_skill_catalog()
+    for skill in catalog.list_skills():
+        body = catalog.load_markdown(skill.name)
+        assert body is not None, skill.name
+        assert "k-skill:cli-stub" not in body, skill.name
+        assert f"npx -y @nomadamas/k-skill@0 instruct {skill.name}" not in body, skill.name
+
+
+def test_source_md_uses_sibling_path_not_machine_local() -> None:
+    text = (PACK / "SOURCE.md").read_text(encoding="utf-8")
+    assert "`../k-skill`" in text
+    assert "/Users/" not in text
+    assert "scripts/vendor_k_skill.py" in text
+
+
 def test_foreign_packs_do_not_index_k_skill_names() -> None:
     assert default_catalog().get("korea-weather") is None
     assert fsi_catalog().get("korea-weather") is None
