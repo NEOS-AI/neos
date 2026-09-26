@@ -73,4 +73,15 @@ def test_coding_prompt_lists_security_audit_index_not_pack_leaves() -> None:
     assert "- RECONNAISSANCE:" not in skills
     assert "- k-skill:" in skills
     assert "- korea-weather:" not in skills
+    assert "- security-audit-research:" not in skills
+    assert "- security-audit-general:" not in skills
+
+
+def test_coding_index_names_kebab_spawn_specs() -> None:
+    text = (REPO_ROOT / "neos" / "coding" / "skills" / "security-audit.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`security-audit-research`" in text
+    assert "`security-audit-general`" in text
+    assert "Do not spawn `research`" in text
 
