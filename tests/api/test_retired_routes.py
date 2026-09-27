@@ -32,6 +32,29 @@ RETIRED = {
     ("POST", "/api/v1/unified/process/upload"),
     ("POST", "/api/v1/unified/process/upload/stream"),
     ("GET", "/api/v1/unified/health"),
+    # research 플랫폼 -- 딥 하네스가 대체. 워크플로우가 내부에서 쓰는 템플릿 자동 적용과
+    # 세션 기록은 서비스라서 남는다.
+    ("GET", "/api/v1/research/sessions"),
+    ("GET", "/api/v1/research/sessions/{session_id}"),
+    ("POST", "/api/v1/research/sessions/branch"),
+    ("GET", "/api/v1/research/sessions/{session_id}/branches"),
+    ("POST", "/api/v1/research/sessions/continue"),
+    ("POST", "/api/v1/research/async"),
+    ("GET", "/api/v1/research/async/{job_id}/status"),
+    ("GET", "/api/v1/research/stream/{session_id}"),
+    ("GET", "/api/v1/research/{session_id}/export"),
+    ("POST", "/api/v1/research/refine/investigate-claim"),
+    ("POST", "/api/v1/research/refine/reject-source"),
+    ("POST", "/api/v1/research/refine/adjust-trust"),
+    ("POST", "/api/v1/research/refine/redirect"),
+    ("POST", "/api/v1/research/refine/more-detail"),
+    ("GET", "/api/v1/research/templates"),
+    ("GET", "/api/v1/research/templates/{template_id}"),
+    # deep-research -- 비동기 조사는 deep-analysis 가 맡는다
+    ("POST", "/api/v1/deep-research/start"),
+    ("GET", "/api/v1/deep-research/{report_id}/stream"),
+    ("GET", "/api/v1/deep-research/{report_id}"),
+    ("GET", "/api/v1/conversations/{conversation_id}/deep-research"),
 }
 
 

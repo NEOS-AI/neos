@@ -41,10 +41,6 @@ params = {
 }
 ```
 
-## Export Integration
-`GET /api/v1/research/{session_id}/export?format=canvas`
-→ 캔버스 HTML 다운로드 (Mermaid CDN + 인라인 차트 포함)
-
 ## Requirements
 - `matplotlib>=3.8.0` (차트 생성용, 선택적 — 없으면 차트 생략)
 - Mermaid JS (CDN, 클라이언트 사이드)

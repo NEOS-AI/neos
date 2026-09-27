@@ -269,28 +269,6 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
         ): "get_current_active_user",
         (f"{API_PREFIX}/hyper-research", "GET"): "get_current_active_user",
         (f"{API_PREFIX}/query/stream", "POST"): "get_current_active_user",
-        (f"{API_PREFIX}/deep-research/start", "POST"): "get_current_active_user",
-        (
-            f"{API_PREFIX}/deep-research/{{report_id}}/stream",
-            "GET",
-        ): "get_owned_deep_research_report",
-        (
-            f"{API_PREFIX}/deep-research/{{report_id}}",
-            "GET",
-        ): "get_owned_deep_research_report",
-        (
-            f"{API_PREFIX}/conversations/{{conversation_id}}/deep-research",
-            "GET",
-        ): "get_owned_conversation",
-        (f"{API_PREFIX}/research/async", "POST"): "get_current_active_user",
-        (
-            f"{API_PREFIX}/research/async/{{job_id}}/status",
-            "GET",
-        ): "get_current_active_user",
-        (
-            f"{API_PREFIX}/research/stream/{{session_id}}",
-            "GET",
-        ): "get_current_active_user",
     }
     actual = {
         (route.path, method): _dependency_names(route)
@@ -308,7 +286,6 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
                     "get_current_active_user",
                     "get_current_admin_user",
                     "get_owned_conversation",
-                    "get_owned_deep_research_report",
                     "get_readable_conversation",
                 }
             )

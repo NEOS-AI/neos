@@ -19,7 +19,6 @@ from neos.api.handlers.analytics_handlers import router as web_search_analytics_
 from neos.api.handlers.document_handlers import router as document_router
 from neos.api.handlers.chat_handlers import router as chat_router
 from neos.api.handlers.catalog_handlers import router as catalog_router
-from neos.api.handlers.deep_research_handlers import router as deep_research_router
 from neos.api.handlers.deep_analysis_analytics_handlers import (
     router as deep_analysis_analytics_router,
 )
@@ -29,11 +28,6 @@ from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
 from neos.api.handlers.vote_handlers import router as vote_router
 from neos.api.handlers.artifact_handlers import router as artifact_router
-from neos.api.handlers.research_session_handlers import router as research_session_router
-from neos.api.handlers.async_research_handlers import router as async_research_router
-from neos.api.handlers.export_handlers import router as export_router
-from neos.api.handlers.refinement_handlers import router as refinement_router
-from neos.api.handlers.template_handlers import router as template_router
 from neos.api.handlers.approval_handlers import router as approval_router  # Phase 2: Execution Approval
 from neos.api.handlers.autonomy_handlers import router as autonomy_router
 from neos.api.handlers.model_preference_handlers import router as model_preference_router
@@ -591,7 +585,6 @@ _include_router_for_runtime(
 _include_router_for_runtime(document_router, prefix=f"{settings.API_V1_PREFIX}/documents", tags=["Document Management"])
 _include_router_for_runtime(chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Chat & Conversations"])
 _include_router_for_runtime(catalog_router, prefix=settings.API_V1_PREFIX, tags=["Models"])
-_include_router_for_runtime(deep_research_router, prefix=settings.API_V1_PREFIX, tags=["Deep Research"])
 _include_router_for_runtime(deep_analysis_analytics_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Analytics"])
 _include_router_for_runtime(deep_analysis_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Harness"])
 _include_router_for_runtime(
@@ -604,11 +597,6 @@ _include_router_for_runtime(
 _include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
 _include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 _include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
-_include_router_for_runtime(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
-_include_router_for_runtime(async_research_router, tags=["Async Research"])  # Phase 3.5: Celery-based async research
-_include_router_for_runtime(export_router, tags=["Report Export"])  # Phase 3.4: Structured report export
-_include_router_for_runtime(refinement_router, tags=["Research Refinement"])  # Phase 3.8: Interactive refinement
-_include_router_for_runtime(template_router, tags=["Research Templates"])  # Phase 4.7: Research templates
 _include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval
 _include_router_for_runtime(autonomy_router, prefix=settings.API_V1_PREFIX, tags=["Agent Autonomy"])
 _include_router_for_runtime(model_preference_router, prefix=settings.API_V1_PREFIX, tags=["Model Preferences"])
