@@ -26,8 +26,6 @@ dependencies = [
     "psycopg2>=2.9.12",
     "psycopg2-binary>=2.9.10",
     "pydantic>=2.11.7",
-    # 트랙 L(Jev 확률 판정 층). 패키지 이름 주의: `typesafe-ai` 는 모델이
-    # 지어내는 이름을 막으려고 등록된 리다이렉트 shim 이고, 진짜는 이것이다.
     "typesafe-sdk>=0.7.1",
     "pydantic-settings>=2.0",
     "pytest>=9.1.1",
