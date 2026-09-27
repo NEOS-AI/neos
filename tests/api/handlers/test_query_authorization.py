@@ -296,30 +296,6 @@ def test_production_query_workflow_routes_have_explicit_authorization_matrix():
             f"{API_PREFIX}/conversations/{{conversation_id}}/deep-research",
             "GET",
         ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity",
-            "POST",
-        ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/stream",
-            "POST",
-        ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/cross-conversation",
-            "POST",
-        ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/messages/similarity/high-confidence",
-            "POST",
-        ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/similarity/config",
-            "GET",
-        ): "get_owned_conversation",
-        (
-            f"{API_PREFIX}/chat/conversations/{{conversation_id}}/similarity/analytics",
-            "GET",
-        ): "get_owned_conversation",
         (f"{API_PREFIX}/research/async", "POST"): "get_current_active_user",
         (
             f"{API_PREFIX}/research/async/{{job_id}}/status",

@@ -52,7 +52,6 @@ from neos.coding.runtime import (
     initialize_coding_transport,
     start_coding_outbox_dispatcher,
 )
-from neos.api.similarity_chat_routes import similarity_chat_router
 from neos.api.dependencies.auth import get_current_admin_user
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
@@ -605,7 +604,6 @@ _include_router_for_runtime(
 )
 _include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
 _include_router_for_runtime(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
-_include_router_for_runtime(similarity_chat_router, prefix=f"{settings.API_V1_PREFIX}/chat", tags=["Similarity-based Chat"])
 _include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 _include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
 _include_router_for_runtime(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)
