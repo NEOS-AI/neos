@@ -20,8 +20,10 @@ from neos.database.web_search_analytics_types import (
     TrendInterval
 )
 
+# `main.py` 가 `/api/v1/analytics` 에 마운트한다. 여기에 절대 경로를 적으면
+# `/api/v1/analytics/api/v1/analytics/web-search/...` 가 된다.
 router = APIRouter(
-    prefix="/api/v1/analytics/web-search",
+    prefix="/web-search",
     tags=["Web Search Analytics"]
 )
 

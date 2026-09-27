@@ -598,7 +598,8 @@ _include_router_for_runtime(deep_analysis_analytics_router, prefix=settings.API_
 _include_router_for_runtime(deep_analysis_router, prefix=settings.API_V1_PREFIX, tags=["Deep Analysis Harness"])
 _include_router_for_runtime(
     skills_router,
-    prefix=f"{settings.API_V1_PREFIX}/skills",
+    # 데코레이터가 이미 `/skills...` 를 품고 있다 -- 여기서 다시 붙이면 `/skills/skills`.
+    prefix=settings.API_V1_PREFIX,
     tags=["Skills Management"],
     dependencies=[Depends(get_current_admin_user)],
 )
