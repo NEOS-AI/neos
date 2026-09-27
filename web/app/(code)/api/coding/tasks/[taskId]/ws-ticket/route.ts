@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 import { getCodingWsPublicUrl } from "@/lib/server-config";
 
 
@@ -18,10 +19,6 @@ export async function POST(
       websocket_url: `${getCodingWsPublicUrl()}/api/v1/coding/ws`,
     });
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not authorize coding stream" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not authorize coding stream");
   }
 }

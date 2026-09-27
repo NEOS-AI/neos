@@ -221,6 +221,48 @@ async def test_events_stream_replays_full_history_for_a_late_subscriber(
 
 
 @pytest.mark.asyncio
+async def test_events_stream_replays_past_a_failure_that_was_resumed(monkeypatch):
+    """재개된 run 의 이력에서 옛 `job_failed` 는 끝이 아니다.
+
+    끝은 **마지막** 종결 이벤트다. 첫 종결에서 닫으면 새로고침한 사용자는
+    지금 돌고 있는(또는 이미 완료된) run 을 '실패'로 본다.
+    """
+    from neos.api.handlers import deep_analysis_handlers as handlers
+
+    _patch_session(monkeypatch, handlers)
+
+    async def fake_owner(session, run_id):
+        return ("owner", "completed")
+
+    monkeypatch.setattr(handlers, "get_run_owner", fake_owner)
+
+    history = [
+        {"seq": 1, "type": "job_started", "qid": None, "payload": {}},
+        {"seq": 2, "type": "job_failed", "qid": None, "payload": {"error": "boom"}},
+        {"seq": 3, "type": "job_resumed", "qid": None, "payload": {}},
+        {"seq": 4, "type": "job_completed", "qid": None, "payload": {}},
+    ]
+
+    async def fake_read(session, run_id, after_seq=0, limit=200):
+        # 배치가 종결 이벤트에서 잘리는 경우까지 재현한다(limit=2).
+        return [event for event in history if event["seq"] > after_seq][:2]
+
+    monkeypatch.setattr(handlers, "read_events_after", fake_read)
+
+    response = await handlers.stream_deep_analysis_events(
+        "run00001",
+        Request(),
+        0,
+        SimpleNamespace(user_id="owner"),
+    )
+    stream = await _drain(response)
+
+    assert '"type": "job_resumed"' in stream
+    assert stream.count('"type": "job_completed"') == 1
+    assert stream.index('"type": "job_failed"') < stream.index('"type": "job_resumed"')
+
+
+@pytest.mark.asyncio
 async def test_events_stream_honours_the_after_cursor(monkeypatch):
     """재접속 클라이언트는 마지막 seq를 넘겨 이어받는다."""
     from neos.api.handlers import deep_analysis_handlers as handlers

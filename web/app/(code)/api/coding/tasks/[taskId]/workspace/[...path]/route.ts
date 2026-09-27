@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPI } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 import { getCodingWsPublicUrl } from "@/lib/server-config";
 
 const ALLOWED_OPERATIONS = new Map([
@@ -41,11 +42,7 @@ async function proxy(request: Request, context: Context) {
     }
     return NextResponse.json(body, { status: response.status });
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Workspace request failed" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Workspace request failed");
   }
 }
 

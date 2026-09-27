@@ -177,7 +177,14 @@ async def stream_deep_analysis_events(
                 for event in events:
                     cursor = event["seq"]
                     yield _sse(event)
-                    if event["type"] in TERMINAL_JOB_KINDS:
+                # 끝은 **마지막** 종결 이벤트다. 재개된 run 의 이력에는 옛
+                # `job_failed` 뒤에 `job_resumed` 가 오므로, 첫 종결에서 닫으면
+                # 재생하는 사람은 살아 있는 run 을 실패로 본다. 종결이 배치 끝에
+                # 걸렸다면 뒤에 더 있는지 한 번 더 읽어 보고 없을 때만 닫는다.
+                if events[-1]["type"] in TERMINAL_JOB_KINDS:
+                    async with await db_manager.get_session() as session:
+                        later = await read_events_after(session, run_id, cursor)
+                    if not later:
                         return
                 # 배치가 꽉 찼을 수 있으므로 곧바로 다음 배치를 읽는다.
                 continue

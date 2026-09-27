@@ -18,6 +18,7 @@
 import "server-only";
 
 import { auth } from "@/app/(auth)/auth";
+import { backendErrorCode, backendErrorMessage } from "@/lib/backend-error";
 import { getBackendUrl } from "@/lib/server-config";
 
 export class BackendAPIError extends Error {
@@ -100,10 +101,12 @@ export async function callBackendAPIWithJSON<T = any>(
       detail: response.statusText,
     }));
 
+    // `detail` 은 문자열·`{code, message}`·422 배열 중 하나다. 그대로 Error 에
+    // 넣으면 뒤의 둘이 "[object Object]" 가 된다(`lib/backend-error.ts`).
     throw new BackendAPIError(
-      error.detail || "Backend API call failed",
+      backendErrorMessage(error, "Backend API call failed"),
       response.status,
-      error.code,
+      backendErrorCode(error),
       error
     );
   }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 export async function GET(
   _request: Request,
@@ -12,10 +13,6 @@ export async function GET(
     );
     return NextResponse.json(snapshot);
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not restore coding task" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not restore coding task");
   }
 }

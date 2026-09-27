@@ -83,22 +83,6 @@ class SendMessageRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict, description="추가 메타데이터")
 
 
-class SendSimilarityMessageRequest(BaseModel):
-    """유사도 검색 기반 채팅 메시지 요청"""
-    content: str = Field(..., min_length=1, description="메시지 내용")
-    role: MessageRole = Field(default=MessageRole.USER, description="메시지 역할")
-    parent_message_id: Optional[str] = Field(None, description="부모 메시지 ID")
-    attachments: List[Dict[str, Any]] = Field(default_factory=list, description="첨부파일")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="추가 메타데이터")
-
-    # 유사도 검색 설정
-    top_k: int = Field(default=3, ge=1, le=10, description="검색할 유사 메시지 수")
-    similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="유사도 임계값")
-    include_cross_conversation: bool = Field(default=False, description="다른 대화에서도 검색")
-    enable_auto_embedding: bool = Field(default=True, description="자동 임베딩 생성")
-    time_range_days: Optional[int] = Field(None, ge=1, le=365, description="검색 시간 범위 (일 단위, None=전체)")
-
-
 class RegenerateMessageRequest(BaseModel):
     message_id: str = Field(..., description="재생성할 메시지 ID")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature")
@@ -277,28 +261,6 @@ class CreateMessageResponse(BaseModel):
     assistant_message: Optional[MessageResponse] = None
     conversation_id: str
     errors: List[str] = Field(default_factory=list)
-
-
-class SimilarityMessageMetadata(BaseModel):
-    """유사도 검색 메타데이터"""
-    message_id: str
-    similarity_score: float
-    search_type: str  # "conversation" or "cross_conversation"
-
-
-class CreateSimilarityMessageResponse(BaseModel):
-    """유사도 검색 기반 채팅 응답"""
-    success: bool
-    user_message: MessageResponse
-    assistant_message: Optional[MessageResponse] = None
-    conversation_id: str
-    errors: List[str] = Field(default_factory=list)
-
-    # 유사도 검색 메타데이터
-    context_enhanced: bool = False
-    relevant_message_count: int = 0
-    similarity_scores: List[SimilarityMessageMetadata] = Field(default_factory=list)
-    search_config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SuccessResponse(BaseModel):

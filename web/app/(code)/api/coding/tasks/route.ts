@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 
 export async function GET(request: Request) {
@@ -17,11 +18,7 @@ export async function GET(request: Request) {
     );
     return NextResponse.json(tasks);
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not load coding tasks" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not load coding tasks");
   }
 }
 
@@ -35,10 +32,6 @@ export async function POST(request: Request) {
     });
     return NextResponse.json(task, { status: 202 });
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not start coding task" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not start coding task");
   }
 }

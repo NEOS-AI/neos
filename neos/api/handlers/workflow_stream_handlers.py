@@ -1,5 +1,9 @@
 """
-Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
+Workflow Streaming 콜백 - 워크플로우 이벤트를 스트림 큐로 옮긴다
+
+이 모듈에는 `POST /query/stream` 과 `/ws/query/*` 라우트가 있었다(2026-09-27
+제거, `tests/api/test_retired_routes.py`). 남은 것은 챗 SSE 파이프라인과 A2UI 가
+쓰는 `WorkflowStreamCallback` 이다.
 
 이벤트 로깅 아키텍처 (DI 패턴):
 ---------------------------------
@@ -14,39 +18,22 @@ Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
    - multi_agent_workflow.execute_workflow(event_handler=callback)
    - 워크플로우가 각 단계에서 자동으로 이벤트 발생
    - 핸들러가 이벤트를 받아 스트림 & DB 저장 처리
-
-3. 스트리밍 방식:
-   - SSE: 단방향, 자동 재연결, HTTP 기반
-   - WebSocket: 양방향, 낮은 지연시간, 실시간 통신
-
-이 설계는 unified_handlers.py의 패턴을 따릅니다.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import StreamingResponse
-from typing import AsyncGenerator, Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional
 from datetime import datetime
 import json
 import asyncio
-import uuid
 
 from neos.api.models.query_models import (
-    WorkflowStreamRequest,
     WorkflowStreamEvent,
     WorkflowStreamEventType
 )
-from neos.api.services.query_service import QueryService
-from neos.api.services.workflow_service import WorkflowService
-from neos.api.dependencies.auth import get_current_active_user
-from neos.database.models import User
 from neos.workflow.events import WorkflowEventHandler
-from neos.workflow.stream_manager import stream_manager
-from neos.config.settings import settings
 from neos.utils.logger import get_logger
 from neos.database.connection import db_manager
 
 logger = get_logger(__name__)
-router = APIRouter()
 
 
 class WorkflowStreamCallback(WorkflowEventHandler):
@@ -322,6 +309,24 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         )
         await self.event_queue.put(event)
 
+    def on_graph_subagent_event(self, kind: str, payload: Dict[str, Any]) -> None:
+        """설계 그래프 서브에이전트 노드의 걸음·폴드를 스트림에 싣는다.
+
+        **동기**다 -- 서브에이전트 호스트의 `emit` 이 동기라서다
+        (`neos.workflow.events.forward_graph_subagent_event`). 큐가 차면 버린다:
+        진행 표시 때문에 그래프가 멈추면 안 된다. 본문 필터는 SSE 변환
+        (`stream_adapter.graph_subagent_event_from`)이 한다.
+        """
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.GRAPH_SUBAGENT,
+            node_name=payload.get("node"),
+            data={"kind": kind, **payload},
+        )
+        try:
+            self.event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.debug("graph subagent event dropped (queue full) kind=%s", kind)
+
     # ============================================================================
     # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
     # ============================================================================
@@ -423,489 +428,3 @@ class WorkflowStreamCallback(WorkflowEventHandler):
             progress_percent=100
         )
         await self.event_queue.put(event)
-
-
-async def execute_workflow_with_streaming(
-    user_id: str,
-    session_id: str,
-    query: str,
-    callback: WorkflowStreamCallback,
-    bypass_cache: bool = False,
-    autonomy_level: Optional[int] = None,
-    workflow_preferences: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    스트리밍 콜백과 함께 워크플로우 실행
-
-    Dependency Injection 패턴을 사용하여 WorkflowEventHandler를 주입
-    """
-
-    try:
-        # Dependency Injection: WorkflowStreamCallback을 event_handler로 주입
-        # 워크플로우 내부에서 발생하는 모든 이벤트가 자동으로 callback으로 전달됨
-        result = await WorkflowService.execute(
-            user_id=user_id,
-            session_id=session_id,
-            query=query,
-            preferences={
-                **(workflow_preferences or {}),
-                "bypass_cache": bypass_cache,
-                "autonomy_level": autonomy_level,
-            },
-            event_handler=callback,
-            use_checkpointer=True,
-            bypass_cache=bypass_cache,
-        )
-
-        return result
-
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Workflow streaming error: {error_msg}")
-        await callback.on_workflow_error(e)
-        raise
-
-
-# ============================================================================
-# SSE Streaming Endpoint
-# ============================================================================
-
-@router.post("/query/stream")
-async def stream_query(
-    body: WorkflowStreamRequest,
-    request: Request,
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    SSE 기반 워크플로우 스트리밍 엔드포인트 (Phase 3 개선)
-
-    실시간으로 워크플로우 진행 상황과 결과를 스트리밍합니다.
-    TTFB(Time To First Byte) 80% 단축 효과.
-
-    Phase 3 개선사항:
-    - Last-Event-ID 기반 재연결 지원
-    - 이벤트 버퍼링 및 재전송
-    - 연결 상태 관리
-
-    이벤트 타입:
-    - started: 워크플로우 시작
-    - node_started: 노드 시작
-    - node_completed: 노드 완료
-    - agent_started: 에이전트 시작
-    - agent_progress: 에이전트 진행 상황
-    - agent_completed: 에이전트 완료
-    - content_chunk: 부분 컨텐츠
-    - progress_update: 진행률 업데이트
-    - heartbeat: 연결 유지
-    - error: 에러 발생
-    - completed: 워크플로우 완료
-    """
-
-    session_id = body.session_id or str(uuid.uuid4())
-    user_id = current_user.user_id
-    try:
-        stream_manager.claim_session(session_id, user_id)
-    except PermissionError:
-        raise HTTPException(status_code=404, detail="Resource not found")
-    stream_options = body.stream_options or {}
-    preferences = body.preferences or {}
-    autonomy_level = (
-        body.autonomy_level
-        if body.autonomy_level is not None
-        else preferences.get("autonomy_level")
-    )
-
-    # Last-Event-ID 헤더 확인 (재연결 지원)
-    last_event_id = request.headers.get("Last-Event-ID")
-
-    async def generate_stream() -> AsyncGenerator[str, None]:
-        # 재연결 시 Last-Event-ID 이후 이벤트 재전송
-        if last_event_id:
-            logger.info(f"Reconnection detected for session {session_id}, last_event_id: {last_event_id}")
-            missed_events = stream_manager.get_events_since(session_id, last_event_id)
-            for event in missed_events:
-                yield event.to_sse_format()
-            logger.info(f"Resent {len(missed_events)} missed events")
-
-        # 기존 콜백 생성
-        event_queue: asyncio.Queue = asyncio.Queue()
-        enable_db_logging = stream_options.get("enable_db_logging", True)
-        callback = WorkflowStreamCallback(
-            session_id=session_id,
-            event_queue=event_queue,
-            enable_db_logging=enable_db_logging,
-            user_id=user_id
-        )
-
-        # 하트비트 태스크
-        heartbeat_task = None
-        if stream_options.get("include_heartbeat", True):
-            heartbeat_interval = stream_options.get("heartbeat_interval_ms", 5000) / 1000
-
-            async def send_heartbeat():
-                while True:
-                    await asyncio.sleep(heartbeat_interval)
-                    heartbeat_event = callback._create_event(
-                        event_type=WorkflowStreamEventType.HEARTBEAT
-                    )
-                    await event_queue.put(heartbeat_event)
-
-            heartbeat_task = asyncio.create_task(send_heartbeat())
-
-        workflow_task = None
-
-        try:
-            # 워크플로우 실행 태스크
-            workflow_task = asyncio.create_task(
-                execute_workflow_with_streaming(
-                    user_id=user_id,
-                    session_id=session_id,
-                    query=body.query,
-                    callback=callback,
-                    bypass_cache=preferences.get("bypass_cache", False),
-                    autonomy_level=autonomy_level,
-                    workflow_preferences=preferences,
-                )
-            )
-
-            completed = False
-            while not completed:
-                try:
-                    # 이벤트 대기 (타임아웃 포함)
-                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
-                    event_data = event.dict()
-                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
-
-                    if event.event in [WorkflowStreamEventType.COMPLETED, WorkflowStreamEventType.ERROR]:
-                        completed = True
-
-                except asyncio.TimeoutError:
-                    # 타임아웃 시 워크플로우 완료 여부 확인
-                    if workflow_task.done():
-                        if workflow_task.exception():
-                            error_event = callback._create_event(
-                                event_type=WorkflowStreamEventType.ERROR,
-                                error=str(workflow_task.exception())
-                            )
-                            yield f"data: {json.dumps(error_event.dict(), ensure_ascii=False)}\n\n"
-                        completed = True
-
-        except Exception as e:
-            error_event = WorkflowStreamEvent(
-                event=WorkflowStreamEventType.ERROR,
-                session_id=session_id,
-                error=str(e)
-            )
-            yield f"data: {json.dumps(error_event.dict(), ensure_ascii=False)}\n\n"
-
-        finally:
-            if workflow_task and not workflow_task.done():
-                workflow_task.cancel()
-                try:
-                    await workflow_task
-                except asyncio.CancelledError:
-                    pass
-
-            if heartbeat_task:
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-
-# ============================================================================
-# WebSocket Streaming Endpoint
-# ============================================================================
-
-@router.websocket("/ws/query/{session_id}")
-async def websocket_query_stream(websocket: WebSocket, session_id: str):
-    """
-    WebSocket 기반 워크플로우 스트리밍 엔드포인트
-
-    양방향 실시간 통신으로 워크플로우 진행 상황을 스트리밍합니다.
-
-    클라이언트 메시지 형식:
-    {
-        "type": "query",
-        "query": "사용자 질문",
-        "user_id": "optional_user_id",
-        "preferences": {"bypass_cache": false}
-    }
-
-    서버 응답 형식:
-    {
-        "event": "started|node_started|...|completed|error",
-        "session_id": "...",
-        "progress_percent": 0-100,
-        "content": "...",
-        "data": {...}
-    }
-    """
-    await websocket.accept()
-    logger.info(f"WebSocket connected: session_id={session_id}")
-
-    event_queue: asyncio.Queue = asyncio.Queue()
-    # WebSocket에서도 DB 로깅 활성화 (기본값: True)
-    callback = WorkflowStreamCallback(
-        session_id=session_id,
-        event_queue=event_queue,
-        enable_db_logging=True,
-        user_id=None  # 클라이언트 메시지에서 받아올 예정
-    )
-    active_task: Optional[asyncio.Task] = None
-
-    try:
-        # 연결 확인 메시지
-        await websocket.send_json({
-            "event": "connected",
-            "session_id": session_id,
-            "timestamp": datetime.now().isoformat(),
-            "message": "워크플로우 스트리밍 준비 완료"
-        })
-
-        while True:
-            # 클라이언트 메시지 수신
-            data = await websocket.receive_json()
-            message_type = data.get("type")
-
-            if message_type == "ping":
-                await websocket.send_json({"type": "pong"})
-                continue
-
-            elif message_type == "query":
-                query = data.get("query", "")
-                user_id = data.get("user_id", f"ws_{uuid.uuid4().hex[:8]}")
-                preferences = data.get("preferences", {})
-
-                if not query:
-                    await websocket.send_json({
-                        "event": "error",
-                        "error": "쿼리가 비어있습니다"
-                    })
-                    continue
-
-                # 이전 태스크 취소
-                if active_task and not active_task.done():
-                    active_task.cancel()
-
-                # 새 콜백 생성 (user_id 업데이트)
-                event_queue = asyncio.Queue()
-                callback = WorkflowStreamCallback(
-                    session_id=session_id,
-                    event_queue=event_queue,
-                    enable_db_logging=True,
-                    user_id=user_id
-                )
-
-                # 워크플로우 실행
-                async def run_workflow():
-                    try:
-                        await execute_workflow_with_streaming(
-                            user_id=user_id,
-                            session_id=session_id,
-                            query=query,
-                            callback=callback,
-                            bypass_cache=preferences.get("bypass_cache", False),
-                            autonomy_level=preferences.get("autonomy_level"),
-                        )
-                    except Exception as e:
-                        await callback.on_error(str(e))
-
-                active_task = asyncio.create_task(run_workflow())
-
-                # 이벤트 스트리밍
-                async def stream_events():
-                    while True:
-                        try:
-                            event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
-                            await websocket.send_json(event.dict())
-
-                            if event.event in [WorkflowStreamEventType.COMPLETED, WorkflowStreamEventType.ERROR]:
-                                break
-
-                        except asyncio.TimeoutError:
-                            if active_task.done():
-                                break
-                        except Exception:
-                            break
-
-                await stream_events()
-
-            elif message_type == "cancel":
-                if active_task and not active_task.done():
-                    active_task.cancel()
-                    await websocket.send_json({
-                        "event": "cancelled",
-                        "session_id": session_id,
-                        "message": "워크플로우가 취소되었습니다"
-                    })
-
-            else:
-                await websocket.send_json({
-                    "event": "error",
-                    "error": f"알 수 없는 메시지 타입: {message_type}"
-                })
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: session_id={session_id}")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        try:
-            await websocket.send_json({
-                "event": "error",
-                "error": str(e)
-            })
-        except:
-            pass
-    finally:
-        if active_task and not active_task.done():
-            active_task.cancel()
-        try:
-            await websocket.close()
-        except:
-            pass
-
-
-# ============================================================================
-# Enhanced WebSocket with Multi-Agent Progress
-# ============================================================================
-
-@router.websocket("/ws/query/detailed/{session_id}")
-async def websocket_detailed_query_stream(websocket: WebSocket, session_id: str):
-    """
-    상세 진행 상황을 포함한 WebSocket 스트리밍
-
-    에이전트별 세부 진행 상황과 중간 결과를 실시간으로 제공합니다.
-    """
-    await websocket.accept()
-    logger.info(f"Detailed WebSocket connected: session_id={session_id}")
-
-    try:
-        await websocket.send_json({
-            "event": "connected",
-            "session_id": session_id,
-            "features": ["detailed_progress", "agent_status", "partial_results"],
-            "timeout_config": {
-                "search": settings.SEARCH_ORCHESTRATION_TIMEOUT,
-                "default_agent": settings.AGENT_TIMEOUT,
-                "agent_timeouts": settings.AGENT_TIMEOUTS
-            }
-        })
-
-        while True:
-            data = await websocket.receive_json()
-            message_type = data.get("type")
-
-            if message_type == "ping":
-                await websocket.send_json({"type": "pong"})
-
-            elif message_type == "query":
-                query = data.get("query", "")
-                user_id = data.get("user_id", f"ws_{uuid.uuid4().hex[:8]}")
-
-                if not query:
-                    await websocket.send_json({"event": "error", "error": "Empty query"})
-                    continue
-
-                # 사용자 생성/조회
-                await QueryService.get_or_create_user(user_id)
-
-                # 시작 알림
-                await websocket.send_json({
-                    "event": "started",
-                    "session_id": session_id,
-                    "query": query[:100],
-                    "timestamp": datetime.now().isoformat()
-                })
-
-                # 워크플로우 노드 목록
-                nodes = [
-                    ("query_classifier", "쿼리 분석", 10),
-                    ("skill_tool_selector", "도구 선택", 15),
-                    ("search_orchestrator", "검색 수행", 40),
-                    ("analysis_orchestrator", "분석 수행", 20),
-                    ("generation_orchestrator", "생성 수행", 5),
-                    ("result_integrator", "결과 통합", 5),
-                    ("quality_validator", "품질 검증", 3),
-                    ("response_generator", "응답 생성", 2)
-                ]
-
-                cumulative_progress = 0
-
-                try:
-                    for node_name, description, weight in nodes:
-                        # 노드 시작
-                        await websocket.send_json({
-                            "event": "node_started",
-                            "node_name": node_name,
-                            "description": description,
-                            "progress_percent": cumulative_progress
-                        })
-
-                        # 진행 시뮬레이션 (실제로는 콜백 기반으로 대체)
-                        await asyncio.sleep(0.05)
-
-                        cumulative_progress += weight
-
-                        # 노드 완료
-                        await websocket.send_json({
-                            "event": "node_completed",
-                            "node_name": node_name,
-                            "progress_percent": cumulative_progress
-                        })
-
-                    # 실제 워크플로우 실행
-                    result = await QueryService.process_query_workflow(
-                        user_id=user_id,
-                        session_id=session_id,
-                        query=query,
-                        bypass_cache=data.get("preferences", {}).get("bypass_cache", False),
-                        preferences=data.get("preferences", {}),
-                    )
-
-                    # 완료
-                    await websocket.send_json({
-                        "event": "completed",
-                        "session_id": session_id,
-                        "progress_percent": 100,
-                        "response": result.get("response"),
-                        "quality_score": result.get("quality_score", 0.0),
-                        "execution_time_ms": result.get("execution_time_ms"),
-                        "cache_hit": result.get("cache_hit", False)
-                    })
-
-                except Exception as e:
-                    logger.error(f"Workflow error: {e}")
-                    await websocket.send_json({
-                        "event": "error",
-                        "error": str(e)
-                    })
-
-            elif message_type == "get_status":
-                await websocket.send_json({
-                    "event": "status",
-                    "session_id": session_id,
-                    "agent_timeouts": settings.AGENT_TIMEOUTS,
-                    "search_timeout": settings.SEARCH_ORCHESTRATION_TIMEOUT
-                })
-
-    except WebSocketDisconnect:
-        logger.info(f"Detailed WebSocket disconnected: session_id={session_id}")
-    except Exception as e:
-        logger.error(f"Detailed WebSocket error: {e}")
-    finally:
-        try:
-            await websocket.close()
-        except:
-            pass

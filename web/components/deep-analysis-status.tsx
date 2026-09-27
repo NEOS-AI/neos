@@ -14,16 +14,20 @@ import {
   LoaderIcon,
   MicroscopeIcon,
   PlugZapIcon,
+  RotateCcwIcon,
 } from "lucide-react";
+import { useState } from "react";
 import {
   type DeepAnalysisConnectionState,
   useDeepAnalysisStream,
 } from "@/hooks/use-deep-analysis-stream";
 import { degradationNotices } from "@/lib/deep-analysis/degradation";
 import type { DeepAnalysisProgress } from "@/lib/deep-analysis/progress";
+import { resumeDeepAnalysis } from "@/lib/deep-analysis/resume";
 import type { DeepAnalysisMetadata } from "@/lib/types";
 import { Tool, ToolContent, ToolHeader } from "./elements/tool";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 
 const phaseLabel: Record<DeepAnalysisProgress["phase"], string> = {
   pending: "대기 중",
@@ -146,17 +150,44 @@ export function DeepAnalysisStatus({
   // 이미 종결된 run은 다시 구독하지 않는다 — 이력 재생 비용이 무의미하다.
   const alreadySettled =
     deepAnalysis.status === "completed" || deepAnalysis.status === "failed";
+  // 사람이 재개를 누른 횟수. 올라가면 구독이 처음부터 다시 붙는다 -- 종결된
+  // run 이라도 그때부터는 저장된 상태가 아니라 스트림이 phase 를 말한다.
+  const [resumes, setResumes] = useState(0);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
 
   const { progress, connection } = useDeepAnalysisStream({
     runId: deepAnalysis.run_id,
-    enabled: !alreadySettled,
+    enabled: !alreadySettled || resumes > 0,
+    subscriptionKey: resumes,
     onCompleted,
     onFailed,
   });
 
-  const phase = alreadySettled
-    ? (deepAnalysis.status as DeepAnalysisProgress["phase"])
-    : progress.phase;
+  const phase =
+    alreadySettled && resumes === 0
+      ? (deepAnalysis.status as DeepAnalysisProgress["phase"])
+      : progress.phase;
+
+  // 백엔드는 `running` 도 재개를 받지만 여기서는 `failed` 에만 연다 --
+  // 실제로 도는 run 에 두 번째 워커를 붙일 이유가 화면에는 없다.
+  const resume = async () => {
+    if (resuming) {
+      return;
+    }
+    setResuming(true);
+    setResumeError(null);
+    try {
+      await resumeDeepAnalysis(deepAnalysis.run_id);
+      setResumes((count) => count + 1);
+    } catch (error) {
+      setResumeError(
+        error instanceof Error ? error.message : "Could not resume deep analysis"
+      );
+    } finally {
+      setResuming(false);
+    }
+  };
   // 우선순위 판단이 아니라 "둘 중 채워진 쪽을 고른다"는 뜻이다. 라이브 세션에서는
   // 구독이 상태를 채우고, 새로고침 후에는 `alreadySettled`라 구독하지 않으므로
   // `progress.degradations`가 항상 비어 있다 — 둘 다 값을 갖는 경우는 없다.
@@ -193,7 +224,11 @@ export function DeepAnalysisStatus({
     <Tool
       className="border-purple-200/70 bg-purple-50/40 dark:border-purple-300/15 dark:bg-purple-950/20"
       defaultOpen={
-        phase === "running" || phase === "pending" || notices.length > 0
+        phase === "running" ||
+        phase === "pending" ||
+        // 실패한 run 은 할 수 있는 일(재개)이 있다. 접혀 열리면 버튼이 언마운트된다.
+        phase === "failed" ||
+        notices.length > 0
       }
     >
       <ToolHeader
@@ -222,7 +257,26 @@ export function DeepAnalysisStatus({
                 {connectionNote}
               </Badge>
             )}
+            {phase === "failed" && (
+              <Button
+                aria-label="Resume deep analysis"
+                className="ml-auto h-7"
+                disabled={resuming}
+                onClick={() => {
+                  resume().catch(() => undefined);
+                }}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <RotateCcwIcon className="mr-1 size-3.5" />
+                {resuming ? "재개 중…" : "이어서 분석"}
+              </Button>
+            )}
           </div>
+          {resumeError && (
+            <p className="text-destructive text-xs">{resumeError}</p>
+          )}
 
           {/*
             보조기술용 라이브 영역. **항상 마운트돼 있어야 한다** — 아래 시각

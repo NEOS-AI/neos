@@ -2,6 +2,11 @@
 
 작성일: 2026-05-17  
 
+> **2026-09-27:** REST `/api/v1/query` 와 SSE `/api/v1/query/stream` 은 제거됐다
+> (`tests/api/test_retired_routes.py`). 자율성 레벨은 이제 챗 경로(`/api/chat` →
+> `/api/v1/chat/conversations/{id}/messages/stream`)로만 들어온다. 아래에서 두 경로를
+> 다루는 절은 당시 기록으로 남긴다.
+
 ## 개요
 
 Agent Control Slider는 사용자가 요청 단위로 에이전트 워크플로우의 자율성 수준을 제어하는 기능이다. 채팅 헤더의 selector에서 `Manual`, `Assisted`, `Autonomous` 중 하나를 고르면 해당 값이 프론트엔드 요청, 백엔드 API 계층, LangGraph workflow state, approval interrupt, cache key까지 전달된다.
@@ -36,7 +41,7 @@ Agent Control Slider는 사용자가 요청 단위로 에이전트 워크플로�
 Chat header selector
   -> useAgentAutonomy()
   -> localStorage + /api/autonomy-preference
-  -> /api/chat or /api/v1/query or /api/v1/query/stream
+  -> /api/chat  (~~or /api/v1/query or /api/v1/query/stream~~ 2026-09-27 제거)
   -> WorkflowService.resolve_autonomy_level()
   -> MultiAgentWorkflow._create_initial_state()
   -> AutonomyPolicy

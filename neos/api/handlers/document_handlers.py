@@ -8,21 +8,14 @@ from fastapi import (
     UploadFile,
     File,
     Form,
-    Query,
 )
-from typing import List, Optional
+from typing import Optional
 import json
 import logging
 
 from neos.api.models.document_models import (
     DocumentUploadResponse,
-    DocumentInfo,
-    DocumentListResponse,
-    ChunkInfo,
-    EntityInfo,
-    DocumentSearchRequest,
-    DocumentSearchResult,
-    DocumentSearchResponse
+    DocumentInfo
 )
 from neos.api.dependencies.auth import get_current_active_user
 from neos.api.dependencies.resource_access import get_owned_document
@@ -79,58 +72,6 @@ async def upload_document(
     except Exception as e:
         logger.error(f"Document upload failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Document upload failed")
-
-
-@router.get("/", response_model=DocumentListResponse)
-async def list_documents(
-    user_id: Optional[str] = Query(None, deprecated=True),
-    status: Optional[str] = None,
-    skip: int = 0,
-    limit: int = 100,
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    문서 목록 조회
-
-    - **user_id**: 사용자 ID (deprecated, ignored)
-    - **status**: 처리 상태 (필터)
-    - **skip**: 오프셋
-    - **limit**: 최대 개수
-    """
-    try:
-        result = await DocumentService.list_documents(
-            current_user.user_id,
-            status,
-            skip,
-            limit,
-        )
-
-        # 응답 생성
-        document_infos = []
-        for doc in result["documents"]:
-            document_infos.append(
-                DocumentInfo(
-                    id=doc.id,
-                    filename=doc.filename,
-                    original_filename=doc.original_filename,
-                    file_size=doc.file_size,
-                    mime_type=doc.mime_type,
-                    storage_provider=doc.storage_provider,
-                    storage_url=doc.storage_url,
-                    processing_status=doc.processing_status,
-                    kg_extracted=doc.kg_extracted,
-                    embedding_processed=doc.embedding_processed,
-                    fts_indexed=doc.fts_indexed,
-                    created_at=doc.created_at.isoformat(),
-                    metadata=doc.metadata or {},
-                )
-            )
-
-        return DocumentListResponse(total=result["total"], documents=document_infos)
-
-    except Exception as e:
-        logger.error(f"Failed to list documents: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to list documents")
 
 
 @router.get("/{document_id}", response_model=DocumentInfo)
@@ -196,103 +137,3 @@ async def delete_document(
     except Exception as e:
         logger.error(f"Failed to delete document: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete document")
-
-
-@router.get("/{document_id}/chunks", response_model=List[ChunkInfo])
-async def get_document_chunks(
-    document_id: int,
-    skip: int = 0,
-    limit: int = 100,
-    owned_document: Document = Depends(get_owned_document),
-):
-    """
-    문서의 청크 목록 조회
-
-    - **document_id**: 문서 ID
-    - **skip**: 오프셋
-    - **limit**: 최대 개수
-    """
-    try:
-        chunks = await DocumentService.get_document_chunks(
-            owned_document.id,
-            skip,
-            limit,
-        )
-
-        return [
-            ChunkInfo(
-                id=chunk.id,
-                chunk_index=chunk.chunk_index,
-                chunk_text=chunk.chunk_text,
-                chunk_size=chunk.chunk_size,
-                page_number=chunk.page_number,
-                chunk_type=chunk.chunk_type,
-            )
-            for chunk in chunks
-        ]
-
-    except Exception as e:
-        logger.error(f"Failed to get document chunks: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get document chunks")
-
-
-@router.get("/{document_id}/knowledge-graph", response_model=List[EntityInfo])
-async def get_document_knowledge_graph(
-    document_id: int,
-    owned_document: Document = Depends(get_owned_document),
-):
-    """
-    문서의 지식 그래프 조회
-
-    - **document_id**: 문서 ID
-    """
-    try:
-        entities = await DocumentService.get_document_knowledge_graph(
-            owned_document.id
-        )
-
-        return [
-            EntityInfo(
-                id=entity.id,
-                entity_id=entity.entity_id,
-                entity_type=entity.entity_type,
-                entity_name=entity.entity_name,
-                entity_description=entity.entity_description,
-                confidence_score=entity.confidence_score,
-                properties=entity.properties or {},
-                relations=entity.relations or [],
-            )
-            for entity in entities
-        ]
-
-    except Exception as e:
-        logger.error(f"Failed to get knowledge graph: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to get knowledge graph")
-
-
-@router.post("/search", response_model=DocumentSearchResponse)
-async def search_documents(
-    request: DocumentSearchRequest,
-    current_user: User = Depends(get_current_active_user),
-):
-    """
-    문서 검색 (시맨틱 검색)
-
-    - **query**: 검색 쿼리
-    - **top_k**: 반환할 결과 개수
-    - **user_id**: 사용자 ID (deprecated, ignored)
-    """
-    try:
-        results = await DocumentService.search_documents(
-            query=request.query,
-            top_k=request.top_k,
-            user_id=current_user.user_id,
-        )
-
-        search_results = [DocumentSearchResult(**result) for result in results]
-
-        return DocumentSearchResponse(query=request.query, results=search_results)
-
-    except Exception as e:
-        logger.error(f"Document search failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Document search failed")

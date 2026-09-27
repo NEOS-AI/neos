@@ -105,10 +105,16 @@ uv run granian --port 8518 --host 0.0.0.0 neos/main:app
 # Health check
 curl http://localhost:8518/api/v1/health
 
-# Query test
-curl -X POST http://localhost:8518/api/v1/query \
+# Chat (chat routes need a bearer token)
+TOKEN=$(curl -s -X POST http://localhost:8518/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"query": "Analyze AI trends in 2024"}'
+  -d '{"email": "you@example.com", "password": "<password>"}' | jq -r .access_token)
+CONV=$(curl -s -X POST http://localhost:8518/api/v1/chat/conversations \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "AI trends"}' | jq -r .conversation_id)
+curl -N -X POST "http://localhost:8518/api/v1/chat/conversations/$CONV/messages/stream" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Analyze AI trends in 2024"}'
 ```
 
 ### 6. Optional test suites
@@ -168,12 +174,27 @@ For more CLI examples, see [docs/CLI_GUIDE.md](./docs/CLI_GUIDE.md).
 ```python
 import requests
 
-response = requests.post(
-    "http://localhost:8518/api/v1/query",
-    json={"query": "Compare ChatGPT and Claude"}
-)
+BASE = "http://localhost:8518/api/v1"
+token = requests.post(
+    f"{BASE}/auth/login",
+    json={"email": "you@example.com", "password": "<password>"},
+).json()["access_token"]
+headers = {"Authorization": f"Bearer {token}"}
 
-print(response.json())
+conversation = requests.post(
+    f"{BASE}/chat/conversations", json={"title": "Model comparison"}, headers=headers
+).json()
+
+# SSE (OpenResponses events + neos:* extensions)
+with requests.post(
+    f"{BASE}/chat/conversations/{conversation['conversation_id']}/messages/stream",
+    json={"content": "Compare ChatGPT and Claude"},
+    headers=headers,
+    stream=True,
+) as response:
+    for line in response.iter_lines(decode_unicode=True):
+        if line.startswith("data: "):
+            print(line[6:])
 ```
 
 ### Python Code

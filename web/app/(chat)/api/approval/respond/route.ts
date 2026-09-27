@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 export async function POST(request: Request) {
   try {
@@ -9,10 +10,7 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data);
-  } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || "Approval response failed" },
-      { status: error?.status || 500 }
-    );
+  } catch (error: unknown) {
+    return bffErrorResponse(error, "Approval response failed");
   }
 }

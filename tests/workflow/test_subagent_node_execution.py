@@ -177,6 +177,16 @@ async def test_each_invocation_advances_exactly_once_until_the_child_completes()
 
 
 @pytest.mark.asyncio
+async def test_emitted_events_name_the_template_for_the_chat_screen() -> None:
+    # 챗 화면은 노드 id(`explore_web`)가 아니라 템플릿 라벨을 보여 준다.
+    # 라벨을 이벤트에 실어야 프론트가 라벨을 지어내지 않는다.
+    host, _runtime, _model, _tools, _sink, _store, emitted = _host([_text()])
+    await host.handler_for(NODE)(_state())
+    label = host._templates[NODE].label
+    assert emitted and all(payload.get("label") == label for _kind, payload in emitted)
+
+
+@pytest.mark.asyncio
 async def test_the_child_is_a_workflow_child_scoped_to_the_execution_and_never_spawns() -> None:
     host, _runtime, model, _tools, _sink, store, _emitted = _host([_text()])
     await host.handler_for(NODE)(_state("wf_scope_a"))

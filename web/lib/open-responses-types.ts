@@ -464,6 +464,23 @@ export interface NeosInlineVizErrorEvent {
   error: string;
 }
 
+/**
+ * 설계 그래프 서브에이전트 노드의 걸음·폴드 (트랙 I).
+ * 백엔드 `NeosGraphSubagentEvent` -- 보고서 본문은 싣지 않는다(미검증이라서).
+ */
+export interface NeosGraphSubagentEvent {
+  type: "neos:graph_subagent";
+  node: string;
+  label?: string | null;
+  phase: "step" | "folded";
+  status: string;
+  run_id?: string | null;
+  steps: number;
+  max_steps?: number | null;
+  exit_reason?: string | null;
+  error_code?: string | null;
+}
+
 // ============================================================================
 // Union of All Events
 // ============================================================================
@@ -502,7 +519,8 @@ export type NeosExtensionEvent =
   | NeosApprovalRequestEvent
   | NeosUIFrameEvent
   | NeosInlineVizEvent
-  | NeosInlineVizErrorEvent;
+  | NeosInlineVizErrorEvent
+  | NeosGraphSubagentEvent;
 
 /**
  * All OpenResponses events (standard + neos extensions)
@@ -668,6 +686,12 @@ export function isNeosInlineVizErrorEvent(
   event: OpenResponsesEvent
 ): event is NeosInlineVizErrorEvent {
   return event.type === "neos:inline_viz_error";
+}
+
+export function isNeosGraphSubagentEvent(
+  event: OpenResponsesEvent
+): event is NeosGraphSubagentEvent {
+  return event.type === "neos:graph_subagent";
 }
 
 // Output item type guards

@@ -25,7 +25,12 @@ import type {
   CodingApprovalView,
   CodingProjectionSnapshot,
 } from "@/features/coding/types/projection";
+import type {
+  CodingCommandListing,
+  CodingCommandResult,
+} from "@/features/coding/commands/types";
 import type { CodingSandboxStatus } from "@/features/coding/sandbox/types";
+import { backendErrorMessage } from "@/lib/backend-error";
 import type {
   WorkspaceDiff,
   WorkspaceFile,
@@ -45,34 +50,11 @@ export class CodingAPIError extends Error {
   }
 }
 
-function extractErrorMessage(
-  body: { error?: unknown; detail?: unknown },
-  fallback: string
-): string {
-  if (typeof body.error === "string" && body.error) {
-    return body.error;
-  }
-  const detail = body.detail;
-  if (typeof detail === "string" && detail) {
-    return detail;
-  }
-  if (
-    detail &&
-    typeof detail === "object" &&
-    "message" in detail &&
-    typeof detail.message === "string" &&
-    detail.message
-  ) {
-    return detail.message;
-  }
-  return fallback;
-}
-
 async function responseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => ({}));
   return new CodingAPIError(
     response.status,
-    extractErrorMessage(body, fallback)
+    backendErrorMessage(body, fallback)
   );
 }
 
@@ -166,6 +148,33 @@ export async function steerCodingTask(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not steer coding task");
+  }
+  return response.json();
+}
+
+export async function listCodingCommands(): Promise<CodingCommandListing[]> {
+  const response = await fetch("/api/coding/commands");
+  if (!response.ok) {
+    throw await responseError(response, "Could not load coding commands");
+  }
+  const body: { commands: CodingCommandListing[] } = await response.json();
+  return body.commands;
+}
+
+export async function invokeCodingCommand(
+  taskId: string,
+  text: string
+): Promise<CodingCommandResult> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not run coding command");
   }
   return response.json();
 }

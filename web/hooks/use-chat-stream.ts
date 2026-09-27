@@ -20,6 +20,11 @@ import {
   rememberActiveRun,
 } from "@/lib/deep-analysis/active-run-store";
 import { parseDeepAnalysisStarted } from "@/lib/deep-analysis/events";
+import {
+  applyReasoningDelta,
+  applyReasoningDone,
+  textPartOf,
+} from "@/lib/reasoning-parts";
 import { isAbortError } from "@/lib/stream-errors";
 import type { MessageItem, OpenResponsesEvent } from "@/lib/stream-types";
 import {
@@ -30,6 +35,7 @@ import {
   isNeosArtifactFinishEvent,
   isNeosArtifactMetaEvent,
   isNeosDeepAnalysisStartedEvent,
+  isNeosGraphSubagentEvent,
   isNeosHarnessEvent,
   isNeosInlineVizErrorEvent,
   isNeosInlineVizEvent,
@@ -38,6 +44,8 @@ import {
   isOutputItemAddedEvent,
   isOutputItemDoneEvent,
   isOutputTextDeltaEvent,
+  isReasoningContentDeltaEvent,
+  isReasoningContentDoneEvent,
   isResponseCompletedEvent,
   isResponseFailedEvent,
   isResponseInProgressEvent,
@@ -45,6 +53,7 @@ import {
 import type { AutonomyLevel, ChatMessage, HarnessMetadata } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+import { applyGraphSubagentEvent } from "@/lib/workflow-agents";
 
 // messageMetadataSchema에서 개별 inline_viz 항목 스키마 추출 (SSE 검증 재사용)
 const inlineVizEntrySchema = messageMetadataSchema.shape.inline_visualizations.unwrap().element;
@@ -388,14 +397,27 @@ export function useChatStream({
 
                 // response.output_text.delta - 텍스트 증분
                 else if (isOutputTextDeltaEvent(eventData)) {
-                  const textPart = assistantMessage.parts[0];
-                  if (textPart.type === "text") {
+                  // 사고 과정 파트가 앞에 끼일 수 있어 `parts[0]` 이 텍스트라고
+                  // 가정하지 않는다(`lib/reasoning-parts.ts`).
+                  const textPart = textPartOf(assistantMessage.parts);
+                  if (textPart) {
                     textPart.text += eventData.delta;
                   }
                   updateMessage();
                   if (onData) {
                     onData({ type: "text_delta", delta: eventData.delta });
                   }
+                }
+
+                // response.reasoning.delta / .done - 모델 사고 과정.
+                // 백엔드는 줄곧 보냈고 `message.tsx` 도 그릴 줄 알았는데 이 훅이
+                // 받지 않아 버려지고 있었다(chat_stream_event_types.json).
+                else if (isReasoningContentDeltaEvent(eventData)) {
+                  applyReasoningDelta(assistantMessage.parts, eventData.delta);
+                  updateMessage();
+                } else if (isReasoningContentDoneEvent(eventData)) {
+                  applyReasoningDone(assistantMessage.parts, eventData.text);
+                  updateMessage();
                 }
 
                 // response.output_item.added - 새 아이템 추가
@@ -704,6 +726,20 @@ export function useChatStream({
                   console.warn(
                     `[InlineViz] ${eventData.tool_name} 렌더링 실패: ${eventData.error}`
                   );
+                }
+
+                // neos:graph_subagent - 설계 그래프 서브에이전트 노드의 걸음·폴드.
+                // 노드별 한 줄로 쌓고, 카드(`message.tsx`)가 같은 노드의 워크플로우
+                // 항목 안에 그린다.
+                else if (isNeosGraphSubagentEvent(eventData)) {
+                  if (!assistantMessage.metadata) {
+                    assistantMessage.metadata = { createdAt: new Date().toISOString() };
+                  }
+                  assistantMessage.metadata.graph_subagents = applyGraphSubagentEvent(
+                    assistantMessage.metadata.graph_subagents,
+                    eventData
+                  );
+                  updateMessage();
                 }
               }
             } catch (parseError) {

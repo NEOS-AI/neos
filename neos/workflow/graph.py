@@ -831,6 +831,7 @@ class MultiAgentWorkflow:
         user_input: Dict[str, Any],
         use_checkpointer: bool,
         span: Any,
+        event_handler: Any = None,
     ) -> ExecutionGraph:
         """이번 호출이 실행할 그래프를 정한다.
 
@@ -970,7 +971,7 @@ class MultiAgentWorkflow:
                     )
                     return static
                 try:
-                    subagent_host = self._build_subagent_host(span)
+                    subagent_host = self._build_subagent_host(span, event_handler)
                 except Exception as exc:  # noqa: BLE001
                     self._record_design_events(
                         (
@@ -1069,18 +1070,22 @@ class MultiAgentWorkflow:
         prompt_path = Path(__file__).parent / "prompts" / "graph_design.md"
         return LlmGraphDesigner(model=llm, prompt_path=prompt_path)
 
-    def _build_subagent_host(self, span: Any) -> Any:
+    def _build_subagent_host(self, span: Any, event_handler: Any = None) -> Any:
         """트랙 I 템플릿 노드를 구동할 호스트. 실행 하나에 하나 (세마포어가 실행당이다).
 
         설계자와 같은 배포 프로바이더를 쓴다. 모델은 템플릿 역할로 첫 걸음에서 한 번
         해석된다. 테스트는 이 메서드를 가짜 런타임을 쥔 호스트로 바꾼다.
         """
-        from .subagent_nodes import build_workflow_subagent_host
+        from . import subagent_nodes
+        from .events import forward_graph_subagent_event
 
         def _emit(kind: str, payload: Dict[str, Any]) -> None:
             self._record_design_events((LedgerEvent(kind=kind, payload=payload),), span)
+            # 챗 화면(`neos:graph_subagent`)에도 넘긴다. 원장 기록이 먼저다 --
+            # 스트림 쪽 실패는 삼켜지고 원장에는 영향이 없다.
+            forward_graph_subagent_event(event_handler, kind, payload)
 
-        return build_workflow_subagent_host(
+        return subagent_nodes.build_workflow_subagent_host(
             provider=settings.LLM_PROVIDER,
             max_active=settings.config.workflow.subagent_max_active,
             emit=_emit,
@@ -2855,6 +2860,7 @@ class MultiAgentWorkflow:
                     user_input=user_input,
                     use_checkpointer=use_checkpointer,
                     span=span,
+                    event_handler=event_handler,
                 )
 
                 # 재개(`approval_handlers`)가 읽을 유일한 근거를 상태에 싣는다.

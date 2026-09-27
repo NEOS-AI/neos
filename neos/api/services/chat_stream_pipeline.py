@@ -28,6 +28,7 @@ from neos.api.adapters.stream_adapter import (
     create_stream_generator,
     format_done_token,
     format_sse_event,
+    graph_subagent_event_from,
     parse_harness_progress_event,
 )
 from neos.api.models.open_responses import (
@@ -151,6 +152,8 @@ class _WorkflowCtx:
     result: Optional[Dict[str, Any]] = None
     agents: List[Dict[str, Any]] = field(default_factory=list)
     approval_requests: List[Dict[str, Any]] = field(default_factory=list)
+    # 노드 → 마지막 `neos:graph_subagent` (본문 없음). 새로고침 후 카드가 읽는다.
+    graph_subagents: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class ChatStreamPipeline:
@@ -355,6 +358,8 @@ class ChatStreamPipeline:
                 message_metadata["attachment_notices"] = acc.attachment_notices
             if wf_ctx.agents:
                 message_metadata["workflow_agents"] = wf_ctx.agents
+            if wf_ctx.graph_subagents:
+                message_metadata["graph_subagents"] = list(wf_ctx.graph_subagents.values())
             workflow_metadata = (wf_ctx.result or {}).get("metadata") or {}
             if workflow_metadata.get("mission_id"):
                 message_metadata["mission"] = {
@@ -527,7 +532,7 @@ class ChatStreamPipeline:
                         # 하네스 카드가 켜지지 않고, 날 JSON이 진행 메시지로 샌다.
                         #
                         # ⚠️ `on_node_progress`는 `agent_progress`로 발행한다
-                        # (`workflow_stream_handlers.py:202`). `node_progress`를
+                        # (`WorkflowStreamCallback.on_node_progress`). `node_progress`를
                         # 기다리면 영원히 오지 않는다 — 그 이름은 DB 로깅용이다.
                         harness_event = parse_harness_progress_event(
                             node_name=event.node_name,
@@ -558,6 +563,15 @@ class ChatStreamPipeline:
                                 "assistant_message_id"
                             ),
                         ))
+
+                    # 트랙 I: 설계 그래프 서브에이전트 노드의 걸음·폴드. 본문은
+                    # 싣지 않는다 -- 허용 목록 변환이 `graph_subagent_event_from` 에 있다.
+                    elif event.event == "graph_subagent":
+                        subagent_event = graph_subagent_event_from(event.data or {})
+                        wf_ctx.graph_subagents[subagent_event.node] = (
+                            subagent_event.model_dump(exclude={"type"})
+                        )
+                        yield format_sse_event(subagent_event)
 
                     elif event.event == "approval_request":
                         pending_approvals = event.data.get("pending_approvals", [])
