@@ -172,3 +172,131 @@ def test_empty_registry_fails_the_run_and_a_lost_claim_does_not() -> None:
     )
     assert failed == "no_evaluator"
     assert calls["fail"] == 1
+
+
+def test_registered_evaluator_stages_an_overlay() -> None:
+    import asyncio
+
+    import neos.tasks.gepa_opt_job_task as job
+    from neos.gepa_opt.evaluators import clear_evaluators, register_evaluator
+
+    clear_evaluators()
+
+    def score(_candidate, _example):
+        return (1.0, {"ok": True})
+
+    register_evaluator("coding_overlay", score)
+    staged: list[dict] = []
+
+    class _Store:
+        async def claim(self, *_args):
+            return True
+
+        async def fail_run(self, *_args):
+            raise AssertionError("a perfect seed should stage, not fail")
+
+        async def load_bundle(self, _run_id, _owner):
+            return {
+                "seed": {"instr": "a"},
+                "train": [{"id": "t"}],
+                "val": [{"id": "v"}],
+                "test": [],
+                "engine_label": "gepa",
+                "pareto_enabled": True,
+                "max_evals": 3,
+                "max_token_cost": 10,
+                "component_cursor": 0,
+                "seed_candidate_id": "seed-1",
+                "surface": "coding_overlay",
+            }
+
+        async def stage_overlay(self, **kwargs):
+            staged.append(kwargs)
+
+        async def mark_succeeded(self, *_args):
+            return None
+
+    def reflector(*_args):
+        raise AssertionError("perfect minibatch must not reflect")
+
+    outcome = asyncio.run(
+        job.execute_gepa_opt_job(
+            _Store(),
+            run_id="run-1",
+            owner_namespace="owner:1",
+            celery_task_id="task-1",
+            reflector=reflector,
+        )
+    )
+    assert outcome == "staged"
+    assert staged[0]["candidate_id"] == "seed-1"
+    assert staged[0]["owner_namespace"] == "owner:1"
+    clear_evaluators()
+
+
+def test_accepted_child_is_committed_before_it_is_staged() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    import neos.tasks.gepa_opt_job_task as job
+    from neos.gepa_opt.evaluators import clear_evaluators, register_evaluator
+
+    clear_evaluators()
+
+    def score(candidate, _example):
+        return (0.9 if candidate["instr"] == "b" else 0.2, {"note": "x"})
+
+    register_evaluator("coding_overlay", score)
+    staged: list[dict] = []
+
+    class _Store:
+        async def claim(self, *_args):
+            return True
+
+        async def fail_run(self, *_args):
+            raise AssertionError("accepted child should stage")
+
+        async def load_bundle(self, _run_id, _owner):
+            return {
+                "seed": {"instr": "a"},
+                "train": [{"id": "t"}],
+                "val": [{"id": "v"}],
+                "test": [],
+                "engine_label": "not-gepa",
+                "pareto_enabled": False,
+                "max_evals": 20,
+                "max_token_cost": 100,
+                "component_cursor": 0,
+                "seed_candidate_id": "seed-1",
+                "surface": "coding_overlay",
+            }
+
+        async def commit_iteration(self, **_kwargs):
+            return "child-1"
+
+        async def stage_overlay(self, **kwargs):
+            staged.append(kwargs)
+
+        async def mark_succeeded(self, *_args):
+            return None
+
+    def reflector(name, _curr, _side):
+        return SimpleNamespace(
+            component_name=name,
+            delta={"instr": "b"},
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1, finish_reason="stop"),
+            text="```\nb\n```",
+        )
+
+    outcome = asyncio.run(
+        job.execute_gepa_opt_job(
+            _Store(),
+            run_id="run-1",
+            owner_namespace="owner:1",
+            celery_task_id="task-1",
+            reflector=reflector,
+        )
+    )
+    assert outcome == "staged"
+    assert staged[0]["candidate_id"] == "child-1"
+    clear_evaluators()

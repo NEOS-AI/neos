@@ -12,6 +12,14 @@ from sqlalchemy import text
 SessionFactory = Callable[[], Awaitable[Any]]
 
 
+def _mapping(row: Any) -> dict[str, Any]:
+    if row is None:
+        raise LookupError("gepa opt row is missing for this owner")
+    if isinstance(row, Mapping):
+        return dict(row)
+    return dict(row._mapping)
+
+
 class GepaOptStore:
     """Every method filters on owner_namespace. A read by id alone is not offered."""
 
@@ -220,6 +228,85 @@ class GepaOptStore:
                     },
                 )
         return candidate_id
+
+    async def load_bundle(self, run_id: str, owner_namespace: str) -> dict[str, Any]:
+        """Seed, splits, and budgets for one owner-scoped run."""
+        async with await self._session_factory() as session:
+            run_result = await session.execute(
+                text(
+                    """
+                    SELECT engine_label, pareto_enabled, max_evals, max_token_cost,
+                           component_cursor, seed_candidate_id, surface
+                    FROM gepa_opt_runs
+                    WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                    """
+                ),
+                {"run_id": run_id, "owner_namespace": owner_namespace},
+            )
+            example_result = await session.execute(
+                text(
+                    """
+                    SELECT split, payload
+                    FROM gepa_opt_examples
+                    WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                    ORDER BY split, ordinal
+                    """
+                ),
+                {"run_id": run_id, "owner_namespace": owner_namespace},
+            )
+            run = _mapping(run_result.mappings().first())
+            seed_result = await session.execute(
+                text(
+                    """
+                    SELECT components
+                    FROM gepa_opt_candidates
+                    WHERE candidate_id = :candidate_id AND owner_namespace = :owner_namespace
+                    """
+                ),
+                {
+                    "candidate_id": run["seed_candidate_id"],
+                    "owner_namespace": owner_namespace,
+                },
+            )
+            seed_row = _mapping(seed_result.mappings().first())
+            example_rows = list(example_result.mappings().all())
+        seed = seed_row["components"]
+        if isinstance(seed, str):
+            seed = json.loads(seed)
+        grouped: dict[str, list[dict[str, Any]]] = {"train": [], "val": [], "test": []}
+        for row in example_rows:
+            payload = row["payload"]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            grouped[str(row["split"])].append(dict(payload))
+        return {
+            "seed": {str(key): str(value) for key, value in dict(seed).items()},
+            "train": grouped["train"],
+            "val": grouped["val"],
+            "test": grouped["test"],
+            "engine_label": run["engine_label"],
+            "pareto_enabled": run["pareto_enabled"],
+            "max_evals": run["max_evals"],
+            "max_token_cost": run["max_token_cost"],
+            "component_cursor": run["component_cursor"],
+            "seed_candidate_id": run["seed_candidate_id"],
+            "surface": run["surface"],
+        }
+
+    async def mark_succeeded(self, run_id: str, owner_namespace: str) -> None:
+        """Close a run that staged an overlay."""
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE gepa_opt_runs
+                        SET status = 'succeeded', finished_at = now(), updated_at = now()
+                        WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {"run_id": run_id, "owner_namespace": owner_namespace},
+                )
 
     async def fail_run(self, run_id: str, owner_namespace: str, error_code: str) -> None:
         """Mark the run failed. Does not insert an overlay."""
