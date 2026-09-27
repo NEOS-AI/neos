@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from neos.gepa_opt.evaluators import clear_evaluators, get_evaluator, register_evaluator
-from neos.gepa_opt.store import GepaOptStore
+from neos.gepa_opt.store import GepaOptStore, _example_item
 
 pytestmark = pytest.mark.no_db
 
@@ -16,9 +16,24 @@ _MIGRATION = (
 )
 
 
+class _Mappings:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[dict]:
+        return list(self._rows)
+
+    def first(self) -> dict | None:
+        return self._rows[0] if self._rows else None
+
+
 class _Result:
-    def __init__(self, rowcount: int) -> None:
+    def __init__(self, rowcount: int, rows: list[dict] | None = None) -> None:
         self.rowcount = rowcount
+        self._rows = rows or []
+
+    def mappings(self) -> _Mappings:
+        return _Mappings(self._rows)
 
 
 class _Begin:
@@ -34,17 +49,18 @@ class _Begin:
 
 
 class FakeSession:
-    def __init__(self, rowcount: int = 1) -> None:
+    def __init__(self, rowcount: int = 1, rows: list[dict] | None = None) -> None:
         self.statements: list[tuple[str, dict | None]] = []
         self.begins = 0
         self._rowcount = rowcount
+        self._rows = rows or []
 
     def begin(self) -> _Begin:
         return _Begin(self)
 
     async def execute(self, stmt: object, params: dict | None = None) -> _Result:
         self.statements.append((str(stmt), params))
-        return _Result(self._rowcount)
+        return _Result(self._rowcount, self._rows)
 
 
 class _Conn:
@@ -157,9 +173,23 @@ async def test_fail_run_does_not_insert_an_overlay() -> None:
     assert "error_code" in joined
 
 
+def test_example_item_attaches_the_id_column() -> None:
+    item = _example_item({"example_id": "ex-1", "split": "val", "payload": {"id": "v"}})
+    assert item["example_id"] == "ex-1"
+    assert item["split"] == "val"
+    assert item["id"] == "v"
+
+
 @pytest.mark.asyncio
 async def test_approve_locks_in_overlay_id_order_and_archives_first() -> None:
-    session = FakeSession()
+    session = FakeSession(
+        rows=[
+            {
+                "overlay_id": "33333333-3333-3333-3333-333333333333",
+                "status": "staged",
+            }
+        ]
+    )
     store = GepaOptStore(_factory(session))
     await store.approve("33333333-3333-3333-3333-333333333333", "user-1", "owner:1")
     sql = _sql(session)
@@ -169,6 +199,16 @@ async def test_approve_locks_in_overlay_id_order_and_archives_first() -> None:
     assert "order by overlay_id" in sql[lock_at]
     assert lock_at < archive_at < approve_at
     assert session.statements[approve_at][1]["actor"] == "user-1"
+    assert "status = 'staged'" in sql[approve_at]
+
+
+@pytest.mark.asyncio
+async def test_approve_refuses_a_row_that_is_not_staged() -> None:
+    session = FakeSession(rows=[{"overlay_id": "other", "status": "approved"}])
+    store = GepaOptStore(_factory(session))
+    with pytest.raises(ValueError, match="staged"):
+        await store.approve("33333333-3333-3333-3333-333333333333", "user-1", "owner:1")
+    assert not any("set status = 'archived'" in statement for statement in _sql(session))
 
 
 @pytest.mark.asyncio

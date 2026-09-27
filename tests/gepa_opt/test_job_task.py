@@ -327,6 +327,19 @@ def test_soft_time_limit_retries_without_staging() -> None:
     assert "stage_overlay" not in source
 
 
+def test_soft_time_limit_exhausted_fails_without_an_overlay() -> None:
+    import neos.tasks.gepa_opt_job_task as job
+
+    class _Self:
+        def retry(self, **_kwargs):
+            raise job.SoftTimeLimitExceeded()
+
+    assert job._retry_after_soft_limit(_Self(), job.SoftTimeLimitExceeded()) == "exhausted"
+    source = inspect.getsource(job.run_gepa_opt_job)
+    assert 'fail_run(run_id, owner_namespace, "soft_time_limit")' in source
+    assert "stage_overlay" not in source
+
+
 def test_resume_does_not_rescore_the_seed_valset() -> None:
     import asyncio
 

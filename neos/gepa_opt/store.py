@@ -44,6 +44,17 @@ def _candidate_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _example_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the JSON payload and attach the example id column the scorer needs."""
+    payload = row["payload"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    item = dict(payload)
+    item["example_id"] = str(row["example_id"])
+    item["split"] = str(row["split"])
+    return item
+
+
 def _mapping(row: Any) -> dict[str, Any]:
     if row is None:
         raise LookupError("gepa opt row is missing for this owner")
@@ -298,7 +309,7 @@ class GepaOptStore:
             example_result = await session.execute(
                 text(
                     """
-                    SELECT split, payload
+                    SELECT example_id, split, payload
                     FROM gepa_opt_examples
                     WHERE run_id = :run_id AND owner_namespace = :owner_namespace
                     ORDER BY split, ordinal
@@ -356,10 +367,7 @@ class GepaOptStore:
             seed = json.loads(seed)
         grouped: dict[str, list[dict[str, Any]]] = {"train": [], "val": [], "test": []}
         for row in example_rows:
-            payload = row["payload"]
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            grouped[str(row["split"])].append(dict(payload))
+            grouped[str(row["split"])].append(_example_item(row))
         return {
             "seed": {str(key): str(value) for key, value in dict(seed).items()},
             "train": grouped["train"],
@@ -476,14 +484,14 @@ class GepaOptStore:
             raise ValueError("approve requires an actor")
         async with await self._session_factory() as session:
             async with session.begin():
-                await session.execute(
+                locked = await session.execute(
                     text(
                         """
-                        SELECT overlay_id
+                        SELECT overlay_id, status
                         FROM gepa_opt_overlays
                         WHERE owner_namespace = :owner_namespace
                           AND (
-                            overlay_id = :overlay_id
+                            (overlay_id = :overlay_id AND status = 'staged')
                             OR status = 'approved'
                           )
                         ORDER BY overlay_id
@@ -492,6 +500,13 @@ class GepaOptStore:
                     ),
                     {"owner_namespace": owner_namespace, "overlay_id": overlay_id},
                 )
+                rows = locked.mappings().all() if hasattr(locked, "mappings") else []
+                staged = any(
+                    str(row["overlay_id"]) == overlay_id and row["status"] == "staged"
+                    for row in rows
+                )
+                if not staged:
+                    raise ValueError("approve requires a staged overlay")
                 await session.execute(
                     text(
                         """
@@ -509,7 +524,9 @@ class GepaOptStore:
                         """
                         UPDATE gepa_opt_overlays
                         SET status = 'approved', approved_by = :actor, approved_at = now()
-                        WHERE overlay_id = :overlay_id AND owner_namespace = :owner_namespace
+                        WHERE overlay_id = :overlay_id
+                          AND owner_namespace = :owner_namespace
+                          AND status = 'staged'
                         """
                     ),
                     {

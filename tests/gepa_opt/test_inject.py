@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from neos.config.settings import settings
-from neos.gepa_opt.inject import coding_turn_overlay
+from neos.gepa_opt.inject import coding_turn_overlay, load_approved_components
 
 pytestmark = pytest.mark.no_db
 
@@ -67,6 +67,27 @@ async def test_component_you_must_sentence_is_kept(monkeypatch: pytest.MonkeyPat
     result = await coding_turn_overlay("code", "owner")
     assert sentence in result
     assert "may be stale" not in result
+
+
+async def test_missing_store_leaves_the_prompt_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.config.learn, "gepa_overlay", True)
+    monkeypatch.setattr(
+        "neos.learn.lessons.resolve_lesson_session_factory",
+        lambda: None,
+    )
+    assert await load_approved_components("owner") is None
+    assert await coding_turn_overlay("code", "owner") == "code"
+
+
+async def test_store_errors_leave_the_prompt_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings.config.learn, "gepa_overlay", True)
+
+    def _boom() -> None:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("neos.learn.lessons.resolve_lesson_session_factory", _boom)
+    assert await load_approved_components("owner") is None
+    assert await coding_turn_overlay("code", "owner") == "code"
 
 
 def test_stepper_does_not_reference_coding_turn_overlay() -> None:

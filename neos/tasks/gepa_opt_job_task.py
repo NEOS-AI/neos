@@ -55,7 +55,9 @@ def run_gepa_opt_job(self, run_id: str, owner_namespace: str) -> str:
             )
         )
     except SoftTimeLimitExceeded as exc:
-        _retry_after_soft_limit(self, exc)
+        if _retry_after_soft_limit(self, exc) == "exhausted":
+            asyncio.run(store.fail_run(run_id, owner_namespace, "soft_time_limit"))
+            return "soft_time_limit"
 
 
 async def execute_gepa_opt_job(
@@ -142,9 +144,12 @@ async def execute_gepa_opt_job(
     return "staged"
 
 
-def _retry_after_soft_limit(task: Any, exc: BaseException) -> None:
-    """Ask Celery to resume. The retry does not insert an overlay."""
-    raise task.retry(exc=exc, countdown=0)
+def _retry_after_soft_limit(task: Any, exc: BaseException) -> str | None:
+    """Ask Celery to resume. Exhausted retries return ``exhausted`` and insert no overlay."""
+    try:
+        raise task.retry(exc=exc, countdown=0)
+    except SoftTimeLimitExceeded:
+        return "exhausted"
 
 
 def _model_reflector(run_id: str):
