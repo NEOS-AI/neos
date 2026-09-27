@@ -215,6 +215,9 @@ class GepaOptStore:
         scores: Sequence[Mapping[str, Any]],
         advance_cursor: bool,
         best_candidate_id: str | None,
+        evals_used: int | None = None,
+        tokens_used: int | None = None,
+        wins_best: bool = False,
     ) -> str:
         """Insert one proposal and its scores, then bump iteration, in one transaction."""
         candidate_id = str(candidate.get("candidate_id") or uuid.uuid4())
@@ -247,37 +250,19 @@ class GepaOptStore:
                         "test_mean": candidate.get("test_mean"),
                     },
                 )
-                for score in scores:
-                    await session.execute(
-                        text(
-                            """
-                            INSERT INTO gepa_opt_example_scores (
-                                score_id, candidate_id, example_id, owner_namespace,
-                                split, phase, score, side_info
-                            ) VALUES (
-                                :score_id, :candidate_id, :example_id, :owner_namespace,
-                                :split, :phase, :score, CAST(:side_info AS jsonb)
-                            )
-                            """
-                        ),
-                        {
-                            "score_id": str(uuid.uuid4()),
-                            "candidate_id": candidate_id,
-                            "example_id": score["example_id"],
-                            "owner_namespace": owner_namespace,
-                            "split": score["split"],
-                            "phase": score["phase"],
-                            "score": score["score"],
-                            "side_info": json.dumps(dict(score["side_info"])),
-                        },
-                    )
+                await self._insert_scores(session, candidate_id, owner_namespace, scores)
                 await session.execute(
                     text(
                         """
                         UPDATE gepa_opt_runs
                         SET iteration = iteration + 1,
                             component_cursor = component_cursor + CASE WHEN :advance THEN 1 ELSE 0 END,
-                            best_candidate_id = COALESCE(:best_candidate_id, best_candidate_id),
+                            evals_used = COALESCE(:evals_used, evals_used),
+                            reflector_tokens_used = COALESCE(:tokens_used, reflector_tokens_used),
+                            best_candidate_id = CASE
+                                WHEN :wins_best THEN :candidate_id
+                                ELSE COALESCE(:best_candidate_id, best_candidate_id)
+                            END,
                             updated_at = now()
                         WHERE run_id = :run_id AND owner_namespace = :owner_namespace
                         """
@@ -285,11 +270,153 @@ class GepaOptStore:
                     {
                         "advance": advance_cursor,
                         "best_candidate_id": best_candidate_id,
+                        "evals_used": evals_used,
+                        "tokens_used": tokens_used,
+                        "wins_best": wins_best,
+                        "candidate_id": candidate_id,
                         "run_id": run_id,
                         "owner_namespace": owner_namespace,
                     },
                 )
         return candidate_id
+
+    async def record_seed_evaluation(
+        self,
+        *,
+        run_id: str,
+        owner_namespace: str,
+        candidate_id: str,
+        val_mean: float | None,
+        scores: Sequence[Mapping[str, Any]],
+        evals_used: int,
+        tokens_used: int,
+    ) -> None:
+        """Store the seed val scores and mark that candidate best when none is set."""
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE gepa_opt_candidates
+                        SET val_mean = :val_mean
+                        WHERE candidate_id = :candidate_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {
+                        "val_mean": val_mean,
+                        "candidate_id": candidate_id,
+                        "owner_namespace": owner_namespace,
+                    },
+                )
+                await self._insert_scores(session, candidate_id, owner_namespace, scores)
+                await session.execute(
+                    text(
+                        """
+                        UPDATE gepa_opt_runs
+                        SET evals_used = :evals_used,
+                            reflector_tokens_used = :tokens_used,
+                            best_candidate_id = COALESCE(best_candidate_id, :candidate_id),
+                            updated_at = now()
+                        WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {
+                        "evals_used": evals_used,
+                        "tokens_used": tokens_used,
+                        "candidate_id": candidate_id,
+                        "run_id": run_id,
+                        "owner_namespace": owner_namespace,
+                    },
+                )
+
+    async def advance_cursor(
+        self,
+        *,
+        run_id: str,
+        owner_namespace: str,
+        evals_used: int,
+        tokens_used: int,
+    ) -> None:
+        """Bump the component cursor with no candidate row."""
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE gepa_opt_runs
+                        SET component_cursor = component_cursor + 1,
+                            evals_used = :evals_used,
+                            reflector_tokens_used = :tokens_used,
+                            updated_at = now()
+                        WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {
+                        "evals_used": evals_used,
+                        "tokens_used": tokens_used,
+                        "run_id": run_id,
+                        "owner_namespace": owner_namespace,
+                    },
+                )
+
+    async def record_test_scores(
+        self,
+        *,
+        owner_namespace: str,
+        candidate_id: str,
+        test_mean: float | None,
+        scores: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Store held-out test scores for one committed candidate."""
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text(
+                        """
+                        UPDATE gepa_opt_candidates
+                        SET test_mean = :test_mean
+                        WHERE candidate_id = :candidate_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {
+                        "test_mean": test_mean,
+                        "candidate_id": candidate_id,
+                        "owner_namespace": owner_namespace,
+                    },
+                )
+                await self._insert_scores(session, candidate_id, owner_namespace, scores)
+
+    async def _insert_scores(
+        self,
+        session: Any,
+        candidate_id: str,
+        owner_namespace: str,
+        scores: Sequence[Mapping[str, Any]],
+    ) -> None:
+        for score in scores:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO gepa_opt_example_scores (
+                        score_id, candidate_id, example_id, owner_namespace,
+                        split, phase, score, side_info
+                    ) VALUES (
+                        :score_id, :candidate_id, :example_id, :owner_namespace,
+                        :split, :phase, :score, CAST(:side_info AS jsonb)
+                    )
+                    """
+                ),
+                {
+                    "score_id": str(uuid.uuid4()),
+                    "candidate_id": candidate_id,
+                    "example_id": score["example_id"],
+                    "owner_namespace": owner_namespace,
+                    "split": score["split"],
+                    "phase": score["phase"],
+                    "score": score["score"],
+                    "side_info": json.dumps(dict(score["side_info"])),
+                },
+            )
 
     async def load_bundle(self, run_id: str, owner_namespace: str) -> dict[str, Any]:
         """Seed, splits, and budgets for one owner-scoped run."""

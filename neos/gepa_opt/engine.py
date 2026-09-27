@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from neos.gepa_opt.reflect import ParseSkip, cap_side_info, parse_proposal, rend
 from neos.gepa_opt.types import Candidate, EngineConfig, validate_candidate
 
 _MINIBATCH = 3
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,6 +48,8 @@ async def run_search(
     start_iteration: int = 0,
     evals_used: int = 0,
     tokens_used: int = 0,
+    journal: Any = None,
+    seed_candidate_id: str | None = None,
 ) -> SearchResult:
     """Run one GEPA or not-gepa search. The reflector may be sync or async.
 
@@ -63,6 +67,21 @@ async def run_search(
                 "empty_train", candidates, cursor, start_iteration, evals_used, tokens_used, score_rows
             )
         if config.pareto:
+            scored = await _score_seed_if_missing(
+                candidates,
+                val=val,
+                evaluator=evaluator,
+                score_rows=score_rows,
+                evals_used=evals_used,
+                tokens_used=tokens_used,
+                journal=journal,
+                seed_candidate_id=seed_candidate_id,
+                cursor=cursor,
+                iteration=start_iteration,
+            )
+            if isinstance(scored, SearchResult):
+                return scored
+            evals_used = scored
             return await _pareto_loop(
                 config=config,
                 train=train,
@@ -78,6 +97,7 @@ async def run_search(
                 evals_used=evals_used,
                 tokens_used=tokens_used,
                 iteration=start_iteration,
+                journal=journal,
             )
         return _failed(
             "resume_requires_gepa",
@@ -103,17 +123,19 @@ async def run_search(
             score_rows,
         )
 
-    candidates.append(
-        _candidate(
-            "seed",
-            seed_components,
-            accepted=True,
-            reject_reason=None,
-            val_mean=_mean(val_scores),
-            val_subscores=val_scores,
-            iteration=0,
-        )
+    seed_row = _candidate(
+        "seed",
+        seed_components,
+        accepted=True,
+        reject_reason=None,
+        val_mean=_mean(val_scores),
+        val_subscores=val_scores,
+        iteration=0,
     )
+    if seed_candidate_id:
+        seed_row["candidate_id"] = str(seed_candidate_id)
+    candidates.append(seed_row)
+    await _journal_seed(journal, seed_row, score_rows, evals_used, tokens_used)
     if len(train) == 0:
         return _failed("empty_train", candidates, cursor, 0, evals_used, tokens_used, score_rows)
 
@@ -132,6 +154,11 @@ async def run_search(
             cursor=cursor,
             evals_used=evals_used,
             tokens_used=tokens_used,
+            journal=journal,
+        )
+    if evals_used >= max_evals or tokens_used >= max_token_cost:
+        return await _succeed(
+            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows, journal
         )
     return await _oneshot(
         config=config,
@@ -146,6 +173,7 @@ async def run_search(
         cursor=cursor,
         evals_used=evals_used,
         tokens_used=tokens_used,
+        journal=journal,
     )
 
 
@@ -165,7 +193,9 @@ async def _pareto_loop(
     evals_used: int,
     tokens_used: int,
     iteration: int = 0,
+    journal: Any = None,
 ) -> SearchResult:
+    best_mean = _best_mean(candidates)
     while evals_used < max_evals and tokens_used < max_token_cost:
         try:
             parent_index = select_parent(*_fronts(candidates, len(val)), random.Random(0))
@@ -173,7 +203,8 @@ async def _pareto_loop(
             return _failed(
                 "empty_front", candidates, cursor, iteration, evals_used, tokens_used, score_rows
             )
-        parent = candidates[parent_index]["components"]
+        parent_row = candidates[parent_index]
+        parent = parent_row["components"]
         batch = _minibatch_indexes(len(train), iteration)
         parent_scores, parent_infos, evals_used = _score_examples(
             evaluator,
@@ -186,6 +217,7 @@ async def _pareto_loop(
         if parent_scores and min(parent_scores) >= 1.0:
             continue
         if _all_empty(parent_infos):
+            _LOG.info("gepa_opt.no_trace")
             continue
         if _all_errors(parent_infos):
             return _failed(
@@ -219,6 +251,7 @@ async def _pareto_loop(
         parsed = parse_proposal(reflected.text, _finish_reason(reflected))
         if isinstance(parsed, ParseSkip):
             cursor += 1
+            await _journal_cursor(journal, evals_used, tokens_used)
             continue
         if reflected.delta != {component_name: parsed}:
             return _failed(
@@ -240,32 +273,35 @@ async def _pareto_loop(
             full_scores, _, evals_used = _score_examples(
                 evaluator, child, val, evals_used, score_rows, phase="full_val"
             )
-            candidates.append(
-                _candidate(
-                    "reflective",
-                    child,
-                    accepted=True,
-                    reject_reason=None,
-                    val_mean=_mean(full_scores),
-                    val_subscores=full_scores,
-                    iteration=iteration,
-                )
+            row = _candidate(
+                "reflective",
+                child,
+                accepted=True,
+                reject_reason=None,
+                val_mean=_mean(full_scores),
+                val_subscores=full_scores,
+                iteration=iteration,
             )
+            wins = row["val_mean"] is not None and (best_mean is None or row["val_mean"] > best_mean)
+            if wins:
+                best_mean = row["val_mean"]
         else:
             reason = "length_mismatch" if len(parent_scores) != len(child_scores) else "not_strict"
-            candidates.append(
-                _candidate(
-                    "reflective",
-                    child,
-                    accepted=False,
-                    reject_reason=reason,
-                    val_mean=None,
-                    val_subscores=None,
-                    iteration=iteration,
-                )
+            row = _candidate(
+                "reflective",
+                child,
+                accepted=False,
+                reject_reason=reason,
+                val_mean=None,
+                val_subscores=None,
+                iteration=iteration,
             )
-    return _succeed(
-        candidates, test, evaluator, cursor, iteration, evals_used, tokens_used, score_rows
+            wins = False
+        row["parent_id"] = parent_row.get("candidate_id")
+        await _journal_candidate(journal, row, score_rows, wins, evals_used, tokens_used)
+        candidates.append(row)
+    return await _succeed(
+        candidates, test, evaluator, cursor, iteration, evals_used, tokens_used, score_rows, journal
     )
 
 
@@ -283,8 +319,10 @@ async def _oneshot(
     cursor: int,
     evals_used: int,
     tokens_used: int,
+    journal: Any = None,
 ) -> SearchResult:
-    parent = candidates[0]["components"]
+    parent_row = candidates[0]
+    parent = parent_row["components"]
     batch = _minibatch_indexes(len(train), 0)
     parent_scores, parent_infos, evals_used = _score_examples(
         evaluator,
@@ -298,9 +336,14 @@ async def _oneshot(
         return _failed(
             _error_name(parent_infos), candidates, cursor, 0, evals_used, tokens_used, score_rows
         )
+    if parent_scores and min(parent_scores) >= 1.0:
+        return await _succeed(
+            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows, journal
+        )
     if _all_empty(parent_infos):
-        return _succeed(
-            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows
+        _LOG.info("gepa_opt.no_trace")
+        return await _succeed(
+            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows, journal
         )
     names = sorted(parent)
     component_name = names[cursor % len(names)]
@@ -315,8 +358,6 @@ async def _oneshot(
         )
     usage = reflected.usage
     tokens_used += int(usage.input_tokens) + int(usage.output_tokens)
-    if tokens_used > max_token_cost:
-        tokens_used = tokens_used
     parsed = parse_proposal(reflected.text, _finish_reason(reflected))
     if isinstance(parsed, ParseSkip) or reflected.delta != {component_name: parsed}:
         code = "bad_delta" if not isinstance(parsed, ParseSkip) else None
@@ -325,47 +366,52 @@ async def _oneshot(
                 "bad_delta", candidates, cursor, 0, evals_used, tokens_used, score_rows
             )
         cursor += 1
-        return _succeed(
-            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows
+        await _journal_cursor(journal, evals_used, tokens_used)
+        return await _succeed(
+            candidates, test, evaluator, cursor, 0, evals_used, tokens_used, score_rows, journal
         )
     child = dict(parent)
     child[component_name] = parsed
     child_scores, _, evals_used = _score_examples(
         evaluator, child, [train[i] for i in batch], evals_used, score_rows, phase="minibatch"
     )
+    best_mean = _best_mean(candidates)
     if accept_strict_minibatch_sum(parent_scores, child_scores):
         full_scores, _, evals_used = _score_examples(
             evaluator, child, val, evals_used, score_rows, phase="full_val"
         )
-        candidates.append(
-            _candidate(
-                "oneshot",
-                child,
-                accepted=True,
-                reject_reason=None,
-                val_mean=_mean(full_scores),
-                val_subscores=full_scores,
-                iteration=1,
-            )
+        row = _candidate(
+            "oneshot",
+            child,
+            accepted=True,
+            reject_reason=None,
+            val_mean=_mean(full_scores),
+            val_subscores=full_scores,
+            iteration=1,
         )
+        wins = row["val_mean"] is not None and (best_mean is None or row["val_mean"] > best_mean)
     else:
         reason = "length_mismatch" if len(parent_scores) != len(child_scores) else "not_strict"
-        candidates.append(
-            _candidate(
-                "oneshot",
-                child,
-                accepted=False,
-                reject_reason=reason,
-                val_mean=None,
-                val_subscores=None,
-                iteration=1,
-            )
+        row = _candidate(
+            "oneshot",
+            child,
+            accepted=False,
+            reject_reason=reason,
+            val_mean=None,
+            val_subscores=None,
+            iteration=1,
         )
+        wins = False
+    row["parent_id"] = parent_row.get("candidate_id")
+    await _journal_candidate(journal, row, score_rows, wins, evals_used, tokens_used)
+    candidates.append(row)
     cursor += 1
-    return _succeed(candidates, test, evaluator, cursor, 1, evals_used, tokens_used, score_rows)
+    return await _succeed(
+        candidates, test, evaluator, cursor, 1, evals_used, tokens_used, score_rows, journal
+    )
 
 
-def _succeed(
+async def _succeed(
     candidates: list[dict[str, Any]],
     test: Sequence[Mapping[str, Any]],
     evaluator: Any,
@@ -374,13 +420,23 @@ def _succeed(
     evals_used: int,
     tokens_used: int,
     score_rows: list[dict[str, Any]],
+    journal: Any = None,
 ) -> SearchResult:
     best = _best(candidates)
+    seed_row = next((item for item in candidates if item["proposal_kind"] == "seed"), best)
+    targets = [seed_row] if seed_row is best else [seed_row, best]
     if test:
-        test_scores, _, _ = _score_examples(
-            evaluator, best["components"], test, 0, score_rows, phase="held_out_test"
-        )
-        best["test_mean"] = _mean(test_scores)
+        for target in targets:
+            test_scores, _, _ = _score_examples(
+                evaluator, target["components"], test, 0, score_rows, phase="held_out_test"
+            )
+            target["test_mean"] = _mean(test_scores)
+            if journal is not None and target.get("candidate_id"):
+                await journal.test_scored(
+                    str(target["candidate_id"]),
+                    target["test_mean"],
+                    _persistable(score_rows, target["components"], "held_out_test"),
+                )
     return SearchResult(
         status="succeeded",
         error_code=None,
@@ -537,6 +593,124 @@ def _error_name(infos: list[dict[str, Any]]) -> str:
         if "error_type" in info:
             return str(info["error_type"])
     return "error_type"
+
+
+async def _score_seed_if_missing(
+    candidates: list[dict[str, Any]],
+    *,
+    val: Sequence[Mapping[str, Any]],
+    evaluator: Any,
+    score_rows: list[dict[str, Any]],
+    evals_used: int,
+    tokens_used: int,
+    journal: Any,
+    seed_candidate_id: str | None,
+    cursor: int,
+    iteration: int,
+) -> SearchResult | int:
+    """Score a resumed seed that has no stored val subscores."""
+    seed_row = next((item for item in candidates if item["proposal_kind"] == "seed"), None)
+    if seed_row is None or seed_row.get("val_subscores"):
+        return evals_used
+    if seed_candidate_id and not seed_row.get("candidate_id"):
+        seed_row["candidate_id"] = str(seed_candidate_id)
+    val_scores, val_infos, evals_used = _score_examples(
+        evaluator, seed_row["components"], val, evals_used, score_rows, phase="full_val"
+    )
+    if val and _all_errors(val_infos):
+        return _failed(
+            _error_name(val_infos), candidates, cursor, iteration, evals_used, tokens_used, score_rows
+        )
+    seed_row["val_subscores"] = val_scores
+    seed_row["val_mean"] = _mean(val_scores)
+    await _journal_seed(journal, seed_row, score_rows, evals_used, tokens_used)
+    return evals_used
+
+
+async def _journal_seed(
+    journal: Any,
+    candidate: dict[str, Any],
+    score_rows: list[dict[str, Any]],
+    evals_used: int,
+    tokens_used: int,
+) -> None:
+    if journal is None:
+        return
+    await journal.seed_scored(
+        candidate,
+        _persistable(score_rows, candidate["components"], "full_val"),
+        evals_used,
+        tokens_used,
+    )
+
+
+async def _journal_cursor(journal: Any, evals_used: int, tokens_used: int) -> None:
+    if journal is None:
+        return
+    await journal.cursor_advanced(evals_used=evals_used, tokens_used=tokens_used)
+
+
+async def _journal_candidate(
+    journal: Any,
+    candidate: dict[str, Any],
+    score_rows: list[dict[str, Any]],
+    wins_best: bool,
+    evals_used: int,
+    tokens_used: int,
+) -> None:
+    if journal is None:
+        return
+    candidate_id = await journal.candidate_committed(
+        candidate,
+        _persistable(score_rows, candidate["components"]),
+        advance_cursor=True,
+        wins_best=wins_best,
+        evals_used=evals_used,
+        tokens_used=tokens_used,
+    )
+    candidate["candidate_id"] = str(candidate_id)
+
+
+def _persistable(
+    score_rows: list[dict[str, Any]],
+    components: Mapping[str, str],
+    phase: str | None = None,
+) -> list[dict[str, Any]]:
+    scores: list[dict[str, Any]] = []
+    for row in score_rows:
+        if row.get("components") != dict(components):
+            continue
+        if phase is not None and row.get("phase") != phase:
+            continue
+        example = row.get("example") or {}
+        example_id = example.get("example_id")
+        if not example_id:
+            continue
+        split = example.get("split")
+        if split not in {"train", "val", "test"}:
+            split = "val" if row["phase"] == "full_val" else "train"
+            if row["phase"] == "held_out_test":
+                split = "test"
+        scores.append(
+            {
+                "example_id": example_id,
+                "split": split,
+                "phase": row["phase"],
+                "score": row["score"],
+                "side_info": row["side_info"],
+            }
+        )
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in scores:
+        deduped[(str(row["example_id"]), str(row["phase"]))] = row
+    return list(deduped.values())
+
+
+def _best_mean(candidates: list[dict[str, Any]]) -> float | None:
+    means = [item["val_mean"] for item in candidates if item.get("val_mean") is not None]
+    if not means:
+        return None
+    return max(means)
 
 
 def _finish_reason(reflected: Any) -> str | None:

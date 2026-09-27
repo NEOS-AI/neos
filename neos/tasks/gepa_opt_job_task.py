@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from celery import shared_task
@@ -43,6 +44,8 @@ def run_gepa_opt_job(self, run_id: str, owner_namespace: str) -> str:
     from neos.gepa_opt.store import GepaOptStore
     from neos.learn.lessons import resolve_lesson_session_factory
 
+    if not settings.config.celery.enabled or not settings.config.learn.gepa_opt:
+        return "refused"
     store = GepaOptStore(resolve_lesson_session_factory())
     task_id = getattr(getattr(self, "request", None), "id", None) or "inline"
     try:
@@ -84,14 +87,19 @@ async def execute_gepa_opt_job(
     from neos.gepa_opt.engine import run_search
     from neos.gepa_opt.types import EngineConfig
 
-    search_kwargs: dict[str, Any] = {}
-    if claim_state == "resume" and int(bundle.get("iteration") or 0) > 0:
-        search_kwargs = {
-            "prior_candidates": bundle.get("candidates") or [],
-            "start_iteration": int(bundle["iteration"]),
-            "evals_used": int(bundle.get("evals_used") or 0),
-            "tokens_used": int(bundle.get("reflector_tokens_used") or 0),
-        }
+    search_kwargs: dict[str, Any] = {
+        "journal": _StoreJournal(store, run_id, owner_namespace),
+        "seed_candidate_id": str(bundle["seed_candidate_id"]),
+    }
+    if claim_state == "resume":
+        search_kwargs.update(
+            {
+                "prior_candidates": bundle.get("candidates") or [],
+                "start_iteration": int(bundle.get("iteration") or 0),
+                "evals_used": int(bundle.get("evals_used") or 0),
+                "tokens_used": int(bundle.get("reflector_tokens_used") or 0),
+            }
+        )
     result = await run_search(
         config=EngineConfig(
             bundle["engine_label"],
@@ -111,28 +119,12 @@ async def execute_gepa_opt_job(
     if result.overlay is None:
         await store.fail_run(run_id, owner_namespace, result.error_code or "failed")
         return "failed"
-    candidate_id = str(bundle["seed_candidate_id"])
-    if result.overlay["components"] != bundle["seed"]:
-        winner = next(
-            row
-            for row in reversed(result.candidates)
-            if row["components"] == result.overlay["components"] and row["accepted"]
-        )
-        candidate_id = await store.commit_iteration(
-            run_id=run_id,
-            owner_namespace=owner_namespace,
-            candidate={
-                "iteration": winner["iteration"],
-                "proposal_kind": winner["proposal_kind"],
-                "components": winner["components"],
-                "accepted": True,
-                "val_mean": winner["val_mean"],
-                "test_mean": winner.get("test_mean"),
-            },
-            scores=_scores_for(result, winner["components"]),
-            advance_cursor=True,
-            best_candidate_id=None,
-        )
+    winner = next(
+        row
+        for row in reversed(result.candidates)
+        if row["components"] == result.overlay["components"] and row["accepted"]
+    )
+    candidate_id = str(winner.get("candidate_id") or bundle["seed_candidate_id"])
     await store.stage_overlay(
         overlay_id=str(uuid.uuid4()),
         owner_namespace=owner_namespace,
@@ -142,6 +134,75 @@ async def execute_gepa_opt_job(
     )
     await store.mark_succeeded(run_id, owner_namespace)
     return "staged"
+
+
+class _StoreJournal:
+    """Writes each committed search step before the next iteration starts."""
+
+    def __init__(self, store: Any, run_id: str, owner_namespace: str) -> None:
+        self._store = store
+        self._run_id = run_id
+        self._owner = owner_namespace
+
+    async def seed_scored(
+        self,
+        candidate: Mapping[str, Any],
+        scores: Sequence[Mapping[str, Any]],
+        evals_used: int,
+        tokens_used: int,
+    ) -> None:
+        await self._store.record_seed_evaluation(
+            run_id=self._run_id,
+            owner_namespace=self._owner,
+            candidate_id=str(candidate["candidate_id"]),
+            val_mean=candidate.get("val_mean"),
+            scores=scores,
+            evals_used=evals_used,
+            tokens_used=tokens_used,
+        )
+
+    async def candidate_committed(
+        self,
+        candidate: Mapping[str, Any],
+        scores: Sequence[Mapping[str, Any]],
+        *,
+        advance_cursor: bool,
+        wins_best: bool,
+        evals_used: int,
+        tokens_used: int,
+    ) -> str:
+        return await self._store.commit_iteration(
+            run_id=self._run_id,
+            owner_namespace=self._owner,
+            candidate=candidate,
+            scores=scores,
+            advance_cursor=advance_cursor,
+            best_candidate_id=None,
+            evals_used=evals_used,
+            tokens_used=tokens_used,
+            wins_best=wins_best,
+        )
+
+    async def cursor_advanced(self, *, evals_used: int, tokens_used: int) -> None:
+        await self._store.advance_cursor(
+            run_id=self._run_id,
+            owner_namespace=self._owner,
+            evals_used=evals_used,
+            tokens_used=tokens_used,
+        )
+
+    async def test_scored(
+        self,
+        candidate_id: str,
+        test_mean: float | None,
+        scores: Sequence[Mapping[str, Any]],
+    ) -> None:
+        await self._store.record_test_scores(
+            owner_namespace=self._owner,
+            candidate_id=candidate_id,
+            test_mean=test_mean,
+            scores=scores,
+        )
 
 
 def _retry_after_soft_limit(task: Any, exc: BaseException) -> str | None:
@@ -170,31 +231,3 @@ def _model_reflector(run_id: str):
         )
 
     return reflect
-
-
-def _scores_for(result: Any, components: dict[str, str]) -> list[dict[str, Any]]:
-    """Example scores for the winning candidate. Rows without an id are dropped."""
-    scores: list[dict[str, Any]] = []
-    for row in result.score_rows:
-        if row.get("components") != components:
-            continue
-        example = row.get("example") or {}
-        example_id = example.get("example_id")
-        if not example_id:
-            continue
-        split = example.get("split")
-        if split not in {"train", "val", "test"}:
-            split = "val" if row["phase"] == "full_val" else "train"
-        scores.append(
-            {
-                "example_id": example_id,
-                "split": split,
-                "phase": row["phase"],
-                "score": row["score"],
-                "side_info": row["side_info"],
-            }
-        )
-    deduped: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in scores:
-        deduped[(str(row["example_id"]), str(row["phase"]))] = row
-    return list(deduped.values())

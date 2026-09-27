@@ -210,6 +210,9 @@ def test_registered_evaluator_stages_an_overlay() -> None:
                 "surface": "coding_overlay",
             }
 
+        async def record_seed_evaluation(self, **_kwargs):
+            return None
+
         async def stage_overlay(self, **kwargs):
             staged.append(kwargs)
 
@@ -271,6 +274,9 @@ def test_accepted_child_is_committed_before_it_is_staged() -> None:
                 "seed_candidate_id": "seed-1",
                 "surface": "coding_overlay",
             }
+
+        async def record_seed_evaluation(self, **_kwargs):
+            return None
 
         async def commit_iteration(self, **kwargs):
             committed.append(kwargs)

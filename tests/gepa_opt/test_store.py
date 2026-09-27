@@ -14,6 +14,9 @@ pytestmark = pytest.mark.no_db
 _MIGRATION = (
     Path(__file__).resolve().parents[2] / "db" / "migrations" / "066_add_gepa_opt.sql"
 )
+_FKS = (
+    Path(__file__).resolve().parents[2] / "db" / "migrations" / "067_add_gepa_opt_candidate_fks.sql"
+)
 
 
 class _Mappings:
@@ -93,6 +96,10 @@ def test_migration_has_required_constraints() -> None:
     assert "where status = 'approved'" in sql
     assert "pickle" not in sql
     assert sql.count("owner_namespace text not null") == 5
+    fks = _FKS.read_text(encoding="utf-8").lower()
+    assert "gepa_opt_runs_seed_candidate_fk" in fks
+    assert "gepa_opt_runs_best_candidate_fk" in fks
+    assert "gepa_opt_candidates_parent_fk" in fks
 
 
 @pytest.mark.asyncio
