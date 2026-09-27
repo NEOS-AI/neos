@@ -162,6 +162,7 @@ from neos.coding.loop._durable.checkpoint import (
     CheckpointMixin as CheckpointMixin,
 )
 
+
 logger = logging.getLogger(__name__)
 
 # Read by `_pre_tool_decision` and `_execute_validated` on the core class.
@@ -282,8 +283,6 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
                 payload={
                     **payload,
                     "tool": validated.name,
-                    # 어느 호출의 점수인가. 없으면 원장은 점수를 세지만
-                    # 그것을 호출에 붙이지 못하고, 중복이 생겨도 보이지 않는다.
                     "tool_call_id": tool_call_id,
                 },
                 tool_call_id=tool_call_id,
@@ -291,18 +290,6 @@ class DurableCodingLoop(ToolExecutionMixin, SubagentSpawnMixin, CompactionMixin,
         return decision.outcome
 
     def _jev_blocks_speculation(self) -> bool:
-        """투기적 경로(읽기 전용 배치 · prefetch)를 포기해야 하는가.
-
-        둘 다 **본 판정 전에** 움직인다. prefetch 는 도구를 먼저 실행하고,
-        배치는 자기 검사로 통과시킨 뒤 본 경로를 건너뛴다. 게이트가 실제로
-        차단하는 중이라면 둘 다 Jev 를 앞지르는 구멍이다.
-
-        배치를 살려 두면 또 하나 새는 곳이 있다 -- 배치 검사에서 막힌 호출이
-        본 경로로 떨어져 **같은 호출이 두 번 채점된다**(실측: 호출 2건에
-        점수 3건). 한 건이 두 줄로 보이면 L3 을 켤지 보는 사람의 분모가 틀린다.
-
-        섀도에서는 행동이 바뀌지 않으므로 둘 다 그대로 둔다.
-        """
         return self._jev is not None and self._jev.enforce
 
     @staticmethod
