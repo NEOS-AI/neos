@@ -1,0 +1,39 @@
+{
+  "$comment": [
+    "챗 SSE 이벤트 어휘의 정본 fixture.",
+    "",
+    "`deep_analysis_event_kinds.json` · `coding_event_kinds.json` 과 같은 규율이고 겨누는 스트림만 다르다.",
+    "세 스트림 중 이것만 짝 규칙이 없었고, 그래서 `response.reasoning.delta`/`.done` 이",
+    "백엔드에서 줄곧 발행되는 동안 프론트 훅에서 조용히 버려졌다.",
+    "",
+    "읽는 곳:",
+    "  tests/api/test_chat_stream_event_types.py      (백엔드: *Event 클래스 인스턴스화를 AST 로 훑어 정확히 일치)",
+    "  web/tests/source/chat-stream-event-types.test.ts (프론트: handled 를 양방향으로)",
+    "",
+    "`handled: true` 면 `open-responses-types.ts` 에 가드가 있고 `use-chat-stream.ts` 가 그 가드를 부른다.",
+    "false 면 부르지 않는다. false 에는 반드시 `reason` 이 붙는다 -- 처리하지 않는 것은 사고가 아니라 판단이어야 한다.",
+    "",
+    "여기 있는 것은 **발행되는** type 뿐이다. `open_responses.py` 에 정의만 있고 아무도 만들지 않는",
+    "클래스(`response.content_part.*`, `response.output_text.done`, `response.reasoning_summary.*`)는 없다."
+  ],
+  "types": [
+    { "type": "response.in_progress", "handled": true },
+    { "type": "response.output_text.delta", "handled": true },
+    { "type": "response.output_item.added", "handled": true },
+    { "type": "response.output_item.done", "handled": true },
+    { "type": "response.reasoning.delta", "handled": true },
+    { "type": "response.reasoning.done", "handled": true },
+    { "type": "response.completed", "handled": true },
+    { "type": "response.failed", "handled": true },
+    { "type": "neos:artifact_meta", "handled": true },
+    { "type": "neos:artifact_delta", "handled": true },
+    { "type": "neos:artifact_finish", "handled": true },
+    { "type": "neos:workflow_progress", "handled": true },
+    { "type": "neos:harness", "handled": true },
+    { "type": "neos:approval_request", "handled": true },
+    { "type": "neos:ui_frame", "handled": true },
+    { "type": "neos:deep_analysis_started", "handled": true },
+    { "type": "neos:inline_viz", "handled": true },
+    { "type": "neos:inline_viz_error", "handled": true }
+  ]
+}

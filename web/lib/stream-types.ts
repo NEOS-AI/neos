@@ -74,6 +74,8 @@ export {
   isOutputItemDoneEvent,
   isOutputTextDeltaEvent,
   isOutputTextDoneEvent,
+  isReasoningContentDeltaEvent,
+  isReasoningContentDoneEvent,
   isContentPartAddedEvent,
   isContentPartDoneEvent,
   isFunctionCallArgumentsDeltaEvent,
