@@ -12,7 +12,6 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 from neos.api.dependencies import resource_access
 from neos.api.dependencies.auth import get_current_active_user
 from neos.api.handlers import document_handlers
-from neos.api.models.document_models import DocumentSearchRequest
 from neos.api.services.document_service import DocumentProcessor, DocumentService
 from neos.database.connection import get_db
 
@@ -70,13 +69,9 @@ def _route(app: FastAPI, path: str, method: str):
 def _install_service_defaults(monkeypatch):
     defaults = {
         "upload_and_process_document": _document(),
-        "list_documents": {"total": 0, "documents": []},
         "get_document_by_id": _document(),
         "delete_document": True,
         "delete_document_for_user": True,
-        "get_document_chunks": [],
-        "get_document_knowledge_graph": [],
-        "search_documents": [],
     }
     mocks = {}
     for method_name, return_value in defaults.items():
@@ -90,15 +85,8 @@ def test_document_routes_preserve_double_prefix_and_install_auth_dependencies():
     app = _document_app()
     expected = {
         (f"{BASE_PATH}/upload", "POST"): "get_current_active_user",
-        (f"{BASE_PATH}/", "GET"): "get_current_active_user",
-        (f"{BASE_PATH}/search", "POST"): "get_current_active_user",
         (f"{BASE_PATH}/{{document_id}}", "GET"): "get_owned_document",
         (f"{BASE_PATH}/{{document_id}}", "DELETE"): "get_owned_document",
-        (f"{BASE_PATH}/{{document_id}}/chunks", "GET"): "get_owned_document",
-        (
-            f"{BASE_PATH}/{{document_id}}/knowledge-graph",
-            "GET",
-        ): "get_owned_document",
     }
 
     for (path, method), dependency_name in expected.items():
@@ -120,16 +108,8 @@ def test_document_routes_preserve_double_prefix_and_install_auth_dependencies():
                 "data": {"user_id": "attacker"},
             },
         ),
-        ("GET", f"{BASE_PATH}/", {"params": {"user_id": "attacker"}}),
         ("GET", f"{BASE_PATH}/7", {}),
         ("DELETE", f"{BASE_PATH}/7", {}),
-        ("GET", f"{BASE_PATH}/7/chunks", {}),
-        ("GET", f"{BASE_PATH}/7/knowledge-graph", {}),
-        (
-            "POST",
-            f"{BASE_PATH}/search",
-            {"json": {"query": "private", "user_id": "attacker"}},
-        ),
     ],
 )
 def test_all_document_routes_reject_unauthenticated_requests_before_service_calls(
@@ -146,47 +126,6 @@ def test_all_document_routes_reject_unauthenticated_requests_before_service_call
     assert response.status_code == 401
     for service_mock in service_mocks.values():
         service_mock.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_document_search_uses_authenticated_user(monkeypatch):
-    search = AsyncMock(return_value=[])
-    monkeypatch.setattr(document_handlers.DocumentService, "search_documents", search)
-
-    await document_handlers.search_documents(
-        DocumentSearchRequest(query="private", user_id="attacker"),
-        current_user=SimpleNamespace(user_id="owner", is_active=True),
-    )
-
-    assert search.await_args.kwargs["user_id"] == "owner"
-
-
-@pytest.mark.asyncio
-async def test_document_list_uses_authenticated_user(monkeypatch):
-    list_documents = AsyncMock(return_value={"total": 0, "documents": []})
-    monkeypatch.setattr(
-        document_handlers.DocumentService,
-        "list_documents",
-        list_documents,
-    )
-
-    await document_handlers.list_documents(
-        user_id="attacker",
-        status=None,
-        skip=0,
-        limit=100,
-        current_user=SimpleNamespace(user_id="owner", is_active=True),
-    )
-
-    assert list_documents.await_args.args[0] == "owner"
-
-
-def test_document_search_user_id_is_deprecated_optional_compatibility_field():
-    request = DocumentSearchRequest(query="private")
-    schema = DocumentSearchRequest.model_json_schema()
-
-    assert request.user_id is None
-    assert schema["properties"]["user_id"]["deprecated"] is True
 
 
 def test_upload_uses_authenticated_user_without_requiring_compatibility_user_id(
@@ -220,8 +159,6 @@ def test_upload_uses_authenticated_user_without_requiring_compatibility_user_id(
     [
         ("GET", f"{BASE_PATH}/7"),
         ("DELETE", f"{BASE_PATH}/7"),
-        ("GET", f"{BASE_PATH}/7/chunks"),
-        ("GET", f"{BASE_PATH}/7/knowledge-graph"),
     ],
 )
 def test_private_document_routes_hide_missing_and_non_owner_resources_before_service(
@@ -249,8 +186,6 @@ def test_owner_document_routes_use_authorized_document_id(monkeypatch):
     owned_document = _document(document_id=17)
     lookup = AsyncMock(return_value=owned_document)
     delete = AsyncMock(return_value=True)
-    chunks = AsyncMock(return_value=[])
-    knowledge_graph = AsyncMock(return_value=[])
     monkeypatch.setattr(resource_access, "_get_document_by_id", lookup)
     monkeypatch.setattr(
         document_handlers.DocumentService,
@@ -258,32 +193,16 @@ def test_owner_document_routes_use_authorized_document_id(monkeypatch):
         delete,
         raising=False,
     )
-    monkeypatch.setattr(
-        document_handlers.DocumentService,
-        "get_document_chunks",
-        chunks,
-    )
-    monkeypatch.setattr(
-        document_handlers.DocumentService,
-        "get_document_knowledge_graph",
-        knowledge_graph,
-    )
     current_user = SimpleNamespace(user_id="owner", is_active=True)
 
     with TestClient(_document_app(current_user)) as client:
         detail_response = client.get(f"{BASE_PATH}/7")
         delete_response = client.delete(f"{BASE_PATH}/7")
-        chunks_response = client.get(f"{BASE_PATH}/7/chunks")
-        graph_response = client.get(f"{BASE_PATH}/7/knowledge-graph")
 
     assert detail_response.status_code == 200
     assert detail_response.json()["id"] == 17
     assert delete_response.status_code == 200
-    assert chunks_response.status_code == 200
-    assert graph_response.status_code == 200
     delete.assert_awaited_once_with(17, "owner")
-    chunks.assert_awaited_once_with(17, 0, 100)
-    knowledge_graph.assert_awaited_once_with(17)
 
 
 def test_delete_race_uses_the_same_resource_not_found_response(monkeypatch):

@@ -7,12 +7,6 @@ from neos.api.models.query_models import (
 from neos.api.models.document_models import (
     DocumentUploadResponse,
     DocumentInfo,
-    DocumentListResponse,
-    ChunkInfo,
-    EntityInfo,
-    DocumentSearchRequest,
-    DocumentSearchResult,
-    DocumentSearchResponse
 )
 
 from neos.api.models.multimodal_models import (
@@ -27,12 +21,6 @@ __all__ = [
     # Document models
     "DocumentUploadResponse",
     "DocumentInfo",
-    "DocumentListResponse",
-    "ChunkInfo",
-    "EntityInfo",
-    "DocumentSearchRequest",
-    "DocumentSearchResult",
-    "DocumentSearchResponse",
     # Multimodal models
     "MultimodalQueryResponse",
     "ImageAnalysisResponse",

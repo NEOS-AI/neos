@@ -65,6 +65,12 @@ RETIRED = {
     ("GET", "/api/v1/stats/system"),
     ("GET", "/api/v1/hyper-research"),
     ("GET", "/api/v1/hyper-research/{report_uuid}"),
+    # RAG 문서 부가 기능 -- 프론트는 upload 와 detail 만 쓴다(DELETE 도 남긴다).
+    # 이중 prefix 는 의도다(`web/lib/backend-routes.ts`).
+    ("GET", "/api/v1/documents/documents/"),
+    ("POST", "/api/v1/documents/documents/search"),
+    ("GET", "/api/v1/documents/documents/{document_id}/chunks"),
+    ("GET", "/api/v1/documents/documents/{document_id}/knowledge-graph"),
 }
 
 

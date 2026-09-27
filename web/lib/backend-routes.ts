@@ -8,22 +8,22 @@
  * 백엔드에는 `documents`라는 이름을 공유하는 **서로 다른 두 라우터**가 있다:
  *
  * 1. **RAG 문서 라우터** (`neos/api/handlers/document_handlers.py`)
- *    - 라우터 자체가 `APIRouter(prefix="/documents")` (`document_handlers.py:34`)
- *    - `neos/main.py:532`가 다시 `prefix="/api/v1/documents"`로 마운트
+ *    - 라우터 자체가 `APIRouter(prefix="/documents")` (`document_handlers.py` 의 `router`)
+ *    - `neos/main.py` 의 `document_router` 마운트가 다시 `prefix="/api/v1/documents"`로 마운트
  *    - → 실제 경로: `/api/v1/documents/documents/...`
  *
  * 2. **아티팩트 라우터** (`neos/api/handlers/artifact_handlers.py`)
- *    - `APIRouter(prefix="/documents")` (`artifact_handlers.py:21`)
- *    - `neos/main.py:548`가 `prefix="/api/v1"`로 마운트
+ *    - `APIRouter(prefix="/documents")` (`artifact_handlers.py` 의 `router`)
+ *    - `neos/main.py` 의 `artifact_router` 마운트가 `prefix="/api/v1"`로 마운트
  *    - → 실제 경로: `/api/v1/documents/...`
  *
  * ### 왜 백엔드의 중복 prefix를 제거하지 않았는가
  *
  * RAG 라우터의 중복 prefix를 제거하면 두 라우터가 **같은 네임스페이스**를 놓고 충돌한다.
  * RAG 라우터는 `GET /{document_id}`, `DELETE /{document_id}`를 갖고
- * (`document_handlers.py:136,172`), 아티팩트 라우터도 동일 경로를 갖는다
- * (`artifact_handlers.py:50,86`). Starlette은 **먼저 등록된 라우트가 이긴다**.
- * RAG(`main.py:532`)가 아티팩트(`main.py:548`)보다 먼저 등록되므로, 중복 prefix를 제거하면
+ * (`document_handlers.py` 의 `get_document` · `delete_document`), 아티팩트 라우터도 동일 경로를 갖는다
+ * (`artifact_handlers.py` 의 같은 두 경로). Starlette은 **먼저 등록된 라우트가 이긴다**.
+ * `main.py` 에서 RAG 가 아티팩트보다 먼저 등록되므로, 중복 prefix를 제거하면
  * `GET/DELETE /api/v1/documents/{id}`가 아티팩트 → RAG로 **가로채진다**.
  *
  * 이 경로들은 프론트가 **현재 정상 동작 중인 아티팩트 기능**에 쓰고 있다
