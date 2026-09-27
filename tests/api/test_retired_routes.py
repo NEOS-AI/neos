@@ -91,3 +91,23 @@ def test_retired_route_is_not_served(method, path):
 
 def test_health_stays_public():
     assert ("GET", "/api/v1/health") in _routes()
+
+
+def test_only_ticketed_coding_sockets_declare_websocket_routes():
+    """레거시 WebSocket(`/ws/{session_id}`, `/ws/query/*`, `/chat/ws/{id}`)은 인증 없이
+    열려 있어서 비디버그에서는 `_include_router_for_runtime` 이 떼어 냈고, 프론트는
+    SSE 를 쓴다. 그래서 앱 라우트로는 부재를 확인할 수 없다(테스트 앱은 비디버그다) --
+    선언 자체를 센다. 티켓 인증을 가진 코딩 소켓 둘만 남는다.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "neos" / "api"
+    declaring = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and ".websocket(" in path.read_text()
+    )
+    assert declaring == [
+        "handlers/coding_workspace_ws_handlers.py",
+        "handlers/coding_ws_handlers.py",
+    ]
