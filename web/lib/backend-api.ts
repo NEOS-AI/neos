@@ -19,6 +19,7 @@ import "server-only";
 
 import { auth } from "@/app/(auth)/auth";
 import { backendErrorCode, backendErrorMessage } from "@/lib/backend-error";
+import { requestClientIpHeaders } from "@/lib/client-ip-server";
 import { getBackendUrl } from "@/lib/server-config";
 
 export class BackendAPIError extends Error {
@@ -62,6 +63,8 @@ export async function callBackendAPI(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${session.backendAccessToken}`,
+      // nginx 가 BFF IP 가 아니라 사용자 IP 로 rate limit 을 세도록 (`lib/client-ip.ts`)
+      ...(await requestClientIpHeaders()),
       ...options.headers,
     },
   });
@@ -135,6 +138,7 @@ export async function callBackendAPIWithKey(
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": apiKey,
+      ...(await requestClientIpHeaders()),
       ...options.headers,
     },
   });
