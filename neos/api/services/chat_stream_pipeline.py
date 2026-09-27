@@ -532,7 +532,7 @@ class ChatStreamPipeline:
                         # 하네스 카드가 켜지지 않고, 날 JSON이 진행 메시지로 샌다.
                         #
                         # ⚠️ `on_node_progress`는 `agent_progress`로 발행한다
-                        # (`workflow_stream_handlers.py:202`). `node_progress`를
+                        # (`WorkflowStreamCallback.on_node_progress`). `node_progress`를
                         # 기다리면 영원히 오지 않는다 — 그 이름은 DB 로깅용이다.
                         harness_event = parse_harness_progress_event(
                             node_name=event.node_name,

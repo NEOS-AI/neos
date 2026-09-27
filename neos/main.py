@@ -25,7 +25,6 @@ from neos.api.handlers.deep_analysis_analytics_handlers import (
 from neos.api.deep_analysis_routes import router as deep_analysis_router
 from neos.api.handlers.auth import router as auth_router
 from neos.api.handlers.skills_handlers import router as skills_router
-from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
 from neos.api.handlers.vote_handlers import router as vote_router
 from neos.api.handlers.artifact_handlers import router as artifact_router
 from neos.api.handlers.approval_handlers import router as approval_router  # Phase 2: Execution Approval
@@ -594,7 +593,6 @@ _include_router_for_runtime(
     tags=["Skills Management"],
     dependencies=[Depends(get_current_admin_user)],
 )
-_include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
 _include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 _include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
 _include_router_for_runtime(approval_router, prefix=settings.API_V1_PREFIX, tags=["Execution Approval"])  # Phase 2: OpenClaw Exec Approval

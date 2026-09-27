@@ -1,80 +1,13 @@
 """Query API Pydantic models"""
 
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
-
-
-class QueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=10000, description="사용자 쿼리")
-    user_id: Optional[str] = Field(
-        None,
-        description="Deprecated compatibility field; authenticated identity is used",
-        deprecated=True,
-    )
-    session_id: Optional[str] = Field(None, description="세션 ID")
-    preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
-    autonomy_level: Optional[int] = Field(
-        default=None,
-        ge=0,
-        le=2,
-        description="에이전트 자율성 레벨: 0=수동, 1=요청, 2=자율",
-    )
-
-
-class QueryResponse(BaseModel):
-    success: bool
-    response: str
-    session_id: str
-    query_id: Optional[int] = None
-    metadata: Dict[str, Any]
-    execution_time_ms: int
-    quality_score: float
-    errors: List[str] = Field(default_factory=list)
+from typing import Dict, Any, Optional
 
 
 class HealthCheckResponse(BaseModel):
     status: str
     timestamp: str
     services: Dict[str, bool]
-
-
-class TrendingQuery(BaseModel):
-    query_text: str
-    search_count: int
-    last_searched: str
-    category: Optional[str] = None
-
-
-class RelatedQuery(BaseModel):
-    query_text: str
-    similarity_score: float
-    relation_type: str
-
-
-class HyperResearchReportResponse(BaseModel):
-    success: bool
-    report_id: str
-    markdown_content: str
-    metadata: Dict[str, Any]
-
-
-class HyperResearchReportSummary(BaseModel):
-    report_id: str
-    report_uuid: str
-    research_topic: str
-    research_status: str
-    created_at: str
-    completed_at: Optional[str]
-    total_sections: int
-    total_sources: int
-    total_queries: int
-    quality_score: Optional[float]
-
-
-class HyperResearchReportsListResponse(BaseModel):
-    success: bool
-    reports: List[HyperResearchReportSummary]
-    total_count: int
 
 
 # ============================================================================
@@ -133,30 +66,3 @@ class WorkflowStreamEvent(BaseModel):
     # 메타데이터
     execution_time_ms: Optional[int] = None
     tokens_used: Optional[int] = None
-
-
-class WorkflowStreamRequest(BaseModel):
-    """워크플로우 스트리밍 요청"""
-    query: str = Field(..., min_length=1, max_length=10000, description="사용자 쿼리")
-    user_id: Optional[str] = Field(
-        None,
-        description="Deprecated compatibility field; authenticated identity is used",
-        deprecated=True,
-    )
-    session_id: Optional[str] = Field(None, description="세션 ID")
-    preferences: Optional[Dict[str, Any]] = Field(default_factory=dict, description="사용자 설정")
-    autonomy_level: Optional[int] = Field(
-        default=None,
-        ge=0,
-        le=2,
-        description="에이전트 자율성 레벨: 0=수동, 1=요청, 2=자율",
-    )
-    stream_options: Optional[Dict[str, Any]] = Field(
-        default_factory=lambda: {
-            "include_heartbeat": True,
-            "heartbeat_interval_ms": 5000,
-            "include_agent_progress": True,
-            "include_partial_content": True
-        },
-        description="스트리밍 옵션"
-    )

@@ -55,6 +55,16 @@ RETIRED = {
     ("GET", "/api/v1/deep-research/{report_id}/stream"),
     ("GET", "/api/v1/deep-research/{report_id}"),
     ("GET", "/api/v1/conversations/{conversation_id}/deep-research"),
+    # 레거시 쿼리 API -- 대화 밖 워크플로우 진입점과 그 부가 기능. `/health` 만 남는다.
+    ("POST", "/api/v1/query"),
+    ("POST", "/api/v1/query/stream"),
+    ("GET", "/api/v1/trending"),
+    ("GET", "/api/v1/related/{query_id}"),
+    ("GET", "/api/v1/history/{user_id}"),
+    ("DELETE", "/api/v1/cache/{cache_key}"),
+    ("GET", "/api/v1/stats/system"),
+    ("GET", "/api/v1/hyper-research"),
+    ("GET", "/api/v1/hyper-research/{report_uuid}"),
 }
 
 

@@ -3,10 +3,10 @@ import os
 import subprocess
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
 
@@ -16,8 +16,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 from neos.api.dependencies.auth import (
     get_current_active_user,
 )
-from neos.api.handlers import query_handlers, workflow_stream_handlers
-from neos.api.models.query_models import QueryRequest, WorkflowStreamRequest
+from neos.api.handlers import query_handlers
 from neos.api.services.query_service import QueryService
 
 
@@ -72,7 +71,6 @@ async def _unauthenticated():
 def _query_app(current_user=None) -> FastAPI:
     app = FastAPI()
     app.include_router(query_handlers.router, prefix=API_PREFIX)
-    app.include_router(workflow_stream_handlers.router, prefix=API_PREFIX)
     app.dependency_overrides[get_current_active_user] = (
         (lambda: current_user) if current_user is not None else _unauthenticated
     )
@@ -125,8 +123,6 @@ def _is_allowed_public_http_route(path: str, method: str) -> bool:
     return (
         path == "/"
         or path.startswith(f"{API_PREFIX}/auth/")
-        or path == f"{API_PREFIX}/trending"
-        or path == f"{API_PREFIX}/related/{{query_id}}"
         or path.endswith("/health")
     )
 
@@ -150,31 +146,10 @@ def _websocket_paths(app: FastAPI) -> set[str]:
 
 def _install_query_service_defaults(monkeypatch):
     defaults = {
-        "get_or_create_user": None,
-        "process_query_workflow": {
-            "success": True,
-            "response": "ok",
-            "session_id": "s1",
-            "metadata": {},
-            "execution_time_ms": 1,
-            "quality_score": 1.0,
-            "errors": [],
-        },
-        "save_query_history_background": None,
         "check_system_health": {
             "status": "healthy",
             "timestamp": "2026-07-04T00:00:00",
             "services": {},
-        },
-        "get_trending_queries": [],
-        "get_related_queries": [],
-        "get_user_query_history": [],
-        "get_system_stats": {},
-        "get_hyper_research_report": None,
-        "list_hyper_research_reports": {
-            "success": True,
-            "reports": [],
-            "total_count": 0,
         },
     }
     mocks = {}
@@ -185,55 +160,12 @@ def _install_query_service_defaults(monkeypatch):
     return mocks
 
 
-def _install_stream_defaults(monkeypatch):
-    async def execute_workflow_with_streaming(**kwargs):
-        await kwargs["callback"].on_workflow_complete(
-            {
-                "success": True,
-                "response": "ok",
-                "metadata": {},
-                "execution_time_ms": 1,
-                "quality_score": 1.0,
-                "errors": [],
-            }
-        )
-
-    execute = AsyncMock(side_effect=execute_workflow_with_streaming)
-    create_session = Mock(return_value=SimpleNamespace(user_id="attacker"))
-    monkeypatch.setattr(
-        workflow_stream_handlers,
-        "execute_workflow_with_streaming",
-        execute,
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "get_session",
-        Mock(return_value=None),
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "create_session",
-        create_session,
-    )
-    return execute, create_session
-
-
 def test_all_query_http_routes_have_an_explicit_public_owner_or_admin_classification():
     app = _query_app()
+    # 레거시 쿼리 API 를 걷어 낸 뒤(2026-09-27, `tests/api/test_retired_routes.py`)
+    # 이 라우터에 남은 것은 공개 헬스 체크 하나다.
     expected = {
-        (f"{API_PREFIX}/query", "POST"): "get_current_active_user",
         (f"{API_PREFIX}/health", "GET"): None,
-        (f"{API_PREFIX}/trending", "GET"): None,
-        (f"{API_PREFIX}/related/{{query_id}}", "GET"): None,
-        (f"{API_PREFIX}/history/{{user_id}}", "GET"): "get_current_active_user",
-        (f"{API_PREFIX}/cache/{{cache_key}}", "DELETE"): "get_current_admin_user",
-        (f"{API_PREFIX}/stats/system", "GET"): "get_current_admin_user",
-        (
-            f"{API_PREFIX}/hyper-research/{{report_uuid}}",
-            "GET",
-        ): "get_current_active_user",
-        (f"{API_PREFIX}/hyper-research", "GET"): "get_current_active_user",
-        (f"{API_PREFIX}/query/stream", "POST"): "get_current_active_user",
     }
     actual_http_routes = {
         (route.path, method)
@@ -255,20 +187,10 @@ def test_all_query_http_routes_have_an_explicit_public_owner_or_admin_classifica
 
 def test_production_query_workflow_routes_have_explicit_authorization_matrix():
     _, production_app = _load_production_app()
+    # 레거시 쿼리 API 를 걷어 낸 뒤(2026-09-27, `tests/api/test_retired_routes.py`)
+    # 이 라우터에 남은 것은 공개 헬스 체크 하나다.
     expected = {
-        (f"{API_PREFIX}/query", "POST"): "get_current_active_user",
         (f"{API_PREFIX}/health", "GET"): None,
-        (f"{API_PREFIX}/trending", "GET"): None,
-        (f"{API_PREFIX}/related/{{query_id}}", "GET"): None,
-        (f"{API_PREFIX}/history/{{user_id}}", "GET"): "get_current_active_user",
-        (f"{API_PREFIX}/cache/{{cache_key}}", "DELETE"): "get_current_admin_user",
-        (f"{API_PREFIX}/stats/system", "GET"): "get_current_admin_user",
-        (
-            f"{API_PREFIX}/hyper-research/{{report_uuid}}",
-            "GET",
-        ): "get_current_active_user",
-        (f"{API_PREFIX}/hyper-research", "GET"): "get_current_active_user",
-        (f"{API_PREFIX}/query/stream", "POST"): "get_current_active_user",
     }
     actual = {
         (route.path, method): _dependency_names(route)
@@ -333,90 +255,10 @@ def test_production_app_exposes_only_authenticated_coding_websocket():
     }
 
 
-def test_query_compatibility_user_ids_are_optional_and_deprecated():
-    query = QueryRequest(query="hello")
-    stream = WorkflowStreamRequest(query="hello")
-
-    assert query.user_id is None
-    assert stream.user_id is None
-    assert QueryRequest.model_json_schema()["properties"]["user_id"]["deprecated"] is True
-    assert (
-        WorkflowStreamRequest.model_json_schema()["properties"]["user_id"]["deprecated"]
-        is True
-    )
-
-
-@pytest.mark.asyncio
-async def test_process_query_uses_authenticated_user(monkeypatch):
-    process = AsyncMock(
-        return_value={
-            "success": True,
-            "response": "ok",
-            "session_id": "s1",
-            "metadata": {},
-            "execution_time_ms": 1,
-            "quality_score": 1.0,
-            "errors": [],
-        }
-    )
-    get_user = AsyncMock()
-    monkeypatch.setattr(QueryService, "get_or_create_user", get_user)
-    monkeypatch.setattr(QueryService, "process_query_workflow", process)
-
-    await query_handlers.process_query(
-        QueryRequest(query="hello", user_id="attacker", session_id="s1"),
-        BackgroundTasks(),
-        current_user=_user("owner"),
-    )
-
-    get_user.assert_awaited_once_with("owner")
-    assert process.await_args.kwargs["user_id"] == "owner"
-
-
-@pytest.mark.parametrize(
-    ("method", "path", "request_kwargs"),
-    [
-        ("POST", f"{API_PREFIX}/query", {"json": {"query": "hello", "user_id": "attacker"}}),
-        ("GET", f"{API_PREFIX}/history/attacker", {}),
-        ("DELETE", f"{API_PREFIX}/cache/key", {}),
-        ("GET", f"{API_PREFIX}/stats/system", {}),
-        ("GET", f"{API_PREFIX}/hyper-research/report-1", {}),
-        ("GET", f"{API_PREFIX}/hyper-research", {"params": {"user_id": "attacker"}}),
-        (
-            "POST",
-            f"{API_PREFIX}/query/stream",
-            {"json": {"query": "hello", "user_id": "attacker", "session_id": "s1"}},
-        ),
-    ],
-)
-def test_private_query_routes_reject_unauthenticated_before_side_effects(
-    monkeypatch,
-    method,
-    path,
-    request_kwargs,
-):
-    service_mocks = _install_query_service_defaults(monkeypatch)
-    execute, create_session = _install_stream_defaults(monkeypatch)
-    cache_delete = AsyncMock(return_value=True)
-    monkeypatch.setattr(query_handlers.cache_manager, "delete", cache_delete)
-
-    with TestClient(_query_app()) as client:
-        response = client.request(method, path, **request_kwargs)
-
-    assert response.status_code == 401
-    for service_mock in service_mocks.values():
-        service_mock.assert_not_awaited()
-    cache_delete.assert_not_awaited()
-    execute.assert_not_awaited()
-    create_session.assert_not_called()
-
-
 @pytest.mark.parametrize(
     ("method", "path"),
     [
         ("GET", f"{API_PREFIX}/health"),
-        ("GET", f"{API_PREFIX}/trending"),
-        ("GET", f"{API_PREFIX}/related/7"),
     ],
 )
 def test_public_query_routes_remain_public(monkeypatch, method, path):
@@ -426,184 +268,6 @@ def test_public_query_routes_remain_public(monkeypatch, method, path):
         response = client.request(method, path)
 
     assert response.status_code == 200
-
-
-def test_cross_user_history_is_hidden_before_service_call(monkeypatch):
-    history = AsyncMock(return_value=[{"query": "private"}])
-    monkeypatch.setattr(QueryService, "get_user_query_history", history)
-
-    with TestClient(_query_app(_user("owner"))) as client:
-        response = client.get(f"{API_PREFIX}/history/attacker")
-
-    assert response.status_code == 404
-    assert response.json() == RESOURCE_NOT_FOUND
-    history.assert_not_awaited()
-
-
-def test_owner_history_uses_authenticated_identity(monkeypatch):
-    history = AsyncMock(return_value=[])
-    monkeypatch.setattr(QueryService, "get_user_query_history", history)
-
-    with TestClient(_query_app(_user("owner"))) as client:
-        response = client.get(f"{API_PREFIX}/history/owner?limit=7&offset=2")
-
-    assert response.status_code == 200
-    history.assert_awaited_once_with("owner", 7, 2)
-
-
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("DELETE", f"{API_PREFIX}/cache/key"),
-        ("GET", f"{API_PREFIX}/stats/system"),
-    ],
-)
-def test_query_admin_routes_reject_non_admin_before_side_effects(
-    monkeypatch,
-    method,
-    path,
-):
-    stats = AsyncMock(return_value={})
-    cache_delete = AsyncMock(return_value=True)
-    monkeypatch.setattr(QueryService, "get_system_stats", stats)
-    monkeypatch.setattr(query_handlers.cache_manager, "delete", cache_delete)
-
-    with TestClient(_query_app(_user("owner"))) as client:
-        response = client.request(method, path)
-
-    assert response.status_code == 403
-    stats.assert_not_awaited()
-    cache_delete.assert_not_awaited()
-
-
-def test_query_admin_routes_allow_admin(monkeypatch):
-    stats = AsyncMock(return_value={"ok": True})
-    cache_delete = AsyncMock(return_value=True)
-    monkeypatch.setattr(QueryService, "get_system_stats", stats)
-    monkeypatch.setattr(query_handlers.cache_manager, "delete", cache_delete)
-
-    with TestClient(_query_app(_user("admin", is_admin=True))) as client:
-        cache_response = client.delete(f"{API_PREFIX}/cache/key")
-        stats_response = client.get(f"{API_PREFIX}/stats/system")
-
-    assert cache_response.status_code == 200
-    assert stats_response.status_code == 200
-    cache_delete.assert_awaited_once_with("key")
-    stats.assert_awaited_once_with()
-
-
-@pytest.mark.parametrize(
-    "report",
-    [None, {"metadata": {"user_id": "other"}}],
-    ids=["missing", "non-owner"],
-)
-def test_hyper_research_detail_hides_missing_and_non_owner(monkeypatch, report):
-    get_report = AsyncMock(return_value=report)
-    monkeypatch.setattr(QueryService, "get_hyper_research_report", get_report)
-
-    with TestClient(_query_app(_user("owner"))) as client:
-        response = client.get(f"{API_PREFIX}/hyper-research/report-1")
-
-    assert response.status_code == 404
-    assert response.json() == RESOURCE_NOT_FOUND
-    get_report.assert_awaited_once_with("report-1")
-
-
-def test_hyper_research_list_uses_authenticated_identity(monkeypatch):
-    list_reports = AsyncMock(
-        return_value={"success": True, "reports": [], "total_count": 0}
-    )
-    monkeypatch.setattr(QueryService, "list_hyper_research_reports", list_reports)
-
-    with TestClient(_query_app(_user("owner"))) as client:
-        response = client.get(
-            f"{API_PREFIX}/hyper-research",
-            params={"user_id": "attacker", "status": "completed"},
-        )
-
-    assert response.status_code == 200
-    list_reports.assert_awaited_once_with("owner", "completed", 50, 0)
-
-
-@pytest.mark.asyncio
-async def test_stream_query_rejects_cross_user_session_before_response(monkeypatch):
-    claim_session = Mock(side_effect=PermissionError("foreign session"))
-    execute = AsyncMock()
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "claim_session",
-        claim_session,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers,
-        "execute_workflow_with_streaming",
-        execute,
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        await workflow_stream_handlers.stream_query(
-            WorkflowStreamRequest(query="hello", session_id="s1"),
-            SimpleNamespace(headers={}),
-            current_user=_user("user-a"),
-        )
-
-    assert exc.value.status_code == 404
-    assert exc.value.detail == "Resource not found"
-    claim_session.assert_called_once_with("s1", "user-a")
-    execute.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_stream_query_uses_authenticated_user_and_creates_only_new_session(monkeypatch):
-    captured = {}
-
-    async def execute_workflow_with_streaming(**kwargs):
-        captured.update(kwargs)
-        await kwargs["callback"].on_workflow_complete(
-            {
-                "success": True,
-                "response": "ok",
-                "metadata": {},
-                "execution_time_ms": 1,
-                "quality_score": 1.0,
-                "errors": [],
-            }
-        )
-
-    claimed_session = SimpleNamespace(user_id="owner")
-    claim_session = Mock(return_value=claimed_session)
-    monkeypatch.setattr(
-        workflow_stream_handlers.stream_manager,
-        "claim_session",
-        claim_session,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        workflow_stream_handlers,
-        "execute_workflow_with_streaming",
-        execute_workflow_with_streaming,
-    )
-
-    response = await workflow_stream_handlers.stream_query(
-        WorkflowStreamRequest(
-            query="hello",
-            user_id="attacker",
-            session_id="s1",
-            stream_options={"include_heartbeat": False, "enable_db_logging": False},
-        ),
-        SimpleNamespace(headers={}),
-        current_user=_user("owner"),
-    )
-    payloads = []
-    async for chunk in response.body_iterator:
-        payloads.append(json.loads(chunk.removeprefix("data: ").strip()))
-        if payloads[-1]["event"] == "completed":
-            break
-
-    claim_session.assert_called_once_with("s1", "owner")
-    assert captured["user_id"] == "owner"
-    assert "Access-Control-Allow-Origin" not in response.headers
 
 
 def test_operational_routes_install_admin_dependency_and_root_stays_public():
