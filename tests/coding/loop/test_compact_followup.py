@@ -190,6 +190,46 @@ async def test_compact_after_prompt_too_long_reattaches_at_most_five_reads() -> 
 
 
 @pytest.mark.asyncio
+async def test_compact_after_prompt_too_long_ignores_denied_absolute_reads() -> None:
+    """A denied read's path was never validated -- normalizing it raised."""
+    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    reads = (
+        CanonicalMessage("user", (TextContent("Fix it"),)),
+        CanonicalMessage(
+            "assistant",
+            (ToolUseContent("bad", "read_file.v1", {"path": "/etc/passwd"}),),
+        ),
+        CanonicalMessage(
+            "tool",
+            (ToolResultContent("bad", "denied", {"reason_code": "policy"}),),
+        ),
+        CanonicalMessage(
+            "assistant",
+            (ToolUseContent("good", "read_file.v1", {"path": "src/a.py"}),),
+        ),
+        CanonicalMessage(
+            "tool",
+            (ToolResultContent("good", "ok", {"preview": "a"}),),
+        ),
+    )
+    state = replace(
+        h.loop._restore(INPUT, None), transcript=reads, instructions_loaded=True
+    )
+
+    after = await h.loop._compact_after_prompt_too_long(state)
+
+    preview = "\n".join(
+        item.text
+        for message in after.transcript
+        if message.role == "user"
+        for item in message.content
+        if hasattr(item, "text") and "Recently read" in item.text
+    )
+    assert "src/a.py" in preview
+    assert "/etc/passwd" not in preview
+
+
+@pytest.mark.asyncio
 async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
     h = harness(
         [[TextDelta("new compressed facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]

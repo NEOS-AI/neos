@@ -38,7 +38,7 @@
 |---|---|---|
 | **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · 코드 인벤토리 비었다 | 🔴 **라이브 표본 #23** — ~~`ANTHROPIC_WORKSPACE_ID` 값 하나에 막혀 있다~~ **키 선행은 사라졌다**(2026-09-23 실호출, §7). ~~남은 선행은 D93 사전 등록 다시 쓰기뿐이다~~ **D98 로 다시 썼다**(2026-09-24). 남은 선행은 **`TAVILY_API_KEY` 하나**다 |
 | **B. 역할 기반 모델 라우팅** | ✅ 안정 | 유지보수. **effort 축이 들어오면 여기에 붙는다**(K5) |
-| **C. 프론트엔드** | ✅ FE1~FE17 종결 · 🆕 **코딩 스트림 짝 규칙**(2026-09-23, §12.9) | 새 kind 는 이제 **두** fixture 가 문다 — DA(`deep_analysis_event_kinds.json`)와 코딩(`coding_event_kinds.json`) |
+| **C. 프론트엔드** | ✅ FE1~FE17 종결 · 🆕 **코딩 스트림 짝 규칙**(2026-09-23, §12.9) · 🆕 **챗 SSE 짝 규칙 · DA 재개 버튼 · 그래프 서브에이전트 표시**(2026-09-27) | 새 kind 는 이제 ~~**두**~~ **세** fixture 가 문다 — DA(`deep_analysis_event_kinds.json`) · 코딩(`coding_event_kinds.json`) · 챗 SSE(`chat_stream_event_types.json`, 2026-09-27). 챗 fixture 가 처음 드러낸 구멍: `response.reasoning.*` 가 훅에서 버려지고 있었다 |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2 · D4(전송만 SDK로) · D3b. **J가 D4의 수요처가 된다** |
 | **E. 코딩 에이전트** | 🟢 플랜 14개 완료 · development 프로파일 실제 루프 on | E-S2 배포 결정 · 잔여는 [PLAN_260913.md](PLAN_260913.md) A~H. managed provider **B2 게이트 미충족** |
 | **F. 개선 루프 서브에이전트화** | 🔴 닫힘 | 재개하려면 새 스펙 + 새 사전 등록 |
@@ -1210,7 +1210,12 @@ enforce 에서 WAF 차단은 **R₀ 가 아니라 한 단계 좁히기**(`ALLOW 
 ### C. 프론트엔드
 어휘는 `tests/fixtures/deep_analysis_event_kinds.json` 한 파일, 백엔드는 AST로 훑어 일치를 주장, 면제는 양방향.
 🆕 코딩 스트림도 같은 규율이다 — `tests/fixtures/coding_event_kinds.json`(§12.9).
-`frontend-ci.yml`에 `paths: [web/**]`를 넣지 말 것. 📌 되돌리지 말 것: 프록시 라우트에 POST 없음 ·
+🆕 챗 SSE 도 같은 규율이다 — `tests/fixtures/chat_stream_event_types.json`(2026-09-27). 백엔드는 `*Event` 클래스 **인스턴스화**를 AST 로
+훑는다(`type` 이 `Literal` 기본값이라 문자열 grep 으로는 안 잡힌다).
+`frontend-ci.yml`에 `paths: [web/**]`를 넣지 말 것. 📌 되돌리지 말 것: ~~프록시 라우트에 POST 없음~~ **이벤트** 프록시 라우트에 POST 없음
+(2026-09-27: 재개는 **별도** 라우트 `deep-analysis/[runId]/resume` 이고 사람이 누른 버튼만 부른다 — 호출부를 이름으로 고정한
+`deep-analysis-resume.test.tsx`. 재개된 run 의 이력은 `job_failed → job_resumed → …` 이라 **종결은 마지막 종결이다** — 백엔드
+스트림과 프론트 훅 둘 다) ·
 모르는 kind도 커서 전진 · `Record<CounterKey, …>`. **J·K·L이 만드는 kind는 이 fixture들을 거친다** — DA 원장이면 DA fixture, 코딩 원장이면 코딩 fixture.
 
 ### D. 프레임워크 이탈
