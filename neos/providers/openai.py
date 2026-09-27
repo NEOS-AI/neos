@@ -1,7 +1,4 @@
-"""OpenAIProvider — OpenAI GPT 모델 프로바이더
-
-Phase 5 (OpenClaw ModelProvider 플러그인)
-"""
+"""OpenAIProvider"""
 
 from typing import Any, List
 
