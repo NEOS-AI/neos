@@ -1,10 +1,22 @@
-"""Tool-call advancement for the durable coding loop (one tool per delivery)."""
+"""Tool-call advancement for the durable coding loop (one tool per delivery).
+
+A pending call passes a chain of gates before it runs, and any gate may end
+the step with its own checkpoint:
+
+    stall -> [read-only batch] -> phase/skill/schema -> pre-tool hook
+          -> approval -> claim -> execute -> settle
+
+A gate returns `_Halt` to end the step, or the value the next gate needs.
+Events yielded from a halt are produced after all of its side effects, so
+collecting them first changes nothing a consumer sees. `tool.started` is the
+exception, and it is yielded from the body before the call runs.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -14,6 +26,7 @@ from neos.coding.domain.approvals import (
     approval_remember_key,
     denial_envelope,
 )
+from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.model.base import (
     ToolCallCompleted,
     ToolResultContent,
@@ -23,9 +36,7 @@ from neos.coding.phases import (
     tool_allowed_in_phase,
     write_risk_blocked,
 )
-from neos.coding.sandbox.observability import (
-    CodingToolAuditEvent,
-)
+from neos.coding.sandbox.observability import CodingToolAuditEvent
 from neos.coding.tools.executor import ToolResult
 from neos.coding.tools.orchestrator import partition_leading_readonly
 from neos.coding.tools.registry import (
@@ -34,23 +45,69 @@ from neos.coding.tools.registry import (
     ToolValidationError,
     ValidatedToolCall,
 )
-from neos.coding.domain.durability import ToolExecutionDisposition
+from neos.coding.loop._durable.children import (
+    _child_ref,
+    _drain_completed_prefix,
+    _is_pending_head,
+    _parked_child_ref,
+    _select_spawn_work,
+    _subagent_max_active,
+    _upsert_active_child,
+    _without_child,
+)
+from neos.coding.loop._durable.signatures import _is_stall_denied
 from neos.coding.loop._durable.state import (
-    ActiveChildRef,
     CodingLoopFailure,
     CodingLoopWaitingApproval,
     DelegatedSpawn,
 )
-from neos.coding.loop._durable.support import (
-    _is_stall_denied,
-    _select_spawn_work,
-    _subagent_max_active,
+from neos.coding.loop._durable.tool_results import (
+    _outcome_status,
     _tool_event_payload,
-    _tool_result_ids,
-    _tool_use_names,
+    _transcript_status,
 )
+from neos.coding.loop._durable.transcript import _tool_result_ids, _tool_use_names
 
 logger = logging.getLogger("neos.coding.loop.durable")
+
+_UNKNOWN = "tool_outcome_unknown"
+_REMEMBERED_RISKS = frozenset({ToolRisk.WORKSPACE_WRITE, ToolRisk.COMMAND})
+_APPROVAL_DENIALS = {
+    ApprovalStatus.DENIED: "approval_denied",
+    ApprovalStatus.EXPIRED: "approval_expired",
+    ApprovalStatus.INVALIDATED: "approval_invalidated",
+}
+_MAX_HOOK_RETRIES = 2
+_MAX_BATCH = 10
+
+
+@dataclass(frozen=True, slots=True)
+class _Halt:
+    """A gate ended the step. `items` are its `(event, state)` pairs."""
+
+    items: tuple[tuple[Any, Any], ...]
+
+
+#: Control-plane tools run on the loop, not in the sandbox.
+#: (loop, call, bound, state, input, deps) -> awaitable (result, state).
+_CONTROL_PLANE_DISPATCH = {
+    "spawn_agent.v1": lambda loop, call, bound, state, input, deps: (
+        loop._run_spawn_agent(call, bound, state, input=input, deps=deps)
+    ),
+    "subagent_list.v1": lambda loop, call, bound, state, input, deps: (
+        loop._run_subagent_list(bound, state, input=input)
+    ),
+    "await_subagent.v1": lambda loop, call, bound, state, input, deps: (
+        loop._run_await_subagent(call, bound, state, input=input, deps=deps)
+    ),
+    "subagent_steer.v1": lambda loop, call, bound, state, input, deps: (
+        loop._run_subagent_steer(call, bound, state, input=input)
+    ),
+}
+
+
+def _with_payload_preview(tool_event, call):
+    return replace(tool_event, payload=_tool_event_payload(call, **dict(tool_event.payload)))
 
 
 class ToolExecutionMixin:
@@ -72,208 +129,166 @@ class ToolExecutionMixin:
         prefetch = prefetch or {}
         if state.tool_count >= self._config.max_tools:
             raise CodingLoopFailure("tool_budget_exceeded", retryable=False)
-        max_active = _subagent_max_active(self._config)
-        head = state.pending_tool_calls[state.pending_tool_index]
-        if head.name in _CONTROL_PLANE_TOOLS:
-            work = None
-            call = head
-        else:
-            work = _select_spawn_work(state, max_active=max_active)
-            if work is not None and work.call is not None:
-                call = work.call
-            else:
-                # resume with a missing pending id (mutation / corruption) uses
-                # pending[index] so the existing cap guard still fails closed
-                call = head
+        call, spawn_selected = self._next_tool_call(state)
         if _is_stall_denied(state, call.name, call.input):
-            event, denied_state = await self._commit_denied_tool(
+            yield await self._commit_denied_tool(
                 input, state, bound, deps, call, "policy_stall_denied"
             )
-            yield event, denied_state
             return
-        if work is not None and work.call is not None:
-            batch = None
-        else:
-            batch = self._leading_readonly_batch(state)
-        if batch is not None and self._jev_blocks_speculation():
-            # 차단 중인 게이트를 배치가 앞지르지 않는다. 본 판정이 대신 본다.
-            batch = None
-        if batch is not None:
-            hook_blocked = False
-            for _call, validated in batch:
-                decision, _reason, updated = await self._pre_tool_decision(validated)
-                if decision in {"deny", "retry", "prevent"} or updated:
-                    hook_blocked = True
-                    break
-                if (
-                    await self._evaluate_call(
-                        validated, state, deps, input.task_id, _call.tool_call_id
-                    )
-                ) is not ApprovalPolicyOutcome.ALLOW:
-                    hook_blocked = True
-                    break
-            if not hook_blocked:
-                async for event, current in self._advance_readonly_batch(
+        if not spawn_selected:
+            batch = await self._cleared_readonly_batch(input, state, deps)
+            if batch is not None:
+                async for item in self._advance_readonly_batch(
                     input, state, bound, deps, batch, prefetch=prefetch
                 ):
-                    yield event, current
+                    yield item
                 return
+        admitted = await self._admit_tool_call(input, state, bound, deps, call)
+        if isinstance(admitted, _Halt):
+            for item in admitted.items:
+                yield item
+            return
+        validated, state = admitted
+        async for item in self._run_admitted_call(
+            input, state, bound, deps, call, validated, prefetch
+        ):
+            yield item
+
+    def _next_tool_call(self, state) -> tuple[ToolCallCompleted, bool]:
+        """The call this step serves, and whether spawn scheduling chose it."""
+        head = state.pending_tool_calls[state.pending_tool_index]
+        if head.name in _CONTROL_PLANE_TOOLS:
+            return head, False
+        work = _select_spawn_work(state, max_active=_subagent_max_active(self._config))
+        if work is not None and work.call is not None:
+            return work.call, True
+        # resume with a missing pending id (mutation / corruption) uses
+        # pending[index] so the existing cap guard still fails closed
+        return head, False
+
+    # -- gates -----------------------------------------------------------------
+
+    async def _admit_tool_call(self, input, state, bound, deps, call):
+        """Policy, hook, and approval gates. `_Halt`, or `(validated, state)`."""
+        reason, validated = self._static_denial(call, state)
+        if reason is not None:
+            return _Halt(
+                (await self._commit_denied_tool(input, state, bound, deps, call, reason),)
+            )
+        await self._audit_tool(bound, call.name, operation="validate", outcome="allowed")
+        hooked = await self._pre_tool_gate(input, state, bound, deps, call, validated)
+        if isinstance(hooked, _Halt):
+            return hooked
+        return await self._approval_gate_step(input, state, bound, deps, call, hooked)
+
+    def _static_denial(self, call, state) -> tuple[str | None, ValidatedToolCall | None]:
         if not tool_allowed_in_phase(call.name, state.phase):
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, "policy_phase_denied"
-            )
-            yield event, denied_state
-            return
+            return "policy_phase_denied", None
         if not self._tool_allowed_by_skills(call.name, state):
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, "policy_skill_denied"
-            )
-            yield event, denied_state
-            return
+            return "policy_skill_denied", None
         try:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError as error:
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, error.reason_code
-            )
-            yield event, denied_state
-            return
+            return error.reason_code, None
         if write_risk_blocked(validated.risk, state.phase):
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, "policy_phase_denied"
-            )
-            yield event, denied_state
-            return
-        await self._audit.emit(
-            CodingToolAuditEvent.from_result(
-                provider=bound.binding.provider,
-                tool=call.name,
-                operation="validate",
-                outcome="allowed",
-            )
-        )
-        hook_decision, hook_reason, updated_input = await self._pre_tool_decision(
-            validated
-        )
-        if hook_decision == "allow" and updated_input is not None:
+            return "policy_phase_denied", None
+        return None, validated
+
+    async def _pre_tool_gate(self, input, state, bound, deps, call, validated):
+        decision, reason, updated_input = await self._pre_tool_decision(validated)
+        if decision == "allow" and updated_input is not None:
             try:
                 validated = self._tools.validate(validated.name, dict(updated_input))
             except ToolValidationError:
-                hook_decision = "deny"
-                hook_reason = "hook_updated_input_invalid"
-        if hook_decision == "deny":
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, "policy_hook_denied"
-            )
-            yield event, denied_state
-            return
-        if hook_decision == "prevent":
-            event, denied_state = await self._commit_denied_tool(
-                input,
-                state,
-                bound,
-                deps,
-                call,
-                "hook_prevented",
-                terminal=True,
-            )
-            yield event, denied_state
-            return
-        if hook_decision == "retry":
-            if state.hook_retry_count >= 2:
-                event, denied_state = await self._commit_denied_tool(
-                    input, state, bound, deps, call, "policy_hook_denied"
+                decision, reason = "deny", "hook_updated_input_invalid"
+        if decision == "deny" or (
+            decision == "retry" and state.hook_retry_count >= _MAX_HOOK_RETRIES
+        ):
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "policy_hook_denied"
+                    ),
                 )
-                yield event, denied_state
-                return
-            retry_state = self._with_hook_retry(state, validated, hook_reason)
-            committed = await deps.repository.commit_model_checkpoint(
-                lease=deps.lease,
-                event_type="model.completed",
-                event_payload={"reason_code": "hook_retry"},
-                loop_state=self._dump_state(input, retry_state),
-                workspace_revision=str(bound.binding.workspace_revision),
-                now=self._clock(),
             )
-            yield committed.event, retry_state
-            return
-        approval_outcome = await self._evaluate_call(
+        if decision == "prevent":
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "hook_prevented", terminal=True
+                    ),
+                )
+            )
+        if decision == "retry":
+            retry_state = self._with_hook_retry(state, validated, reason)
+            committed = await self._commit_model(
+                input, bound, deps, retry_state, {"reason_code": "hook_retry"}
+            )
+            return _Halt(((committed.event, retry_state),))
+        return validated
+
+    async def _approval_gate_step(self, input, state, bound, deps, call, validated):
+        outcome = await self._evaluate_call(
             validated, state, deps, input.task_id, call.tool_call_id
         )
-        if approval_outcome is ApprovalPolicyOutcome.DENY:
-            event, denied_state = await self._commit_denied_tool(
-                input, state, bound, deps, call, "policy_approval_denied"
-            )
-            yield event, denied_state
-            return
-        if approval_outcome is ApprovalPolicyOutcome.REQUIRE_APPROVAL:
-            approval = await deps.repository.get_tool_approval(
-                task_id=input.task_id,
-                run_id=input.run_id,
-                tool_call_id=call.tool_call_id,
-            )
-            if approval is None:
-                now = self._clock()
-                committed = await deps.repository.request_tool_approval(
-                    lease=deps.lease,
-                    tool_call=call,
-                    validated=validated,
-                    loop_state=self._dump_state(input, state),
-                    workspace_revision=str(bound.binding.workspace_revision),
-                    requested_at=now,
-                    expires_at=now + timedelta(seconds=self._config.approval_ttl_sec),
-                )
-                for event in committed.events:
-                    yield event, state
-                return
-            if approval.status is ApprovalStatus.PENDING:
-                raise CodingLoopWaitingApproval(approval.approval_id)
-            if approval.status is not ApprovalStatus.APPROVED:
-                reason_code = {
-                    ApprovalStatus.DENIED: "approval_denied",
-                    ApprovalStatus.EXPIRED: "approval_expired",
-                    ApprovalStatus.INVALIDATED: "approval_invalidated",
-                }[approval.status]
-                denied = ToolResultContent(
-                    call.tool_call_id,
-                    "denied",
-                    denial_envelope(call, reason_code),
-                )
-                advance_index = (
-                    state.has_pending_tool
-                    and state.pending_tool_calls[state.pending_tool_index].tool_call_id
-                    == call.tool_call_id
-                )
-                denied_state = await self._after_result(
-                    state,
-                    denied,
-                    tool_name=call.name,
-                    tool_input=call.input,
-                    advance_index=advance_index,
-                )
-                denied_state = self._drain_completed_prefix(denied_state)
-                committed = await deps.repository.commit_model_checkpoint(
-                    lease=deps.lease,
-                    event_type="tool.denied",
-                    event_payload=_tool_event_payload(
-                        call, reason_code=reason_code
+        if outcome is ApprovalPolicyOutcome.DENY:
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "policy_approval_denied"
                     ),
-                    loop_state=self._dump_state(input, denied_state),
-                    workspace_revision=str(bound.binding.workspace_revision),
-                    now=self._clock(),
                 )
-                yield committed.event, denied_state
-                return
-            validated = self._with_approval_answers(validated, approval)
-            if bool(approval.display_summary.get("remember")) and validated.risk in {
-                ToolRisk.WORKSPACE_WRITE,
-                ToolRisk.COMMAND,
-            }:
-                state = replace(
-                    state,
-                    approved_always=state.approved_always
-                    | {approval_remember_key(validated)},
+            )
+        if outcome is not ApprovalPolicyOutcome.REQUIRE_APPROVAL:
+            return validated, state
+        approval = await deps.repository.get_tool_approval(
+            task_id=input.task_id,
+            run_id=input.run_id,
+            tool_call_id=call.tool_call_id,
+        )
+        if approval is None:
+            now = self._clock()
+            committed = await deps.repository.request_tool_approval(
+                lease=deps.lease,
+                tool_call=call,
+                validated=validated,
+                loop_state=self._dump_state(input, state),
+                workspace_revision=str(bound.binding.workspace_revision),
+                requested_at=now,
+                expires_at=now + timedelta(seconds=self._config.approval_ttl_sec),
+            )
+            return _Halt(tuple((event, state) for event in committed.events))
+        if approval.status is ApprovalStatus.PENDING:
+            raise CodingLoopWaitingApproval(approval.approval_id)
+        if approval.status is not ApprovalStatus.APPROVED:
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input,
+                        state,
+                        bound,
+                        deps,
+                        call,
+                        _APPROVAL_DENIALS[approval.status],
+                        audit=False,
+                    ),
                 )
+            )
+        validated = self._with_approval_answers(validated, approval)
+        if (
+            bool(approval.display_summary.get("remember"))
+            and validated.risk in _REMEMBERED_RISKS
+        ):
+            state = replace(
+                state,
+                approved_always=state.approved_always
+                | {approval_remember_key(validated)},
+            )
+        return validated, state
+
+    # -- claim, execute, settle ----------------------------------------------
+
+    async def _claim_call(self, deps, call):
         claim_ttl = self._config.tool_claim_ttl_sec
         if call.name == "spawn_agent.v1" and self._config.subagent_enabled:
             claim_ttl = self._config.timeout_sec + 30
@@ -285,11 +300,19 @@ class ToolExecutionMixin:
         )
         if claim.disposition is ToolExecutionDisposition.BUSY:
             raise CodingLoopFailure("tool_execution_busy", retryable=True)
+        return claim
+
+    async def _run_admitted_call(
+        self, input, state, bound, deps, call, validated, prefetch
+    ):
+        claim = await self._claim_call(deps, call)
         if (
             claim.disposition is ToolExecutionDisposition.RECLAIMED
             and validated.risk is not ToolRisk.READ_ONLY
             and call.name != "spawn_agent.v1"
         ):
+            # A lost execution that may have mutated the workspace: never
+            # run it twice.
             async for item in self._emit_unknown_tool_result(
                 input, state, bound, deps, call, claim=claim
             ):
@@ -303,75 +326,21 @@ class ToolExecutionMixin:
         if started.event is not None:
             yield started.event, state
         ran_spawn = False
-        spawn_enabled = (
-            call.name == "spawn_agent.v1" and self._config.subagent_enabled
-        )
         if claim.disposition is ToolExecutionDisposition.COMPLETED:
-            result = dict(claim.result or {})
-            await self._audit.emit(
-                CodingToolAuditEvent.from_result(
-                    provider=bound.binding.provider,
-                    tool=call.name,
-                    operation="execute",
-                    outcome="reused",
-                )
-            )
-            tool_event = await deps.events.append(
-                task_id=input.task_id,
-                event_type="tool.completed",
-                payload=_tool_event_payload(call, result=result, reused=True),
-                run_id=input.run_id,
-                tool_call_id=call.tool_call_id,
-            )
+            result, tool_event = await self._reuse_completed(input, bound, deps, call, claim)
         else:
-            resume_spawn = spawn_enabled and claim.disposition in {
-                ToolExecutionDisposition.DELEGATED,
-                ToolExecutionDisposition.RECLAIMED,
-            }
+            resume_spawn = (
+                call.name == "spawn_agent.v1"
+                and self._config.subagent_enabled
+                and claim.disposition
+                in {ToolExecutionDisposition.DELEGATED, ToolExecutionDisposition.RECLAIMED}
+            )
             if not resume_spawn:
                 yield await self._emit_tool_started(input, deps, call), state
             try:
-                if call.name == "spawn_agent.v1":
-                    await self._adopt_all_live_claims(
-                        state, deps, selected_tool_call_id=call.tool_call_id
-                    )
-                    result = await self._run_spawn_agent(
-                        call, bound, state, input=input, deps=deps
-                    )
-                    ran_spawn = True
-                    if isinstance(result, dict):
-                        updated = result.pop("_loop_state", None)
-                        if updated is not None:
-                            state = updated
-                elif call.name == "subagent_list.v1":
-                    result = await self._run_subagent_list(
-                        bound, state, input=input
-                    )
-                elif call.name == "await_subagent.v1":
-                    result = await self._run_await_subagent(
-                        call, bound, state, input=input, deps=deps
-                    )
-                    if isinstance(result, dict):
-                        updated = result.pop("_loop_state", None)
-                        if updated is not None:
-                            state = updated
-                elif call.name == "subagent_steer.v1":
-                    result = await self._run_subagent_steer(
-                        call, bound, state, input=input
-                    )
-                    if isinstance(result, dict):
-                        updated = result.pop("_loop_state", None)
-                        if updated is not None:
-                            state = updated
-                else:
-                    result = await self._execute_validated(
-                        bound,
-                        deps,
-                        validated,
-                        known_reads=state.read_paths,
-                        known_stamps=state.read_stamps,
-                        prefetched=prefetch.get(call.tool_call_id),
-                    )
+                result, state = await self._dispatch_call(
+                    input, state, bound, deps, call, validated, prefetch
+                )
             except asyncio.CancelledError:
                 await self._cancel_active_child(
                     state, reason="aborted", task_id=input.task_id
@@ -379,218 +348,179 @@ class ToolExecutionMixin:
                 await self._fail_delegated_claim(deps, claim, bound)
                 raise
             except CodingLoopFailure as error:
-                if error.code != "tool_outcome_unknown":
+                if error.code != _UNKNOWN:
                     raise
                 async for item in self._emit_unknown_tool_result(
                     input, state, bound, deps, call, claim=claim, started=started
                 ):
                     yield item
                 return
+            ran_spawn = call.name == "spawn_agent.v1"
             if isinstance(result, DelegatedSpawn):
-                if claim.disposition in {
-                    ToolExecutionDisposition.CLAIMED,
-                    ToolExecutionDisposition.RECLAIMED,
-                }:
-                    await self._mark_spawn_delegated(deps, claim, result)
-                ref_call_id = result.tool_call_id or call.tool_call_id
-                existing = self._child_ref(state, ref_call_id)
-                in_delta, out_delta, rolled_in, rolled_out = self._unrolled_child_usage(
-                    existing, result.input_tokens, result.output_tokens
+                yield await self._park_delegated_spawn(
+                    input, state, bound, deps, call, claim, started, result
                 )
-                parked = self._upsert_active_child(
-                    self._apply_child_usage_delta(state, in_delta, out_delta),
-                    ActiveChildRef(
-                        run_id=result.run_id,
-                        checkpoint_id=result.checkpoint_id,
-                        tool_call_id=ref_call_id,
-                        last_advanced_at=self._utc_stamp(),
-                        rolled_input_tokens=rolled_in,
-                        rolled_output_tokens=rolled_out,
-                        pending_steer=existing.pending_steer if existing else "",
-                        spec=result.spec or (existing.spec if existing else "explore"),
-                        spawn_depth=(
-                            result.spawn_depth
-                            if result.spawn_depth
-                            else (existing.spawn_depth if existing else 0)
-                        ),
-                        worktree_repo=result.worktree_repo
-                        or (existing.worktree_repo if existing else ""),
-                        worktree_path=result.worktree_path
-                        or (existing.worktree_path if existing else ""),
-                        worktree_branch=result.worktree_branch
-                        or (existing.worktree_branch if existing else ""),
-                        worktree_base_sha=result.worktree_base_sha
-                        or (existing.worktree_base_sha if existing else ""),
-                        # park 이 자식의 배달 방식을 바꾸지는 않는다.
-                        delivery=existing.delivery if existing else "tool_result",
-                    ),
-                )
-                payload = {
-                    "child_run_id": result.run_id,
-                    "child_checkpoint_id": result.checkpoint_id,
-                    "step_kind": result.step_kind,
-                    "live_count": len(parked.active_children),
-                }
-                self._record_spawn_live_children(parked, call)
-                committed = await deps.repository.commit_phase_checkpoint(
-                    lease=deps.lease,
-                    phase=started.phase,
-                    tool_call_id=call.tool_call_id,
-                    result=payload,
-                    loop_state=self._dump_state(input, parked),
-                    workspace_revision=str(bound.binding.workspace_revision),
-                    now=self._clock(),
-                )
-                await self._enforce_usage_budgets_after_child_spend(
-                    parked,
-                    deps,
-                    bound,
-                    input,
-                    except_tool_call_id=call.tool_call_id,
-                )
-                yield committed.event, parked
                 return
-            if validated.risk is not ToolRisk.READ_ONLY:
-                try:
-                    await self._bindings.record_mutation(
-                        deps.lease,
-                        workspace_revision=(
-                            await bound.session.workspace_revision()
-                        ),
-                    )
-                except Exception:
-                    await self._audit.emit(
-                        CodingToolAuditEvent.from_result(
-                            provider=bound.binding.provider,
-                            tool=validated.name,
-                            operation="execute",
-                            outcome="error",
-                            error_code="tool_outcome_unknown",
-                        )
-                    )
-                    async for item in self._emit_unknown_tool_result(
-                        input, state, bound, deps, call, claim=claim, started=started
-                    ):
-                        yield item
-                    return
-            if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
-                envelope = dict(denial_envelope(call, "hook_prevented"))
-                envelope["denied_by"] = "hook"
-                try:
-                    await deps.repository.complete_tool_execution(
-                        claim, result=envelope, now=self._clock()
-                    )
-                except Exception:
-                    pass
-                event, denied_state = await self._commit_denied_tool(
-                    input,
-                    state,
-                    bound,
-                    deps,
-                    call,
-                    "hook_prevented",
-                    terminal=True,
-                )
-                yield event, denied_state
-                return
-            try:
-                tool_event = await deps.repository.complete_tool_execution(
-                    claim, result=result, now=self._clock()
-                )
-            except Exception:
-                await self._audit.emit(
-                    CodingToolAuditEvent.from_result(
-                        provider=bound.binding.provider,
-                        tool=call.name,
-                        operation="execute",
-                        outcome="error",
-                        error_code="tool_outcome_unknown",
-                    )
-                )
-                async for item in self._emit_unknown_tool_result(
-                    input, state, bound, deps, call, claim=claim, started=started
-                ):
+            finished = await self._record_execution(
+                input, state, bound, deps, call, validated, claim, started, result
+            )
+            if isinstance(finished, _Halt):
+                for item in finished.items:
                     yield item
                 return
-            await self._audit_execute_result(bound, call.name, result)
-            tool_event = replace(
-                tool_event,
-                payload=_tool_event_payload(
-                    call, **dict(tool_event.payload)
-                ),
-            )
+            tool_event = finished
         self._record_tool_metric(call.name, result)
         yield tool_event, state
-        status = str(result.get("status", "ok"))
-        canonical_status = status if status in {"ok", "error", "denied"} else "ok"
-        reused = claim.disposition is ToolExecutionDisposition.COMPLETED
-        dropped_fold = (
-            call.name == "spawn_agent.v1"
-            and str(result.get("exit_reason") or "") == "dropped"
-        )
-        child_fold = call.name == "spawn_agent.v1" and "child_status" in result
-        if (
-            child_fold
-            and not dropped_fold
-            and (not reused or self._child_ref(state, call.tool_call_id) is not None)
+        async for item in self._settle_call(
+            input, state, bound, deps, call, claim, started, result, ran_spawn
         ):
-            state = self._apply_child_fold_usage(state, result, call.tool_call_id)
-        advance_index = (
-            state.has_pending_tool
-            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
-            == call.tool_call_id
+            yield item
+
+    async def _reuse_completed(self, input, bound, deps, call, claim):
+        """A claim already finished by an earlier step: replay, don't run."""
+        result = dict(claim.result or {})
+        await self._audit_tool(bound, call.name, operation="execute", outcome="reused")
+        tool_event = await deps.events.append(
+            task_id=input.task_id,
+            event_type="tool.completed",
+            payload=_tool_event_payload(call, result=result, reused=True),
+            run_id=input.run_id,
+            tool_call_id=call.tool_call_id,
         )
-        if dropped_fold:
-            if call.tool_call_id in _tool_result_ids(state.transcript):
-                after = self._drain_completed_prefix(state)
-            elif call.tool_call_id in _tool_use_names(state.transcript):
-                after = await self._after_result(
-                    state,
-                    ToolResultContent(
-                        call.tool_call_id,
-                        "error",
-                        {"exit_reason": "dropped"},
-                    ),
-                    tool_name=call.name,
-                    tool_input=call.input,
-                    advance_index=advance_index,
-                )
-            else:
-                after = state
-                if advance_index:
-                    after = replace(
-                        after, pending_tool_index=after.pending_tool_index + 1
-                    )
-        elif call.tool_call_id in _tool_result_ids(state.transcript):
-            after = self._drain_completed_prefix(state)
-        else:
-            after = await self._after_result(
-                state,
-                ToolResultContent(call.tool_call_id, canonical_status, result),
-                tool_name=call.name,
-                tool_input=call.input,
-                advance_index=advance_index,
+        return result, tool_event
+
+    async def _dispatch_call(self, input, state, bound, deps, call, validated, prefetch):
+        handler = _CONTROL_PLANE_DISPATCH.get(call.name)
+        if handler is None:
+            result = await self._execute_validated(
+                bound,
+                deps,
+                validated,
+                known_reads=state.read_paths,
+                known_stamps=state.read_stamps,
+                prefetched=prefetch.get(call.tool_call_id),
             )
-        if ran_spawn and not self._config.subagent_enabled:
-            after = self._with_spawn_handoff(after, call, result)
-        ref = self._child_ref(after, call.tool_call_id)
-        still_live = ref is not None
-        # A parked child's tool result *is* its fold, so writing one means the
-        # child is done and the ref goes. A detached child (K3) already had its
-        # result written at spawn time -- dropping it here would strand a run
-        # nobody advances and lose the report.
-        if ran_spawn or child_fold or still_live:
-            if ref is None or not ref.detached:
-                after = self._sync_active_children(
-                    after,
-                    tuple(
-                        child
-                        for child in after.active_children
-                        if child.tool_call_id != call.tool_call_id
+            return result, state
+        if call.name == "spawn_agent.v1":
+            await self._adopt_all_live_claims(
+                state, deps, selected_tool_call_id=call.tool_call_id
+            )
+        return await handler(self, call, bound, state, input, deps)
+
+    async def _park_delegated_spawn(
+        self, input, state, bound, deps, call, claim, started, parked_step: DelegatedSpawn
+    ):
+        """The child is still running: keep the claim open and remember it."""
+        if claim.disposition in {
+            ToolExecutionDisposition.CLAIMED,
+            ToolExecutionDisposition.RECLAIMED,
+        }:
+            await self._mark_spawn_delegated(deps, claim, parked_step)
+        ref_call_id = parked_step.tool_call_id or call.tool_call_id
+        existing = _child_ref(state, ref_call_id)
+        charged, rolled_in, rolled_out = self._roll_in_child_usage(
+            state, existing, parked_step.input_tokens, parked_step.output_tokens
+        )
+        parked = _upsert_active_child(
+            charged,
+            _parked_child_ref(
+                existing,
+                parked_step,
+                tool_call_id=ref_call_id,
+                stamp=self._utc_stamp(),
+                rolled_in=rolled_in,
+                rolled_out=rolled_out,
+            ),
+        )
+        payload = {
+            "child_run_id": parked_step.run_id,
+            "child_checkpoint_id": parked_step.checkpoint_id,
+            "step_kind": parked_step.step_kind,
+            "live_count": len(parked.active_children),
+        }
+        self._record_spawn_live_children(parked, call)
+        committed = await deps.repository.commit_phase_checkpoint(
+            lease=deps.lease,
+            phase=started.phase,
+            tool_call_id=call.tool_call_id,
+            result=payload,
+            loop_state=self._dump_state(input, parked),
+            workspace_revision=str(bound.binding.workspace_revision),
+            now=self._clock(),
+        )
+        await self._enforce_usage_budgets_after_child_spend(
+            parked,
+            deps,
+            bound,
+            input,
+            except_tool_call_id=call.tool_call_id,
+        )
+        return committed.event, parked
+
+    async def _record_execution(
+        self, input, state, bound, deps, call, validated, claim, started, result
+    ):
+        """Record the mutation and complete the claim. `_Halt`, or the event."""
+        if validated.risk is not ToolRisk.READ_ONLY:
+            try:
+                await self._bindings.record_mutation(
+                    deps.lease,
+                    workspace_revision=await bound.session.workspace_revision(),
+                )
+            except Exception:
+                return await self._halt_unknown(
+                    input, state, bound, deps, call, claim, started, validated.name
+                )
+        if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
+            envelope = dict(denial_envelope(call, "hook_prevented"))
+            envelope["denied_by"] = "hook"
+            try:
+                await deps.repository.complete_tool_execution(
+                    claim, result=envelope, now=self._clock()
+                )
+            except Exception:
+                pass
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "hook_prevented", terminal=True
                     ),
                 )
-            after = self._drain_completed_prefix(after)
-            self._record_spawn_live_children(after, call)
+            )
+        try:
+            tool_event = await deps.repository.complete_tool_execution(
+                claim, result=result, now=self._clock()
+            )
+        except Exception:
+            return await self._halt_unknown(
+                input, state, bound, deps, call, claim, started, call.name
+            )
+        await self._audit_execute_result(bound, call.name, result)
+        return _with_payload_preview(tool_event, call)
+
+    async def _halt_unknown(
+        self, input, state, bound, deps, call, claim, started, audited_name
+    ) -> _Halt:
+        await self._audit_tool(
+            bound, audited_name, operation="execute", outcome="error", error_code=_UNKNOWN
+        )
+        return _Halt(
+            tuple(
+                [
+                    item
+                    async for item in self._emit_unknown_tool_result(
+                        input, state, bound, deps, call, claim=claim, started=started
+                    )
+                ]
+            )
+        )
+
+    async def _settle_call(
+        self, input, state, bound, deps, call, claim, started, result, ran_spawn
+    ):
+        after, child_fold = await self._state_after_call(
+            state, call, claim, result, ran_spawn
+        )
         revision = str(result.get("workspace_revision") or "")
         if revision in {"", "unknown"}:
             revision = str(bound.binding.workspace_revision)
@@ -610,6 +540,72 @@ class ToolExecutionMixin:
         yield committed.event, after
         if after.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
+
+    async def _state_after_call(self, state, call, claim, result, ran_spawn):
+        """Fold a finished call's result into state. Returns (state, child_fold)."""
+        reused = claim.disposition is ToolExecutionDisposition.COMPLETED
+        is_spawn = call.name == "spawn_agent.v1"
+        dropped_fold = is_spawn and str(result.get("exit_reason") or "") == "dropped"
+        child_fold = is_spawn and "child_status" in result
+        if (
+            child_fold
+            and not dropped_fold
+            and (not reused or _child_ref(state, call.tool_call_id) is not None)
+        ):
+            state = self._apply_child_fold_usage(state, result, call.tool_call_id)
+        advance_index = _is_pending_head(state, call.tool_call_id)
+        if call.tool_call_id in _tool_result_ids(state.transcript):
+            # Already answered (a detached spawn, or a replay): just move on.
+            after = _drain_completed_prefix(state)
+        elif dropped_fold and call.tool_call_id not in _tool_use_names(state.transcript):
+            # The call itself was compacted away; there is nothing to answer.
+            after = state
+            if advance_index:
+                after = replace(after, pending_tool_index=after.pending_tool_index + 1)
+        else:
+            content = (
+                {"exit_reason": "dropped"} if dropped_fold else result
+            )
+            status = "error" if dropped_fold else _transcript_status(result)
+            after = await self._after_result(
+                state,
+                ToolResultContent(call.tool_call_id, status, content),
+                tool_name=call.name,
+                tool_input=call.input,
+                advance_index=advance_index,
+            )
+        if ran_spawn and not self._config.subagent_enabled:
+            after = self._with_spawn_handoff(after, call, result)
+        ref = _child_ref(after, call.tool_call_id)
+        # A parked child's tool result *is* its fold, so writing one means the
+        # child is done and the ref goes. A detached child (K3) already had its
+        # result written at spawn time -- dropping it here would strand a run
+        # nobody advances and lose the report.
+        if ran_spawn or child_fold or ref is not None:
+            if ref is None or not ref.detached:
+                after = _without_child(after, call.tool_call_id)
+            after = _drain_completed_prefix(after)
+            self._record_spawn_live_children(after, call)
+        return after, child_fold
+
+    # -- read-only batches -----------------------------------------------------
+
+    async def _cleared_readonly_batch(self, input, state, deps):
+        """A leading read-only batch every hook and the gate let through, or None."""
+        batch = self._leading_readonly_batch(state)
+        if batch is None or self._jev_blocks_speculation():
+            # 차단 중인 게이트를 배치가 앞지르지 않는다. 본 판정이 대신 본다.
+            return None
+        for call, validated in batch:
+            decision, _reason, updated = await self._pre_tool_decision(validated)
+            if decision in {"deny", "retry", "prevent"} or updated:
+                return None
+            outcome = await self._evaluate_call(
+                validated, state, deps, input.task_id, call.tool_call_id
+            )
+            if outcome is not ApprovalPolicyOutcome.ALLOW:
+                return None
+        return batch
 
     def _leading_readonly_batch(self, state):
         remaining = state.pending_tool_calls[state.pending_tool_index :]
@@ -633,7 +629,7 @@ class ToolExecutionMixin:
             return None
         batch, _rest = partition_leading_readonly(
             tuple(validated for _call, validated in pairs),
-            max_batch=min(10, remaining_budget),
+            max_batch=min(_MAX_BATCH, remaining_budget),
         )
         if len(batch) < 2:
             return None
@@ -646,13 +642,8 @@ class ToolExecutionMixin:
         current = state
         claims = []
         for call, validated in pairs:
-            await self._audit.emit(
-                CodingToolAuditEvent.from_result(
-                    provider=bound.binding.provider,
-                    tool=call.name,
-                    operation="validate",
-                    outcome="allowed",
-                )
+            await self._audit_tool(
+                bound, call.name, operation="validate", outcome="allowed"
             )
             claim = await deps.repository.claim_tool_execution(
                 lease=deps.lease,
@@ -678,13 +669,8 @@ class ToolExecutionMixin:
         async def run_one(call, validated, claim):
             if claim.disposition is ToolExecutionDisposition.COMPLETED:
                 result = dict(claim.result or {})
-                await self._audit.emit(
-                    CodingToolAuditEvent.from_result(
-                        provider=bound.binding.provider,
-                        tool=call.name,
-                        operation="execute",
-                        outcome="reused",
-                    )
+                await self._audit_tool(
+                    bound, call.name, operation="execute", outcome="reused"
                 )
                 return result, True
             result = await self._execute_validated(
@@ -699,10 +685,7 @@ class ToolExecutionMixin:
             return result, False
 
         gathered = await asyncio.gather(
-            *(
-                run_one(call, validated, claim)
-                for call, validated, claim in claims
-            )
+            *(run_one(call, validated, claim) for call, validated, claim in claims)
         )
         last_call = claims[-1][0]
         last_result: dict[str, Any] = {}
@@ -723,22 +706,15 @@ class ToolExecutionMixin:
                         claim, result=result, now=self._clock()
                     )
                 except Exception as error:
-                    await self._audit.emit(
-                        CodingToolAuditEvent.from_result(
-                            provider=bound.binding.provider,
-                            tool=call.name,
-                            operation="execute",
-                            outcome="error",
-                            error_code="tool_outcome_unknown",
-                        )
+                    await self._audit_tool(
+                        bound,
+                        call.name,
+                        operation="execute",
+                        outcome="error",
+                        error_code=_UNKNOWN,
                     )
-                    raise CodingLoopFailure(
-                        "tool_outcome_unknown", retryable=False
-                    ) from error
-                tool_event = replace(
-                    tool_event,
-                    payload=_tool_event_payload(call, **dict(tool_event.payload)),
-                )
+                    raise CodingLoopFailure(_UNKNOWN, retryable=False) from error
+                tool_event = _with_payload_preview(tool_event, call)
             self._record_tool_metric(call.name, result)
             yield tool_event, current
             if isinstance(result, dict) and result.pop("_post_tool_prevent", False):
@@ -754,11 +730,9 @@ class ToolExecutionMixin:
                 last_call = call
                 last_result = envelope
                 break
-            status = str(result.get("status", "ok"))
-            canonical_status = status if status in {"ok", "error", "denied"} else "ok"
             current = await self._after_result(
                 current,
-                ToolResultContent(call.tool_call_id, canonical_status, result),
+                ToolResultContent(call.tool_call_id, _transcript_status(result), result),
                 tool_name=call.name,
                 tool_input=call.input,
             )
@@ -780,6 +754,8 @@ class ToolExecutionMixin:
         if current.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
             raise CodingLoopFailure("tool_error_budget_exceeded", retryable=False)
 
+    # -- events, audit, metrics ------------------------------------------------
+
     async def _emit_tool_started(self, input, deps, call):
         return await deps.events.append(
             task_id=input.task_id,
@@ -792,7 +768,7 @@ class ToolExecutionMixin:
     async def _emit_unknown_tool_result(
         self, input, state, bound, deps, call, *, claim=None, started=None
     ):
-        result = self._spawn_tool_error(bound, "tool_outcome_unknown")
+        result = self._spawn_tool_error(bound, _UNKNOWN)
         tool_event = None
         if claim is not None and claim.disposition is not ToolExecutionDisposition.COMPLETED:
             try:
@@ -805,17 +781,12 @@ class ToolExecutionMixin:
             tool_event = await deps.events.append(
                 task_id=input.task_id,
                 event_type="tool.completed",
-                payload=_tool_event_payload(
-                    call, result=result, reason_code="tool_outcome_unknown"
-                ),
+                payload=_tool_event_payload(call, result=result, reason_code=_UNKNOWN),
                 run_id=input.run_id,
                 tool_call_id=call.tool_call_id,
             )
         else:
-            tool_event = replace(
-                tool_event,
-                payload=_tool_event_payload(call, **dict(tool_event.payload)),
-            )
+            tool_event = _with_payload_preview(tool_event, call)
         after = await self._after_result(
             state,
             ToolResultContent(call.tool_call_id, "error", result),
@@ -833,87 +804,96 @@ class ToolExecutionMixin:
                 now=self._clock(),
             )
         else:
-            committed = await deps.repository.commit_model_checkpoint(
-                lease=deps.lease,
+            committed = await self._commit_model(
+                input,
+                bound,
+                deps,
+                after,
+                {"reason_code": _UNKNOWN},
                 event_type="tool.completed",
-                event_payload={"reason_code": "tool_outcome_unknown"},
-                loop_state=self._dump_state(input, after),
-                workspace_revision=str(bound.binding.workspace_revision),
-                now=self._clock(),
             )
         yield tool_event, state
         yield committed.event, after
 
-    async def _audit_execute_result(self, bound, tool_name, result) -> None:
-        result_status = str(result.get("status", "ok"))
+    async def _audit_tool(
+        self, bound, tool: str, *, operation: str, outcome: str, error_code=None
+    ) -> None:
         await self._audit.emit(
             CodingToolAuditEvent.from_result(
                 provider=bound.binding.provider,
-                tool=tool_name,
-                operation="execute",
-                outcome=(
-                    result_status
-                    if result_status in {"ok", "error", "denied"}
-                    else "error"
-                ),
-                error_code=(
-                    str(result.get("reason_code"))
-                    if result_status != "ok"
-                    else None
-                ),
+                tool=tool,
+                operation=operation,
+                outcome=outcome,
+                error_code=error_code,
             )
         )
 
+    async def _audit_execute_result(self, bound, tool_name, result) -> None:
+        raw_status = str(result.get("status", "ok"))
+        await self._audit_tool(
+            bound,
+            tool_name,
+            operation="execute",
+            outcome=_outcome_status(result),
+            error_code=str(result.get("reason_code")) if raw_status != "ok" else None,
+        )
+
     async def _commit_denied_tool(
-        self, input, state, bound, deps, call, reason_code, *, terminal: bool = False
+        self,
+        input,
+        state,
+        bound,
+        deps,
+        call,
+        reason_code,
+        *,
+        terminal: bool = False,
+        audit: bool = True,
     ):
-        await self._audit.emit(
-            CodingToolAuditEvent.from_result(
-                provider=bound.binding.provider,
-                tool=call.name,
+        """Answer `call` with a denial and end the step.
+
+        `audit=False` is for denials the policy did not make (an approval a
+        human denied or let expire): those are not validation outcomes.
+        """
+        if audit:
+            await self._audit_tool(
+                bound,
+                call.name,
                 operation="validate",
                 outcome="denied",
                 error_code=reason_code,
             )
-        )
         envelope = dict(denial_envelope(call, reason_code))
         if reason_code == "hook_prevented":
             envelope["denied_by"] = "hook"
-        denied = ToolResultContent(call.tool_call_id, "denied", envelope)
-        advance_index = (
-            state.has_pending_tool
-            and state.pending_tool_calls[state.pending_tool_index].tool_call_id
-            == call.tool_call_id
-        )
         denied_state = await self._after_result(
             state,
-            denied,
+            ToolResultContent(call.tool_call_id, "denied", envelope),
             tool_name=call.name,
             tool_input=call.input,
-            advance_index=advance_index,
+            advance_index=_is_pending_head(state, call.tool_call_id),
         )
-        denied_state = self._drain_completed_prefix(denied_state)
+        denied_state = _drain_completed_prefix(denied_state)
         if terminal:
             denied_state = replace(denied_state, terminal_pending=True)
-        committed = await deps.repository.commit_model_checkpoint(
-            lease=deps.lease,
+        committed = await self._commit_model(
+            input,
+            bound,
+            deps,
+            denied_state,
+            _tool_event_payload(call, reason_code=reason_code),
             event_type="tool.denied",
-            event_payload=_tool_event_payload(call, reason_code=reason_code),
-            loop_state=self._dump_state(input, denied_state),
-            workspace_revision=str(bound.binding.workspace_revision),
-            now=self._clock(),
         )
         return committed.event, denied_state
 
     def _record_tool_metric(self, tool_name, result) -> None:
         if self._metrics is None:
             return
-        metric_outcome = str(result.get("status", "ok"))
-        if metric_outcome not in {"ok", "error", "denied"}:
-            metric_outcome = "error"
         self._metrics.coding_tool_execution_total.labels(
-            tool=tool_name, outcome=metric_outcome
+            tool=tool_name, outcome=_outcome_status(result)
         ).inc()
+
+    # -- speculative prefetch --------------------------------------------------
 
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
         if call.name == "spawn_agent.v1":

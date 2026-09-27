@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from neos.coding.loop._durable.support import (
+from neos.coding.loop._durable.codec import (
     _message_from_mapping,
     _message_to_mapping,
 )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -17,17 +16,6 @@ EMPTY_RETRY_LIMIT = 1
 STALL_DENY_AFTER = 3
 COMPACT_REF_THRESHOLD_BYTES = 4096
 DEFAULT_MAX_TRANSCRIPT_TOKENS = 80_000
-_UNCHANGED_PREVIEW = "File unchanged since last read."
-_THINK_CLOSED_RE = re.compile(
-    r"<(think|thinking|reasoning)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
-)
-_THINK_UNCLOSED_RE = re.compile(
-    r"<(think|thinking|reasoning)\b[^>]*>.*\Z",
-    re.IGNORECASE | re.DOTALL,
-)
-_BRIEF_PLACEHOLDER_RE = re.compile(r"<[A-Za-z_][A-Za-z0-9_]*>")
-_STUB_GOALS = frozenset({"TODO", "TBD"})
 
 
 class CodingLoopFailure(RuntimeError):
@@ -128,18 +116,6 @@ class CodingLoopConfig:
             raise ValueError("coding loop configuration limits must be positive")
         if self.thinking_budget < 0:
             raise ValueError("coding loop configuration limits must be positive")
-
-
-_EPOCH_STAMP = "1970-01-01T00:00:00+00:00"
-_STALE_SLACK_SEC = 30.0
-
-
-@dataclass(frozen=True, slots=True)
-class _AppliedPendingCommand:
-    transcript: tuple[CanonicalMessage, ...]
-    bodies: dict[str, str]
-    todos: tuple
-    instructions_loaded: bool
 
 
 # `_CONTROL_PLANE_TOOLS` 는 여기 없다 -- 레지스트리가 도구 정체성의 주인이고,
