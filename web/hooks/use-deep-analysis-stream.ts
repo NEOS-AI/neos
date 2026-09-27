@@ -20,7 +20,12 @@
  */
 
 import { useEffect, useReducer, useRef, useState } from "react";
-import { isTerminalJobKind, JOB_COMPLETED } from "@/lib/deep-analysis/events";
+import {
+  type DeepAnalysisJobEvent,
+  isTerminalJobKind,
+  JOB_COMPLETED,
+  JOB_RESUMED,
+} from "@/lib/deep-analysis/events";
 import {
   type DeepAnalysisProgress,
   initialDeepAnalysisProgress,
@@ -57,6 +62,12 @@ export type UseDeepAnalysisStreamOptions = {
   runId: string | undefined;
   /** false면 구독하지 않는다 (이미 완료된 run 등). */
   enabled?: boolean;
+  /**
+   * 바뀌면 처음부터 다시 구독한다. 사람이 누른 재개(`resumeDeepAnalysis`) 뒤에만
+   * 올린다 -- 이 훅은 재개를 **부르지 않는다**. 커서를 0 에서 다시 읽어도
+   * 리듀서의 `seq <= cursor` 가드가 중복을 버린다.
+   */
+  subscriptionKey?: number;
   onCompleted?: (reportMarkdown: string | null) => void;
   onFailed?: (error: string) => void;
 };
@@ -69,6 +80,7 @@ export type UseDeepAnalysisStreamReturn = {
 export function useDeepAnalysisStream({
   runId,
   enabled = true,
+  subscriptionKey = 0,
   onCompleted,
   onFailed,
 }: UseDeepAnalysisStreamOptions): UseDeepAnalysisStreamReturn {
@@ -87,6 +99,7 @@ export function useDeepAnalysisStream({
   onCompletedRef.current = onCompleted;
   onFailedRef.current = onFailed;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: subscriptionKey is a restart trigger — it is read by React, not by the effect body
   useEffect(() => {
     if (!(runId && enabled)) {
       return;
@@ -95,6 +108,11 @@ export function useDeepAnalysisStream({
 
     let disposed = false;
     let settled = false;
+    // 종결 이벤트는 **보류**했다가 스트림이 끝날 때 확정한다. 재개된 run 의
+    // 이력은 `job_failed → job_resumed → …` 라서 첫 종결은 끝이 아닐 수 있다.
+    // 백엔드는 마지막 종결 뒤에야 스트림을 닫는다(`deep_analysis_handlers.py`).
+    // `as` 로 선언한다 -- 콜백 안에서만 대입되므로 제어 흐름이 null 로 좁혀 버린다.
+    let pendingTerminal = null as DeepAnalysisJobEvent | null;
     let terminalError = false;
     let attempt = 0;
     let cursor = 0;
@@ -145,22 +163,26 @@ export function useDeepAnalysisStream({
           cursor = nextCursor(cursor, event.seq);
           dispatch(event);
           if (isTerminalJobKind(event.kind)) {
-            settled = true;
-            if (event.kind === JOB_COMPLETED) {
-              const report = event.payload.report_markdown;
-              onCompletedRef.current?.(
-                typeof report === "string" ? report : null
-              );
-            } else {
-              const error = event.payload.error;
-              onFailedRef.current?.(
-                typeof error === "string" ? error : "Deep analysis job failed"
-              );
-            }
-            return false;
+            pendingTerminal = event;
+          } else if (event.kind === JOB_RESUMED) {
+            pendingTerminal = null;
           }
           return true;
         });
+
+        if (pendingTerminal) {
+          settled = true;
+          const terminal = pendingTerminal;
+          if (terminal.kind === JOB_COMPLETED) {
+            const report = terminal.payload.report_markdown;
+            onCompletedRef.current?.(typeof report === "string" ? report : null);
+          } else {
+            const error = terminal.payload.error;
+            onFailedRef.current?.(
+              typeof error === "string" ? error : "Deep analysis job failed"
+            );
+          }
+        }
 
         if (settled) {
           setConnection("closed");
@@ -188,7 +210,7 @@ export function useDeepAnalysisStream({
       }
       controller.abort();
     };
-  }, [runId, enabled]);
+  }, [runId, enabled, subscriptionKey]);
 
   return { progress, connection };
 }
