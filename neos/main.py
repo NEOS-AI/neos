@@ -27,7 +27,6 @@ from neos.api.deep_analysis_routes import router as deep_analysis_router
 from neos.api.handlers.auth import router as auth_router
 from neos.api.handlers.skills_handlers import router as skills_router
 from neos.api.handlers.workflow_stream_handlers import router as workflow_stream_router
-from neos.api.handlers.unified_handlers import router as unified_router
 from neos.api.handlers.vote_handlers import router as vote_router
 from neos.api.handlers.artifact_handlers import router as artifact_router
 from neos.api.handlers.research_session_handlers import router as research_session_router
@@ -603,7 +602,6 @@ _include_router_for_runtime(
     dependencies=[Depends(get_current_admin_user)],
 )
 _include_router_for_runtime(workflow_stream_router, prefix=settings.API_V1_PREFIX, tags=["Workflow Streaming"])
-_include_router_for_runtime(unified_router, tags=["Unified Processing"])  # 통합 API (문서 + 워크플로우)
 _include_router_for_runtime(vote_router, prefix=settings.API_V1_PREFIX, tags=["Votes & Feedback"])  # Vote API
 _include_router_for_runtime(artifact_router, prefix=settings.API_V1_PREFIX, tags=["Artifacts & Documents"])  # Artifact API
 _include_router_for_runtime(research_session_router, tags=["Research Sessions"])  # Research Session API (prefix already set in router)

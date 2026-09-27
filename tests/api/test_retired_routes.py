@@ -26,6 +26,12 @@ RETIRED = {
     ),
     ("GET", "/api/v1/chat/conversations/{conversation_id}/similarity/config"),
     ("GET", "/api/v1/chat/conversations/{conversation_id}/similarity/analytics"),
+    # unified -- 챗 경로와 기능이 겹쳤다
+    ("POST", "/api/v1/unified/process"),
+    ("POST", "/api/v1/unified/process/stream"),
+    ("POST", "/api/v1/unified/process/upload"),
+    ("POST", "/api/v1/unified/process/upload/stream"),
+    ("GET", "/api/v1/unified/health"),
 }
 
 

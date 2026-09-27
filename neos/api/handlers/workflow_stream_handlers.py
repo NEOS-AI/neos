@@ -19,7 +19,6 @@ Workflow Streaming API handlers - SSE & WebSocket 기반 실시간 스트리밍
    - SSE: 단방향, 자동 재연결, HTTP 기반
    - WebSocket: 양방향, 낮은 지연시간, 실시간 통신
 
-이 설계는 unified_handlers.py의 패턴을 따릅니다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
