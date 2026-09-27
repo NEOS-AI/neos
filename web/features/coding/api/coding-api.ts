@@ -25,6 +25,10 @@ import type {
   CodingApprovalView,
   CodingProjectionSnapshot,
 } from "@/features/coding/types/projection";
+import type {
+  CodingCommandListing,
+  CodingCommandResult,
+} from "@/features/coding/commands/types";
 import type { CodingSandboxStatus } from "@/features/coding/sandbox/types";
 import { backendErrorMessage } from "@/lib/backend-error";
 import type {
@@ -144,6 +148,33 @@ export async function steerCodingTask(
   );
   if (!response.ok) {
     throw await responseError(response, "Could not steer coding task");
+  }
+  return response.json();
+}
+
+export async function listCodingCommands(): Promise<CodingCommandListing[]> {
+  const response = await fetch("/api/coding/commands");
+  if (!response.ok) {
+    throw await responseError(response, "Could not load coding commands");
+  }
+  const body: { commands: CodingCommandListing[] } = await response.json();
+  return body.commands;
+}
+
+export async function invokeCodingCommand(
+  taskId: string,
+  text: string
+): Promise<CodingCommandResult> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/commands`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not run coding command");
   }
   return response.json();
 }

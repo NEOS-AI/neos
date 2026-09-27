@@ -4,7 +4,12 @@ import { CornerDownRight, Octagon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { steerCodingTask } from "@/features/coding/api/coding-api";
+import {
+  invokeCodingCommand,
+  steerCodingTask,
+} from "@/features/coding/api/coding-api";
+import { routeComposerInput } from "@/features/coding/commands/route-input";
+import { useCodingCommandCatalog } from "@/features/coding/commands/use-command-catalog";
 
 export function CodingSteerComposer({
   taskId,
@@ -18,6 +23,11 @@ export function CodingSteerComposer({
     null
   );
   const [error, setError] = useState<string | null>(null);
+  const [reply, setReply] = useState<string | null>(null);
+  const { tokens } = useCodingCommandCatalog();
+  const route = routeComposerInput(instruction, tokens);
+  const commandName =
+    route.kind === "command" ? route.text.trim().split(" ", 1)[0] : null;
 
   async function submit(mode: "safe_point" | "interrupt_now") {
     const value = instruction.trim();
@@ -26,8 +36,16 @@ export function CodingSteerComposer({
     }
     setPending(mode);
     setError(null);
+    setReply(null);
     try {
-      await steerCodingTask(taskId, value, mode);
+      // 커맨드에는 steer 모드가 없다 -- 적용 시점은 백엔드 커맨드 서비스가 정한다.
+      const target = routeComposerInput(value, tokens);
+      if (target.kind === "command") {
+        const result = await invokeCodingCommand(taskId, target.text);
+        setReply(result.message);
+      } else {
+        await steerCodingTask(taskId, target.instruction, mode);
+      }
       setInstruction("");
     } catch (cause) {
       setError(
@@ -60,7 +78,7 @@ export function CodingSteerComposer({
       />
       <div className="flex flex-wrap items-center justify-between gap-2 border-border/60 border-t px-2 pt-2">
         <p className="text-[10px] text-muted-foreground uppercase tracking-[0.15em]">
-          Steer the active run
+          {commandName ? `Run ${commandName}` : "Steer the active run"}
         </p>
         <div className="flex gap-2">
           <Button
@@ -92,6 +110,9 @@ export function CodingSteerComposer({
       </div>
       {error ? (
         <p className="px-2 pt-2 text-destructive text-xs">{error}</p>
+      ) : null}
+      {reply ? (
+        <p className="px-2 pt-2 text-muted-foreground text-xs">{reply}</p>
       ) : null}
     </form>
   );
