@@ -128,3 +128,47 @@ def test_submit_queues_when_both_flags_on(monkeypatch: pytest.MonkeyPatch) -> No
 def test_job_module_does_not_insert_learned_lessons() -> None:
     source = (_REPO_ROOT / "neos" / "tasks" / "gepa_opt_job_task.py").read_text(encoding="utf-8")
     assert "INSERT INTO learned_lessons" not in source
+
+
+def test_empty_registry_fails_the_run_and_a_lost_claim_does_not() -> None:
+    import asyncio
+
+    import neos.tasks.gepa_opt_job_task as job
+    from neos.gepa_opt.evaluators import clear_evaluators
+
+    clear_evaluators()
+    calls = {"fail": 0, "claim": 0}
+
+    class _Store:
+        def __init__(self, claimed: bool) -> None:
+            self._claimed = claimed
+
+        async def claim(self, *_args):
+            calls["claim"] += 1
+            return self._claimed
+
+        async def fail_run(self, _run_id, _owner, error_code):
+            calls["fail"] += 1
+            assert error_code == "no_evaluator"
+
+    lost = asyncio.run(
+        job.execute_gepa_opt_job(
+            _Store(False),
+            run_id="run-1",
+            owner_namespace="owner:1",
+            celery_task_id="task-1",
+        )
+    )
+    assert lost == "lost"
+    assert calls["fail"] == 0
+
+    failed = asyncio.run(
+        job.execute_gepa_opt_job(
+            _Store(True),
+            run_id="run-1",
+            owner_namespace="owner:1",
+            celery_task_id="task-1",
+        )
+    )
+    assert failed == "no_evaluator"
+    assert calls["fail"] == 1

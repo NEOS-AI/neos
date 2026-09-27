@@ -1,11 +1,16 @@
-"""Enqueue a GEPA opt job. The search itself is a later slice.
+"""Enqueue a GEPA opt job.
 
-This module must not write the learned_lessons table.
+This module must not write the learned_lessons table. It does not add an HTTP route.
 """
+
+from __future__ import annotations
+
+import asyncio
 
 from celery import shared_task
 
 from neos.config.settings import settings
+from neos.gepa_opt.evaluators import get_evaluator
 
 
 def submit_gepa_opt_job(run_id: str, owner_namespace: str) -> str:
@@ -30,8 +35,36 @@ def submit_gepa_opt_job(run_id: str, owner_namespace: str) -> str:
     soft_time_limit=1800,
     time_limit=2100,
 )
-def run_gepa_opt_job(self, run_id: str, owner_namespace: str) -> None:
-    """Worker entry. Search is not implemented in this slice."""
-    raise NotImplementedError(
-        f"gepa opt search is not implemented for {run_id} in {owner_namespace}"
+def run_gepa_opt_job(self, run_id: str, owner_namespace: str) -> str:
+    """Claim the run. An empty evaluator registry fails it and inserts no overlay."""
+    from neos.gepa_opt.store import GepaOptStore
+    from neos.learn.lessons import resolve_lesson_session_factory
+
+    store = GepaOptStore(resolve_lesson_session_factory())
+    task_id = getattr(getattr(self, "request", None), "id", None) or "inline"
+    return asyncio.run(
+        execute_gepa_opt_job(
+            store,
+            run_id=run_id,
+            owner_namespace=owner_namespace,
+            celery_task_id=str(task_id),
+        )
     )
+
+
+async def execute_gepa_opt_job(
+    store,
+    *,
+    run_id: str,
+    owner_namespace: str,
+    celery_task_id: str,
+    surface: str = "coding_overlay",
+) -> str:
+    """Lost claims return without writing. No evaluator fails the run."""
+    claimed = await store.claim(run_id, owner_namespace, celery_task_id)
+    if not claimed:
+        return "lost"
+    if get_evaluator(surface) is None:
+        await store.fail_run(run_id, owner_namespace, "no_evaluator")
+        return "no_evaluator"
+    return "ready"
