@@ -34,6 +34,7 @@
     { "type": "neos:ui_frame", "handled": true },
     { "type": "neos:deep_analysis_started", "handled": true },
     { "type": "neos:inline_viz", "handled": true },
-    { "type": "neos:inline_viz_error", "handled": true }
+    { "type": "neos:inline_viz_error", "handled": true },
+    { "type": "neos:graph_subagent", "handled": true }
   ]
 }

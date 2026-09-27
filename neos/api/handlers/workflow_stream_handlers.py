@@ -322,6 +322,24 @@ class WorkflowStreamCallback(WorkflowEventHandler):
         )
         await self.event_queue.put(event)
 
+    def on_graph_subagent_event(self, kind: str, payload: Dict[str, Any]) -> None:
+        """설계 그래프 서브에이전트 노드의 걸음·폴드를 스트림에 싣는다.
+
+        **동기**다 -- 서브에이전트 호스트의 `emit` 이 동기라서다
+        (`neos.workflow.events.forward_graph_subagent_event`). 큐가 차면 버린다:
+        진행 표시 때문에 그래프가 멈추면 안 된다. 본문 필터는 SSE 변환
+        (`stream_adapter.graph_subagent_event_from`)이 한다.
+        """
+        event = self._create_event(
+            event_type=WorkflowStreamEventType.GRAPH_SUBAGENT,
+            node_name=payload.get("node"),
+            data={"kind": kind, **payload},
+        )
+        try:
+            self.event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.debug("graph subagent event dropped (queue full) kind=%s", kind)
+
     # ============================================================================
     # HDR (HyperDeep Research) Phase 이벤트 메서드들 — OpenResponses 브릿지
     # ============================================================================

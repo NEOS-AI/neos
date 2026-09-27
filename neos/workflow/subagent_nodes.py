@@ -589,6 +589,8 @@ class SubagentNodeHost:
             "graph_subagent_step",
             {
                 "node": node,
+                # 챗 화면이 노드 id 대신 보여 줄 이름 (`neos:graph_subagent`).
+                "label": template.label,
                 "run_id": outcome.run_id,
                 "step_kind": outcome.kind.value,
                 "steps": steps,
@@ -652,7 +654,9 @@ class SubagentNodeHost:
                 )
             )
         # 요약 본문은 이벤트에 싣지 않는다 -- 본문은 unverified 검색 결과로만 간다.
-        self._emit("graph_subagent_folded", {"node": node, **report})
+        self._emit(
+            "graph_subagent_folded", {"node": node, "label": template.label, **report}
+        )
         return {
             "subagent_runs": {node: {**new_ref, "terminal": True}},
             "subagent_reports": {node: report},
@@ -683,7 +687,9 @@ class SubagentNodeHost:
             "cost_micros": 0,
             "unverified": True,
         }
-        self._emit("graph_subagent_folded", {"node": node, **report})
+        self._emit(
+            "graph_subagent_folded", {"node": node, "label": template.label, **report}
+        )
         return {
             "subagent_runs": {
                 node: {

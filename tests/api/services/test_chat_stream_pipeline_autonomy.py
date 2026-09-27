@@ -923,3 +923,52 @@ async def test_chat_interrupted_workflow_persists_approval_placeholder(
     assert assistant_messages[0]["metadata"]["approval_requests"][0]["request_id"] == "approval-1"
     assert _FakeChatService.messages[0]["parent_message_id"] == parent_message_id
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_forwards_graph_subagent_progress_without_the_report():
+    """트랙 I: 설계 그래프 서브에이전트의 걸음·폴드가 챗 SSE 에 닿는다.
+
+    본문은 싣지 않고(미검증), 노드별 마지막 상태는 새로고침을 위해 남긴다.
+    """
+    def _event(kind, **payload):
+        return SimpleNamespace(
+            event="graph_subagent",
+            data={"kind": kind, "node": "explore_web", "label": "Investigating", **payload},
+            node_name="explore_web",
+            progress_percent=0,
+            content=None,
+        )
+
+    pipeline, stream_state = _run_scripted_workflow(
+        [
+            _event("graph_subagent_step", steps=1, max_advances=9, step_kind="continuing"),
+            _event(
+                "graph_subagent_folded",
+                steps=2,
+                status="completed",
+                exit_reason="completed",
+                summary="REPORT BODY",
+            ),
+        ]
+    )
+    wf_ctx = _WorkflowCtx()
+    payloads = []
+    async for chunk in pipeline._run_workflow(
+        conversation_id="conversation_123",
+        user_content="analyse this",
+        current_user=SimpleNamespace(user_id="user_123"),
+        history_messages=[],
+        stream_state=stream_state,
+        wf_ctx=wf_ctx,
+        autonomy_level=1,
+    ):
+        for line in chunk.splitlines():
+            if line.startswith("data: {"):
+                payloads.append(json.loads(line.removeprefix("data: ").strip()))
+
+    sub = [p for p in payloads if p["type"] == "neos:graph_subagent"]
+    assert [p["phase"] for p in sub] == ["step", "folded"]
+    assert "REPORT BODY" not in json.dumps(payloads)
+    assert wf_ctx.graph_subagents["explore_web"]["phase"] == "folded"
+    assert wf_ctx.graph_subagents["explore_web"]["status"] == "completed"

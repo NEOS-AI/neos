@@ -8,6 +8,7 @@ import type { Vote } from "@/lib/db/schema";
 import type { ApprovalRequest } from "@/lib/open-responses-types";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
+import { graphSubagentLine, workflowAgentTitle } from "@/lib/workflow-agents";
 import { ArtifactBlock } from "./artifact-block";
 import { UIFrameRenderer } from "./ui-frame/UIFrameRenderer";
 import { MermaidDiagram } from "./mermaid-diagram";
@@ -322,29 +323,44 @@ const PurePreviewMessage = ({
           {/* Workflow Agents (rendered as Tools) */}
           {message.role === "assistant" &&
             message.metadata?.workflow_agents &&
-            message.metadata.workflow_agents.map((agent, index) => (
-              <Tool
-                defaultOpen={false}
-                key={`workflow-agent-${message.id}-${agent.node_name}-${index}`}
-              >
-                <ToolHeader
-                  state={agent.status as "input-available" | "output-available"}
-                  type={`workflow-${agent.agent_name}` as any}
-                />
-                <ToolContent>
-                  {agent.status === "input-available" && (
-                    <div className="text-sm text-muted-foreground">
-                      Processing: {agent.agent_name}
-                    </div>
-                  )}
-                  {agent.status === "output-available" && (
-                    <div className="text-sm text-green-600">
-                      ✓ {agent.agent_name} completed
-                    </div>
-                  )}
-                </ToolContent>
-              </Tool>
-            ))}
+            message.metadata.workflow_agents.map((agent, index) => {
+              // `node_name` 은 백엔드 노드 이름이고(`call_id`), 서브에이전트
+              // 이벤트의 `node` 와 같은 키다.
+              const subagent = message.metadata?.graph_subagents?.find(
+                (entry) => entry.node === agent.node_name
+              );
+              const title = workflowAgentTitle(agent.agent_name, subagent);
+              return (
+                <Tool
+                  defaultOpen={false}
+                  key={`workflow-agent-${message.id}-${agent.node_name}-${index}`}
+                >
+                  <ToolHeader
+                    state={agent.status as "input-available" | "output-available"}
+                    title={title}
+                    type={`workflow-${agent.agent_name}` as any}
+                  />
+                  <ToolContent>
+                    {subagent && (
+                      <div
+                        className="text-muted-foreground text-sm"
+                        data-testid="graph-subagent-line"
+                      >
+                        {graphSubagentLine(subagent)}
+                      </div>
+                    )}
+                    {!subagent && agent.status === "input-available" && (
+                      <div className="text-sm text-muted-foreground">
+                        처리 중: {title}
+                      </div>
+                    )}
+                    {!subagent && agent.status === "output-available" && (
+                      <div className="text-sm text-green-600">✓ {title} 완료</div>
+                    )}
+                  </ToolContent>
+                </Tool>
+              );
+            })}
 
           {message.role === "assistant" &&
             message.metadata?.approval_requests &&

@@ -38,6 +38,7 @@ from neos.api.models.open_responses import (
     NeosHarnessEvent,
     NeosUIFrameEvent,
     NeosDeepAnalysisStartedEvent,
+    NeosGraphSubagentEvent,
     # Types
     OpenResponsesEvent,
     create_response,
@@ -347,6 +348,28 @@ def parse_harness_progress_event(
         report_id=report_id,
         timestamp=payload.get("timestamp"),
         data=payload.get("data") if isinstance(payload.get("data"), dict) else {},
+    )
+
+
+def graph_subagent_event_from(data: Dict[str, Any]) -> NeosGraphSubagentEvent:
+    """`graph_subagent_step`/`_folded` 페이로드 → `neos:graph_subagent`.
+
+    **허용 목록으로** 옮긴다. 페이로드를 통째로 펼치면 나중에 누군가 폴드
+    페이로드에 요약 본문을 더했을 때 그것이 그대로 화면에 샌다 -- 본문은
+    unverified 검색 결과로만 가야 한다(`subagent_nodes.py`).
+    """
+    folded = data.get("kind") == "graph_subagent_folded"
+    max_steps = data.get("max_advances")
+    return NeosGraphSubagentEvent(
+        node=str(data.get("node") or ""),
+        label=data.get("label"),
+        phase="folded" if folded else "step",
+        status=str(data.get("status") or "unknown") if folded else "running",
+        run_id=data.get("run_id"),
+        steps=int(data.get("steps") or 0),
+        max_steps=int(max_steps) if isinstance(max_steps, int) else None,
+        exit_reason=data.get("exit_reason") if folded else None,
+        error_code=data.get("error_code") if folded else None,
     )
 
 

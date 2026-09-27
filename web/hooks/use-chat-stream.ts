@@ -35,6 +35,7 @@ import {
   isNeosArtifactFinishEvent,
   isNeosArtifactMetaEvent,
   isNeosDeepAnalysisStartedEvent,
+  isNeosGraphSubagentEvent,
   isNeosHarnessEvent,
   isNeosInlineVizErrorEvent,
   isNeosInlineVizEvent,
@@ -52,6 +53,7 @@ import {
 import type { AutonomyLevel, ChatMessage, HarnessMetadata } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
+import { applyGraphSubagentEvent } from "@/lib/workflow-agents";
 
 // messageMetadataSchema에서 개별 inline_viz 항목 스키마 추출 (SSE 검증 재사용)
 const inlineVizEntrySchema = messageMetadataSchema.shape.inline_visualizations.unwrap().element;
@@ -724,6 +726,20 @@ export function useChatStream({
                   console.warn(
                     `[InlineViz] ${eventData.tool_name} 렌더링 실패: ${eventData.error}`
                   );
+                }
+
+                // neos:graph_subagent - 설계 그래프 서브에이전트 노드의 걸음·폴드.
+                // 노드별 한 줄로 쌓고, 카드(`message.tsx`)가 같은 노드의 워크플로우
+                // 항목 안에 그린다.
+                else if (isNeosGraphSubagentEvent(eventData)) {
+                  if (!assistantMessage.metadata) {
+                    assistantMessage.metadata = { createdAt: new Date().toISOString() };
+                  }
+                  assistantMessage.metadata.graph_subagents = applyGraphSubagentEvent(
+                    assistantMessage.metadata.graph_subagents,
+                    eventData
+                  );
+                  updateMessage();
                 }
               }
             } catch (parseError) {

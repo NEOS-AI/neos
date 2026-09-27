@@ -114,7 +114,7 @@ async def test_with_the_flag_on_a_checked_template_design_is_expanded_and_hosted
     _enable(monkeypatch, subagent=True)
     workflow = MultiAgentWorkflow()
     host = _fake_host()
-    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span: host)
+    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span, event_handler=None: host)
 
     resolved = await _resolve(monkeypatch, workflow, _DESIGN, use_checkpointer=True)
 
@@ -145,7 +145,7 @@ async def test_with_the_flag_on_an_unchecked_template_design_is_rejected(monkeyp
     )
     events = []
     workflow = MultiAgentWorkflow()
-    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span: _fake_host())
+    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span, event_handler=None: _fake_host())
     monkeypatch.setattr(workflow, "_record_design_events", lambda evs, span: events.extend(evs))
 
     resolved = await _resolve(monkeypatch, workflow, unchecked, use_checkpointer=True)
@@ -162,7 +162,7 @@ async def test_without_a_checkpointer_a_template_design_falls_back_with_a_reason
     events = []
     workflow = MultiAgentWorkflow()
     built = []
-    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span: built.append(1))
+    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span, event_handler=None: built.append(1))
     monkeypatch.setattr(workflow, "_record_design_events", lambda evs, span: events.extend(evs))
 
     resolved = await _resolve(monkeypatch, workflow, _DESIGN, use_checkpointer=False)
@@ -179,7 +179,7 @@ async def test_a_host_that_cannot_be_built_falls_back_instead_of_killing_the_req
     events = []
     workflow = MultiAgentWorkflow()
 
-    def _explode(span):
+    def _explode(span, event_handler=None):
         raise RuntimeError("no database")
 
     monkeypatch.setattr(workflow, "_build_subagent_host", _explode)
@@ -218,7 +218,7 @@ async def test_resume_rebuilds_a_template_topology_with_a_host_when_the_flag_is_
 
     workflow = MultiAgentWorkflow()
     host = _fake_host()
-    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span: host)
+    monkeypatch.setattr(workflow, "_build_subagent_host", lambda span, event_handler=None: host)
     payload = topology_to_payload(expand_subagent_nodes(_DESIGN))
     graph = await resume_graph_for(
         {"execution_topology": payload}, workflow=workflow, checkpointer=MemorySaver()

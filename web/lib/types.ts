@@ -91,6 +91,25 @@ export const deepAnalysisMetadataSchema = z.object({
 export type DeepAnalysisMetadata = z.infer<typeof deepAnalysisMetadataSchema>;
 
 /**
+ * 설계 그래프 서브에이전트 노드 하나의 마지막 상태 (`neos:graph_subagent`).
+ * 노드별로 한 줄이고 새 이벤트가 오면 갈아 끼운다(`lib/workflow-agents.ts`).
+ * 보고서 본문은 없다 -- 백엔드가 싣지 않는다(미검증이라서).
+ */
+export const graphSubagentViewSchema = z.object({
+  node: z.string(),
+  label: z.string().nullish(),
+  phase: z.enum(["step", "folded"]),
+  status: z.string(),
+  run_id: z.string().nullish(),
+  steps: z.number(),
+  max_steps: z.number().nullish(),
+  exit_reason: z.string().nullish(),
+  error_code: z.string().nullish(),
+});
+
+export type GraphSubagentView = z.infer<typeof graphSubagentViewSchema>;
+
+/**
  * Message metadata schema with OpenResponses fields
  */
 export const messageMetadataSchema = z.object({
@@ -122,6 +141,8 @@ export const messageMetadataSchema = z.object({
       })
     )
     .optional(),
+  // 설계 그래프 서브에이전트 노드의 걸음·폴드. `workflow_agents[].node_name` 과 같은 키.
+  graph_subagents: z.array(graphSubagentViewSchema).optional(),
   // Execution approval requests emitted by checkpointer-backed workflows.
   approval_requests: z.custom<ApprovalRequest[]>().optional(),
   approval_session_id: z.string().optional(),

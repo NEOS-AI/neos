@@ -105,6 +105,8 @@ class WorkflowStreamEventType(str):
     # Phase 3b (D23): deep analysis job이 제출됐음을 알리는 핸들 이벤트.
     # 클라이언트는 이 이벤트의 events_url로 별도 SSE를 열어 진행을 관찰한다.
     DEEP_ANALYSIS_STARTED = "deep_analysis_started"
+    # 트랙 I: 설계 그래프 서브에이전트 노드의 걸음·폴드 (`neos:graph_subagent`).
+    GRAPH_SUBAGENT = "graph_subagent"
 
 
 class WorkflowStreamEvent(BaseModel):

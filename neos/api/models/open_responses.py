@@ -356,6 +356,29 @@ class NeosDeepAnalysisStartedEvent(BaseModel):
     assistant_message_id: Optional[str] = None
 
 
+
+class NeosGraphSubagentEvent(BaseModel):
+    """
+    Event: neos:graph_subagent — 설계 그래프 서브에이전트 노드의 걸음·폴드 (트랙 I)
+
+    `phase="step"` 은 자식이 한 걸음 나갔다는 뜻이고 `steps/max_steps` 로 상한 대비
+    진행을 말한다. `phase="folded"` 는 자식이 끝났다는 뜻이고 `status` 가 결말이다.
+
+    ⚠️ 자식 보고서 **본문은 싣지 않는다.** 본문은 unverified 검색 결과로만 흐른다
+    (`neos/workflow/subagent_nodes.py`). 화면에 올리면 미검증 텍스트가 조사
+    결과처럼 보인다 -- 여기 있는 것은 상태와 계측뿐이다.
+    """
+    type: Literal["neos:graph_subagent"] = "neos:graph_subagent"
+    node: str
+    label: Optional[str] = None
+    phase: Literal["step", "folded"]
+    status: str
+    run_id: Optional[str] = None
+    steps: int = 0
+    max_steps: Optional[int] = None
+    exit_reason: Optional[str] = None
+    error_code: Optional[str] = None
+
 # ── Inline Visualization Data Models ──────────────────────────────────────────
 
 class MermaidVizData(BaseModel):
@@ -433,6 +456,7 @@ NeosExtensionEvent = Union[
     NeosDeepAnalysisStartedEvent,  # Phase 3b (D23) deep analysis job 핸들
     NeosInlineVizEvent,          # Inline Visualization (renderDiagram/renderChart)
     NeosInlineVizErrorEvent,     # Inline Visualization 에러 (non-fatal)
+    NeosGraphSubagentEvent,      # 설계 그래프 서브에이전트 노드 걸음·폴드
 ]
 
 OpenResponsesEvent = Union[StandardStreamEvent, NeosExtensionEvent]

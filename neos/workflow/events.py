@@ -186,6 +186,27 @@ def get_duration_stats() -> Dict[str, Any]:
     return stats
 
 
+def forward_graph_subagent_event(
+    handler: Any, kind: str, payload: Dict[str, Any]
+) -> None:
+    """설계 그래프 서브에이전트 노드의 진행을 스트림 핸들러로 넘긴다.
+
+    서브에이전트 호스트의 `emit` 은 **동기**이고 노드 코루틴 한가운데서 불린다.
+    그래서 핸들러 쪽 훅(`on_graph_subagent_event`)도 동기다 -- 비동기 태스크로
+    띄우면 뒤따르는 `node_completed` 보다 늦게 도착할 수 있다.
+
+    훅이 없는 핸들러(`NullEventHandler` 등)는 조용히 넘어가고, 훅이 던져도 삼킨다:
+    진행 표시는 버려도 되는 정보이고 그래프 실행을 멈출 이유가 아니다.
+    """
+    hook = getattr(handler, "on_graph_subagent_event", None)
+    if hook is None:
+        return
+    try:
+        hook(kind, payload)
+    except Exception:  # noqa: BLE001
+        logger.warning("graph subagent stream forward failed kind=%s", kind, exc_info=True)
+
+
 # ============================================================================
 # Observer Pattern: 이벤트 핸들러 인터페이스
 # ============================================================================
