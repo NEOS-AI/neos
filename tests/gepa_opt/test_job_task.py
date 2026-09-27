@@ -145,7 +145,7 @@ def test_empty_registry_fails_the_run_and_a_lost_claim_does_not() -> None:
 
         async def claim(self, *_args):
             calls["claim"] += 1
-            return self._claimed
+            return "claimed" if self._claimed else "lost"
 
         async def fail_run(self, _run_id, _owner, error_code):
             calls["fail"] += 1
@@ -248,6 +248,7 @@ def test_accepted_child_is_committed_before_it_is_staged() -> None:
 
     register_evaluator("coding_overlay", score)
     staged: list[dict] = []
+    committed: list[dict] = []
 
     class _Store:
         async def claim(self, *_args):
@@ -259,8 +260,8 @@ def test_accepted_child_is_committed_before_it_is_staged() -> None:
         async def load_bundle(self, _run_id, _owner):
             return {
                 "seed": {"instr": "a"},
-                "train": [{"id": "t"}],
-                "val": [{"id": "v"}],
+                "train": [{"id": "t", "example_id": "ex-train", "split": "train"}],
+                "val": [{"id": "v", "example_id": "ex-val", "split": "val"}],
                 "test": [],
                 "engine_label": "not-gepa",
                 "pareto_enabled": False,
@@ -271,7 +272,8 @@ def test_accepted_child_is_committed_before_it_is_staged() -> None:
                 "surface": "coding_overlay",
             }
 
-        async def commit_iteration(self, **_kwargs):
+        async def commit_iteration(self, **kwargs):
+            committed.append(kwargs)
             return "child-1"
 
         async def stage_overlay(self, **kwargs):
@@ -299,4 +301,102 @@ def test_accepted_child_is_committed_before_it_is_staged() -> None:
     )
     assert outcome == "staged"
     assert staged[0]["candidate_id"] == "child-1"
+    example_ids = {row["example_id"] for row in committed[0]["scores"]}
+    assert "ex-val" in example_ids
+    assert all(row["side_info"] for row in committed[0]["scores"])
+    phases = {row["example_id"]: row["phase"] for row in committed[0]["scores"]}
+    assert phases["ex-val"] == "full_val"
+    clear_evaluators()
+
+
+def test_soft_time_limit_retries_without_staging() -> None:
+    import neos.tasks.gepa_opt_job_task as job
+
+    class _Self:
+        def retry(self, **kwargs):
+            self.kwargs = kwargs
+            raise RuntimeError("retried")
+
+    task = _Self()
+    with pytest.raises(RuntimeError, match="retried"):
+        job._retry_after_soft_limit(task, job.SoftTimeLimitExceeded())
+    assert task.kwargs["countdown"] == 0
+    source = inspect.getsource(job.run_gepa_opt_job)
+    assert "SoftTimeLimitExceeded" in source
+    assert "_retry_after_soft_limit" in source
+    assert "stage_overlay" not in source
+
+
+def test_resume_does_not_rescore_the_seed_valset() -> None:
+    import asyncio
+
+    import neos.tasks.gepa_opt_job_task as job
+    from neos.gepa_opt.evaluators import clear_evaluators, register_evaluator
+
+    clear_evaluators()
+    seen: list[str] = []
+
+    def score(_candidate, example):
+        seen.append(example["id"])
+        return (1.0, {"ok": True})
+
+    register_evaluator("coding_overlay", score)
+
+    class _Store:
+        async def claim(self, *_args):
+            return "resume"
+
+        async def fail_run(self, *_args):
+            raise AssertionError("resume should not fail a perfect continuation")
+
+        async def load_bundle(self, _run_id, _owner):
+            return {
+                "seed": {"instr": "a"},
+                "train": [{"id": "t", "example_id": "ex-train", "split": "train"}],
+                "val": [{"id": "v", "example_id": "ex-val", "split": "val"}],
+                "test": [],
+                "engine_label": "gepa",
+                "pareto_enabled": True,
+                "max_evals": 6,
+                "max_token_cost": 10,
+                "component_cursor": 0,
+                "seed_candidate_id": "seed-1",
+                "surface": "coding_overlay",
+                "iteration": 1,
+                "evals_used": 4,
+                "reflector_tokens_used": 0,
+                "candidates": [
+                    {
+                        "proposal_kind": "seed",
+                        "components": {"instr": "a"},
+                        "accepted": True,
+                        "reject_reason": None,
+                        "val_mean": 1.0,
+                        "test_mean": None,
+                        "val_subscores": [1.0],
+                        "iteration": 0,
+                    }
+                ],
+            }
+
+        async def stage_overlay(self, **_kwargs):
+            return None
+
+        async def mark_succeeded(self, *_args):
+            return None
+
+    def reflector(*_args):
+        raise AssertionError("perfect minibatch must not reflect")
+
+    outcome = asyncio.run(
+        job.execute_gepa_opt_job(
+            _Store(),
+            run_id="run-1",
+            owner_namespace="owner:1",
+            celery_task_id="task-1",
+            reflector=reflector,
+        )
+    )
+    assert outcome == "staged"
+    assert "v" not in seen
     clear_evaluators()

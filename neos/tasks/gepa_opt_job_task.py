@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 
 from neos.config.settings import settings
 from neos.gepa_opt.evaluators import get_evaluator
@@ -44,14 +45,17 @@ def run_gepa_opt_job(self, run_id: str, owner_namespace: str) -> str:
 
     store = GepaOptStore(resolve_lesson_session_factory())
     task_id = getattr(getattr(self, "request", None), "id", None) or "inline"
-    return asyncio.run(
-        execute_gepa_opt_job(
-            store,
-            run_id=run_id,
-            owner_namespace=owner_namespace,
-            celery_task_id=str(task_id),
+    try:
+        return asyncio.run(
+            execute_gepa_opt_job(
+                store,
+                run_id=run_id,
+                owner_namespace=owner_namespace,
+                celery_task_id=str(task_id),
+            )
         )
-    )
+    except SoftTimeLimitExceeded as exc:
+        _retry_after_soft_limit(self, exc)
 
 
 async def execute_gepa_opt_job(
@@ -67,8 +71,8 @@ async def execute_gepa_opt_job(
 
     A registered evaluator runs the in-process search. Success stages one overlay.
     """
-    claimed = await store.claim(run_id, owner_namespace, celery_task_id)
-    if not claimed:
+    claim_state = await store.claim(run_id, owner_namespace, celery_task_id)
+    if claim_state == "lost":
         return "lost"
     evaluator = get_evaluator(surface)
     if evaluator is None:
@@ -78,6 +82,14 @@ async def execute_gepa_opt_job(
     from neos.gepa_opt.engine import run_search
     from neos.gepa_opt.types import EngineConfig
 
+    search_kwargs: dict[str, Any] = {}
+    if claim_state == "resume" and int(bundle.get("iteration") or 0) > 0:
+        search_kwargs = {
+            "prior_candidates": bundle.get("candidates") or [],
+            "start_iteration": int(bundle["iteration"]),
+            "evals_used": int(bundle.get("evals_used") or 0),
+            "tokens_used": int(bundle.get("reflector_tokens_used") or 0),
+        }
     result = await run_search(
         config=EngineConfig(
             bundle["engine_label"],
@@ -91,7 +103,8 @@ async def execute_gepa_opt_job(
         max_evals=int(bundle["max_evals"]),
         max_token_cost=int(bundle["max_token_cost"]),
         evaluator=evaluator,
-        reflector=reflector if reflector is not None else _refuse_reflector,
+        reflector=reflector if reflector is not None else _model_reflector(run_id),
+        **search_kwargs,
     )
     if result.overlay is None:
         await store.fail_run(run_id, owner_namespace, result.error_code or "failed")
@@ -114,7 +127,7 @@ async def execute_gepa_opt_job(
                 "val_mean": winner["val_mean"],
                 "test_mean": winner.get("test_mean"),
             },
-            scores=[],
+            scores=_scores_for(result, winner["components"]),
             advance_cursor=True,
             best_candidate_id=None,
         )
@@ -129,5 +142,54 @@ async def execute_gepa_opt_job(
     return "staged"
 
 
-async def _refuse_reflector(*_args: Any) -> Any:
-    raise RuntimeError("gepa opt reflector is not configured")
+def _retry_after_soft_limit(task: Any, exc: BaseException) -> None:
+    """Ask Celery to resume. The retry does not insert an overlay."""
+    raise task.retry(exc=exc, countdown=0)
+
+
+def _model_reflector(run_id: str):
+    """Coding-model reflector. Tests pass their own reflector instead."""
+
+    async def reflect(component_name: str, curr_param: str, side_info_text: str) -> Any:
+        from neos.gepa_opt.provider import reflect_with_coding_model
+
+        coding = settings.config.coding
+        model = coding.model or "claude-sonnet-4-5"
+        return await reflect_with_coding_model(
+            component_name,
+            curr_param,
+            side_info_text,
+            run_id=run_id,
+            provider=coding.provider,
+            model=model,
+        )
+
+    return reflect
+
+
+def _scores_for(result: Any, components: dict[str, str]) -> list[dict[str, Any]]:
+    """Example scores for the winning candidate. Rows without an id are dropped."""
+    scores: list[dict[str, Any]] = []
+    for row in result.score_rows:
+        if row.get("components") != components:
+            continue
+        example = row.get("example") or {}
+        example_id = example.get("example_id")
+        if not example_id:
+            continue
+        split = example.get("split")
+        if split not in {"train", "val", "test"}:
+            split = "val" if row["phase"] == "full_val" else "train"
+        scores.append(
+            {
+                "example_id": example_id,
+                "split": split,
+                "phase": row["phase"],
+                "score": row["score"],
+                "side_info": row["side_info"],
+            }
+        )
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in scores:
+        deduped[(str(row["example_id"]), str(row["phase"]))] = row
+    return list(deduped.values())

@@ -110,7 +110,7 @@ async def test_lost_claim_returns_false() -> None:
     session = FakeSession(rowcount=0)
     store = GepaOptStore(_factory(session))
     claimed = await store.claim("11111111-1111-1111-1111-111111111111", "owner:1", "task-1")
-    assert claimed is False
+    assert claimed == "lost"
     statement = _sql(session)[0]
     assert "status = 'queued'" in statement
     assert "celery_task_id is null" in statement

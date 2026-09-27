@@ -42,14 +42,52 @@ async def run_search(
     max_token_cost: int,
     evaluator: Any,
     reflector: Any,
+    prior_candidates: Sequence[Mapping[str, Any]] | None = None,
+    start_iteration: int = 0,
+    evals_used: int = 0,
+    tokens_used: int = 0,
 ) -> SearchResult:
-    """Run one GEPA or not-gepa search. The reflector may be sync or async."""
+    """Run one GEPA or not-gepa search. The reflector may be sync or async.
+
+    ``prior_candidates`` is the committed frontier. Resume starts at
+    ``start_iteration`` and does not score the seed again.
+    """
     cursor = config.component_cursor
-    evals_used = 0
-    tokens_used = 0
     candidates: list[dict[str, Any]] = []
     score_rows: list[dict[str, Any]] = []
     seed_components = validate_candidate(seed)
+    if prior_candidates is not None:
+        candidates = [dict(item) for item in prior_candidates]
+        if len(train) == 0:
+            return _failed(
+                "empty_train", candidates, cursor, start_iteration, evals_used, tokens_used, score_rows
+            )
+        if config.pareto:
+            return await _pareto_loop(
+                config=config,
+                train=train,
+                val=val,
+                test=test,
+                max_evals=max_evals,
+                max_token_cost=max_token_cost,
+                evaluator=evaluator,
+                reflector=reflector,
+                candidates=candidates,
+                score_rows=score_rows,
+                cursor=cursor,
+                evals_used=evals_used,
+                tokens_used=tokens_used,
+                iteration=start_iteration,
+            )
+        return _failed(
+            "resume_requires_gepa",
+            candidates,
+            cursor,
+            start_iteration,
+            evals_used,
+            tokens_used,
+            score_rows,
+        )
 
     val_scores, val_infos, evals_used = _score_examples(
         evaluator, seed_components, val, evals_used, score_rows, phase="full_val"
@@ -126,8 +164,8 @@ async def _pareto_loop(
     cursor: int,
     evals_used: int,
     tokens_used: int,
+    iteration: int = 0,
 ) -> SearchResult:
-    iteration = 0
     while evals_used < max_evals and tokens_used < max_token_cost:
         try:
             parent_index = select_parent(*_fronts(candidates, len(val)), random.Random(0))
@@ -401,7 +439,15 @@ def _score_examples(
         payload = cap_side_info(payload)
         scores.append(float(score))
         infos.append(payload)
-        score_rows.append({"phase": phase, "score": float(score), "side_info": payload})
+        score_rows.append(
+            {
+                "phase": phase,
+                "score": float(score),
+                "side_info": payload,
+                "example": example,
+                "components": dict(candidate),
+            }
+        )
     return scores, infos, evals_used
 
 

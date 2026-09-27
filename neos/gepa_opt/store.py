@@ -12,6 +12,38 @@ from sqlalchemy import text
 SessionFactory = Callable[[], Awaitable[Any]]
 
 
+def _with_subscores(
+    candidate_rows: Sequence[Mapping[str, Any]],
+    score_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[int, str], list[float]] = {}
+    for row in score_rows:
+        key = (int(row["iteration"]), str(row["proposal_kind"]))
+        grouped.setdefault(key, []).append(float(row["score"]))
+    built = [_candidate_row(row) for row in candidate_rows]
+    for candidate in built:
+        candidate["val_subscores"] = grouped.get(
+            (int(candidate["iteration"]), str(candidate["proposal_kind"]))
+        )
+    return built
+
+
+def _candidate_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    components = row["components"]
+    if isinstance(components, str):
+        components = json.loads(components)
+    return {
+        "proposal_kind": row["proposal_kind"],
+        "components": {str(key): str(value) for key, value in dict(components).items()},
+        "accepted": bool(row["accepted"]),
+        "reject_reason": row["reject_reason"],
+        "val_mean": row["val_mean"],
+        "test_mean": row["test_mean"],
+        "val_subscores": None,
+        "iteration": int(row["iteration"]),
+    }
+
+
 def _mapping(row: Any) -> dict[str, Any]:
     if row is None:
         raise LookupError("gepa opt row is missing for this owner")
@@ -121,8 +153,8 @@ class GepaOptStore:
                     )
         return candidate_id
 
-    async def claim(self, run_id: str, owner_namespace: str, celery_task_id: str) -> bool:
-        """Move queued -> running for this task id. A lost claim returns False."""
+    async def claim(self, run_id: str, owner_namespace: str, celery_task_id: str) -> str:
+        """Move queued -> running. Same task id on a running row resumes. Else lost."""
         async with await self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(
@@ -142,7 +174,26 @@ class GepaOptStore:
                         "celery_task_id": celery_task_id,
                     },
                 )
-        return int(getattr(result, "rowcount", 0) or 0) > 0
+                if int(getattr(result, "rowcount", 0) or 0) > 0:
+                    return "claimed"
+                found = await session.execute(
+                    text(
+                        """
+                        SELECT status, celery_task_id
+                        FROM gepa_opt_runs
+                        WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                        """
+                    ),
+                    {"run_id": run_id, "owner_namespace": owner_namespace},
+                )
+        row = found.mappings().first() if hasattr(found, "mappings") else None
+        if (
+            row is not None
+            and row["status"] == "running"
+            and row["celery_task_id"] == celery_task_id
+        ):
+            return "resume"
+        return "lost"
 
     async def commit_iteration(
         self,
@@ -236,7 +287,8 @@ class GepaOptStore:
                 text(
                     """
                     SELECT engine_label, pareto_enabled, max_evals, max_token_cost,
-                           component_cursor, seed_candidate_id, surface
+                           component_cursor, seed_candidate_id, surface,
+                           iteration, evals_used, reflector_tokens_used
                     FROM gepa_opt_runs
                     WHERE run_id = :run_id AND owner_namespace = :owner_namespace
                     """
@@ -270,6 +322,35 @@ class GepaOptStore:
             )
             seed_row = _mapping(seed_result.mappings().first())
             example_rows = list(example_result.mappings().all())
+            candidate_result = await session.execute(
+                text(
+                    """
+                    SELECT iteration, proposal_kind, components, accepted,
+                           reject_reason, val_mean, test_mean
+                    FROM gepa_opt_candidates
+                    WHERE run_id = :run_id AND owner_namespace = :owner_namespace
+                    ORDER BY iteration
+                    """
+                ),
+                {"run_id": run_id, "owner_namespace": owner_namespace},
+            )
+            candidate_rows = list(candidate_result.mappings().all())
+            score_result = await session.execute(
+                text(
+                    """
+                    SELECT c.iteration, c.proposal_kind, s.score
+                    FROM gepa_opt_example_scores s
+                    JOIN gepa_opt_candidates c ON c.candidate_id = s.candidate_id
+                    JOIN gepa_opt_examples e ON e.example_id = s.example_id
+                    WHERE s.owner_namespace = :owner_namespace
+                      AND c.run_id = :run_id
+                      AND s.phase = 'full_val'
+                    ORDER BY c.iteration, e.ordinal
+                    """
+                ),
+                {"run_id": run_id, "owner_namespace": owner_namespace},
+            )
+            score_rows_db = list(score_result.mappings().all())
         seed = seed_row["components"]
         if isinstance(seed, str):
             seed = json.loads(seed)
@@ -291,6 +372,10 @@ class GepaOptStore:
             "component_cursor": run["component_cursor"],
             "seed_candidate_id": run["seed_candidate_id"],
             "surface": run["surface"],
+            "iteration": int(run.get("iteration") or 0),
+            "evals_used": int(run.get("evals_used") or 0),
+            "reflector_tokens_used": int(run.get("reflector_tokens_used") or 0),
+            "candidates": _with_subscores(candidate_rows, score_rows_db),
         }
 
     async def mark_succeeded(self, run_id: str, owner_namespace: str) -> None:
