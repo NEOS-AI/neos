@@ -693,6 +693,7 @@ class LearnConfig(StrictConfigModel):
     write_approval: bool = True
     coding_lessons: bool = False
     gepa_opt: bool = False
+    gepa_overlay: bool = False
     channel_learn: bool = False
     research_procedures: bool = False
     session_search_tool: bool = False

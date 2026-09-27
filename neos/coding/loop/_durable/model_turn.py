@@ -28,6 +28,7 @@ from neos.coding.instructions import (
     load_workspace_instructions,
 )
 from neos.coding.learn_lessons import coding_turn_system
+from neos.gepa_opt.inject import coding_turn_overlay
 from neos.coding.loop.hooks import invoke_post_generate, invoke_pre_generate
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -189,6 +190,7 @@ class ModelTurnMixin:
             state = self._with_note(state, append)
         system = await coding_turn_system(self._config.system, input.owner_id)
         system = inject_previous_summary(system, state.summary)
+        system = await coding_turn_overlay(system, input.owner_id)
         system_note = str(note.get("system") or "")
         if system_note:
             # Appended, never folded into `system`: rebuilding the system

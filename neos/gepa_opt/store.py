@@ -272,6 +272,32 @@ class GepaOptStore:
                     },
                 )
 
+    async def approved_components(
+        self, owner_namespace: str, surface: str
+    ) -> dict[str, str] | None:
+        """The one approved overlay for this owner and surface, or None."""
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT c.components
+                    FROM gepa_opt_overlays o
+                    JOIN gepa_opt_candidates c ON c.candidate_id = o.candidate_id
+                    WHERE o.owner_namespace = :owner_namespace
+                      AND o.surface = :surface
+                      AND o.status = 'approved'
+                    """
+                ),
+                {"owner_namespace": owner_namespace, "surface": surface},
+            )
+        row = result.first() if hasattr(result, "first") else None
+        if row is None:
+            return None
+        components = row[0]
+        if isinstance(components, str):
+            components = json.loads(components)
+        return {str(key): str(value) for key, value in dict(components).items()}
+
     async def approve(self, overlay_id: str, actor: str, owner_namespace: str) -> None:
         """Archive the current approved row, then approve the staged row."""
         if not actor:

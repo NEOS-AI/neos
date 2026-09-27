@@ -223,6 +223,7 @@ LEGACY_EXACT_PATHS = {
     "LEARN_WRITE_APPROVAL": "learn.write_approval",
     "LEARN_CODING_LESSONS": "learn.coding_lessons",
     "LEARN_GEPA_OPT": "learn.gepa_opt",
+    "LEARN_GEPA_OVERLAY": "learn.gepa_overlay",
     "LEARN_RESEARCH_PROCEDURES": "learn.research_procedures",
     "LEARN_SESSION_SEARCH_TOOL": "learn.session_search_tool",
     "CONTEXT_MAX_TOKENS": "context_assembly.max_tokens",

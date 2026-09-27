@@ -178,6 +178,18 @@ async def test_approve_requires_an_actor() -> None:
         await store.approve("33333333-3333-3333-3333-333333333333", "", "owner:1")
 
 
+@pytest.mark.asyncio
+async def test_approved_components_filters_owner_and_status() -> None:
+    session = FakeSession()
+    store = GepaOptStore(_factory(session))
+    found = await store.approved_components("owner:1", "coding_overlay")
+    statement, params = session.statements[0]
+    assert "status = 'approved'" in statement.lower()
+    assert params["owner_namespace"] == "owner:1"
+    assert params["surface"] == "coding_overlay"
+    assert found is None
+
+
 def test_evaluator_registry_starts_empty() -> None:
     clear_evaluators()
     assert get_evaluator("coding_overlay") is None
