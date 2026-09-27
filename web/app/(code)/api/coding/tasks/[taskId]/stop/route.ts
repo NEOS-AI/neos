@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 export async function POST(
   _request: Request,
@@ -13,10 +14,6 @@ export async function POST(
     );
     return NextResponse.json(result, { status: 202 });
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not stop coding task" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not stop coding task");
   }
 }

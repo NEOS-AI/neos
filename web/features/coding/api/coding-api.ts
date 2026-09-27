@@ -26,6 +26,7 @@ import type {
   CodingProjectionSnapshot,
 } from "@/features/coding/types/projection";
 import type { CodingSandboxStatus } from "@/features/coding/sandbox/types";
+import { backendErrorMessage } from "@/lib/backend-error";
 import type {
   WorkspaceDiff,
   WorkspaceFile,
@@ -45,34 +46,11 @@ export class CodingAPIError extends Error {
   }
 }
 
-function extractErrorMessage(
-  body: { error?: unknown; detail?: unknown },
-  fallback: string
-): string {
-  if (typeof body.error === "string" && body.error) {
-    return body.error;
-  }
-  const detail = body.detail;
-  if (typeof detail === "string" && detail) {
-    return detail;
-  }
-  if (
-    detail &&
-    typeof detail === "object" &&
-    "message" in detail &&
-    typeof detail.message === "string" &&
-    detail.message
-  ) {
-    return detail.message;
-  }
-  return fallback;
-}
-
 async function responseError(response: Response, fallback: string) {
   const body = await response.json().catch(() => ({}));
   return new CodingAPIError(
     response.status,
-    extractErrorMessage(body, fallback)
+    backendErrorMessage(body, fallback)
   );
 }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 /**
  * 샌드박스 상태 프록시. **GET 만 둔다.**
@@ -19,10 +20,6 @@ export async function GET(
     );
     return NextResponse.json(status);
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not read sandbox status" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not read sandbox status");
   }
 }

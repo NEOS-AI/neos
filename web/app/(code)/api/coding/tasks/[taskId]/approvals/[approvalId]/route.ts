@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callBackendAPIWithJSON } from "@/lib/backend-api";
+import { bffErrorResponse } from "@/lib/bff-error";
 
 export async function POST(
   request: Request,
@@ -15,10 +16,6 @@ export async function POST(
     );
     return NextResponse.json(result);
   } catch (error: unknown) {
-    const cause = error as { message?: string; status?: number };
-    return NextResponse.json(
-      { error: cause.message ?? "Could not resolve coding approval" },
-      { status: cause.status ?? 500 }
-    );
+    return bffErrorResponse(error, "Could not resolve coding approval");
   }
 }
