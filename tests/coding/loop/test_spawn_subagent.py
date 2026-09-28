@@ -780,7 +780,11 @@ async def test_implement_tool_port_allows_workspace_writes() -> None:
     registry = CodingToolRegistry.default(command_allowlist=frozenset({"pytest"}))
     executor = _WriteExecutor()
     port = CodingToolPort(registry=registry, executor=executor, spec="implement")
-    port.bind(session=object())
+
+    async def allow(validated):
+        return validated, None
+
+    port.bind(session=object(), authorize=allow)
     names = {item.name for item in port.definitions()}
     assert "write_file.v1" in names
     assert "edit_file.v1" in names

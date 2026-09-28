@@ -100,7 +100,11 @@ async def test_the_child_port_strips_the_blob_as_well(monkeypatch) -> None:
         ),
     )
     port = CodingToolPort(registry=_Registry(), executor=_Executor())
-    port.bind(session=object())
+
+    async def allow(validated):
+        return validated, None
+
+    port.bind(session=object(), authorize=allow)
 
     result = await port.execute("read_image.v1", {"path": "a.png"})
 

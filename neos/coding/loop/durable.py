@@ -174,7 +174,13 @@ class DurableCodingLoop(
 
     # -- approval ----------------------------------------------------------
 
-    def _approval_gate(self, state: AgentLoopState) -> ApprovalGate:
+    def _approval_gate(
+        self, state: AgentLoopState, *, unattended: bool = False
+    ) -> ApprovalGate:
+        """`unattended=True` 는 좁히기만 한다 -- 설정이 이미 unattended 면 그대로다.
+
+        자식(CHILD-GATE)은 승인할 사람에게 닿을 수 없으므로 늘 이것으로 판정한다.
+        """
         try:
             mode = ApprovalMode(self._config.approval_mode)
         except ValueError:
@@ -186,14 +192,14 @@ class DurableCodingLoop(
             always_allow=frozenset(self._config.approval_always_allow),
             approved_always=state.approved_always,
             current_phase=state.phase,
-            unattended=self._config.approval_unattended,
+            unattended=self._config.approval_unattended or unattended,
         )
 
     def _evaluate_static_call(
-        self, validated, state: AgentLoopState
+        self, validated, state: AgentLoopState, *, unattended: bool = False
     ) -> ApprovalPolicyOutcome:
         """주입된 평가기로 내는 판정. Jev 가 꺼져 있을 때의 유일한 경로다."""
-        gate = self._approval_gate(state)
+        gate = self._approval_gate(state, unattended=unattended)
         try:
             return self._approval_evaluator(validated, gate)
         except TypeError:
@@ -206,6 +212,8 @@ class DurableCodingLoop(
         deps=None,
         task_id: str | None = None,
         tool_call_id: str | None = None,
+        *,
+        unattended: bool = False,
     ) -> ApprovalPolicyOutcome:
         """정적 판정에 Jev 밴딩을 얹는다. 꺼져 있으면 정적 판정 그대로다.
 
@@ -217,16 +225,16 @@ class DurableCodingLoop(
         `tests/coding/test_event_kinds.py` 가 경로와 이름으로 이 자리를 짚는다.
         """
         if self._jev is None:
-            return self._evaluate_static_call(validated, state)
+            return self._evaluate_static_call(validated, state, unattended=unattended)
 
         decision = await evaluate_approval_with_jev(
             validated,
-            self._approval_gate(state),
+            self._approval_gate(state, unattended=unattended),
             scorer=self._jev.scorer,
             thresholds=self._jev.thresholds,
             enforce=self._jev.enforce,
             static_evaluator=lambda call, _gate: self._evaluate_static_call(
-                call, state
+                call, state, unattended=unattended
             ),
         )
         if decision.event is not None and deps is not None and task_id is not None:

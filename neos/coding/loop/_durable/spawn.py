@@ -263,8 +263,10 @@ class SubagentSpawnMixin:
         bound,
         state,
         *,
+        deps=None,
         spec_name: str = "explore",
         worktree_path: str = "",
+        spawn_call_id: str = "",
     ) -> None:
         if self._subagents is None:
             return
@@ -278,7 +280,115 @@ class SubagentSpawnMixin:
         if worktree_path:
             session = _session_on_workspace(session, worktree_path)
         if callable(bind):
-            bind(session=session)
+
+            async def authorize(validated):
+                return await self._authorize_child_call(
+                    validated,
+                    state=state,
+                    deps=deps,
+                    spec_name=spec_name,
+                    spawn_call_id=spawn_call_id,
+                )
+
+            bind(session=session, authorize=authorize)
+
+    def _rebind_child(self, ref: ActiveChildRef, bound, state, deps) -> None:
+        """A resumed child gets the gate of *this* parent step, not the last spawn's.
+
+        The port is shared by every child of the runtime. Without this, a child
+        stepped at the safe point or by `await_subagent.v1` would run under
+        whatever spec, worktree and gate the most recent spawn left bound.
+        """
+        lease = _lease_from_ref(ref)
+        self._bind_child_tools(
+            bound,
+            state,
+            deps=deps,
+            spec_name=ref.spec,
+            worktree_path=str(lease.path) if lease is not None else "",
+            spawn_call_id=ref.tool_call_id,
+        )
+
+    async def _authorize_child_call(
+        self, validated, *, state, deps, spec_name: str, spawn_call_id: str
+    ):
+        """The parent's gate, applied to one child call (roadmap CHILD-GATE).
+
+        Same hooks, same static policy, same Jev banding as the parent's own
+        calls -- this calls the parent's methods rather than restating them.
+        What differs is that a child cannot ask anyone: specs carry
+        `can_approve=False`, so the judgement runs unattended and
+        REQUIRE_APPROVAL folds to DENY (D-L1's fold, not a new rule). A hook
+        that asks to retry is a deny for the same reason -- the child has no
+        retry turn to spend it on.
+        """
+        from neos.coding.domain.approvals import ApprovalPolicyOutcome
+        from neos.coding.tools.registry import ToolValidationError
+
+        reason: str | None = None
+        decision, _hook_reason, updated_input = await self._pre_tool_decision(
+            validated
+        )
+        if decision == "allow" and updated_input is not None:
+            try:
+                validated = self._tools.validate(validated.name, dict(updated_input))
+            except ToolValidationError:
+                reason = "hook_updated_input_invalid"
+        elif decision == "prevent":
+            reason = "hook_prevented"
+        elif decision != "allow":
+            reason = "policy_hook_denied"
+        if reason is None:
+            task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+            outcome = await self._evaluate_call(
+                validated, state, deps, task_id, None, unattended=True
+            )
+            if outcome is not ApprovalPolicyOutcome.ALLOW:
+                reason = "policy_approval_denied"
+        if reason is None:
+            return validated, None
+        await self._record_child_denial(
+            deps,
+            name=validated.name,
+            reason_code=reason,
+            spec_name=spec_name,
+            spawn_call_id=spawn_call_id,
+        )
+        return None, reason
+
+    async def _record_child_denial(
+        self, deps, *, name: str, reason_code: str, spec_name: str, spawn_call_id: str
+    ) -> None:
+        """Put the child's denial in the parent's ledger.
+
+        The child's own transcript already carries the error; this is for the
+        person reading the run. The denial stands whether or not the write
+        lands -- a ledger outage must not turn a refused call into an allowed one.
+        """
+        lease = getattr(deps, "lease", None)
+        events = getattr(deps, "events", None)
+        task_id = getattr(lease, "task_id", None)
+        if events is None or not task_id:
+            return
+        try:
+            await events.append(
+                task_id=task_id,
+                event_type="tool.denied",
+                payload={
+                    "name": name,
+                    "denied_by": "hook"
+                    if reason_code in {"hook_prevented", "policy_hook_denied"}
+                    else "approval_policy",
+                    "reason_code": reason_code,
+                    "subagent_spec": spec_name,
+                    "parent_tool_call_id": spawn_call_id,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "child denial event failed task_id=%s tool=%s", task_id, name,
+                exc_info=True,
+            )
 
     # -- control-plane tools -----------------------------------------------
 
@@ -448,8 +558,10 @@ class SubagentSpawnMixin:
             self._bind_child_tools(
                 bound,
                 state,
+                deps=deps,
                 spec_name=request.spec_name,
                 worktree_path=str(lease.path) if lease is not None else "",
+                spawn_call_id=call.tool_call_id,
             )
         except Exception:
             _discard_lease(lease)
@@ -555,6 +667,7 @@ class SubagentSpawnMixin:
             # never this parent's. Saying "not live" beats silence: the model
             # can go look for the report it was handed.
             return self._spawn_tool_error(bound, "policy_not_live"), state
+        self._rebind_child(ref, bound, state, deps)
         outcome = await self._resume_child(ref, deps)
         if outcome.kind is StepKind.CONTINUING:
             return (
@@ -642,6 +755,7 @@ class SubagentSpawnMixin:
 
         await self._renew_parent_lease(deps)
         try:
+            self._rebind_child(ref, bound, state, deps)
             outcome = await self._subagents.resume(
                 ref.run_id,
                 expected_checkpoint_id=ref.checkpoint_id,
