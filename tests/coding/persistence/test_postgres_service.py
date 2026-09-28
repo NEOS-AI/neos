@@ -68,6 +68,30 @@ async def test_create_task_and_first_event_share_one_transaction() -> None:
     assert task.last_seq == 1
 
 
+
+async def test_create_task_writes_the_mode_column() -> None:
+    """K9. Mutation: drop `mode` from the INSERT -> every task is interactive."""
+    from neos.coding.domain.models import CodingTaskMode
+
+    session = FakeSession()
+
+    async def session_factory():
+        return session
+
+    task = await PostgresCodingService(session_factory).create_task(
+        owner_id="u1", prompt="Fix it", mode=CodingTaskMode.AUTONOMOUS
+    )
+
+    [(insert, params)] = [
+        (statement, params)
+        for statement, params in session.statements
+        if "INSERT INTO coding_tasks" in statement
+    ]
+    assert "mode" in insert
+    assert params["mode"] == "autonomous"
+    assert task.mode is CodingTaskMode.AUTONOMOUS
+
+
 async def test_event_append_locks_task_sequence_before_insert() -> None:
     session = FakeSession()
 

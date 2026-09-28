@@ -182,6 +182,31 @@ def test_create_task_returns_202_and_replayable_created_event() -> None:
     assert replay.json()["events"][0]["type"] == "task.created"
 
 
+def test_an_autonomous_task_records_its_mode() -> None:
+    """K9: the mode rides on the request, lands on the task and on the
+    `task.created` event (the ledger says which mode a task ran in)."""
+    client, _ = make_client()
+
+    created = client.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it", "mode": "autonomous"}
+    )
+    task_id = created.json()["task_id"]
+    replay = client.get(f"/api/v1/coding/tasks/{task_id}/events?after_seq=0")
+
+    assert created.status_code == 202
+    assert replay.json()["events"][0]["payload"]["mode"] == "autonomous"
+
+
+def test_an_unknown_mode_is_refused() -> None:
+    client, _ = make_client()
+
+    response = client.post(
+        "/api/v1/coding/tasks", json={"prompt": "Fix it", "mode": "yolo"}
+    )
+
+    assert response.status_code == 422
+
+
 def test_event_replay_exposes_checkpoint_identity() -> None:
     client, service = make_client()
     task_id = client.post(

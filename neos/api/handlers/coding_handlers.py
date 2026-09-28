@@ -37,6 +37,7 @@ from neos.coding.application.task_service import (
     clamp_task_list_limit,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
+from neos.coding.domain.models import CodingTaskMode
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
 from neos.coding.domain.phases import SteeringMode
@@ -192,7 +193,11 @@ async def create_coding_task(
     service: CodingTaskService = Depends(get_coding_service),
 ):
     return _task_response(
-        await service.create_task(owner_id=current_user.user_id, prompt=body.prompt)
+        await service.create_task(
+            owner_id=current_user.user_id,
+            prompt=body.prompt,
+            mode=CodingTaskMode(body.mode),
+        )
     )
 
 

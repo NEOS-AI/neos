@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 
 class CreateCodingTaskRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=100_000)
+    # 누가 보고 있는가 (로드맵 K9). Code UI 는 보내지 않는다 -- 사람이 본다.
+    # autonomous 면 승인 요구가 기다리지 않고 거절로 접힌다.
+    mode: Literal["interactive", "autonomous"] = "interactive"
 
 
 class CodingTaskResponse(BaseModel):

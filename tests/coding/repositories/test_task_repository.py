@@ -63,6 +63,7 @@ async def test_get_owned_maps_task_row() -> None:
             3,
             "2026-07-18T10:00:00+00:00",
             "2026-07-18T10:01:00+00:00",
+            "autonomous",
         )
     )
 
@@ -72,6 +73,11 @@ async def test_get_owned_maps_task_row() -> None:
     assert task.task_id == "ct_1"
     assert task.last_seq == 3
     assert task.status.value == "queued"
+    # K9: the run service reads the task through this repository, and the loop
+    # judges unattended from it. Mutation: drop `mode` from the select or the
+    # mapping -> an autonomous task resumes as interactive.
+    assert task.mode.value == "autonomous"
+    assert "mode" in db.calls[0][0]
 
 
 async def test_list_owned_scopes_query_to_owner_and_orders_by_activity() -> None:

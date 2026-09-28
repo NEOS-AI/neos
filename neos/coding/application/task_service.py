@@ -8,6 +8,7 @@ from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.models import (
     ARCHIVABLE_TASK_STATUSES,
     CodingTask,
+    CodingTaskMode,
     CodingTaskStatus,
     transition_task,
 )
@@ -138,7 +139,12 @@ class CodingTaskService:
             )
 
     async def create_task(
-        self, *, owner_id: str, prompt: str, task_id: str | None = None
+        self,
+        *,
+        owner_id: str,
+        prompt: str,
+        task_id: str | None = None,
+        mode: CodingTaskMode = CodingTaskMode.INTERACTIVE,
     ) -> CodingTask:
         now = self._clock()
         task = CodingTask(
@@ -150,12 +156,17 @@ class CodingTaskService:
             last_seq=0,
             created_at=now,
             updated_at=now,
+            mode=mode,
         )
         await self.tasks.create(task)
         event = await self.events.append(
             task_id=task.task_id,
             event_type="task.created",
-            payload={"status": task.status.value, "prompt": prompt},
+            payload={
+                "status": task.status.value,
+                "prompt": prompt,
+                "mode": task.mode.value,
+            },
             now=now,
         )
         task = replace(task, last_seq=event.seq)

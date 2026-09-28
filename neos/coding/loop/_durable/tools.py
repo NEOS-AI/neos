@@ -229,7 +229,12 @@ class ToolExecutionMixin:
 
     async def _approval_gate_step(self, input, state, bound, deps, call, validated):
         outcome = await self._evaluate_call(
-            validated, state, deps, input.task_id, call.tool_call_id
+            validated,
+            state,
+            deps,
+            input.task_id,
+            call.tool_call_id,
+            unattended=_unattended(input),
         )
         if outcome is ApprovalPolicyOutcome.DENY:
             return _Halt(
@@ -601,7 +606,12 @@ class ToolExecutionMixin:
             if decision in {"deny", "retry", "prevent"} or updated:
                 return None
             outcome = await self._evaluate_call(
-                validated, state, deps, input.task_id, call.tool_call_id
+                validated,
+                state,
+                deps,
+                input.task_id,
+                call.tool_call_id,
+                unattended=_unattended(input),
             )
             if outcome is not ApprovalPolicyOutcome.ALLOW:
                 return None
@@ -935,3 +945,17 @@ class ToolExecutionMixin:
             if isinstance(result, ToolResult):
                 ready[call_id] = result
         return ready
+
+
+def _unattended(input) -> bool:
+    """Nobody is watching this task (K9): an approval request would wait forever.
+
+    The gate step is where this matters: REQUIRE_APPROVAL folds to DENY
+    instead of parking. The speculative read-only batch passes it too, but
+    there it cannot change anything -- the fold only turns REQUIRE_APPROVAL
+    into DENY, and the batch already declines both (it prefetches on ALLOW
+    only). It is passed so the two sites judge with the same gate, not
+    because a test could tell the difference; a mutation removing it there
+    survives, and that is why.
+    """
+    return getattr(input, "mode", "interactive") == "autonomous"

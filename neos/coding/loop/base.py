@@ -46,6 +46,9 @@ class LoopInput:
     instruction: str
     workspace_edits: tuple[WorkspaceEditContext, ...] = ()
     owner_id: str | None = None
+    #: 태스크의 모드 (K9). `"autonomous"` 면 부모의 승인 판정이 unattended 로
+    #: 돈다 -- REQUIRE_APPROVAL 을 기다리지 않고 거절로 접는다(D-L1).
+    mode: str = "interactive"
 
 
 @dataclass(frozen=True, slots=True)
