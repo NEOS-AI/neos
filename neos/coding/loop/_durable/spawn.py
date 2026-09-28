@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -58,6 +59,16 @@ _FOREIGN_SPEC_PREFIXES = ("fsi-", "univer-")
 _STEER_MAX_CHARS = 2000
 
 SpawnOutcome = tuple["dict[str, Any] | DelegatedSpawn", AgentLoopState]
+
+
+#: `coding_events.tool_call_id` is VARCHAR(128).
+_CHILD_DENIAL_ID_BUDGET = 128
+
+
+def child_denial_call_id(spawn_call_id: str) -> str:
+    """A card id for one child denial: `<spawn call>:child:<nonce>`."""
+    suffix = f":child:{uuid.uuid4().hex[:12]}"
+    return spawn_call_id[: _CHILD_DENIAL_ID_BUDGET - len(suffix)] + suffix
 
 
 @dataclass(frozen=True, slots=True)
@@ -388,6 +399,15 @@ class SubagentSpawnMixin:
             await events.append(
                 task_id=task_id,
                 event_type="tool.denied",
+                # The projection keys tool cards by `tool_call_id` and drops a
+                # `tool.*` event without one -- this denial reached the ledger
+                # but never the screen (CHILD-GATE ②). The port does not see
+                # the child's own call id, so this one is minted: prefixed by
+                # the spawn call so it cannot collide with the parent's ids,
+                # unique so two denials are two cards. `run_id` is the parent
+                # run's, because the phase panel lists tools by run.
+                run_id=getattr(lease, "run_id", None),
+                tool_call_id=child_denial_call_id(spawn_call_id),
                 payload={
                     "name": name,
                     "denied_by": "hook"

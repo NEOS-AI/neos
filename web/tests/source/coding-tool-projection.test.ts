@@ -181,3 +181,35 @@ test("snapshot cost and token fields surface on the projection", () => {
   assert.equal(state.outputTokens, 40);
   assert.equal(state.maxCostMicros, 10_000_000);
 });
+
+test("a child's denial becomes its own card, with no tool.started before it", () => {
+  // CHILD-GATE ②: the child's call never started in the parent, so the denial
+  // is the first and only event for this id. The id is minted by the parent's
+  // gate (`<spawn call>:child:<nonce>`) so it cannot land on a parent card.
+  const payload = {
+    name: "rm.v1",
+    denied_by: "approval_policy",
+    reason_code: "policy_approval_denied",
+    subagent_spec: "implement",
+    parent_tool_call_id: "s1",
+  };
+  const state = reduceProjectionEvent(
+    emptyProjection("ct_1"),
+    event(1, "tool.denied", payload, "s1:child:abc")
+  );
+
+  const card = state.toolsById["s1:child:abc"];
+  assert.equal(card.status, "denied");
+  assert.equal(card.name, "rm.v1");
+  assert.equal(card.run_id, "cr_1");
+  assert.equal(card.reason_code, "policy_approval_denied");
+});
+
+test("a tool.denied without a tool_call_id is dropped -- why the gate mints one", () => {
+  const state = reduceProjectionEvent(
+    emptyProjection("ct_1"),
+    event(1, "tool.denied", { name: "rm.v1", reason_code: "x" })
+  );
+
+  assert.deepEqual(state.toolsById, {});
+});

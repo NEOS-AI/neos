@@ -427,3 +427,109 @@ def test_projection_reads_the_kinds_the_parent_sink_forwards() -> None:
     from neos.coding.runtime import _PARENT_SINK_EVENTS
 
     assert set(CHILD_EVENT_TYPES) == set(_PARENT_SINK_EVENTS)
+
+
+_CHILD_DENIAL = {
+    "name": "rm.v1",
+    "denied_by": "approval_policy",
+    "reason_code": "policy_approval_denied",
+    "subagent_spec": "implement",
+    "parent_tool_call_id": "s1",
+}
+
+
+@pytest.mark.no_db
+async def test_the_repository_reads_child_denials_as_denied_tool_rows() -> None:
+    """CHILD-GATE ②. A child's refused call never reaches the parent's
+    executor, so `coding_tool_executions` has no row for it -- the only record
+    is the `tool.denied` event. Without this read the live stream shows the
+    card and a reload loses it.
+
+    This pins the query and the mapping; the next test pins that the
+    snapshot read calls it.
+    """
+    from neos.coding.repositories.projection_repository import (
+        PostgresCodingProjectionRepository,
+    )
+
+    session = FakeSession()
+    session.results = [FakeResult(rows=[("s1:child:abc", "cr_1", _CHILD_DENIAL)])]
+
+    rows = await PostgresCodingProjectionRepository(None)._child_denials(
+        session, "ct_1"
+    )
+
+    assert rows == (
+        CodingToolExecutionRow("s1:child:abc", "cr_1", "denied", _CHILD_DENIAL),
+    )
+    sql = session.sql[-1]
+    assert "event_type = 'tool.denied'" in sql
+    # Only the child's: the parent's denials already have execution rows, and
+    # reading them here too would show every parent denial twice.
+    assert "subagent_spec" in sql
+
+
+@pytest.mark.no_db
+async def test_a_child_denial_row_projects_as_a_named_denied_tool() -> None:
+    from dataclasses import replace
+
+    class DenialRepository(ProjectionFixtureRepository):
+        async def get_owned_snapshot(self, task_id: str, owner_id: str):
+            rows = await super().get_owned_snapshot(task_id, owner_id)
+            return replace(
+                rows,
+                tools=rows.tools
+                + (CodingToolExecutionRow("s1:child:abc", "cr_1", "denied", _CHILD_DENIAL),),
+            )
+
+    snapshot = await CodingSnapshotService(DenialRepository(head_seq=14)).get_owned(
+        "ct_1", "u1"
+    )
+
+    assert snapshot is not None
+    [tool] = [t for t in snapshot.tools if t.tool_call_id == "s1:child:abc"]
+    assert tool.status == "denied"
+    assert tool.name == "rm.v1"
+    assert tool.run_id == "cr_1"
+    assert tool.result["reason_code"] == "policy_approval_denied"
+
+
+@pytest.mark.no_db
+async def test_the_snapshot_read_includes_child_denials() -> None:
+    """Mutation: drop `_child_denials` from `get_owned_snapshot` -> no row."""
+    from neos.coding.repositories.projection_repository import (
+        PostgresCodingProjectionRepository,
+    )
+
+    denial = CodingToolExecutionRow("s1:child:abc", "cr_1", "denied", _CHILD_DENIAL)
+    executed = CodingToolExecutionRow("t1", "cr_1", "completed", {"name": "read_file.v1"})
+
+    class Repo(PostgresCodingProjectionRepository):
+        async def _tools(self, session, task_id):
+            return (executed,)
+
+        async def _child_denials(self, session, task_id):
+            return (denial,)
+
+    async def empty(self, session, task_id, *rest):
+        return ()
+
+    async def none(self, session, task_id, *rest):
+        return None
+
+    for name in ("_runs", "_phases", "_approvals", "_parts", "_workspace_edits",
+                 "_tool_risks", "_child_events"):
+        setattr(Repo, name, empty)
+    for name in ("_checkpoint", "_refusal"):
+        setattr(Repo, name, none)
+
+    session = FakeSession()
+    session.results = [FakeResult(first=("ct_1", "running", 1, 3, NOW, NOW))]
+
+    async def session_factory():
+        return session
+
+    rows = await Repo(session_factory).get_owned_snapshot("ct_1", "u1")
+
+    assert rows is not None
+    assert rows.tools == (executed, denial)

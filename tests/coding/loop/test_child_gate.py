@@ -255,6 +255,16 @@ async def test_implement_child_rm_is_denied_and_recorded(tmp_path: Path) -> None
         "subagent_spec": "implement",
         "parent_tool_call_id": "s1",
     }
+    # CHILD-GATE ②: the projection keys tool cards by `tool_call_id` and drops
+    # a `tool.*` event without one; the phase panel lists tools by `run_id`.
+    # Mutation: append without either -> the denial never reaches the screen.
+    assert denied.tool_call_id.startswith("s1:child:")
+    parent_runs = {
+        event.run_id
+        for event in h.events.items
+        if event.run_id and event is not denied
+    }
+    assert parent_runs and denied.run_id in parent_runs
     [child_result] = _child_tool_results(runtime)
     assert child_result["status"] == "error"
     assert "policy_approval_denied" in child_result["content"]["error"]
@@ -395,3 +405,13 @@ async def test_the_binding_does_not_outlive_the_step(tmp_path: Path) -> None:
     await _run_until_folded(h)
 
     assert port._bindings == {}
+
+
+def test_two_child_denials_are_two_cards() -> None:
+    """The nonce is what keeps a second denial from overwriting the first."""
+    from neos.coding.loop._durable.spawn import child_denial_call_id
+
+    first, second = child_denial_call_id("s1"), child_denial_call_id("s1")
+
+    assert first != second
+    assert len(child_denial_call_id("x" * 400)) <= 128  # VARCHAR(128)

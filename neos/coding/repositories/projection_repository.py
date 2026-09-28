@@ -188,6 +188,7 @@ class PostgresCodingProjectionRepository:
                 runs = await self._runs(session, task_id)
                 phases = await self._phases(session, task_id)
                 tools = await self._tools(session, task_id)
+                tools += await self._child_denials(session, task_id)
                 approvals = await self._approvals(session, task_id, owner_id)
                 parts = await self._parts(session, task_id)
                 workspace_edits = await self._workspace_edits(session, task_id)
@@ -273,6 +274,39 @@ class PostgresCodingProjectionRepository:
         return tuple(
             CodingToolExecutionRow(
                 row[0], row[1], row[2], dict(row[3]) if row[3] is not None else None
+            )
+            for row in result.all()
+        )
+
+    async def _child_denials(
+        self, session, task_id: str
+    ) -> tuple[CodingToolExecutionRow, ...]:
+        """A child's refused calls, as tool rows (CHILD-GATE ②).
+
+        The parent's own denials land in `coding_tool_executions`; a child's
+        do not -- the child's call never reaches the parent's executor, so
+        the only record is the `tool.denied` event the parent's gate writes.
+        Without this, the live stream shows the card and a reload loses it.
+        The payload is the result: it carries `name`, `denied_by`,
+        `reason_code` and which child (`subagent_spec`) was refused.
+        """
+        result = await session.execute(
+            text(
+                """
+                SELECT tool_call_id, run_id, payload
+                FROM coding_events
+                WHERE task_id = :task_id
+                  AND event_type = 'tool.denied'
+                  AND tool_call_id IS NOT NULL
+                  AND payload->>'subagent_spec' IS NOT NULL
+                ORDER BY seq ASC
+                """
+            ),
+            {"task_id": task_id},
+        )
+        return tuple(
+            CodingToolExecutionRow(
+                row[0], row[1] or "", "denied", dict(row[2]) if row[2] else {}
             )
             for row in result.all()
         )
