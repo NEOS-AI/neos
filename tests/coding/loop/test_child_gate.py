@@ -359,8 +359,8 @@ def test_rebinding_a_resumed_child_replaces_the_gate() -> None:
     """A resumed child runs under this step's gate, not the last spawn's.
 
     Mutation: make `_rebind_child` a no-op -> the stale closure stays bound.
-    This calls the method directly; it does not catch the call being removed
-    from the two resume paths (`await_subagent.v1` and the K3 safe point).
+    This calls the method directly. The two call sites (`await_subagent.v1`
+    and the K3 safe point) are pinned by the CHILD-GATE ③ tests below.
     """
     runtime, port, _executor = _runtime_with_real_port([])
     h = harness(_spawn("implement"), config=_flag_on(), subagents=runtime)
@@ -415,3 +415,98 @@ def test_two_child_denials_are_two_cards() -> None:
 
     assert first != second
     assert len(child_denial_call_id("x" * 400)) <= 128  # VARCHAR(128)
+
+
+# ---- CHILD-GATE ③: the resume paths rebind -------------------------------------
+#
+# `test_rebinding_a_resumed_child_replaces_the_gate` calls the method. These drive
+# the two call sites. With async spawn the spawn step runs only the child's model
+# turn; its tool call runs on the *next* advance -- at the K3 safe point or under
+# `await_subagent.v1`. Each step unbinds in `finally`, so if a resume path skips
+# the rebind the port is unbound there and refuses the call before the executor.
+
+
+def _async_gate_on():
+    from neos.coding.loop.anthropic import AnthropicLoopConfig
+
+    return AnthropicLoopConfig(
+        model="claude-test",
+        system="code",
+        subagent_enabled=True,
+        subagent_async_spawn=True,
+        approval_mode="auto",
+        approval_allow_tools=("read_file.v1",),
+    )
+
+
+def _read_then_report():
+    return [_child_calls("read_file.v1", {"path": "a.py"}), _text("found it")]
+
+
+@pytest.mark.asyncio
+async def test_the_safe_point_rebinds_before_it_steps_the_child() -> None:
+    """Mutation: drop `_rebind_child` from `_advance_one_detached_child` ->
+    the child's read is refused as unbound and never reaches the executor."""
+    from tests.coding.loop.test_spawn_async import _children, _spawn_then_talk
+
+    runtime, port, executor = _runtime_with_real_port(_read_then_report())
+    h = harness(
+        _spawn_then_talk(),
+        config=_async_gate_on(),
+        subagents=runtime,
+        approval_evaluator=evaluate_approval,
+    )
+
+    checkpoint = None
+    for _ in range(8):
+        await collect(h, checkpoint)
+        checkpoint = h.repository.checkpoints[-1]
+        if not _children(checkpoint.loop_state):
+            break
+
+    assert executor.calls == ["read_file.v1"]
+    [child_result] = _child_tool_results(runtime)
+    assert child_result["status"] == "ok"
+    assert port._bindings == {}
+
+
+@pytest.mark.asyncio
+async def test_await_rebinds_before_it_resumes_the_child() -> None:
+    """Mutation: drop `_rebind_child` from the `await_subagent.v1` path ->
+    the child's read is refused as unbound."""
+    from tests.coding.loop.test_spawn_async import (
+        _await_the_spawned_child,
+        _spawn_then_await,
+    )
+
+    # Two reads: the safe point before the parent's await turn steps the
+    # child once and runs the first read; only the second runs under the
+    # await. With one read the await path never runs a tool and this test
+    # would pass with its rebind removed (it did, on the first draft).
+    runtime, port, executor = _runtime_with_real_port(
+        [
+            (
+                TextDelta("working"),
+                ToolCallCompleted("c1", "read_file.v1", {"path": "a.py"}),
+                ModelCompleted("tool_use", ModelUsage(1, 1)),
+            ),
+            (
+                TextDelta("again"),
+                ToolCallCompleted("c2", "read_file.v1", {"path": "b.py"}),
+                ModelCompleted("tool_use", ModelUsage(1, 1)),
+            ),
+            _text("found it"),
+        ]
+    )
+    h = harness(
+        _spawn_then_await(),
+        config=_async_gate_on(),
+        subagents=runtime,
+        approval_evaluator=evaluate_approval,
+    )
+
+    await _await_the_spawned_child(h)
+
+    assert executor.calls == ["read_file.v1", "read_file.v1"]
+    assert [r["status"] for r in _child_tool_results(runtime)] == ["ok", "ok"]
+    assert port._bindings == {}
