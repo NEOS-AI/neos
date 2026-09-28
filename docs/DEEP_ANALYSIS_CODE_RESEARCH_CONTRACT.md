@@ -44,6 +44,11 @@
 | `compose` | 클레임 파일을 읽어 리포트를 워크스페이스에 쓰고 제출 | `list_tree.v1` `read_file.v1` `search_text.v1` `write_file.v1` `edit_file.v1` `check_claims.v1` `submit.v1` | ❌ | `synth` |
 
 - **judge는 스펙이 아니다.** 판정자는 지금처럼 오케스트레이터가 부르고, worker와 같은 인스턴스일 수 없다.
+- **`research` 도 계산 클레임을 낸다 (2026-09-28, 사용자 결정 — J1.5).** 위 표는 계산을 `analyze` 몫으로 적었다.
+  그런데 `research` 의 도구 열에 이미 `execute.v1` 이 있고 제출 파서는 계산 클레임을 받는다 — J1.5 가 그 표면을
+  실제로 열면서 research 자식의 계산이 verified 까지 가는 산 경로가 됐다. 막는 대신 허용하고, 결정 3(§9)의
+  "같은 질문의 verified 클레임만" 을 **채점기 규칙 2 로 강제**한다(§5). `analyze` 는 "검색 없는 계산" 이
+  필요해질 때 따로 연다 — 그때도 스펙을 더하는 커밋은 표본 경계다(§8).
 - **`sandbox_mode` 는 `NONE` 이다 (2026-09-20, 구현 주석).** 위 표는 도구·`can_spawn`·역할만 정하고
   `SubagentSpec.sandbox_mode` 를 **적어 주지 않았다.** 남은 셋 중 `WORKTREE` 는 git 워크트리를 만드는
   코딩 전용 모드라 저장소가 없는 DA 에 맞지 않고, `PARENT_RO` 는 부모 바인딩을 물려받는다는 뜻인데
@@ -80,7 +85,7 @@ output: {"raw_ref": str(16), "status": int, "path": "/evidence/<raw_ref>.txt",
 |---|---|
 | 네트워크 | 없음 |
 | 마운트 | `/evidence` 읽기 전용 · `/workspace` 읽기-쓰기(질문별) — ~~⚠️ **development 에서는 읽기 전용이 아니다**~~ development(Docker)에서도 읽기 전용이다(2026-09-23). ⚠️ 관리형·메모리 provider 에서는 아니다, 아래 참조 |
-| argv allowlist | `python3` 만. 셸 없음 |
+| argv allowlist | `python3` 만. 셸 없음 — ✅ **코드로 강제**(2026-09-28, J1.5): 조사 포트의 레지스트리가 `command_allowlist={"python3"}` 로 지어진다(`research_session.py`). `-c`·셸은 레지스트리가 이미 거절한다. 그 위에 게이트(`research_gate.py`)가 **재실행기가 다시 돌릴 수 있는 모양**만 허락한다: `python3 <워크스페이스의 .py>` 하나, cwd 루트, env·stdin 없음 |
 | 이미지 | digest 고정. digest가 매니페스트 구성 지문에 들어간다 |
 | 이미지 내용물 | 파이썬 + **분석 번들**: pandas · numpy · pypdf · beautifulsoup4 (2026-09-17 결정). 목록은 잠금 파일로 고정한다 — 버전이 움직이면 재실행이 재현되지 않는다 |
 | 한도 | CPU 초·메모리·출력 바이트·프로세스 수 — 전부 settings |
@@ -195,6 +200,13 @@ output_digest    sha256(정규화된 stdout)
 claimed_value    클레임 본문이 인용하는 값(문자열 그대로)
 ```
 
+**`script_ref` 가 원장에 들어오는 길 (2026-09-28 착지, J1.5).** 워커가 해시를 계산하지 않는다.
+`execute.v1` 이 **돌리기 전에** 스크립트 바이트를 원장 blob 으로 넣고(`LedgerEvidenceStore.commit_script`),
+결과에 `script_ref` 와 `output_digest` 를 싣는다 — 워커는 그 둘을 그대로 옮긴다. `output_digest` 는 재실행기와
+**같은 함수**(`graders/computed.py` `digest_stdout`)로 만들고, 한도에 걸린 실행에는 주지 않는다. 스크립트
+blob 의 URL 은 `sandbox-script://<question_id>/<path>` 다 — 두 채점기가 이 표시를 보고 스크립트를 quote 증거나
+계산 `inputs` 로 받지 않는다(I4: 워커가 쓴 파일은 증거가 될 수 없다). 스크립트는 `/evidence` 한도에 청구하지 않는다.
+
 **stdout 정규화:** 줄 끝 `\r\n`→`\n`, 끝 공백 제거. **그 외는 건드리지 않는다** — 숫자 반올림을 정규화에 넣으면
 채점기가 "비슷하면 같다"를 판정하게 된다.
 
@@ -206,7 +218,7 @@ claimed_value    클레임 본문이 인용하는 값(문자열 그대로)
 | 코드 | 조건 |
 |---|---|
 | `E_COMPUTE_INPUT_UNFETCHED` | `inputs` **또는 `script_ref`** 중 원장 blob이 아닌 것이 있다 |
-| `E_COMPUTE_PREMISE_UNVERIFIED` | `premises` 중 verified quote 클레임이 아닌 것이 있다 |
+| `E_COMPUTE_PREMISE_UNVERIFIED` | `premises` 중 verified quote 클레임이 아닌 것, 또는 **다른 질문의** 클레임이 있다(2026-09-28, §2 주석) |
 | `E_COMPUTE_NONDETERMINISTIC` | 같은 입력으로 **두 번** 돌려 digest가 다르다 |
 | `E_COMPUTE_NOT_REPRODUCED` | 재실행 digest가 `output_digest`와 다르다 |
 | `E_COMPUTE_VALUE_MISMATCH` | `claimed_value`가 정규화된 stdout에 문자 그대로 없다 |
@@ -236,8 +248,10 @@ claimed_value    클레임 본문이 인용하는 값(문자열 그대로)
 | `evidence_fetched_for_sandbox` | 오케스트레이터 | raw_ref · path |
 | `compute_reexecuted` | 채점 사전 작업 | claim_id · digest 일치 여부 · 소요 |
 | `compute_reexecution_capped` | 채점 사전 작업 | claim_id · 넘은 한도 |
+| `code_tool_denied` 🆕 | 오케스트레이터(조사 게이트, J1.5) | tool · reason_code |
+| `script_executed` 🆕 | 오케스트레이터(`execute.v1` 마다, S8) | script_ref · output_digest(한도면 null) · exit_code · timed_out · stdout_truncated · evidence_refs(그때 샌드박스에 있던 증거 — 상한 집합) |
 
-`claim_rejected`의 `code`에 §5의 코드가 새로 흐른다. 새 kind를 만들지 않는다.
+`claim_rejected`의 `code`에 §5의 코드가 새로 흐른다. ~~새 kind를 만들지 않는다.~~ → 채점에는 새 kind 를 만들지 않는다. `code_tool_denied` 는 채점이 아니라 **게이트의 거절**이라 따로 둔다(2026-09-28) — 조용한 거절은 CHILD-GATE 가 닫은 구멍과 같은 모양이다. 레지스트리 단계의 거절(`policy_executable_not_allowed` 등)은 여기 남지 않고 워커에게만 간다 — 코딩 자식과 같다.
 
 ## 7. 설정 키 (전부 기본 off·보수값)
 
@@ -283,6 +297,10 @@ deep_analysis:
      모양이고, 이는 §13 "조용히 바뀌는 것이 시끄럽게 깨지는 것보다 위험하다" 에 정면으로 걸린다
    - 대가도 적는다: **조사가 그 지점에서 멈춘다.** 대신 멈춘 자리가 이벤트로 남아 눈에 보인다
    - I4 와 같은 방향이다 — 샌드박스 안의 바이트는 원장 blob 뿐이고, 그 집합은 **줄지 않는다**
+   - ⚠️ **라운드 경계에서 줄고 있었다 (2026-09-28, J1.5 의 E2E 가 찾았다).** 질문의 샌드박스는 라운드마다 새로 열리고,
+     라운드 1 의 `/evidence` 는 라운드 2 에 없었다. 계산은 premises ID 가 briefing 에 실리는 둘째 라운드부터 가능하므로
+     계산이 읽을 증거는 언제나 사라진 뒤였다. 이제 샌드박스를 열 때 `LedgerEvidenceStore.restore` 가 이 질문이
+     샌드박스에 놓았던 blob(`evidence_fetched_for_sandbox`)을 원장에서 다시 놓는다 — 다시 청구하지도, 다시 기록하지도 않는다
 
 5. **코드 경로의 blob 커밋은 건별이다** — `fetch.v1` 이 성공하면 오케스트레이터가 **그 자리에서**
    원장에 쓰고, 그 뒤에 `/evidence/<raw_ref>.txt` 가 샌드박스에 나타난다.

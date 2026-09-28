@@ -6,6 +6,7 @@ import {
   RAG_DOCUMENT_UPLOAD_PATH,
   ragDocumentPath,
 } from "@/lib/backend-routes";
+import { requestClientIpHeaders } from "@/lib/client-ip-server";
 import { SUPPORTED_ATTACHMENT_MIME_TYPES } from "@/lib/message-parts";
 import { getBackendUrl } from "@/lib/server-config";
 
@@ -86,6 +87,7 @@ export async function POST(request: Request) {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.backendAccessToken}`,
+          ...(await requestClientIpHeaders()),
           // Content-Type은 지정하지 않음 — fetch가 multipart boundary를 자동 설정
         },
         body: uploadFormData,
@@ -112,6 +114,7 @@ export async function POST(request: Request) {
       {
         headers: {
           Authorization: `Bearer ${session.backendAccessToken}`,
+          ...(await requestClientIpHeaders()),
         },
       }
     );

@@ -91,6 +91,19 @@ ARCHIVABLE_TASK_STATUSES = frozenset(
 )
 
 
+class CodingTaskMode(StrEnum):
+    """누가 보고 있는가 (로드맵 K9).
+
+    `INTERACTIVE` 는 사람이 Code UI 에서 보고 승인한다. `AUTONOMOUS` 는 아무도
+    보지 않는다 -- 승인을 기다리면 영원히 기다리므로 REQUIRE_APPROVAL 은
+    거절로 접힌다(D-L1). 태스크에 붙는 이유는 재개·워커 이관에서도 같아야
+    하기 때문이다.
+    """
+
+    INTERACTIVE = "interactive"
+    AUTONOMOUS = "autonomous"
+
+
 @dataclass(frozen=True, slots=True)
 class CodingTask:
     task_id: str
@@ -101,6 +114,7 @@ class CodingTask:
     last_seq: int
     created_at: datetime
     updated_at: datetime
+    mode: CodingTaskMode = CodingTaskMode.INTERACTIVE
 
 
 def transition_task(

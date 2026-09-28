@@ -12,9 +12,9 @@ class PDFExtractionError(Exception):
 def pdf_bytes_to_text(content: bytes) -> str:
     """Extract normalized page text from PDF bytes."""
     try:
-        import fitz
+        import pymupdf
 
-        document = fitz.open(stream=content, filetype="pdf")
+        document = pymupdf.open(stream=content, filetype="pdf")
     except Exception as exc:
         raise PDFExtractionError("Unable to extract PDF text") from exc
 

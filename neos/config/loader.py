@@ -92,6 +92,9 @@ SECRET_ENV_KEYS = {
     "AI_GATEWAY_API_KEY",
     "POSTGRES_PASSWORD",
     "GRAFANA_PASSWORD",
+    # nginx(compose) ↔ web BFF 공유 비밀 -- 백엔드는 읽지 않는다
+    # (config/nginx/40-neos-client-ip.sh, web/lib/client-ip.ts).
+    "NEOS_CLIENT_IP_SECRET",
 }
 
 SECRET_ENV_MAPPING = {

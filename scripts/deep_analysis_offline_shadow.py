@@ -43,6 +43,7 @@ from neos.workflow.deep_analysis.cassette_model import CassetteModel
 from neos.workflow.deep_analysis.graders.deterministic import DeterministicGrader
 from neos.workflow.deep_analysis.ledger import Ledger
 from neos.workflow.deep_analysis.models import Effort
+from neos.workflow.deep_analysis.research_session import CommandLimits
 from neos.workflow.deep_analysis.shadow import (
     build_shadow_worker,
     run_offline_shadow,
@@ -107,8 +108,9 @@ async def _run(args) -> dict:
         )
         worker = build_shadow_worker(
             provider=provider,
-            # 채점기는 원장을 **읽기만** 한다. 계산 클레임은 research 명세가
-            # 만들지 않으므로 재실행기는 없다.
+            # 채점기는 원장을 **읽기만** 한다. 여기서는 `check_claims.v1` 만
+            # 쓰고, 그 도구는 계산 클레임을 채점기에 넘기지 않으므로 재실행기는
+            # 없다(섀도는 제안을 비교할 뿐 채점하지 않는다).
             grader=DeterministicGrader(
                 ledger,
                 quote_threshold=config.quote_match_threshold,
@@ -120,6 +122,11 @@ async def _run(args) -> dict:
             cap_bytes=config.code_research.evidence_bytes_cap,
             limits=SandboxLimits.safe_defaults(),
             parent_id=args.run_id,
+            # 오케스트레이터(`_run_worker`)와 같은 값 -- 재실행 한도.
+            command_limits=CommandLimits(
+                timeout_sec=config.code_research.reexecution.cpu_sec,
+                output_bytes=config.code_research.reexecution.stdout_bytes,
+            ),
         )
         comparison = await run_offline_shadow(ledger, assignment, worker=worker)
 

@@ -22,7 +22,14 @@ from neos.database.deep_analysis_models import (
     DARun,
 )
 
-from .models import ProposedBlob, ProposedClaim, RepairResult, Verdict, WorkerResult
+from .models import (
+    ComputedEvidence,
+    ProposedBlob,
+    ProposedClaim,
+    RepairResult,
+    Verdict,
+    WorkerResult,
+)
 from .text_norm import claim_hash
 
 
@@ -129,6 +136,18 @@ def _computation_json(claim: ProposedClaim) -> str | None:
     if computation is None:
         return None
     return json.dumps(asdict(computation), ensure_ascii=False)
+
+
+def stored_computation(raw: str | None) -> ComputedEvidence | None:
+    """`_computation_json` 의 역. 행의 JSON 을 다시 `ComputedEvidence` 로.
+
+    수리가 클레임을 `pending` 으로 되돌리면 오케스트레이터가 행에서 클레임을
+    다시 짓는다. 여기서 계산을 되살리지 못하면 계산 클레임이 **인용 클레임으로
+    재채점**되어 `E_NO_EVIDENCE` 를 받는다 -- 재실행도 판정자도 거치지 않고.
+    """
+    if not raw:
+        return None
+    return ComputedEvidence(**json.loads(raw))
 
 
 async def create_run(
@@ -1091,8 +1110,44 @@ class Ledger:
                 urls.append(url)
         return urls
 
+    async def claim_evidence(self, claim_id: str) -> list[DAEvidence]:
+        """A claim's evidence rows, run-scoped. Read-only.
+
+        The judge reads a computed claim through its premises' excerpts
+        (GRADE1); this is how the orchestrator gets them.
+        """
+        return await self._evidence_for_claim(claim_id)
+
     async def get_blob(self, content_hash: str) -> DABlob | None:
         return await self.db.get(DABlob, (self.run_id, content_hash))
+
+    async def sandbox_evidence_refs(self, question_id: str) -> list[str]:
+        """이 질문의 샌드박스에 놓였던 blob 들, 처음 놓인 순서대로 (J1.5).
+
+        질문의 샌드박스는 라운드마다 새로 열리고 닫힌다. 라운드 1 이 가져온
+        증거는 라운드 2 의 샌드박스에 **없다** -- 이것이 그 증거를 다시 놓을
+        목록이다. `evidence_fetched_for_sandbox` 는 원장 커밋과 샌드박스
+        배치가 **둘 다** 끝난 뒤에만 적히므로(`ResearchToolPort` 의 순서),
+        여기 있는 것은 전부 원장에 있다.
+        """
+        rows = await self.db.execute(
+            select(DAEvent.payload)
+            .where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.qid == question_id,
+                DAEvent.kind == "evidence_fetched_for_sandbox",
+            )
+            .order_by(DAEvent.seq)
+        )
+        refs: list[str] = []
+        for payload in rows.scalars():
+            try:
+                raw_ref = str(json.loads(payload).get("raw_ref") or "")
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if raw_ref and raw_ref not in refs:
+                refs.append(raw_ref)
+        return refs
 
     async def verified_claims(
         self,

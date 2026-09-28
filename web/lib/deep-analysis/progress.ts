@@ -136,6 +136,14 @@ function activityLabel(event: DeepAnalysisJobEvent): string | null {
     const reason = asString(payload.reason);
     return reason ? `코드 조사 미제출 · ${reason}` : "코드 조사 미제출";
   }
+  if (kind === "code_tool_denied") {
+    // 무엇이 왜 막혔는지를 싣는다. 게이트는 "재실행기가 똑같이 다시 돌릴 수
+    // 있는 것만" 허락하므로, 이유를 보면 워커가 무엇을 다르게 했는지 보인다.
+    const tool = asString(payload.tool);
+    const reason = asString(payload.reason_code);
+    if (tool && reason) return `코드 도구 거절 · ${tool} · ${reason}`;
+    return reason ? `코드 도구 거절 · ${reason}` : "코드 도구 거절";
+  }
   if (kind === "compute_reexecution_capped") {
     // 넘은 한도를 그대로 보여준다. "한도 초과"만 뜨면 계산을 줄여야 하는지
     // 출력을 줄여야 하는지가 화면에서 구별되지 않는다 -- code_worker_unsubmitted

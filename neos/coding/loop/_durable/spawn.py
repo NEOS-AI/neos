@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -58,6 +59,16 @@ _FOREIGN_SPEC_PREFIXES = ("fsi-", "univer-")
 _STEER_MAX_CHARS = 2000
 
 SpawnOutcome = tuple["dict[str, Any] | DelegatedSpawn", AgentLoopState]
+
+
+#: `coding_events.tool_call_id` is VARCHAR(128).
+_CHILD_DENIAL_ID_BUDGET = 128
+
+
+def child_denial_call_id(spawn_call_id: str) -> str:
+    """A card id for one child denial: `<spawn call>:child:<nonce>`."""
+    suffix = f":child:{uuid.uuid4().hex[:12]}"
+    return spawn_call_id[: _CHILD_DENIAL_ID_BUDGET - len(suffix)] + suffix
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,22 +274,155 @@ class SubagentSpawnMixin:
         bound,
         state,
         *,
+        deps=None,
         spec_name: str = "explore",
         worktree_path: str = "",
+        spawn_call_id: str = "",
     ) -> None:
-        if self._subagents is None:
-            return
-        stepper = getattr(self._subagents, "_stepper", None)
-        port = getattr(stepper, "_tools", None) if stepper is not None else None
+        port = self._child_port()
         bind = getattr(port, "bind", None)
-        use_spec = getattr(port, "use_spec", None)
-        if callable(use_spec):
-            use_spec(spec_name)
+        task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+        if not callable(bind) or not task_id:
+            # Nothing bound means the port refuses every call -- fail closed.
+            return
         session = bound.session
         if worktree_path:
             session = _session_on_workspace(session, worktree_path)
-        if callable(bind):
-            bind(session=session)
+
+        async def authorize(validated):
+            return await self._authorize_child_call(
+                validated,
+                state=state,
+                deps=deps,
+                spec_name=spec_name,
+                spawn_call_id=spawn_call_id,
+            )
+
+        bind(task_id=task_id, session=session, authorize=authorize)
+
+    def _child_port(self):
+        if self._subagents is None:
+            return None
+        stepper = getattr(self._subagents, "_stepper", None)
+        return getattr(stepper, "_tools", None) if stepper is not None else None
+
+    def _unbind_child_tools(self, deps) -> None:
+        """A binding lives for one parent step (CHILD-PORT-SHARED).
+
+        It closes over this step's state and deps; keeping it past the step
+        would both hold them and let a later step find a stale gate.
+        """
+        unbind = getattr(self._child_port(), "unbind", None)
+        task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+        if callable(unbind) and task_id:
+            unbind(task_id)
+
+    def _rebind_child(self, ref: ActiveChildRef, bound, state, deps) -> None:
+        """A resumed child gets the gate of *this* parent step, not the last spawn's.
+
+        The port is shared by every child of the runtime. Without this, a child
+        stepped at the safe point or by `await_subagent.v1` would run under
+        whatever spec, worktree and gate the most recent spawn left bound.
+        """
+        lease = _lease_from_ref(ref)
+        self._bind_child_tools(
+            bound,
+            state,
+            deps=deps,
+            spec_name=ref.spec,
+            worktree_path=str(lease.path) if lease is not None else "",
+            spawn_call_id=ref.tool_call_id,
+        )
+
+    async def _authorize_child_call(
+        self, validated, *, state, deps, spec_name: str, spawn_call_id: str
+    ):
+        """The parent's gate, applied to one child call (roadmap CHILD-GATE).
+
+        Same hooks, same static policy, same Jev banding as the parent's own
+        calls -- this calls the parent's methods rather than restating them.
+        What differs is that a child cannot ask anyone: specs carry
+        `can_approve=False`, so the judgement runs unattended and
+        REQUIRE_APPROVAL folds to DENY (D-L1's fold, not a new rule). A hook
+        that asks to retry is a deny for the same reason -- the child has no
+        retry turn to spend it on.
+        """
+        from neos.coding.domain.approvals import ApprovalPolicyOutcome
+        from neos.coding.tools.registry import ToolValidationError
+
+        reason: str | None = None
+        decision, _hook_reason, updated_input = await self._pre_tool_decision(
+            validated
+        )
+        if decision == "allow" and updated_input is not None:
+            try:
+                validated = self._tools.validate(validated.name, dict(updated_input))
+            except ToolValidationError:
+                reason = "hook_updated_input_invalid"
+        elif decision == "prevent":
+            reason = "hook_prevented"
+        elif decision != "allow":
+            reason = "policy_hook_denied"
+        if reason is None:
+            task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+            outcome = await self._evaluate_call(
+                validated, state, deps, task_id, None, unattended=True
+            )
+            if outcome is not ApprovalPolicyOutcome.ALLOW:
+                reason = "policy_approval_denied"
+        if reason is None:
+            return validated, None
+        await self._record_child_denial(
+            deps,
+            name=validated.name,
+            reason_code=reason,
+            spec_name=spec_name,
+            spawn_call_id=spawn_call_id,
+        )
+        return None, reason
+
+    async def _record_child_denial(
+        self, deps, *, name: str, reason_code: str, spec_name: str, spawn_call_id: str
+    ) -> None:
+        """Put the child's denial in the parent's ledger.
+
+        The child's own transcript already carries the error; this is for the
+        person reading the run. The denial stands whether or not the write
+        lands -- a ledger outage must not turn a refused call into an allowed one.
+        """
+        lease = getattr(deps, "lease", None)
+        events = getattr(deps, "events", None)
+        task_id = getattr(lease, "task_id", None)
+        if events is None or not task_id:
+            return
+        try:
+            await events.append(
+                task_id=task_id,
+                event_type="tool.denied",
+                # The projection keys tool cards by `tool_call_id` and drops a
+                # `tool.*` event without one -- this denial reached the ledger
+                # but never the screen (CHILD-GATE ②). The port does not see
+                # the child's own call id, so this one is minted: prefixed by
+                # the spawn call so it cannot collide with the parent's ids,
+                # unique so two denials are two cards. `run_id` is the parent
+                # run's, because the phase panel lists tools by run.
+                run_id=getattr(lease, "run_id", None),
+                tool_call_id=child_denial_call_id(spawn_call_id),
+                payload={
+                    "name": name,
+                    "denied_by": "hook"
+                    if reason_code in {"hook_prevented", "policy_hook_denied"}
+                    else "approval_policy",
+                    "reason_code": reason_code,
+                    "subagent_spec": spec_name,
+                    "parent_tool_call_id": spawn_call_id,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "child denial event failed task_id=%s tool=%s", task_id, name,
+                exc_info=True,
+            )
 
     # -- control-plane tools -----------------------------------------------
 
@@ -448,8 +592,10 @@ class SubagentSpawnMixin:
             self._bind_child_tools(
                 bound,
                 state,
+                deps=deps,
                 spec_name=request.spec_name,
                 worktree_path=str(lease.path) if lease is not None else "",
+                spawn_call_id=call.tool_call_id,
             )
         except Exception:
             _discard_lease(lease)
@@ -464,6 +610,8 @@ class SubagentSpawnMixin:
                 state, reason="aborted", task_id=input.task_id
             )
             raise
+        finally:
+            self._unbind_child_tools(deps)
         if outcome.kind is StepKind.CONTINUING and self._async_spawn:
             return self._detached_spawn_result(
                 bound,
@@ -555,7 +703,11 @@ class SubagentSpawnMixin:
             # never this parent's. Saying "not live" beats silence: the model
             # can go look for the report it was handed.
             return self._spawn_tool_error(bound, "policy_not_live"), state
-        outcome = await self._resume_child(ref, deps)
+        self._rebind_child(ref, bound, state, deps)
+        try:
+            outcome = await self._resume_child(ref, deps)
+        finally:
+            self._unbind_child_tools(deps)
         if outcome.kind is StepKind.CONTINUING:
             return (
                 _delegated(
@@ -642,6 +794,7 @@ class SubagentSpawnMixin:
 
         await self._renew_parent_lease(deps)
         try:
+            self._rebind_child(ref, bound, state, deps)
             outcome = await self._subagents.resume(
                 ref.run_id,
                 expected_checkpoint_id=ref.checkpoint_id,
@@ -658,6 +811,8 @@ class SubagentSpawnMixin:
                 "detached child resume failed run_id=%s", ref.run_id, exc_info=True
             )
             return state
+        finally:
+            self._unbind_child_tools(deps)
         state, rolled_in, rolled_out = self._roll_in_child_usage(
             state, ref, outcome.input_tokens, outcome.output_tokens
         )

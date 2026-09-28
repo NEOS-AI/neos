@@ -30,6 +30,7 @@ from neos.coding.prompts import CodingPromptEnv, build_coding_system_prompt
 from neos.dataset.adapters import TrackedCodingModel
 from neos.config.coding_selection import (
     coding_credential_for,
+    resolve_coding_effort,
     resolve_coding_selection_from_app,
 )
 from neos.config.model_config import model_config, resolve_coding_rate_micros
@@ -567,6 +568,8 @@ def _build_subagent_runtime(
     parent_events=None,
     input_cost_micros_per_million: int = 0,
     output_cost_micros_per_million: int = 0,
+    effort: str = "",
+    effort_model: str = "",
 ):
     """Construct the parent-driven child runtime.
 
@@ -601,6 +604,8 @@ def _build_subagent_runtime(
         input_cost_micros_per_million=input_cost_micros_per_million,
         output_cost_micros_per_million=output_cost_micros_per_million,
         nested_spawn=RuntimeNestedSpawn(lambda: holder[0]),
+        effort=effort,
+        effort_model=effort_model,
     )
     runtime = SubagentRuntime(
         store=store,
@@ -620,6 +625,18 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     coding = config.coding_model
     selection = resolve_coding_selection_from_app(config)
     coding_model = selection.model
+    effort = resolve_coding_effort(
+        coding=config.coding_model, routing=config.model_routing, selection=selection
+    )
+    if effort.refused:
+        # 조용히 떨어뜨리지 않는다. 운영자가 `high` 를 적고도 아무 일이 없는
+        # 이유가 여기 남는다 (`EffortResolution.refused` 의 존재 이유).
+        logger.warning(
+            "coding effort not sent: %s from %s (%s)",
+            effort.refused,
+            effort.source,
+            effort.detail,
+        )
     sandbox = config.sandbox
     resources = sandbox.resources
     execution = sandbox.execution
@@ -693,6 +710,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         context_window=window.context_window,
         input_limit=window.input_limit,
         thinking_budget=window.thinking_budget,
+        effort=effort.effort or "",
         max_transcript_tokens=(
             DEFAULT_MAX_TRANSCRIPT_TOKENS
             if window.usable is None
@@ -721,6 +739,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         parent_events=coding_service,
         input_cost_micros_per_million=coding.input_cost_micros_per_million,
         output_cost_micros_per_million=coding.output_cost_micros_per_million,
+        # 자식은 부모의 모델로 돈다(`ModelPin(model=self._config.model)`).
+        effort=effort.effort or "",
+        effort_model=coding_model,
     )
 
     def finish(sandboxes) -> DurableCodingLoop:

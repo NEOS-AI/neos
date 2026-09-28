@@ -16,6 +16,7 @@ from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import (
     ARCHIVABLE_TASK_STATUSES,
     CodingTask,
+    CodingTaskMode,
     CodingTaskStatus,
 )
 
@@ -56,7 +57,12 @@ class PostgresCodingService:
             )
 
     async def create_task(
-        self, *, owner_id: str, prompt: str, task_id: str | None = None
+        self,
+        *,
+        owner_id: str,
+        prompt: str,
+        task_id: str | None = None,
+        mode: CodingTaskMode = CodingTaskMode.INTERACTIVE,
     ) -> CodingTask:
         now = datetime.now(UTC)
         task = CodingTask(
@@ -68,6 +74,7 @@ class PostgresCodingService:
             last_seq=0,
             created_at=now,
             updated_at=now,
+            mode=mode,
         )
         async with await self._session_factory() as session:
             async with session.begin():
@@ -76,10 +83,10 @@ class PostgresCodingService:
                         """
                         INSERT INTO coding_tasks
                             (task_id, owner_id, prompt, status, version, last_seq,
-                             created_at, updated_at, last_activity_at)
+                             created_at, updated_at, last_activity_at, mode)
                         VALUES
                             (:task_id, :owner_id, :prompt, :status, 1, 0,
-                             :now, :now, :now)
+                             :now, :now, :now, :mode)
                         """
                     ),
                     {
@@ -88,13 +95,18 @@ class PostgresCodingService:
                         "prompt": prompt,
                         "status": task.status.value,
                         "now": now,
+                        "mode": task.mode.value,
                     },
                 )
                 event = await self._append_in_session(
                     session,
                     task_id=task.task_id,
                     event_type="task.created",
-                    payload={"status": task.status.value, "prompt": prompt},
+                    payload={
+                        "status": task.status.value,
+                        "prompt": prompt,
+                        "mode": task.mode.value,
+                    },
                     now=now,
                 )
         if self._wake_outbox is not None:
@@ -264,7 +276,7 @@ class PostgresCodingService:
                 text(
                     """
                     SELECT task_id, owner_id, prompt, status, version, last_seq,
-                           created_at, updated_at
+                           created_at, updated_at, mode
                     FROM coding_tasks
                     WHERE task_id = :task_id AND owner_id = :owner_id
                       AND deleted_at IS NULL
@@ -278,7 +290,7 @@ class PostgresCodingService:
         task = CodingTask(
             task_id=row[0], owner_id=row[1], prompt=row[2],
             status=CodingTaskStatus(row[3]), version=row[4], last_seq=row[5],
-            created_at=row[6], updated_at=row[7],
+            created_at=row[6], updated_at=row[7], mode=CodingTaskMode(row[8]),
         )
         return CodingTaskSnapshot(task=task, head_seq=task.last_seq)
 
@@ -289,7 +301,7 @@ class PostgresCodingService:
                 text(
                     """
                     SELECT task_id, owner_id, prompt, status, version, last_seq,
-                           created_at, updated_at
+                           created_at, updated_at, mode
                     FROM coding_tasks
                     WHERE owner_id = :owner AND deleted_at IS NULL
                     ORDER BY last_activity_at DESC, task_id DESC
@@ -309,6 +321,7 @@ class PostgresCodingService:
                 last_seq=row[5],
                 created_at=row[6],
                 updated_at=row[7],
+                mode=CodingTaskMode(row[8]),
             )
             for row in rows
         ]

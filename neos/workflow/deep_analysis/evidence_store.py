@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .script_blob import script_blob
+
 #: 한도에 닿아 거절할 때 원장에 남기는 이유. 거절은 조용하면 안 된다 --
 #: 조사가 멈춘 자리가 보여야 멈췄다는 것을 알 수 있다.
 CAP_REACHED = "evidence_cap_reached"
@@ -76,6 +78,9 @@ class LedgerEvidenceStore:
     def __init__(self, ledger: Any, *, question_id: str) -> None:
         self._ledger = ledger
         self._question_id = question_id
+        # 이 샌드박스에 지금 놓인 증거 -- 복원한 것과 이번에 가져온 것.
+        # 실행 기록(`record_execution`)이 싣는다.
+        self._present: list[str] = []
 
     async def _question(self) -> Any:
         question = await self._ledger.get_question(self._question_id)
@@ -104,6 +109,48 @@ class LedgerEvidenceStore:
         question.evidence_bytes = int(question.evidence_bytes) + bytes_charged
         await self._ledger.db.flush()
 
+    async def restore(self, sandbox: Any) -> list[str]:
+        """앞 라운드가 이 질문에 가져온 증거를 새 샌드박스에 다시 놓는다 (J1.5).
+
+        질문의 샌드박스는 라운드마다 새로 열린다. 다시 놓지 않으면 `/evidence`
+        는 라운드마다 비고, 계산 클레임은 **ID 를 볼 수 있는 둘째 라운드부터만**
+        쓸 수 있으므로(briefing) 계산이 읽을 증거는 언제나 사라진 뒤다. 결정
+        4(계약 §9)의 "그 집합은 줄지 않는다" 가 라운드 경계에서 깨지는 자리다.
+
+        다시 청구하지 않고(이미 냈다), 다시 기록하지도 않는다(가져온 것이
+        아니다). 원장 접근자는 방어적으로 읽는다 -- 최소 test double 은
+        복원 없이 이전과 같다.
+        """
+        refs_fn = getattr(self._ledger, "sandbox_evidence_refs", None)
+        refs = await refs_fn(self._question_id) if refs_fn is not None else []
+        restored: list[str] = []
+        for raw_ref in refs:
+            blob = await self._ledger.get_blob(raw_ref)
+            if blob is None:
+                # 기록은 커밋 뒤에만 적히므로 여기 오면 원장이 깨진 것이다.
+                # 조용히 건너뛰면 그 증거를 읽는 계산이 이유 없이 죽는다.
+                raise KeyError(raw_ref)
+            await sandbox.materialize_evidence(raw_ref, blob.raw_text or "")
+            restored.append(raw_ref)
+        self._note_present(restored)
+        return restored
+
+    async def commit_script(self, text: str, *, path: str) -> str:
+        """워커가 돌리려는 스크립트를 원장 blob 으로 넣고 주소를 돌려준다 (J1.5).
+
+        **돌리기 전에** 넣는다 -- 원장에 없는 바이트로 나온 출력은 계산
+        클레임의 근거가 될 수 없다(계약 §4 `script_ref`, S8). 실행이 실패해도
+        blob 은 남는다; 남는 것은 무해하고, 빠지는 것은 재실행을 불가능하게
+        만든다.
+
+        `/evidence` 한도에 **청구하지 않는다.** 스크립트는 `/evidence` 에
+        놓이지 않고, 한도가 막으려는 것은 원문 수집의 폭이다. 워커가 쓴
+        스크립트로 수집 한도가 닳으면 조사가 엉뚱한 이유로 멈춘다.
+        """
+        blob = script_blob(text, question_id=self._question_id, path=path)
+        await self._ledger.commit_blobs([blob])
+        return blob.content_hash
+
     async def record_fetched(self, raw_ref: str, path: str) -> None:
         """증거가 샌드박스에 나타났다고 원장에 적는다 (계약 §6).
 
@@ -116,4 +163,45 @@ class LedgerEvidenceStore:
             "evidence_fetched_for_sandbox",
             self._question_id,
             {"raw_ref": raw_ref, "path": path},
+        )
+        self._note_present([raw_ref])
+
+    def _note_present(self, refs: list[str]) -> None:
+        for raw_ref in refs:
+            if raw_ref not in self._present:
+                self._present.append(raw_ref)
+
+    async def record_execution(
+        self,
+        *,
+        script_ref: str,
+        output_digest: str | None,
+        exit_code: int | None,
+        timed_out: bool,
+        stdout_truncated: bool,
+    ) -> None:
+        """`execute.v1` 한 번을 원장에 적는다 (S8, 2026-09-28).
+
+        스크립트 바이트는 `commit_script` 가 이미 넣었다. 그것만으로는 **그
+        실행이 무엇을 냈는지**가 원장에 없다 -- 클레임이 인용한 실행만
+        `output_digest` 를 남겼다. 인용되지 않은 실행(버린 시도, 틀린 계산)이
+        사라지면 원장은 워커가 무엇을 해 봤는지 말하지 못한다.
+
+        `evidence_refs` 는 그 실행 때 샌드박스에 **놓여 있던** 증거다. 스크립트가
+        실제로 연 파일은 샌드박스 밖에서 알 수 없으므로 상한 집합이다 --
+        입력은 이 안에 있다. 클레임의 `inputs` 가 정확한 목록을 따로 싣는다.
+
+        `output_digest` 가 None 이면 한도에 걸린 실행이다(답을 내지 못했다).
+        """
+        await self._ledger.log(
+            "script_executed",
+            self._question_id,
+            {
+                "script_ref": script_ref,
+                "output_digest": output_digest,
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "stdout_truncated": stdout_truncated,
+                "evidence_refs": list(self._present),
+            },
         )

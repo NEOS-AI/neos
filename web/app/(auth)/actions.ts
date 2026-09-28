@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { requestClientIpHeaders } from "@/lib/client-ip-server";
 import { getBackendUrl } from "@/lib/server-config";
 
 import { signIn } from "./auth";
@@ -66,7 +67,10 @@ export const register = async (
 
     const response = await fetch(`${backendUrl}/api/v1/auth/register`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(await requestClientIpHeaders()),
+      },
       body: JSON.stringify({
         email: validatedData.email,
         password: validatedData.password,

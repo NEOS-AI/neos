@@ -48,21 +48,22 @@ def run_fixture(run_id: str) -> CodingRun:
 
 
 async def make_run_service(
-    repository, *, loop=None, execution_lease=None
+    repository, *, loop=None, execution_lease=None, mode=None
 ) -> CodingRunService:
     tasks = InMemoryCodingTaskRepository()
-    await tasks.create(
-        CodingTask(
-            task_id="ct_1",
-            owner_id="u1",
-            prompt="Fix it",
-            status=CodingTaskStatus.QUEUED,
-            version=1,
-            last_seq=0,
-            created_at=NOW,
-            updated_at=NOW,
-        )
+    task = CodingTask(
+        task_id="ct_1",
+        owner_id="u1",
+        prompt="Fix it",
+        status=CodingTaskStatus.QUEUED,
+        version=1,
+        last_seq=0,
+        created_at=NOW,
+        updated_at=NOW,
     )
+    if mode is not None:
+        task = replace(task, mode=mode)
+    await tasks.create(task)
     kwargs = {}
     if execution_lease is not None:
         kwargs["execution_lease"] = execution_lease
@@ -876,3 +877,38 @@ async def test_configured_execution_lease_controls_repository_expiry() -> None:
         await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
 
     assert repository.requested_expirations == [NOW + timedelta(seconds=75)]
+
+
+async def test_a_resumed_autonomous_task_stays_autonomous() -> None:
+    """K9: the mode is read off the task at every safe point, so a resume from
+    a checkpoint -- a new worker, a new run attempt -- keeps it.
+    Mutation: drop `mode=` from the `LoopInput` in `run_service` -> the loop
+    sees interactive and parks an approval nobody will answer.
+    """
+    from neos.coding.domain.models import CodingTaskMode
+
+    run = run_fixture("cr_1")
+    repository = InMemoryCodingRunRepository(
+        active_run=run, task_prompts={"ct_1": "Fix it"}
+    )
+    repository.created_runs.append(run)
+    repository.task_statuses["ct_1"] = "running"
+    await repository.save_checkpoint(
+        CodingCheckpoint(
+            "cc_1",
+            "ct_1",
+            "cr_1",
+            1,
+            {"current_instruction": "Fix it", "transcript": []},
+            "1",
+            NOW,
+        )
+    )
+    loop = ModelCheckpointLoop()
+    service = await make_run_service(
+        repository, loop=loop, mode=CodingTaskMode.AUTONOMOUS
+    )
+
+    await service.advance_one_safe_point(task_id="ct_1", worker_id="worker-a")
+
+    assert loop.inputs[0].mode == "autonomous"

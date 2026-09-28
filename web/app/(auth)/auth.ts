@@ -3,6 +3,7 @@ import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import { mergeRefreshedTokens, resolveAccessTokenExpiry } from "@/lib/auth-tokens";
+import { requestClientIpHeaders } from "@/lib/client-ip-server";
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import { getBackendUrl, getGoogleOAuthConfig } from "@/lib/server-config";
 import { compare } from "bcrypt-ts";
@@ -37,7 +38,10 @@ async function refreshAccessToken(token: any) {
 
     const response = await fetch(`${backendUrl}/api/v1/auth/refresh`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(await requestClientIpHeaders()),
+      },
       body: JSON.stringify({ refresh_token: token.backendRefreshToken }),
     });
 
@@ -163,7 +167,10 @@ export const {
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/login`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(await requestClientIpHeaders()),
+            },
             body: JSON.stringify({ email, password }),
           });
 
@@ -202,7 +209,10 @@ export const {
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/guest`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(await requestClientIpHeaders()),
+            },
           });
 
           if (!response.ok) {
@@ -235,7 +245,10 @@ export const {
         try {
           const response = await fetch(`${backendUrl}/api/v1/auth/oauth/google`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(await requestClientIpHeaders()),
+            },
             body: JSON.stringify({ id_token: account.id_token }),
           });
 

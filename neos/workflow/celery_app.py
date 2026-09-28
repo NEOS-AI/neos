@@ -24,7 +24,10 @@ def create_celery_app(candidate, *, name: str = "neos_workflow"):
         name,
         broker=candidate.CELERY_BROKER_URL,
         backend=candidate.CELERY_RESULT_BACKEND,
-        include=["neos.coding.workers.celery_tasks"],
+        include=[
+            "neos.coding.workers.celery_tasks",
+            "neos.tasks.gepa_opt_job_task",
+        ],
     )
     created.conf.update(
         broker_url=candidate.CELERY_BROKER_URL,
@@ -80,6 +83,7 @@ app.conf.update(
         'neos.coding.managed.probe_health': {
             'queue': settings.CODING_CELERY_QUEUE
         },
+        'neos.tasks.run_gepa_opt_job': {'queue': 'gepa_opt'},
     },
 
     # 큐 정의 (우선순위 지원)
@@ -93,6 +97,7 @@ app.conf.update(
             Exchange(settings.CODING_CELERY_QUEUE),
             routing_key=settings.CODING_CELERY_QUEUE,
         ),
+        Queue('gepa_opt', Exchange('gepa_opt'), routing_key='gepa_opt'),
     ),
 
     # 재시도 설정

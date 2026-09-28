@@ -39,6 +39,7 @@ class _Claim:
     id: str
     status: str = "verified"
     kind: str = "quote"
+    question_id: str = "q1"
 
 
 @dataclass
@@ -133,6 +134,7 @@ async def _grade(claim, *, ledger=None, runs=None, reexecutor=None):
             if reexecutor is not None
             else _FakeReexecutor(runs if runs is not None else _twice())
         ),
+        question_id="q1",
     )
 
 
@@ -457,8 +459,9 @@ async def test_a_computation_with_no_premises_is_capped_at_zero() -> None:
 async def test_a_computed_claim_without_a_reexecutor_is_a_wiring_error() -> None:
     """조용히 통과시키지 않는다 -- 판정할 수 없으면 터뜨린다.
 
-    프로덕션에서는 일어날 수 없다: 계산 클레임을 만드는 analyze 스펙이
-    `specs_enabled` 에 없다. 그래서 런타임 degrade 가 아니라 배선 실수다.
+    서비스는 샌드박스 provider 가 있으면 언제나 재실행기를 짓고, 계산 클레임은
+    그 provider 가 있어야만 생긴다(J1.5 부터 research 자식이 낸다). 그래서
+    런타임 degrade 가 아니라 배선 실수다.
     """
     from neos.workflow.deep_analysis.graders.computed import grade_computed
 
@@ -468,4 +471,39 @@ async def test_a_computed_claim_without_a_reexecutor_is_a_wiring_error() -> None
             ledger=_FakeLedger(),
             confidence_cap={1: 0.6, 2: 0.8, 3: 0.95},
             reexecutor=None,
+            question_id="q1",
         )
+
+
+@pytest.mark.asyncio
+async def test_a_computed_claim_without_a_question_is_a_wiring_error() -> None:
+    """빠지면 "같은 질문" 검사가 조용히 꺼진다. 그래서 기본값이 없다."""
+    from neos.workflow.deep_analysis.graders.computed import grade_computed
+
+    with pytest.raises(ValueError, match="question_id"):
+        await grade_computed(
+            _claim(),
+            ledger=_FakeLedger(),
+            confidence_cap={1: 0.6, 2: 0.8, 3: 0.95},
+            reexecutor=_FakeReexecutor(_twice()),
+            question_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_premise_from_another_question_is_refused() -> None:
+    """계약 §9 결정 3: 계산은 **같은 질문의** verified 클레임만 본다.
+
+    J1.5 전에는 계산 클레임을 내는 스펙이 켜져 있지 않아 이 검사가 없어도
+    됐다. research 자식이 계산을 내게 되면서(2026-09-28 결정) briefing 의
+    범위가 기대에서 규칙이 됐다. Mutation: drop the question check -> the
+    claim reaches re-execution and passes.
+    """
+    reexecutor = _FakeReexecutor(_twice())
+    ledger = _FakeLedger(claims={"c1": _Claim("c1", question_id="q_other")})
+
+    verdict = await _grade(_claim(), ledger=ledger, reexecutor=reexecutor)
+
+    assert verdict.code == "E_COMPUTE_PREMISE_UNVERIFIED"
+    assert "another question" in verdict.detail
+    assert reexecutor.calls == []

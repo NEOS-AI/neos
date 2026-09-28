@@ -23,14 +23,19 @@ from neos.config.model_routing import EffortResolution, ModelResolution
 MANIFEST_KIND = "run_manifest"
 MANIFEST_VERSION = 1
 
-# 런 경로가 쓰는 프롬프트만. `prompts/` 에는 9개가 있으나
-# `diagnose_bottleneck` 은 F1 진단자 전용이라 런의 구성이 아니다 --
-# 넣으면 그 파일을 고칠 때마다 동일한 두 런이 달라 보인다.
+# 런 경로가 쓰는 프롬프트만. `prompts/` 의 `diagnose_bottleneck` 은 F1 진단자
+# 전용이라 런의 구성이 아니다 -- 넣으면 그 파일을 고칠 때마다 동일한 두 런이
+# 달라 보인다.
+#
+# `judge_computed` 는 계산 클레임에서만 렌더된다(J 플래그 on). 꺼진 런에서는
+# 읽히지 않지만 해시는 매니페스트에 실린다 -- 이 키가 생긴 커밋(GRADE1,
+# 2026-09-28) 앞뒤의 매니페스트는 이 키 하나로 다르다. 모델이 보는 것은 같다.
 RUN_PROMPTS: tuple[str, ...] = (
     "claim_entailment",   # worker.py
     "decompose",          # orchestrator.py
     "final_compose",      # synthesizer.py
     "judge",              # graders/agentic.py
+    "judge_computed",     # graders/agentic.py (computed claims only)
     "node_summary",       # synthesizer.py
     "report_judge",       # graders/report.py
     "subq_review",        # orchestrator.py
@@ -43,7 +48,7 @@ _PACKAGE_PREFIX = "neos.workflow.deep_analysis."
 
 @lru_cache(maxsize=1)
 def prompt_hashes() -> Mapping[str, str]:
-    """런 경로 프롬프트 8개의 내용 해시.
+    """런 경로 프롬프트(`RUN_PROMPTS`)의 내용 해시.
 
     캐시하는 이유는 `load_prompt` 와 같다 -- 파일은 프로세스 수명 동안
     바뀌지 않는다. `lru_cache` 는 매 호출에 같은 dict 객체를 돌려주므로,

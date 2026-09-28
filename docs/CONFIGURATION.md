@@ -556,6 +556,9 @@ deep_analysis:
     dig: null
     synth: null
     judge: null
+
+coding_model:
+  effort: null       # the coding loop's feature override
 ```
 
 Two things make effort different from the model:
@@ -578,8 +581,19 @@ Deep analysis reads the chain once per harness role through
 same slot chat uses, so a per-model default is a deep analysis sample boundary.
 Every deep analysis call site passes the resolved value as `effort=`; a test
 walks the package's AST and fails on a call that omits it. The run manifest
-records each role's `effort: {level, source, refused}`. The coding loop does
-not send effort yet — it has no configuration slot for it.
+records each role's `effort: {level, source, refused}`.
+
+The coding loop reads the chain once per runtime through `resolve_coding_effort`
+(`neos/config/coding_selection.py`): `coding_model.effort` as the feature
+override, `model_routing.effort.models[<coding model>]` as the per-model
+default, and `model_routing.effort.everyday` as the role default — the role the
+coding loop picks its model with. So a per-model or `everyday` default applies
+to chat, deep analysis **and** coding, and setting one is a coding-agent sample
+boundary as well. The level rides on the loop's turns, on the preserving
+compaction summary (not the legacy 512-token one, where thinking would eat the
+summary), and on children, but only when the child runs on the model the level
+was resolved for. A refused level is logged at runtime construction
+(`coding effort not sent: ...`).
 
 ⚠️ `deep_analysis.model_effort` and `deep_analysis.effort` are **different
 axes**. The latter is investigation depth (`token_cap`, `wall_clock_cap`); the

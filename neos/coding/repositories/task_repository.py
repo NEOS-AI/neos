@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Protocol
 
-from neos.coding.domain.models import CodingTask, CodingTaskStatus
+from neos.coding.domain.models import CodingTask, CodingTaskMode, CodingTaskStatus
 
 
 class Database(Protocol):
@@ -18,7 +18,7 @@ class CodingTaskRepository:
         row = await self._database.fetch_one(
             """
             SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at
+                   created_at, updated_at, mode
             FROM coding_tasks
             WHERE task_id = $1 AND deleted_at IS NULL
             """,
@@ -30,7 +30,7 @@ class CodingTaskRepository:
         row = await self._database.fetch_one(
             """
             SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at
+                   created_at, updated_at, mode
             FROM coding_tasks
             WHERE task_id = $1 AND owner_id = $2 AND deleted_at IS NULL
             """,
@@ -43,7 +43,7 @@ class CodingTaskRepository:
         rows = await self._database.fetch_all(
             """
             SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at
+                   created_at, updated_at, mode
             FROM coding_tasks
             WHERE owner_id = $1 AND deleted_at IS NULL
             ORDER BY last_activity_at DESC, task_id DESC
@@ -94,6 +94,7 @@ def _task_from_row(row) -> CodingTask | None:
         last_seq=row[5],
         created_at=_as_datetime(row[6]),
         updated_at=_as_datetime(row[7]),
+        mode=CodingTaskMode(row[8]),
     )
 
 

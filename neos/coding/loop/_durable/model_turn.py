@@ -28,6 +28,7 @@ from neos.coding.instructions import (
     load_workspace_instructions,
 )
 from neos.coding.learn_lessons import coding_turn_system
+from neos.gepa_opt.inject import coding_turn_overlay
 from neos.coding.loop.hooks import invoke_post_generate, invoke_pre_generate
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -187,8 +188,12 @@ class ModelTurnMixin:
         append = str(note.get("append") or "")
         if append:
             state = self._with_note(state, append)
-        system = await coding_turn_system(self._config.system, input.owner_id)
+        system = await coding_turn_system(
+            with_mode_overlay(self._config.system, getattr(input, "mode", "")),
+            input.owner_id,
+        )
         system = inject_previous_summary(system, state.summary)
+        system = await coding_turn_overlay(system, input.owner_id)
         system_note = str(note.get("system") or "")
         if system_note:
             # Appended, never folded into `system`: rebuilding the system
@@ -283,6 +288,7 @@ class ModelTurnMixin:
             context_window=self._config.context_window,
             input_limit=self._config.input_limit,
             thinking_budget=self._config.thinking_budget,
+            effort=self._config.effort,
         )
 
     # -- stage 2: stream -----------------------------------------------------
@@ -553,3 +559,28 @@ class ModelTurnMixin:
             terminal_pending=False,
             empty_retry_count=state.empty_retry_count + 1,
         )
+
+
+def with_mode_overlay(system: str, mode: str) -> str:
+    """K9: an autonomous task's system prompt opens with the official P-01 blocks
+    and P-02 (autonomous only for now -- in interactive it would be a boundary).
+
+    **In front**, not appended: the roadmap's principle 2 is that the first
+    sentence declares the mode, and P-01's own first sentence ("The user is
+    not watching in real time") is what carries the effect. An interactive
+    task gets `system` back unchanged -- byte for byte, so nothing that runs
+    today moves. The mode is fixed per task, so the prefix is stable across
+    its turns (thinking guard, prompt cache).
+    """
+    if mode != "autonomous":
+        return system
+    from neos.coding.prompts.official import (
+        AUTONOMOUS_EXECUTION,
+        DELIVERING_WORK,
+        SCOPE_OF_CHANGES,
+    )
+
+    return (
+        f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\n{SCOPE_OF_CHANGES}"
+        f"\n\n{system}"
+    )

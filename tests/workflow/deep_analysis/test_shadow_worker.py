@@ -64,6 +64,7 @@ def _worker(**overrides):
         "cap_bytes": 1024,
         "limits": object(),
         "parent_id": "run00001",
+        "command_limits": object(),
     }
     kwargs.update(overrides)
     return build_shadow_worker(**kwargs)
@@ -100,6 +101,9 @@ async def test_the_archive_is_what_the_worker_fetches_with(research_spy) -> None
 async def test_the_assembled_pieces_reach_the_worker(research_spy) -> None:
     """샌드박스·채점기·런타임·한도. 하나라도 빠지면 질문마다 실패한다."""
     provider, grader, limits = object(), object(), object()
+    # J1.5: 빠지면 섀도의 자식은 코드를 돌리지 못한다 -- 비교가 J 를 재지
+    # 않는다. Mutation: drop `command_limits=` in `build_shadow_worker`.
+    command_limits = object()
 
     def runtime_factory(port):
         return object()
@@ -110,6 +114,7 @@ async def test_the_assembled_pieces_reach_the_worker(research_spy) -> None:
         limits=limits,
         runtime_factory=runtime_factory,
         cap_bytes=4096,
+        command_limits=command_limits,
     )(_assignment(), ledger=object(), fetch_fn=object())
 
     call = research_spy[0]
@@ -119,6 +124,7 @@ async def test_the_assembled_pieces_reach_the_worker(research_spy) -> None:
     assert call["runtime_factory"] is runtime_factory
     assert call["cap_bytes"] == 4096
     assert call["parent_id"] == "run00001"
+    assert call["command_limits"] is command_limits
 
 
 @pytest.mark.asyncio
@@ -128,3 +134,32 @@ async def test_the_worker_result_comes_back_untouched(research_spy) -> None:
 
     assert result.question_id == "q_1"
     assert result.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_the_shadow_ledger_hands_the_briefing_its_reads() -> None:
+    """J1.5: the research worker reads three more things off the ledger.
+
+    They are reads, so the shadow delegates them. Unclassified, the
+    `getattr(.., None)` in `_briefing_material`/`restore` would quietly read
+    them as absent -- the shadow child would get a goal-only briefing while
+    production's gets verified IDs, and the comparison would measure the
+    briefing instead of the worker. Mutation: drop any of the three.
+    """
+    from neos.workflow.deep_analysis.shadow import ShadowLedger
+
+    class _Reads:
+        async def verified_claims(self, question_id):
+            return [("claim", [])]
+
+        async def unverified_and_deadends(self, question_id):
+            return ["dead"]
+
+        async def sandbox_evidence_refs(self, question_id):
+            return ["ref"]
+
+    shadow = ShadowLedger(_Reads())
+
+    assert await shadow.verified_claims("q") == [("claim", [])]
+    assert await shadow.unverified_and_deadends("q") == ["dead"]
+    assert await shadow.sandbox_evidence_refs("q") == ["ref"]

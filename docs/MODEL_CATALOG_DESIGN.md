@@ -60,7 +60,7 @@ Resolution precedence is already correct and must stay (`neos/config/model_routi
 3. `feature_override` — `llm.model`, `coding_model.model`, DA `models.*`, etc.
 4. `role_default` — `model_routing.{provider}.{role}`
 
-Coding already does **not** pick models in the UI. `CreateCodingTaskRequest` (`neos/api/models/coding_models.py`) has only `prompt`. `resolve_coding_selection` (`neos/config/coding_selection.py`) uses `coding_model.model` if set, else Anthropic/OpenAI `everyday`, else the first selectable catalog entry for Gemini/Ollama.
+Coding already does **not** pick models in the UI. `CreateCodingTaskRequest` (`neos/api/models/coding_models.py`) has `prompt` and, since 2026-09-28, `mode` (`interactive`|`autonomous`, roadmap K9) — still no model field. `resolve_coding_selection` (`neos/config/coding_selection.py`) uses `coding_model.model` if set, else Anthropic/OpenAI `everyday`, else the first selectable catalog entry for Gemini/Ollama.
 
 Chat create **does** hardcode the provider. `resolve_new_chat_model` (`neos/api/services/chat_service.py:21-28`) always calls `resolve_model(..., provider="anthropic", role="everyday", user_model=model_name)`. An OpenAI picker selection still works only because `user_model` short-circuits before the role default; the returned `ModelResolution.provider` is still `"anthropic"` even when the model is `gpt-5.6-terra`. Downstream chat infers vendor from the name (`"claude" in model_name` in `chat_stream_pipeline.py:373`) and from `provider_for_model()`.
 

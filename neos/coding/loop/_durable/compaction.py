@@ -209,6 +209,9 @@ class CompactionMixin:
             limits = ModelLimits(
                 self._config.compaction_summary_max_tokens,
                 self._config.timeout_sec,
+                # 같은 모델, 같은 사고량. 옛 요약(512 토큰)에는 싣지 않는다 --
+                # 그 상한 안에서 사고량을 올리면 요약이 사고에 잘려 나간다.
+                effort=self._config.effort,
             )
         else:
             system = _LEGACY_SUMMARY_SYSTEM

@@ -692,6 +692,8 @@ class MemoryConfig(StrictConfigModel):
 class LearnConfig(StrictConfigModel):
     write_approval: bool = True
     coding_lessons: bool = False
+    gepa_opt: bool = False
+    gepa_overlay: bool = False
     channel_learn: bool = False
     research_procedures: bool = False
     session_search_tool: bool = False
@@ -1838,6 +1840,12 @@ class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["anthropic", "openai", "gemini", "ollama"] = "anthropic"
     model: str | None = None
+    # 코딩 루프의 **모델 사고량** (로드맵 K5 ④). 사슬에서는 feature override 칸
+    # -- `deep_analysis.model_effort.*` 와 같은 자리다. None = 요구하지 않는다.
+    # 모델이 받지 않는 레벨이면 보내지 않고 부팅 로그에 이유를 남긴다
+    # (`resolve_coding_effort`). 값을 정하는 것은 코딩 에이전트 지표의 표본
+    # 경계다(§경계 10).
+    effort: str | None = None
     model_timeout_sec: float = Field(default=120, gt=0, le=600)
     tool_timeout_sec: float = Field(default=30, gt=0, le=300)
     max_turns: int = Field(default=20, gt=0, le=100)

@@ -177,6 +177,9 @@ async def _run(
             fetch_fn=fetch_fn,
             runtime_factory=runtime_factory,
             parent_id="run_1",
+            # 이 파일은 DA 도구 셋만 본다. 코딩 도구는
+            # `test_code_research_coding_tools.py` 가 본다.
+            command_limits=None,
         )
     finally:
         module.open_research_session = real_open  # type: ignore[assignment]

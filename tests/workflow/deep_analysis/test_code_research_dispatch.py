@@ -144,6 +144,11 @@ async def test_with_the_flag_on_the_research_path_runs(
         call["profile"]
         == settings.config.deep_analysis.code_research.sandbox_profile
     )
+    # J1.5: 코딩 도구는 한도가 넘어올 때만 붙는다. 워커의 한도가 재실행의
+    # 한도와 다르면 워커 안에서 끝난 계산이 채점 때 한도에 걸린다.
+    reexecution = settings.config.deep_analysis.code_research.reexecution
+    assert call["command_limits"].timeout_sec == reexecution.cpu_sec
+    assert call["command_limits"].output_bytes == reexecution.stdout_bytes
     assert result.status == "completed"
 
 
