@@ -14,7 +14,7 @@ class PDFParser:
     """
     PDF 파서
 
-    PyMuPDF(fitz)를 주 파서로 사용하고, PyPDF2를 fallback으로 사용하여
+    PyMuPDF를 주 파서로 사용하고, PyPDF2를 fallback으로 사용하여
     PDF 파일을 파싱하고 텍스트, 메타데이터, 표, 이미지를 추출합니다.
     """
 
@@ -25,7 +25,7 @@ class PDFParser:
     def _check_pymupdf(self) -> bool:
         """PyMuPDF 설치 여부 확인"""
         try:
-            import fitz  # noqa: F401
+            import pymupdf  # noqa: F401
             return True
         except ImportError:
             return False
@@ -101,14 +101,14 @@ class PDFParser:
         file_path: Optional[str] = None
     ) -> Dict[str, Any]:
         """PyMuPDF를 사용한 PDF 파싱"""
-        import fitz
+        import pymupdf
 
         try:
             # PDF 문서 열기
             if file_content:
-                doc = fitz.open(stream=file_content, filetype="pdf")
+                doc = pymupdf.open(stream=file_content, filetype="pdf")
             else:
-                doc = fitz.open(file_path)
+                doc = pymupdf.open(file_path)
 
             try:
                 # 기본 정보 추출

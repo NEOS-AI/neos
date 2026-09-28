@@ -42,7 +42,7 @@ def test_pdf_bytes_to_text_normalizes_pages_and_closes(monkeypatch) -> None:
     def open_pdf(**kwargs):
         return document
 
-    monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=open_pdf))
+    monkeypatch.setitem(sys.modules, "pymupdf", SimpleNamespace(open=open_pdf))
 
     text = pdf_bytes_to_text(b"%PDF-fake")
 
@@ -54,7 +54,7 @@ def test_pdf_bytes_to_text_returns_empty_for_empty_document(monkeypatch) -> None
     document = FakeDocument([])
     monkeypatch.setitem(
         sys.modules,
-        "fitz",
+        "pymupdf",
         SimpleNamespace(open=lambda **kwargs: document),
     )
 
@@ -70,7 +70,7 @@ def test_pdf_bytes_to_text_wraps_open_failure_without_payload(
 
     monkeypatch.setitem(
         sys.modules,
-        "fitz",
+        "pymupdf",
         SimpleNamespace(open=fail_open),
     )
 
@@ -85,7 +85,7 @@ def test_pdf_bytes_to_text_closes_after_page_failure(monkeypatch) -> None:
     document = FakeDocument([ValueError("secret page payload")])
     monkeypatch.setitem(
         sys.modules,
-        "fitz",
+        "pymupdf",
         SimpleNamespace(open=lambda **kwargs: document),
     )
 
@@ -99,7 +99,7 @@ def test_pdf_bytes_to_text_closes_after_page_failure(monkeypatch) -> None:
 
 
 def test_pdf_bytes_to_text_wraps_missing_dependency(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "fitz", None)
+    monkeypatch.setitem(sys.modules, "pymupdf", None)
 
     with pytest.raises(
         PDFExtractionError,
