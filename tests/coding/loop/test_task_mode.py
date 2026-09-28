@@ -86,16 +86,23 @@ def test_an_interactive_prompt_is_byte_identical() -> None:
     assert with_mode_overlay("BASE", "") == "BASE"
 
 
-def test_an_autonomous_prompt_opens_with_both_official_blocks() -> None:
-    """P-01: "Apply both", and the opening sentence carries the effect.
-    Mutation: append instead of prepend, or drop the second block."""
+def test_an_autonomous_prompt_opens_with_the_official_blocks() -> None:
+    """P-01: "Apply both", and the opening sentence carries the effect. P-02
+    follows (autonomous only, 2026-09-28). Mutation: append instead of
+    prepend, or drop any block."""
     from neos.coding.loop._durable.model_turn import with_mode_overlay
-    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, DELIVERING_WORK
+    from neos.coding.prompts.official import (
+        AUTONOMOUS_EXECUTION,
+        DELIVERING_WORK,
+        SCOPE_OF_CHANGES,
+    )
 
     system = with_mode_overlay("BASE", "autonomous")
 
     assert system.startswith("You are operating autonomously.")
-    assert system == f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\nBASE"
+    assert system == (
+        f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\n{SCOPE_OF_CHANGES}\n\nBASE"
+    )
 
 
 def test_the_blocks_are_the_ones_in_the_spec_file() -> None:
@@ -103,7 +110,11 @@ def test_the_blocks_are_the_ones_in_the_spec_file() -> None:
     off fails -- the measured effect is attached to the wording."""
     from pathlib import Path
 
-    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, DELIVERING_WORK
+    from neos.coding.prompts.official import (
+        AUTONOMOUS_EXECUTION,
+        DELIVERING_WORK,
+        SCOPE_OF_CHANGES,
+    )
 
     spec = (
         Path(__file__).resolve().parents[3] / "docs/fable-5-1-multiagent-spec.md"
@@ -111,6 +122,7 @@ def test_the_blocks_are_the_ones_in_the_spec_file() -> None:
 
     assert AUTONOMOUS_EXECUTION in spec
     assert DELIVERING_WORK in spec
+    assert SCOPE_OF_CHANGES in spec
 
 
 @pytest.mark.asyncio

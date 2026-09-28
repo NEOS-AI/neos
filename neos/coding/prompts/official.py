@@ -98,3 +98,23 @@ DELIVERING_WORK = (
     'a change to make; actions clearly beyond what the ask implies, and risky'
     " or destructive ones, still need the user's go-ahead."
 )
+
+# P-02 · "Keep changes and tests to what the task asks for" · 원문 대조 2026-09-28.
+# 스펙은 코드를 고치는 **모든** 에이전트에 걸라고 적는다. 지금은 autonomous
+# 오버레이에만 싣는다(2026-09-28 사람의 결정) -- interactive 에 넣는 것은
+# 코딩 에이전트 지표의 경계(§경계 11)라 그 효과를 본 뒤 따로 정한다.
+SCOPE_OF_CHANGES = (
+    'If, while working or testing, you find a pre-existing bug, a performance'
+    " concern, or behavior the task doesn't mention, don't fix, optimize or "
+    'extend it in this change unless the requested behavior cannot work '
+    'without it; report it as a follow-up in your summary. Where the task is '
+    'ambiguous, implement the reading its wording and the surrounding code '
+    "most directly support, state that assumption in your summary, and don't "
+    'build for the other readings as well. Verify your work however you like;'
+    ' scratch scripts and quick checks need not be kept. Commit tests only '
+    'where the task asks for them or this repository already keeps tests for '
+    'this kind of change, sized like the neighboring test files — roughly one'
+    " focused test per stated behavior — and don't turn scratch checks into "
+    'additional permanent test files. This is about extras only: implement '
+    'every behavior the task asks for, completely.'
+)

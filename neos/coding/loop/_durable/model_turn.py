@@ -562,7 +562,8 @@ class ModelTurnMixin:
 
 
 def with_mode_overlay(system: str, mode: str) -> str:
-    """K9: an autonomous task's system prompt opens with the official P-01 blocks.
+    """K9: an autonomous task's system prompt opens with the official P-01 blocks
+    and P-02 (autonomous only for now -- in interactive it would be a boundary).
 
     **In front**, not appended: the roadmap's principle 2 is that the first
     sentence declares the mode, and P-01's own first sentence ("The user is
@@ -573,6 +574,13 @@ def with_mode_overlay(system: str, mode: str) -> str:
     """
     if mode != "autonomous":
         return system
-    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, DELIVERING_WORK
+    from neos.coding.prompts.official import (
+        AUTONOMOUS_EXECUTION,
+        DELIVERING_WORK,
+        SCOPE_OF_CHANGES,
+    )
 
-    return f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\n{system}"
+    return (
+        f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\n{SCOPE_OF_CHANGES}"
+        f"\n\n{system}"
+    )
