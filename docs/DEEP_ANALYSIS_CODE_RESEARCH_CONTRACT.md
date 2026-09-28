@@ -249,6 +249,7 @@ blob 의 URL 은 `sandbox-script://<question_id>/<path>` 다 — 두 채점기�
 | `compute_reexecuted` | 채점 사전 작업 | claim_id · digest 일치 여부 · 소요 |
 | `compute_reexecution_capped` | 채점 사전 작업 | claim_id · 넘은 한도 |
 | `code_tool_denied` 🆕 | 오케스트레이터(조사 게이트, J1.5) | tool · reason_code |
+| `script_executed` 🆕 | 오케스트레이터(`execute.v1` 마다, S8) | script_ref · output_digest(한도면 null) · exit_code · timed_out · stdout_truncated · evidence_refs(그때 샌드박스에 있던 증거 — 상한 집합) |
 
 `claim_rejected`의 `code`에 §5의 코드가 새로 흐른다. ~~새 kind를 만들지 않는다.~~ → 채점에는 새 kind 를 만들지 않는다. `code_tool_denied` 는 채점이 아니라 **게이트의 거절**이라 따로 둔다(2026-09-28) — 조용한 거절은 CHILD-GATE 가 닫은 구멍과 같은 모양이다. 레지스트리 단계의 거절(`policy_executable_not_allowed` 등)은 여기 남지 않고 워커에게만 간다 — 코딩 자식과 같다.
 
