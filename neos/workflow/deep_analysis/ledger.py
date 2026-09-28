@@ -1121,6 +1121,34 @@ class Ledger:
     async def get_blob(self, content_hash: str) -> DABlob | None:
         return await self.db.get(DABlob, (self.run_id, content_hash))
 
+    async def sandbox_evidence_refs(self, question_id: str) -> list[str]:
+        """이 질문의 샌드박스에 놓였던 blob 들, 처음 놓인 순서대로 (J1.5).
+
+        질문의 샌드박스는 라운드마다 새로 열리고 닫힌다. 라운드 1 이 가져온
+        증거는 라운드 2 의 샌드박스에 **없다** -- 이것이 그 증거를 다시 놓을
+        목록이다. `evidence_fetched_for_sandbox` 는 원장 커밋과 샌드박스
+        배치가 **둘 다** 끝난 뒤에만 적히므로(`ResearchToolPort` 의 순서),
+        여기 있는 것은 전부 원장에 있다.
+        """
+        rows = await self.db.execute(
+            select(DAEvent.payload)
+            .where(
+                DAEvent.run_id == self.run_id,
+                DAEvent.qid == question_id,
+                DAEvent.kind == "evidence_fetched_for_sandbox",
+            )
+            .order_by(DAEvent.seq)
+        )
+        refs: list[str] = []
+        for payload in rows.scalars():
+            try:
+                raw_ref = str(json.loads(payload).get("raw_ref") or "")
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if raw_ref and raw_ref not in refs:
+                refs.append(raw_ref)
+        return refs
+
     async def verified_claims(
         self,
         question_id: str,

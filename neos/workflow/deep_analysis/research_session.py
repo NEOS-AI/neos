@@ -22,8 +22,51 @@ from dataclasses import dataclass
 from typing import Any
 
 from .evidence_store import LedgerEvidenceStore
-from .research_tools import ResearchToolPort
+from .research_gate import ResearchGate
+from .research_tools import CodingSurface, ResearchToolPort
 from .sandbox import RESEARCH_PROFILE, QuestionSandbox, open_question_sandbox
+
+#: 조사 자식이 돌릴 수 있는 실행 파일. 계약 §3.2 "argv allowlist: `python3` 만".
+#: 설정이 아닌 이유: 이것은 배포가 고르는 값이 아니라 재실행기가 돌릴 수 있는
+#: 것이다(`reexecutor.py` 는 `python3` 만 부른다).
+RESEARCH_COMMANDS = frozenset({"python3"})
+
+
+@dataclass(frozen=True, slots=True)
+class CommandLimits:
+    """워커의 `execute.v1` 한도. **재실행 한도와 같은 값**을 넘긴다.
+
+    다르면 워커 안에서는 끝난 계산이 채점 때 한도에 걸린다 -- 제출할 때는
+    멀쩡했던 클레임이 `compute_reexecution_capped` 로 멈추는 모양이다.
+    """
+
+    timeout_sec: float
+    output_bytes: int
+
+
+def _coding_surface(ledger: Any, *, question_id: str, session: Any, limits: CommandLimits) -> CodingSurface:
+    from neos.coding.tools.executor import SandboxToolExecutor
+    from neos.coding.tools.registry import CodingToolRegistry
+
+    registry = CodingToolRegistry.default(
+        command_allowlist=RESEARCH_COMMANDS,
+        max_command_timeout_sec=limits.timeout_sec,
+        max_command_output_bytes=limits.output_bytes,
+        # 0 은 레지스트리가 받지 않는다(≥1). stdin 은 게이트가 비어 있기를
+        # 요구하므로 한 바이트면 충분하다.
+        max_command_stdin_bytes=1,
+        allowed_env_names=frozenset(),
+    )
+    executor = SandboxToolExecutor(
+        max_preview_bytes=limits.output_bytes, max_entries=1000
+    )
+    gate = ResearchGate(ledger, question_id=question_id)
+    return CodingSurface(
+        registry=registry,
+        executor=executor,
+        session=session,
+        authorize=gate.authorize,
+    )
 
 
 @dataclass
@@ -52,12 +95,17 @@ async def open_research_session(
     limits: Any,
     grader: Any = None,
     profile: str = RESEARCH_PROFILE,
+    command_limits: CommandLimits | None = None,
 ) -> ResearchSession:
     """이 질문의 샌드박스를 열고 도구를 묶는다.
 
     `fetch_fn` 은 `neos.workflow.deep_analysis.fetch.fetch_url` 이다. 주입
     으로 받는 이유는 카세트 재생(J3 오프라인 섀도)이 같은 자리를 갈아끼우기
     때문이고, 그때도 구현은 여전히 하나다.
+
+    `command_limits` 가 있으면 코딩 도구 다섯이 이 질문의 샌드박스에 묶여
+    게이트(`ResearchGate`)와 함께 붙는다(J1.5). 없으면 DA 도구만이다 --
+    오케스트레이터는 언제나 넘긴다(`_run_worker`).
 
     `grader` 는 오케스트레이터가 이미 들고 있는 결정론 채점기다
     (`Orchestrator.__init__` 의 네 번째 인자). 없으면 `check_claims.v1` 이
@@ -66,11 +114,28 @@ async def open_research_session(
     sandbox = await open_question_sandbox(
         provider, question_id=question_id, limits=limits, profile=profile
     )
+    store = LedgerEvidenceStore(ledger, question_id=question_id)
+    try:
+        await store.restore(sandbox)
+    except BaseException:
+        # 여기서 터지면 부르는 쪽은 세션을 받지 못해 닫을 수 없다.
+        await sandbox.close()
+        raise
     port = ResearchToolPort(
         fetch_fn=fetch_fn,
-        store=LedgerEvidenceStore(ledger, question_id=question_id),
+        store=store,
         sandbox=sandbox,
         cap_bytes=cap_bytes,
         grader=grader,
+        coding=(
+            None
+            if command_limits is None
+            else _coding_surface(
+                ledger,
+                question_id=question_id,
+                session=sandbox.session,
+                limits=command_limits,
+            )
+        ),
     )
     return ResearchSession(port=port, sandbox=sandbox)

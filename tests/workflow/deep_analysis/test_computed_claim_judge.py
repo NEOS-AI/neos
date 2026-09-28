@@ -179,7 +179,7 @@ class _Ledger:
 
 
 class _PassingDeterministic:
-    async def grade(self, claim):
+    async def grade(self, claim, **kwargs):
         return Verdict(ok=True, diagnostics={"deterministic": "passed"})
 
 

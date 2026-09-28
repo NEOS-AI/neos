@@ -17,6 +17,7 @@ from neos.subagent.types import (
     SubagentTicket,
 )
 
+from .assignment import render_repair_lines
 from .harness_bridge import da_provider_for_model
 from .model_roles import resolve_harness_model
 from .models import Assignment, WorkerResult
@@ -142,6 +143,7 @@ def _build_ticket(
     parent_id: str,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
+    briefing: ParentBriefing | None = None,
 ) -> SubagentTicket:
     """스펙만 다르고 나머지는 같다 -- 티켓을 두 벌 적으면 둘이 갈라진다."""
     goal = (assignment.question_text or assignment.brief or "").strip()
@@ -151,7 +153,7 @@ def _build_ticket(
         parent_run_id=parent_id,
         parent_tool_call_id=assignment.question_id,
         spec=spec,
-        briefing=ParentBriefing(goal=goal),
+        briefing=briefing or ParentBriefing(goal=goal),
         model=_model_pin(assignment),
         sandbox_mode=SandboxMode.NONE,
         run_id=run_id,
@@ -175,18 +177,73 @@ def build_explore_ticket(
     )
 
 
+#: briefing 의 `why` 머리말. 계산 클레임의 `premises` 는 원장 claim_id 여야
+#: 하고(계약 §5 규칙 2), 자식이 그 ID 를 알 길은 여기뿐이다.
+VERIFIED_HEADER = (
+    "이 질문에서 이미 verified 된 인용 클레임이다. 다시 조사하지 마라. "
+    "계산 클레임의 premises 에는 아래 줄 맨 앞의 ID 를 그대로 쓴다."
+)
+#: briefing 의 `scope` 머리말. 줄 모양은 `worker_brief` 의 repairs 와 같다.
+REPAIRS_HEADER = "이전 제출에서 거절된 클레임이다. 먼저 수선하라 (claim_id | code | detail | 처방 | salvage)."
+
+
+def research_briefing(
+    assignment: Assignment,
+    *,
+    verified: tuple[tuple[str, str], ...] = (),
+    dead_ends: tuple[str, ...] = (),
+) -> ParentBriefing:
+    """조사 자식의 briefing (J1.5).
+
+    전에는 `goal = question_text or brief` 하나였다 -- brief 가 싣던 확정된
+    발견·막다른 길·수선 지시가 **전부 버려졌다.** 재조사는 같은 길을 되풀이했고,
+    무엇보다 자식은 verified 클레임의 ID 를 볼 수 없어 **유효한 계산 클레임을
+    하나도 쓸 수 없었다**(premises 가 가리킬 것이 없다).
+
+    `worker_brief` 를 통째로 넘기지 않는 이유: 그 프롬프트는 "JSON 외 출력
+    금지" 로 끝나는 옛 워커의 출력 계약을 싣고 있고, 조사 자식의 출력 계약은
+    `submit.v1` 이다(계약 §3.4). 필요한 재료만 옮긴다.
+
+    `verified` 는 (claim_id, text) 이고 **quote 클레임만** 온다 -- 계산 위에
+    계산을 쌓지 못하게 하는 규칙 2 를, 고르는 자리에서부터 지킨다.
+    """
+    goal = (assignment.question_text or assignment.brief or "").strip()
+    why = (
+        VERIFIED_HEADER
+        + "\n"
+        + "\n".join(f"{claim_id} | {text}" for claim_id, text in verified)
+        if verified
+        else ""
+    )
+    repairs = list(assignment.repairs or [])
+    scope = (
+        REPAIRS_HEADER + "\n" + render_repair_lines(repairs) if repairs else ""
+    )
+    return ParentBriefing(
+        goal=goal,
+        why=why,
+        already_tried=tuple(dead_ends),
+        scope=scope,
+    )
+
+
 def build_research_ticket(
     assignment: Assignment,
     *,
     parent_id: str,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
+    briefing: ParentBriefing | None = None,
 ) -> SubagentTicket:
     """트랙 J. `research` 스펙이 도구 목록을 정한다 (계약 §2).
 
     `sandbox_mode` 가 explore 와 같은 `NONE` 인 것은 우연이 아니다 -- 조사
     자식의 샌드박스는 서브에이전트 런타임이 아니라 오케스트레이터가
     `research-offline-v1` 로 띄운다.
+
+    `briefing` 은 `research_briefing` 이 짓는다. 비우면 goal 만 있는 옛
+    모양이다 -- explore 티켓은 여전히 그 모양이다(S9: 그 경로의 바이트는
+    움직이지 않는다).
     """
     return _build_ticket(
         assignment,
@@ -194,6 +251,7 @@ def build_research_ticket(
         parent_id=parent_id,
         run_id=run_id,
         expected_checkpoint_id=expected_checkpoint_id,
+        briefing=briefing,
     )
 
 

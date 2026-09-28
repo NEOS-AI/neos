@@ -168,6 +168,7 @@ class _StoredClaim:
     status: str = "verified"
     # 계약 §5 의 전제는 verified **quote** 여야 한다 (마이그레이션 061).
     kind: str = "quote"
+    question_id: str = "q1"
 
 
 class _ComputedLedger(FakeLedger):
@@ -219,7 +220,7 @@ async def test_a_computed_claim_takes_the_computed_rules():
     ledger = _ComputedLedger({}, claims={"c1": _StoredClaim("c1")})
 
     verdict = await _computed_grader(ledger, _CountingReexecutor([])).grade(
-        _computed_claim()
+        _computed_claim(), question_id="q1"
     )
 
     assert verdict.code == "E_COMPUTE_INPUT_UNFETCHED"
@@ -250,7 +251,7 @@ async def test_a_reproduced_computed_claim_passes_through_the_grader():
     ]
 
     verdict = await _computed_grader(ledger, _CountingReexecutor(runs)).grade(
-        _computed_claim(confidence=0.5)
+        _computed_claim(confidence=0.5), question_id="q1"
     )
 
     assert verdict.ok is True

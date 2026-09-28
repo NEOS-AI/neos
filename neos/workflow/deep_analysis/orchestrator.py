@@ -21,6 +21,7 @@ from .model_roles import resolve_harness_effort, resolve_harness_model
 from .assignment import build_assignment
 from .models import Assignment, Effort, NodeSummary, Verdict, WorkerResult
 from .prompt_loader import render
+from .research_session import CommandLimits
 from .research_worker import run_research_worker
 from .subagent_adapter import (
     investigate_via_subagent,
@@ -632,7 +633,12 @@ class Orchestrator:
         it (and only when an agentic grader is configured) proceed to the
         agentic semantic tier. A deterministic failure short-circuits so the
         expensive judge is never invoked on already-rejected claims."""
-        verdict = await self.grader.grade(claim)  # deterministic first
+        # deterministic first. 계산 클레임만 질문을 넘긴다 -- 전제가 같은
+        # 질문의 것인지 본다(계약 §9 결정 3). quote 경로의 호출은 그대로다.
+        if getattr(claim, "kind", "quote") == "computed":
+            verdict = await self.grader.grade(claim, question_id=question_id)
+        else:
+            verdict = await self.grader.grade(claim)
         if self.agentic_grader is None:
             return replace(
                 verdict,
@@ -778,6 +784,12 @@ class Orchestrator:
                 # 원장의 `code_worker_started.profile` 과 **같은 값**이다. 적은
                 # 이름과 실제로 연 이름이 갈라지면 원장이 거짓말을 한다.
                 profile=research.sandbox_profile,
+                # 재실행과 **같은 한도**다. 워커 안에서 끝난 계산이 채점 때
+                # 한도에 걸리지 않게 한다.
+                command_limits=CommandLimits(
+                    timeout_sec=research.reexecution.cpu_sec,
+                    output_bytes=research.reexecution.stdout_bytes,
+                ),
             )
             await self._log_code_worker_outcome(assignment.question_id, result)
             return result

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..models import ProposedClaim, Verdict
+from ..script_blob import is_script_blob
 from ..text_norm import excerpt_match_score
 from .computed import grade_computed
 
@@ -28,15 +29,19 @@ class DeterministicGrader:
             return self.confidence_cap[3]
         return self.confidence_cap[source_count]
 
-    async def grade(self, claim: ProposedClaim) -> Verdict:
+    async def grade(
+        self, claim: ProposedClaim, *, question_id: str | None = None
+    ) -> Verdict:
         # 계산 클레임의 증거는 `evidence` 가 아니라 `computation` 에 있다.
         # 아래 quote 규칙을 그대로 돌리면 "근거 없음" 이라고 답하게 된다.
+        # `question_id` 는 계산 클레임에만 쓰인다(전제가 같은 질문인가).
         if claim.kind == "computed":
             return await grade_computed(
                 claim,
                 ledger=self.ledger,
                 confidence_cap=self.confidence_cap,
                 reexecutor=self.reexecutor,
+                question_id=question_id,
             )
         source_urls = {evidence.source_url for evidence in claim.evidence}
         diagnostics = {
@@ -87,6 +92,18 @@ class DeterministicGrader:
             dead_source_count=len(dead_urls),
             best_quote_score=best_quote_score,
         )
+
+        # 워커가 돌린 스크립트는 원장 blob 이지만 원문이 아니다 (I4, J1.5).
+        # 플래그가 꺼져 있으면 스크립트 blob 이 없으므로 이 갈래는 돌지 않는다.
+        for evidence, blob, _is_fetched, _score in observations:
+            if blob is not None and is_script_blob(blob):
+                diagnostics["deterministic_code"] = "E_NO_EVIDENCE"
+                return Verdict(
+                    ok=False,
+                    code="E_NO_EVIDENCE",
+                    detail=f"{evidence.raw_ref} is a worker script, not a fetched source",
+                    diagnostics=diagnostics,
+                )
 
         for evidence, blob, is_fetched, score in observations:
             if not is_fetched:

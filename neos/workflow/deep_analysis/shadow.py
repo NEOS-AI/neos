@@ -120,6 +120,19 @@ class ShadowLedger:
     async def claim_source_urls(self, claim_id: str) -> list[str]:
         return await self.ledger.claim_source_urls(claim_id)
 
+    # 조사 briefing 과 증거 복원이 읽는다 (J1.5). 섀도의 자식이 프로덕션의
+    # 자식과 **같은 briefing** 을 받아야 비교가 워커를 잰다 -- 없으면
+    # `getattr(.., None)` 이 조용히 빈 briefing 을 만든다.
+
+    async def verified_claims(self, question_id: str):
+        return await self.ledger.verified_claims(question_id)
+
+    async def unverified_and_deadends(self, question_id: str) -> list[str]:
+        return await self.ledger.unverified_and_deadends(question_id)
+
+    async def sandbox_evidence_refs(self, question_id: str) -> list[str]:
+        return await self.ledger.sandbox_evidence_refs(question_id)
+
     async def get_question(self, question_id: str) -> ShadowQuestion | None:
         """복사본을 돌려주되 **같은 복사본**을 계속 돌려준다.
 
@@ -357,8 +370,13 @@ def build_shadow_worker(
     cap_bytes: int,
     limits: Any,
     parent_id: str,
+    command_limits: Any,
 ) -> Any:
     """`run_offline_shadow` 의 `worker` 자리에 **진짜 조사 워커**를 꽂는다.
+
+    `command_limits` 는 오케스트레이터가 넘기는 것과 같은 값이어야 한다
+    (J1.5) -- 빠지면 섀도의 자식은 코드를 돌리지 못하고, 비교는 J 가 아니라
+    "샌드박스를 가진 fetch 자식" 을 잰다.
 
     주입 지점만 있고 진짜를 꽂는 어댑터가 없으면 J3 는 테스트에서만 도는
     기계로 남는다 -- 이 저장소가 K2b 에서 배운 그 모양이다.
@@ -380,6 +398,7 @@ def build_shadow_worker(
             fetch_fn=fetch_fn,
             runtime_factory=runtime_factory,
             parent_id=parent_id,
+            command_limits=command_limits,
         )
 
     return worker

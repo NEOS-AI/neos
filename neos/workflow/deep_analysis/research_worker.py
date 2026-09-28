@@ -20,13 +20,37 @@ from typing import Any
 from neos.subagent.types import StepKind
 
 from .models import Assignment, WorkerResult
-from .research_session import open_research_session
+from .research_session import CommandLimits, open_research_session
 from .sandbox import RESEARCH_PROFILE
-from .subagent_adapter import build_research_ticket
+from .subagent_adapter import build_research_ticket, research_briefing
 
 #: 제출 없이 턴이 끝났다. 계약 §3.4 는 이것을 `partial` 로 처리하고 **이유를
 #: 남기라**고 적는다 -- 조용한 degrade 금지.
 SUBMIT_NOT_CALLED = "submit_not_called"
+
+
+async def _briefing_material(
+    ledger: Any, question_id: str
+) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """briefing 에 실을 원장 상태: verified quote 클레임(ID 와 함께)과 막다른 길.
+
+    원장 접근자를 방어적으로 읽는 것은 `assignment.py` 와 같은 패턴이다 --
+    최소 test double 이 둘을 구현하지 않아도 된다. 그 경우 briefing 은 goal
+    만 싣는다(옛 모양).
+    """
+    verified_fn = getattr(ledger, "verified_claims", None)
+    pairs = await verified_fn(question_id) if verified_fn is not None else []
+    verified = tuple(
+        (str(claim.id), str(claim.text))
+        for claim, _evidence in pairs
+        # 계산 위에 계산을 쌓지 못한다(계약 §5 규칙 2). premises 후보에서부터 뺀다.
+        if (getattr(claim, "kind", None) or "quote") == "quote"
+    )
+    dead_ends_fn = getattr(ledger, "unverified_and_deadends", None)
+    dead_ends = (
+        tuple(await dead_ends_fn(question_id)) if dead_ends_fn is not None else ()
+    )
+    return verified, dead_ends
 
 
 def _pointers(outcome: Any) -> dict[str, Any]:
@@ -51,9 +75,14 @@ async def run_research_worker(
     parent_id: str,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
+    command_limits: CommandLimits | None,
     profile: str = RESEARCH_PROFILE,
 ) -> WorkerResult:
     """샌드박스를 열고, 자식을 한 걸음 돌리고, 제출을 거둔다.
+
+    `command_limits` 는 **기본값이 없다** (J1.5). 호출부가 둘이고(오케스트레이터 ·
+    J3 섀도) 기본값이 None 이면 한쪽이 잊어도 초록이다 -- 그쪽 자식은 코드를
+    돌리지 못하는 채로 돈다. 코딩 도구 없이 돌리려면 None 을 **적어서** 넘긴다.
 
     `runtime_factory(port)` 로 런타임을 받는 이유는 포트가 질문마다 새로
     만들어지기 때문이다. 런타임은 `SubagentRuntime.__init__` 이 순수 대입이라
@@ -68,12 +97,17 @@ async def run_research_worker(
         limits=limits,
         grader=grader,
         profile=profile,
+        command_limits=command_limits,
     )
+    verified, dead_ends = await _briefing_material(ledger, assignment.question_id)
     ticket = build_research_ticket(
         assignment,
         parent_id=parent_id,
         run_id=run_id,
         expected_checkpoint_id=expected_checkpoint_id,
+        briefing=research_briefing(
+            assignment, verified=verified, dead_ends=dead_ends
+        ),
     )
     try:
         runtime = runtime_factory(session.port)

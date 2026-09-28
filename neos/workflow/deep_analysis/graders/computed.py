@@ -12,9 +12,11 @@ quote 클레임은 "원문에 그 문장이 있는가" 를 본다. 계산 클레
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from ..models import ProposedClaim, Verdict
+from ..script_blob import is_script_blob
 
 
 def normalize_stdout(value: str) -> str:
@@ -24,6 +26,18 @@ def normalize_stdout(value: str) -> str:
     "비슷하면 같다" 를 판정하게 되고, 그것은 재현성 검사가 아니다.
     """
     return value.replace("\r\n", "\n").rstrip()
+
+
+def digest_stdout(raw: bytes) -> tuple[str, str]:
+    """날것의 stdout 에서 (정규화된 문자열, 그 digest).
+
+    워커의 `execute.v1`(J1.5)과 채점의 재실행기가 **둘 다** 이것을 부른다.
+    워커가 받은 `output_digest` 와 재실행이 만든 digest 가 다른 함수를
+    거치면, 같은 출력이 서로 다른 digest 가 되어 멀쩡한 계산이
+    `E_COMPUTE_NOT_REPRODUCED` 로 죽는다.
+    """
+    stdout = normalize_stdout(raw.decode("utf-8", errors="replace"))
+    return stdout, hashlib.sha256(stdout.encode("utf-8")).hexdigest()
 
 
 def _confidence_limit(source_count: int, caps: dict[int, float]) -> float:
@@ -64,12 +78,20 @@ async def grade_computed(
     ledger: Any,
     confidence_cap: dict[int, float],
     reexecutor: Any,
+    question_id: str | None,
 ) -> Verdict:
-    """계약 §5의 계산 클레임 규칙. 첫 실패에서 멈춘다."""
+    """계약 §5의 계산 클레임 규칙. 첫 실패에서 멈춘다.
+
+    `question_id` 는 이 클레임이 제출된 질문이다. 기본값이 없는 이유는 규칙
+    2 의 "같은 질문" 검사 때문이다 -- 빠지면 그 검사가 조용히 꺼진다.
+    """
     if reexecutor is None:
-        # 조용히 통과시키지 않는다. 프로덕션에서는 일어날 수 없다 --
-        # 계산 클레임을 만드는 analyze 스펙이 `specs_enabled` 에 없다.
+        # 조용히 통과시키지 않는다. 판정할 수 없으면 배선 실수로 터뜨린다.
+        # 서비스는 샌드박스 provider 가 있으면 언제나 재실행기를 짓는다
+        # (`service.py`) -- 계산 클레임은 그 provider 가 있어야만 생긴다.
         raise ValueError("computed claims need a reexecutor")
+    if question_id is None:
+        raise ValueError("computed claims need a question_id")
 
     diagnostics: dict[str, Any] = {
         "deterministic": "rejected",
@@ -114,10 +136,19 @@ async def grade_computed(
             diagnostics,
         )
     for raw_ref in computation.inputs:
-        if await ledger.get_blob(raw_ref) is None:
+        blob = await ledger.get_blob(raw_ref)
+        if blob is None:
             return _rejected(
                 "E_COMPUTE_INPUT_UNFETCHED",
                 f"input {raw_ref} is not a ledger blob",
+                diagnostics,
+            )
+        # 스크립트 blob 은 원장에 있지만 fetch 된 것이 아니다 (I4, J1.5).
+        # 입력으로 받으면 워커가 쓴 바이트가 계산의 근거가 된다.
+        if is_script_blob(blob):
+            return _rejected(
+                "E_COMPUTE_INPUT_UNFETCHED",
+                f"input {raw_ref} is a worker script, not a fetched source",
                 diagnostics,
             )
 
@@ -127,6 +158,12 @@ async def grade_computed(
     # 계산을 쌓게 두면 그 사슬의 **어느 고리도 fetch 된 원문에 닿지 않을 수
     # 있다** -- 각 고리가 앞 고리를 근거로 대고, 전부 verified 인데 전부
     # 자기들끼리다.
+    #
+    # 그리고 **같은 질문**의 클레임이어야 한다 (계약 §9 결정 3, 2026-09-28
+    # 강제). 계산은 research 자식도 낸다(J1.5, 사용자 결정) -- briefing 은 이
+    # 질문의 verified 클레임만 보여 주지만, 그것은 자식이 다른 ID 를 모른다는
+    # 기대이지 규칙이 아니다. 질문 경계를 넘는 비교가 필요하면 부모가 그
+    # 질문을 만든다.
     for claim_id in computation.premises:
         premise = await ledger.get_claim(claim_id)
         if (
@@ -137,6 +174,12 @@ async def grade_computed(
             return _rejected(
                 "E_COMPUTE_PREMISE_UNVERIFIED",
                 f"premise {claim_id} is not a verified claim",
+                diagnostics,
+            )
+        if premise.question_id != question_id:
+            return _rejected(
+                "E_COMPUTE_PREMISE_UNVERIFIED",
+                f"premise {claim_id} belongs to another question",
                 diagnostics,
             )
 

@@ -42,6 +42,7 @@
     { "kind": "claim_verified", "labeled": true },
     { "kind": "code_worker_started", "labeled": true },
     { "kind": "code_worker_submitted", "labeled": true },
+    { "kind": "code_tool_denied", "labeled": true },
     { "kind": "code_worker_unsubmitted", "labeled": true },
     {
       "kind": "compute_reexecuted",

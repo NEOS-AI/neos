@@ -283,6 +283,12 @@ def test_the_research_port_is_not_given_a_ledger() -> None:
     # 빨개져서 한 번 멈춰 세웠다 -- 가드가 노린 그 순간이다. 채점기는 원장을
     # **읽기만** 한다(`deterministic.py` 의 유일한 원장 호출은 `get_blob`),
     # 그리고 포트는 채점기를 받지 원장을 받지 않는다.
+    #
+    # `coding` 은 2026-09-28(J1.5)에 늘었고 같은 식으로 멈춰 세웠다. 그 안의
+    # `authorize` 는 거절을 원장에 **로그로** 남긴다 -- 원장에 닿는 문이다.
+    # 그러나 문은 오케스트레이터가 지은 콜백이고 포트는 원장을 받지 않는다.
+    # `store.record_fetched` 가 이미 같은 모양이다. 아래 단언이 그 경계를
+    # 필드 수준에서 고정한다.
     assert parameters == {
         "self",
         "fetch_fn",
@@ -290,4 +296,16 @@ def test_the_research_port_is_not_given_a_ledger() -> None:
         "sandbox",
         "cap_bytes",
         "grader",
+        "coding",
+    }
+
+    import dataclasses
+
+    from neos.workflow.deep_analysis.research_tools import CodingSurface
+
+    assert {field.name for field in dataclasses.fields(CodingSurface)} == {
+        "registry",
+        "executor",
+        "session",
+        "authorize",
     }

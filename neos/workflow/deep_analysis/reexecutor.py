@@ -28,14 +28,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from neos.coding.sandbox.base import CommandRequest, SandboxLimits
 
-from .graders.computed import normalize_stdout
+from .graders.computed import digest_stdout
 from .sandbox import RESEARCH_PROFILE, open_question_sandbox
 
 #: `capped` 에 실리는 이름. 설정 키(`code_research.reexecution.*`)와 같은
@@ -162,9 +161,5 @@ class SandboxReexecutor:
         # 0 이 아닌 종료 코드는 따로 다루지 않는다. 터진 스크립트는 주장한
         # 출력을 내지 못했으므로 digest 비교에서 `E_COMPUTE_NOT_REPRODUCED`
         # 로 죽고, 그것이 정확한 진단이다 -- 돌렸고, 다른 답이 나왔다.
-        stdout = normalize_stdout(result.stdout.decode("utf-8", errors="replace"))
-        return Reexecution(
-            digest=hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
-            stdout=stdout,
-            duration_sec=duration,
-        )
+        stdout, digest = digest_stdout(result.stdout)
+        return Reexecution(digest=digest, stdout=stdout, duration_sec=duration)

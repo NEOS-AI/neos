@@ -32,6 +32,20 @@ REPAIR_PRESCRIPTIONS = {
 }
 
 
+def render_repair_lines(repairs: list[dict]) -> str:
+    """수선 지시 한 줄씩. `worker_brief` 와 조사 자식의 briefing(J1.5)이 같이 쓴다.
+
+    두 벌로 두면 처방 문구를 고칠 때 한쪽만 바뀐다. 빈 목록의 "(없음)" 은
+    부르는 쪽 몫이다 -- 조사 briefing 은 빈 칸을 비워 둔다.
+    """
+    return "\n".join(
+        f"{r['claim_id']} | {r['code']} | {r['detail']} | "
+        f"{REPAIR_PRESCRIPTIONS.get(r['code'], '')} | "
+        f"{r['salvage'] or ''}"
+        for r in repairs
+    )
+
+
 async def build_assignment(
     ledger: Any, question: Any, effort: Effort
 ) -> Assignment:
@@ -53,12 +67,7 @@ async def build_assignment(
     ]
     if repairs:
         repair_count = len(repairs)
-        repairs_rendered = "\n".join(
-            f"{r['claim_id']} | {r['code']} | {r['detail']} | "
-            f"{REPAIR_PRESCRIPTIONS.get(r['code'], '')} | "
-            f"{r['salvage'] or ''}"
-            for r in repairs
-        )
+        repairs_rendered = render_repair_lines(repairs)
     else:
         repair_count = 0
         repairs_rendered = "(없음)"
