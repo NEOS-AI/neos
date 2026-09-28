@@ -17,7 +17,7 @@ PGUSER      ?= postgres
 PGDATABASE  ?= neos
 export PGPASSWORD ?= password
 
-.PHONY: help image-build image-push db-up db-down db-bootstrap db-reset db-check db-verify db-shell release
+.PHONY: help image-build image-push db-up db-down db-bootstrap db-reset db-check db-verify db-shell release dev-jev-shadow jev-shadow-report
 
 help:
 	@grep -E '^[a-z][a-zA-Z0-9_-]*:.*?## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | expand -t22
@@ -73,3 +73,22 @@ db-verify: ## 일회용 컨테이너의 빈 DB 에 전량 적용 + 재적용 멱
 # 못한다 -- make 는 앞 타깃이 0 이 아니면 멈춘다.
 release: image-build db-verify image-push ## 빌드 → 스키마 검증 → push (검증 실패 시 push 안 함)
 	@echo "$(REGISTRY)/$(IMAGE):$(TAG) push 완료 -- 스키마 검증을 통과한 이미지다"
+
+## ── 개발 서버 ─────────────────────────────────────────────────────────
+
+# L2 -- Jev 도구 위험 섀도 (로드맵 §12.12). 판정은 바꾸지 않고 확률만 원장에 남긴다.
+#
+# 왜 `development.yaml` 이나 `config/neos.local.yaml` 이 아니라 여기인가:
+# 앞의 것은 CI 가 `TYPESAFE_API_KEY` 를 요구하게 되고, 뒤의 것은 `.env` 의
+# `NEOS_CONFIG_PATH` 를 통해 **테스트 실행에도 걸린다** -- 키가 채워진 기계에서
+# 테스트가 진짜 Jev 를 부른다. 이 타깃은 개발 서버 **프로세스 하나에만** 오버레이를
+# 건다. 켠 날짜를 적어 두고 `jev-shadow-report SINCE=<그날>` 로 읽는다.
+JEV_SHADOW_CONFIG ?= config/samples/jev-l2-shadow.yaml
+DEV_PORT          ?= 8518
+
+dev-jev-shadow: ## 개발 서버를 L2 섀도 오버레이로 띄운다 (게이트는 꺼진 채)
+	NEOS_CONFIG_PATH=$(JEV_SHADOW_CONFIG) uvicorn neos.main:app --reload --host 0.0.0.0 --port $(DEV_PORT)
+
+jev-shadow-report: ## 섀도 판독 (SINCE=YYYY-MM-DD 필수, TRY=0.2:0.9 후보 경계)
+	@test -n "$(SINCE)" || { echo "SINCE=<섀도를 켠 날> 을 주어야 한다"; exit 2; }
+	python -m scripts.jev_l2_shadow_report --since $(SINCE) --try $(or $(TRY),0.2:0.9)
