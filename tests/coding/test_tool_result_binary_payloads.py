@@ -104,9 +104,10 @@ async def test_the_child_port_strips_the_blob_as_well(monkeypatch) -> None:
     async def allow(validated):
         return validated, None
 
-    port.bind(session=object(), authorize=allow)
+    port.bind(task_id="ct_1", session=object(), authorize=allow)
+    view = port.for_ticket(SimpleNamespace(spec="media", parent_id="ct_1"))
 
-    result = await port.execute("read_image.v1", {"path": "a.png"})
+    result = await view.execute("read_image.v1", {"path": "a.png"})
 
     assert BLOB not in json.dumps(result, default=str)
     assert result["entries"][0]["data_b64_omitted"] is True

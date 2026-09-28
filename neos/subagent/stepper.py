@@ -126,7 +126,9 @@ class ChildStepper:
         request = ModelRequest(
             system=system,
             messages=_canonical_messages(state),
-            tools=_child_tools(spec, self._tools, spawn_depth=ticket.spawn_depth),
+            tools=_child_tools(
+                spec, _port_for(self._tools, ticket), spawn_depth=ticket.spawn_depth
+            ),
             model=ticket.model.alias or ticket.model.model,
             limits=ModelLimits(
                 max_output_tokens=CHILD_MAX_OUTPUT_TOKENS, timeout_sec=120
@@ -233,7 +235,9 @@ class ChildStepper:
                     status = "error"
             else:
                 try:
-                    result = await self._tools.execute(name, payload)
+                    result = await _port_for(self._tools, ticket).execute(
+                        name, payload
+                    )
                     status = "ok"
                 except Exception as exc:
                     result = {"error": str(exc)}
@@ -344,6 +348,18 @@ def _tool_permitted(spec: SubagentSpec, name: str, *, spawn_depth: int) -> bool:
     if name in REFUSED_TOOLS and name not in spec.allowed_tools:
         return False
     return True
+
+
+def _port_for(port: ToolPort, ticket: SubagentTicket) -> ToolPort:
+    """The port as this child sees it, when the port scopes by ticket.
+
+    A port shared by concurrent parents must not answer from whatever was
+    bound last (coding CHILD-PORT-SHARED). Ports without `for_ticket` -- the
+    deep-analysis research port, which is built per question -- are already
+    scoped and are used as they are.
+    """
+    scoped = getattr(port, "for_ticket", None)
+    return scoped(ticket) if callable(scoped) else port
 
 
 def _child_tools(

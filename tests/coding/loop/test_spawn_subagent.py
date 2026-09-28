@@ -753,13 +753,14 @@ async def test_coding_tool_port_intersects_and_refuses_writes() -> None:
 
     registry = CodingToolRegistry.default(command_allowlist=frozenset({"git"}))
     port = CodingToolPort(registry=registry, executor=object())
-    names = {item.name for item in port.definitions()}
+    view = port.for_ticket(SimpleNamespace(spec="explore", parent_id="ct_1"))
+    names = {item.name for item in view.definitions()}
     assert "read_file.v1" in names
     assert "spawn_agent.v1" in names
     assert "write_file.v1" not in names
     assert "execute.v1" not in names
     with pytest.raises(Exception):
-        await port.execute("write_file.v1", {"path": "a.txt", "content": "x"})
+        await view.execute("write_file.v1", {"path": "a.txt", "content": "x"})
     write = registry.validate("write_file.v1", {"path": "a.txt", "content": "x"})
     assert write.risk is not ToolRisk.READ_ONLY
 
@@ -779,18 +780,19 @@ async def test_implement_tool_port_allows_workspace_writes() -> None:
 
     registry = CodingToolRegistry.default(command_allowlist=frozenset({"pytest"}))
     executor = _WriteExecutor()
-    port = CodingToolPort(registry=registry, executor=executor, spec="implement")
+    port = CodingToolPort(registry=registry, executor=executor)
 
     async def allow(validated):
         return validated, None
 
-    port.bind(session=object(), authorize=allow)
-    names = {item.name for item in port.definitions()}
+    port.bind(task_id="ct_1", session=object(), authorize=allow)
+    view = port.for_ticket(SimpleNamespace(spec="implement", parent_id="ct_1"))
+    names = {item.name for item in view.definitions()}
     assert "write_file.v1" in names
     assert "edit_file.v1" in names
     assert "execute.v1" in names
     assert "spawn_agent.v1" not in names
-    result = await port.execute("write_file.v1", {"path": "a.txt", "content": "x"})
+    result = await view.execute("write_file.v1", {"path": "a.txt", "content": "x"})
     assert result["ok"] is True
     assert executor.calls == ["write_file.v1"]
 
@@ -799,19 +801,11 @@ def test_child_native_expose_ignores_parent_revealed_and_phase() -> None:
     from neos.coding.subagent_port import CodingToolPort
 
     registry = CodingToolRegistry.default(command_allowlist=frozenset({"pytest"}))
-    explore = CodingToolPort(registry=registry, executor=object(), spec="explore")
-    explore.bind(
-        session=object(),
-        phase="explore",
-        revealed=frozenset(
-            {
-                "search_tools.v1",
-                "web_fetch.v1",
-                "mcp__server__tool",
-                "write_file.v1",
-            }
-        ),
-    )
+    # The port takes no phase or revealed set at all -- a child cannot inherit
+    # the parent's disclosures because there is nowhere to pass them.
+    port = CodingToolPort(registry=registry, executor=object())
+    port.bind(task_id="ct_1", session=object())
+    explore = port.for_ticket(SimpleNamespace(spec="explore", parent_id="ct_1"))
     explore_names = {item.name for item in explore.definitions()}
     assert "search_tools.v1" not in explore_names
     assert "web_fetch.v1" not in explore_names
@@ -821,10 +815,7 @@ def test_child_native_expose_ignores_parent_revealed_and_phase() -> None:
     assert "git_status.v1" in explore_names
     assert "spawn_agent.v1" in explore_names
 
-    implement = CodingToolPort(
-        registry=registry, executor=object(), spec="implement"
-    )
-    implement.bind(session=object(), phase="explore", revealed=frozenset())
+    implement = port.for_ticket(SimpleNamespace(spec="implement", parent_id="ct_1"))
     implement_names = {item.name for item in implement.definitions()}
     assert "search_tools.v1" not in implement_names
     assert "spawn_agent.v1" not in implement_names

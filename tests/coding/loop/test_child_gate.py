@@ -11,6 +11,7 @@ one bites is named in its docstring.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,6 +47,15 @@ from tests.coding.loop.test_spawn_subagent import (
 )
 
 pytestmark = pytest.mark.no_db
+
+
+class _SessionExecutor:
+    def __init__(self) -> None:
+        self.sessions: list[object] = []
+
+    async def execute(self, session, validated):
+        self.sessions.append(session)
+        return {"ok": True}
 
 
 class _PortExecutor:
@@ -118,6 +128,10 @@ def _child_tool_results(runtime):
     return results
 
 
+def _ticket(spec: str, task_id: str = "ct_1"):
+    return SimpleNamespace(spec=spec, parent_id=task_id)
+
+
 @pytest.mark.asyncio
 async def test_unbound_port_refuses_before_the_executor() -> None:
     """Mutation: drop the `authorize is None` check -> the executor runs."""
@@ -125,15 +139,87 @@ async def test_unbound_port_refuses_before_the_executor() -> None:
     port = CodingToolPort(
         registry=CodingToolRegistry.default(command_allowlist=frozenset()),
         executor=executor,
-        spec="implement",
     )
-    port.bind(session=object())
+    port.bind(task_id="ct_1", session=object())
 
     with pytest.raises(CodingToolPortError) as error:
-        await port.execute("rm.v1", {"path": "old.py"})
+        await port.for_ticket(_ticket("implement")).execute("rm.v1", {"path": "old.py"})
 
     assert error.value.reason_code == "policy_gate_unbound"
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_another_tasks_binding_is_not_this_childs() -> None:
+    """CHILD-PORT-SHARED: a binding answers only its own task's children.
+
+    Mutation: look the binding up by anything but `ticket.parent_id` (say,
+    the most recent bind) -> task A's child runs in task B's session.
+    """
+    executor = _SessionExecutor()
+    port = CodingToolPort(
+        registry=CodingToolRegistry.default(command_allowlist=frozenset()),
+        executor=executor,
+    )
+
+    async def allow(validated):
+        return validated, None
+
+    port.bind(task_id="task_a", session="session_a", authorize=allow)
+    port.bind(task_id="task_b", session="session_b", authorize=allow)
+
+    await port.for_ticket(_ticket("explore", "task_a")).execute(
+        "read_file.v1", {"path": "a.py"}
+    )
+    with pytest.raises(CodingToolPortError) as error:
+        await port.for_ticket(_ticket("explore", "task_c")).execute(
+            "read_file.v1", {"path": "a.py"}
+        )
+
+    assert executor.sessions == ["session_a"]
+    assert error.value.reason_code == "sandbox_session_missing"
+
+
+@pytest.mark.asyncio
+async def test_a_rebind_mid_call_does_not_reach_a_child_already_running() -> None:
+    """The race itself: the port is rebound while a child waits in `authorize`.
+
+    Before, the child resumed after the await and ran in whatever session the
+    port held by then. The view holds the binding it was built with for the
+    whole call.
+    Mutation: have the view read `port._bindings` at execute time instead of
+    holding the binding it was built with -> this goes red.
+    """
+    executor = _SessionExecutor()
+    port = CodingToolPort(
+        registry=CodingToolRegistry.default(command_allowlist=frozenset()),
+        executor=executor,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_allow(validated):
+        entered.set()
+        await release.wait()
+        return validated, None
+
+    port.bind(task_id="task_a", session="session_a", authorize=slow_allow)
+    call_a = asyncio.create_task(
+        port.for_ticket(_ticket("explore", "task_a")).execute(
+            "read_file.v1", {"path": "a.py"}
+        )
+    )
+    await entered.wait()
+
+    async def allow(validated):
+        return validated, None
+
+    # Same task id on purpose: the worst case is a *rebind* of A's own slot.
+    port.bind(task_id="task_a", session="session_b", authorize=allow)
+    release.set()
+    await call_a
+
+    assert executor.sessions == ["session_a"]
 
 
 @pytest.mark.asyncio
@@ -259,13 +345,12 @@ async def test_the_child_is_judged_unattended_and_the_parent_is_not(
     assert executor.calls == ["rm.v1"]
 
 
-def test_rebinding_a_resumed_child_replaces_spec_and_gate() -> None:
-    """A resumed child runs under its own spec and this step's gate.
+def test_rebinding_a_resumed_child_replaces_the_gate() -> None:
+    """A resumed child runs under this step's gate, not the last spawn's.
 
-    Mutation: make `_rebind_child` a no-op -> the port keeps the last spawn's
-    spec (`implement`) and its closure. This calls the method directly; it
-    does not catch the call being removed from the two resume paths
-    (`await_subagent.v1` and the K3 safe point).
+    Mutation: make `_rebind_child` a no-op -> the stale closure stays bound.
+    This calls the method directly; it does not catch the call being removed
+    from the two resume paths (`await_subagent.v1` and the K3 safe point).
     """
     runtime, port, _executor = _runtime_with_real_port([])
     h = harness(_spawn("implement"), config=_flag_on(), subagents=runtime)
@@ -274,8 +359,7 @@ def test_rebinding_a_resumed_child_replaces_spec_and_gate() -> None:
     async def stale(validated):
         return validated, None
 
-    port.use_spec("implement")
-    port.bind(session=object(), authorize=stale)
+    port.bind(task_id="ct_1", session=object(), authorize=stale)
     ref = ActiveChildRef(
         run_id="sa_1",
         checkpoint_id=None,
@@ -286,5 +370,28 @@ def test_rebinding_a_resumed_child_replaces_spec_and_gate() -> None:
 
     h.loop._rebind_child(ref, bound, SimpleNamespace(), h.deps)
 
-    assert port._spec_name == "explore"
-    assert port._authorize is not None and port._authorize is not stale
+    binding = port._bindings["ct_1"]
+    assert binding.authorize is not None and binding.authorize is not stale
+    assert binding.session is bound.session
+
+
+@pytest.mark.asyncio
+async def test_the_binding_does_not_outlive_the_step(tmp_path: Path) -> None:
+    """Each binding closes over one step's state and deps; the step drops it.
+
+    Mutation: remove `_unbind_child_tools` from the spawn path -> the port
+    still holds task `ct_1` after the child folds.
+    """
+    runtime, port, _executor = _runtime_with_real_port(
+        [_child_calls("read_file.v1", {"path": "a.py"}), _text("done")]
+    )
+    h = harness(
+        _spawn("explore"),
+        config=_flag_on(approval_mode="auto", approval_allow_tools=("read_file.v1",)),
+        subagents=runtime,
+        approval_evaluator=evaluate_approval,
+    )
+
+    await _run_until_folded(h)
+
+    assert port._bindings == {}

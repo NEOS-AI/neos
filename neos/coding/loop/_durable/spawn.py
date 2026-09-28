@@ -268,29 +268,43 @@ class SubagentSpawnMixin:
         worktree_path: str = "",
         spawn_call_id: str = "",
     ) -> None:
-        if self._subagents is None:
-            return
-        stepper = getattr(self._subagents, "_stepper", None)
-        port = getattr(stepper, "_tools", None) if stepper is not None else None
+        port = self._child_port()
         bind = getattr(port, "bind", None)
-        use_spec = getattr(port, "use_spec", None)
-        if callable(use_spec):
-            use_spec(spec_name)
+        task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+        if not callable(bind) or not task_id:
+            # Nothing bound means the port refuses every call -- fail closed.
+            return
         session = bound.session
         if worktree_path:
             session = _session_on_workspace(session, worktree_path)
-        if callable(bind):
 
-            async def authorize(validated):
-                return await self._authorize_child_call(
-                    validated,
-                    state=state,
-                    deps=deps,
-                    spec_name=spec_name,
-                    spawn_call_id=spawn_call_id,
-                )
+        async def authorize(validated):
+            return await self._authorize_child_call(
+                validated,
+                state=state,
+                deps=deps,
+                spec_name=spec_name,
+                spawn_call_id=spawn_call_id,
+            )
 
-            bind(session=session, authorize=authorize)
+        bind(task_id=task_id, session=session, authorize=authorize)
+
+    def _child_port(self):
+        if self._subagents is None:
+            return None
+        stepper = getattr(self._subagents, "_stepper", None)
+        return getattr(stepper, "_tools", None) if stepper is not None else None
+
+    def _unbind_child_tools(self, deps) -> None:
+        """A binding lives for one parent step (CHILD-PORT-SHARED).
+
+        It closes over this step's state and deps; keeping it past the step
+        would both hold them and let a later step find a stale gate.
+        """
+        unbind = getattr(self._child_port(), "unbind", None)
+        task_id = getattr(getattr(deps, "lease", None), "task_id", None)
+        if callable(unbind) and task_id:
+            unbind(task_id)
 
     def _rebind_child(self, ref: ActiveChildRef, bound, state, deps) -> None:
         """A resumed child gets the gate of *this* parent step, not the last spawn's.
@@ -576,6 +590,8 @@ class SubagentSpawnMixin:
                 state, reason="aborted", task_id=input.task_id
             )
             raise
+        finally:
+            self._unbind_child_tools(deps)
         if outcome.kind is StepKind.CONTINUING and self._async_spawn:
             return self._detached_spawn_result(
                 bound,
@@ -668,7 +684,10 @@ class SubagentSpawnMixin:
             # can go look for the report it was handed.
             return self._spawn_tool_error(bound, "policy_not_live"), state
         self._rebind_child(ref, bound, state, deps)
-        outcome = await self._resume_child(ref, deps)
+        try:
+            outcome = await self._resume_child(ref, deps)
+        finally:
+            self._unbind_child_tools(deps)
         if outcome.kind is StepKind.CONTINUING:
             return (
                 _delegated(
@@ -772,6 +791,8 @@ class SubagentSpawnMixin:
                 "detached child resume failed run_id=%s", ref.run_id, exc_info=True
             )
             return state
+        finally:
+            self._unbind_child_tools(deps)
         state, rolled_in, rolled_out = self._roll_in_child_usage(
             state, ref, outcome.input_tokens, outcome.output_tokens
         )
