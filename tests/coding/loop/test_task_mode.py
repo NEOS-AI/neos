@@ -73,3 +73,54 @@ def test_the_default_mode_is_interactive() -> None:
     assert LoopInput("ct", "cr", "x").mode == "interactive"
     assert CreateCodingTaskRequest(prompt="x").mode == "interactive"
     assert CodingTaskMode.INTERACTIVE.value == "interactive"
+
+
+# ---- the autonomous overlay (P-01) -------------------------------------------------
+
+
+def test_an_interactive_prompt_is_byte_identical() -> None:
+    """Every task today is interactive; its system prompt must not move."""
+    from neos.coding.loop._durable.model_turn import with_mode_overlay
+
+    assert with_mode_overlay("BASE", "interactive") == "BASE"
+    assert with_mode_overlay("BASE", "") == "BASE"
+
+
+def test_an_autonomous_prompt_opens_with_both_official_blocks() -> None:
+    """P-01: "Apply both", and the opening sentence carries the effect.
+    Mutation: append instead of prepend, or drop the second block."""
+    from neos.coding.loop._durable.model_turn import with_mode_overlay
+    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, DELIVERING_WORK
+
+    system = with_mode_overlay("BASE", "autonomous")
+
+    assert system.startswith("You are operating autonomously.")
+    assert system == f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\nBASE"
+
+
+def test_the_blocks_are_the_ones_in_the_spec_file() -> None:
+    """§10.5: the spec file is fixed first, the code follows it. One character
+    off fails -- the measured effect is attached to the wording."""
+    from pathlib import Path
+
+    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, DELIVERING_WORK
+
+    spec = (
+        Path(__file__).resolve().parents[3] / "docs/fable-5-1-multiagent-spec.md"
+    ).read_text(encoding="utf-8")
+
+    assert AUTONOMOUS_EXECUTION in spec
+    assert DELIVERING_WORK in spec
+
+
+@pytest.mark.asyncio
+async def test_the_model_sees_the_overlay_only_on_an_autonomous_task() -> None:
+    """End to end through the loop. Mutation: drop `with_mode_overlay` from
+    `_prepare_turn` -> the autonomous request's system has no P-01."""
+    interactive, _events, _error = await _run(INPUT)
+    autonomous, _events, _error = await _run(replace(INPUT, mode="autonomous"))
+
+    [first_i, *_] = interactive.model.requests
+    [first_a, *_] = autonomous.model.requests
+    assert "operating autonomously" not in first_i.system
+    assert first_a.system.startswith("You are operating autonomously.")
