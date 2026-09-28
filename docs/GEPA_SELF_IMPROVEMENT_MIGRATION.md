@@ -582,7 +582,37 @@ No PR edits `skills/k-skill`, `skills/security-audit`, `skills/financial-service
 
 ## Open Questions
 
-None. Submit and approve stay off HTTP (Key Decision 14). The first surface, the approver, and the in-tree kernel are Key Decisions 1, 3, and 9. Soft 1800 / hard 2100 and the 8192-byte `side_info` cap stay the numbers in Job placement and Observability.
+None at design time. After landing, see **Post-landing review (2026-09-28)** below. Submit and approve stay off HTTP (Key Decision 14). The first surface, the approver, and the in-tree kernel are Key Decisions 1, 3, and 9. Soft 1800 / hard 2100 and the 8192-byte `side_info` cap stay the numbers in Job placement and Observability.
+
+## Post-landing review (2026-09-28, `403aeb77`)
+
+Code read against this design after all eight commits (`99d05697`..`403aeb77`) landed. Source: [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) §4. Items are split by whether the design already chose the behavior.
+
+**Divergences from this design or from upstream (fix):**
+
+| Where | What | Why it matters |
+| --- | --- | --- |
+| `engine.py:201` | Parent selection builds `random.Random(0)` every iteration. The design says the engine is pure given a clock/rng. That rng is not threaded. | With equal fronts, the same parent is drawn every time. This is separate from the minibatch shuffle, which *is* pinned to `Random(0)` per run (Loop pins). |
+| `provider.py:26` | The reflector request sets `system=curr_param`. The text being optimized becomes the reflector's system instruction. | Upstream sends the meta-prompt as the user turn only. A candidate can steer its own reflector. Use a fixed neutral system string. |
+| `store.py:638-647` | The approve-time archive `UPDATE` filters `owner_namespace` and `status` but not `surface`. The unique index is `(owner_namespace, surface)`. | Latent while `coding_overlay` is the only surface. With a second surface, approving one archives the other. |
+
+**Chosen by this design, worth reopening (decide, do not silently change):**
+
+| Behavior | Design reference | Observed consequence |
+| --- | --- | --- |
+| `test_mean` is reported, not used | Risks: Selection bias | "Do not use it to pick" is right. Using it as a **gate** is a different rule: stage nothing when `best.test_mean ≤ seed.test_mean + margin`, or when best is the seed. Today a regressing or unchanged overlay stages, and the approver is the only regression check. |
+| `side_info` over 8192 bytes is dropped whole | Open Questions, Observability | Coding traces routinely exceed 8 KB. The reflector would see `{"truncated": true}` for nearly every real example. Per-field truncation keeps the cap and the signal. |
+| Evaluator stays sync | Loop pins | A real coding-fixture evaluator is async (it drives the durable loop). The first real evaluator needs this changed. |
+| N=1 per `(candidate, example)` | Risks: N=1 | Strict-sum on a minibatch of 3 is at the mercy of scorer noise once the scorer is an LLM. Deterministic scorers are fine. |
+| No approver path | Key Decision 14 | Correct to keep approve off HTTP. But there is no operator CLI either, so the loop cannot close in practice. |
+
+**Gaps outside the kernel (the loop is not closed):**
+
+- **No production caller.** `register_evaluator`, `insert_run_with_seed`, `submit_gepa_opt_job`, and `approve` have zero callers in `neos/`. Expected for Phase 1 (no in-repo fitness), but the design has no step that ends this state.
+- **The effect is unmeasurable.** Coding runs do not record which overlay (id, digest) was injected, so before and after cannot be compared.
+- **`validated_on` is missing.** Rows record neither target model, provider, nor base system-prompt hash. A base-prompt or model change does not invalidate an approved overlay.
+- **Ambient bleed.** A coding Celery delivery ends with `set_lesson_session_factory(None)`, which pins `_USE_MEMORY_ONLY=True` process-wide (`neos/learn/lessons.py`). A later gepa_opt task in the same worker child sees no store. `inject.py` then swallows the error and returns `None`.
+- **Process-local evaluator registry.** An evaluator registered in the API process is invisible to the `gepa_opt` worker. This fails closed (`no_evaluator`), which is correct, but registration has to happen at worker import.
 
 ## Invariants / tests that must not flip
 

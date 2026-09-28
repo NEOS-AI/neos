@@ -180,6 +180,22 @@ deep_analysis는 DB 로그로, coding은 outbox와 Redis로 풀었다. 확장성
 **S1~S13 중 마이크로서비스화로만 풀리는 결함은 없다.** S9(Playwright 격리) 하나만
 "별도 프로세스"가 필요한데, 그것도 별도 **서비스**일 필요는 없다(§5의 `fetch` 워커 큐로 충분하다).
 
+### 3.1 추가 결함 — 2026-09-28 코드 대조 (`403aeb77`)
+
+[NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) §5에서 찾았다. 판정 기준은 위 표와 같다.
+S14·S15는 §2.2가 "DA는 durable job + resume으로 이미 분리 가능하다"고 본 판단을 **동시 실행 안전성 쪽에서** 보완한다.
+
+| # | 결함 | 근거 | 레플리카·워커 N>1에서 일어나는 일 | 심각도 |
+|---|---|---|---|---|
+| S14 | **DA에 실행 lease가 없다** | `jobs.py:66` `RESUMABLE_STATUSES = {"running","failed"}` · resume 핸들러가 status만 본다 · `ledger.recover()`가 `investigating`을 `open`으로 되돌린다 | 살아 있는 run에 resume하면 실행자가 둘이 된다. 이중 지출, 질문 탈취, 원장 작성자 둘. 코딩의 `coding_run_leases`(펜싱 + heartbeat) 패턴이 없다 | 🔴 |
+| S15 | **Celery `visibility_timeout`이 DA 시간 한도보다 짧다** | `task_acks_late=True`(`schema.py:682`) · DA `job_time_limit=3900` · `visibility_timeout` 설정 0건(kombu Redis 기본 1시간) | 1시간이 넘는 run은 원래 워커가 살아 있어도 다른 워커로 재전달된다. S14와 겹치면 lease 없이 동시에 실행된다 | 🔴 (Celery on) |
+| S16 | **브로커가 축출 정책을 가진 캐시 Redis와 같다** | `docker-compose.enterprise.yml:26,94` — 브로커 db 2 + `--maxmemory-policy allkeys-lru` | 메모리가 차면 대기 태스크 키가 축출될 수 있다. 조용한 유실이다 | 🔴 |
+| S17 | **워커 프로세스 전역 상태가 태스크 사이로 샌다** | `set_lesson_session_factory(None)`이 `_USE_MEMORY_ONLY`를 프로세스 전체에 고정(`learn/lessons.py`) · DA·gepa_opt 태스크가 `asyncio.run`마다 새 루프를 만드는데 전역 `db_manager`와 `LLMFactory._llm_cache`를 재사용한다 ⚠️ 미재현 | 같은 워커 자식에서 코딩 전달 다음에 도는 태스크가 lesson과 overlay를 못 읽는다. 풀과 클라이언트가 다른 루프에 묶여 있을 수 있다. 코딩 워커만 전달마다 새 매니저를 만들어 이를 피한다 | 🟠 |
+| S18 | **LLM 호출 기록에 테넌트가 없다** | `coding/runtime.py:649-656`이 `TrackedCodingModel`에 `user_id`·`session_id`를 넘기지 않는다(기본값 `""`) | 비용 귀속과 테넌트별 계량이 불가능하다. S7의 JSONL에 테넌트 구분 없이 섞인다 | 🟠 |
+| S19 | **memory 샌드박스를 production에서 거부하지 않는다** | `neos.default.yaml` `sandbox.enabled: false` + `provider: memory` · production·staging yaml에 `sandbox` 섹션 없음 | `enabled`만 켜면 host subprocess로 돈다. 지금은 off라 잠재 위험이다 | 🟠 |
+
+**P0에 붙일 것:** S14(DA lease + resume 409) · S15(`broker_transport_options.visibility_timeout` > `job_time_limit`) · S16(브로커용 Redis `noeviction` 분리). S12의 compose worker·beat 추가와 같은 PR 묶음이 자연스럽다.
+
 ---
 
 ## 4. 마이크로서비스화 — 얻는 것과 잃는 것
@@ -334,7 +350,7 @@ deep_analysis에서 이미 증명했다. "동기 요청 안에서 장시간 작�
 | 팀이 2개 이상이 되고 배포 충돌이 생긴다 | 한 도메인 배포가 다른 도메인 롤백을 유발하는 일이 분기당 2회 이상 |
 | 역할별 배포로는 풀리지 않는 의존성 충돌이 생긴다 | 한 역할의 의존성 업그레이드가 다른 역할을 깬다 (예: 브라우저·ML 런타임) |
 | 이질적인 하드웨어가 필요해진다 | GPU 추론, 로컬 임베딩 모델 상주 |
-| 보안·규제상 격리가 필요해진다 | 테넌트별 데이터 격리 요구 (`DIRECTION_260717.md` §3.5 — 현재 격리는 0이다) |
+| 보안·규제상 격리가 필요해진다 | 테넌트별 데이터 격리 요구 (`DIRECTION_260717.md` §3.5 — 현재 격리는 0이다) · 🆕 (2026-09-28) 이 줄은 **서비스 분리**의 트리거다. 멀티테넌트 SaaS로 판다면 테넌트 격리는 트리거가 아니라 **전제**다. 서비스를 분리하지 않아도 `tenant_id`(런·원장·스토어·overlay·비용 기록), 테넌트별 admission과 레이트리밋이 필요하다. 이것은 §8 결정 D-6으로 올린다 |
 | 외부 공개 API가 생긴다 | 제3자에게 버전 계약을 약속해야 한다 |
 
 ### 분리 후보 우선순위 (트리거가 충족됐을 때)
@@ -368,6 +384,7 @@ deep_analysis에서 이미 증명했다. "동기 요청 안에서 장시간 작�
 | D-3 | Ray 존속 | 유지 / Celery로 통합 | **통합을 검토한다.** 작업 분산 기구가 둘이면(Celery + Ray) 유지보수성 비용이다. 기본값이 꺼져 있고 SSE 콜백이 Ray 경계에서 유실된다(`executor_pool.py:9`). 실제 사용량 데이터를 본 뒤 결정한다 |
 | D-4 | Rust 게이트웨이 | 채택 (upstream 다중화, rate limit 구현) / 제거 | **제거에 무게를 둔다.** 인증 이중화와 운영 단위 증가를 정당화할 근거가 지금은 없다. 제거한다면 Python의 gateway-trust 경로도 함께 걷어낸다 |
 | D-5 | 코딩 Docker 프로바이더 | 단일 호스트로 고정 유지 / managed(E2B/Modal)로 일원화 | Docker 볼륨이 호스트 로컬이다(`neos/coding/sandbox/docker.py:382`). 멀티 호스트로 간다면 managed가 유일한 경로다 |
+| D-6 🆕 | 테넌트 경계 (2026-09-28) | user 단위 유지 / org(tenant) 단위 도입 | 판정하지 않았다. 지금 격리는 전부 `owner`(user)에서 끝난다. org 차원은 관리형 샌드박스 할당 평면(migration 045)에만 있다. 벤더 키, 레이트리밋, 서킷을 모든 테넌트가 공유한다. SaaS로 간다면 **org 단위 + 런 경계의 `RunContext`/`TenantContext` 주입**을 권한다. S17·S18이 같은 객체로 풀린다 |
 
 ---
 

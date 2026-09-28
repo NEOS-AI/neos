@@ -29,6 +29,8 @@
 - **§4·§5·§12는 아직 설계다.** 코드가 착지하면 그 줄을 "착지(커밋)"로 바꾸고, 설계와 코드가 어긋나면 **코드가 이긴다**
 
 **기준 시점: 2026-09-23** (코딩 스트림 짝 규칙 · §12.9. 트랙 L 은 2026-09-22, 그 앞의 서술은 2026-09-15 기준이다)
+· 🆕 **2026-09-28 코드 대조**(`403aeb77`): §1 J 행 · §4.5 J1 · §10.1 · §10.3 · §11 · §12.3 · §13 E·E′ · §15 를 고쳤다.
+근거와 검증 로그는 [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) §9.2
 
 ---
 
@@ -45,7 +47,7 @@
 | **G. 그래프 계약·검증** | 🟢 C3·C4 live(플래그 off) | 켜는 결정 · M-0 재측정(사전 등록 완료) |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료(꺼짐) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
-| **J. 코딩 루프 조사** 🆕 | 🟢 **J1·J2·J3 착지**(코드 대조 2026-09-23) — 도구 셋(`fetch.v1`·`submit.v1`·`check_claims.v1`) · 스펙 셋 · `evidence_cap_reached` · S9 플래그 off 테스트 · 계산 클레임 재실행 · 오프라인 섀도 · 이벤트 kind 여섯(DA fixture 에 있다). **전부 플래그 off** | **J4**(#23 판정 뒤). ~~J1 절반~~은 낡은 서술이었다 — §11 인벤토리가 J3 착지를 적는 동안 이 줄은 J1 에 머물러 있었다. ~~⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**~~ → **Docker 경로에서 닫혔다**(2026-09-23, §12.11 ③). ⚠️ managed·memory provider 에는 아직 남아 있다(계약 §3.2) |
+| **J. 코딩 루프 조사** 🆕 | ~~🟢 **J1·J2·J3 착지**(코드 대조 2026-09-23)~~ → 🟡 **J1 부분 착지 · J2·J3 착지**(코드 대조 2026-09-28) — 도구 셋(`fetch.v1`·`submit.v1`·`check_claims.v1`) · 스펙 셋 · `evidence_cap_reached` · S9 플래그 off 테스트 · 계산 클레임 재실행 · 오프라인 섀도 · 이벤트 kind 여섯(DA fixture 에 있다). **전부 플래그 off**. 🔴 **조사 자식은 코드를 돌릴 수 없다**: 계약 §2 의 research 도구 열 개 중 포트가 내미는 것은 위 셋뿐이다(`research_tools.py` `definitions()`). `ChildStepper` 가 포트 ∩ 스펙만 보여 주므로 `execute.v1`·`read_file.v1`·`write_file.v1` 이 사라진다. 샌드박스는 열리지만 쓰이지 않는다. 스크립트를 원장 blob 으로 넣는 경로도 없어서 계산 클레임 재실행(J2)은 **합성 fixture 에서만 초록**이다 → §11 **J1.5** | 🆕 **J1.5**(선행: child 게이트) → **J4**(#23 판정 뒤). ~~J1 절반~~은 낡은 서술이었다 — §11 인벤토리가 J3 착지를 적는 동안 이 줄은 J1 에 머물러 있었다. ~~⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**~~ → **Docker 경로에서 닫혔다**(2026-09-23, §12.11 ③). ⚠️ managed·memory provider 에는 아직 남아 있다(계약 §3.2) |
 | **K. Fable 5.1 적응** 🆕 | 🟢 **표본 없이 되는 K는 다 썼다**(K0·K1·K2·K7·K1c·K1d·K6·K4a·K2b, 2026-09-15~19) — 코딩 루프 · 자식 · DA 세 경로 + 거절 분기 + 상태 줄 + 도구 공개 | ~~키가 있어야 하는 것이 둘이다 — K1b·K4b~~ **둘 다 끝났다**(2026-09-24, §5.6 — K4b 는 착지, reasoning 토큰 0 결함도 같이 잡았다) · ~~K5④⑤~~ **K5④ DA 절반 착지**(2026-09-24, §5.2 R-05 — 호출부가 0개였다) · K5④ 코딩 루프 절반 · K5⑤ 벤치 · K9·K10·K11. **K3 착지(2026-09-22, 기본 off)** — 켜는 것은 A1·A2 숫자 뒤 |
 | **L. Jev 확률 판정 층** 🆕 | 🟢 **L0·L1·L2 완료**(2026-09-23, 전부 플래그 off). 핀 **`jev-1.13.0`** · 기준선 §12.7 · durable 루프 배선 · 실 API end-to-end | ~~**D-L2**~~ **쪼갰다** · ~~**D-L3**~~ **WAF 차단은 좁힌다**(2026-09-24, §12.12) · 🆕 **L2 섀도 켤 준비 완료**(오버레이 + 판독기, 2026-09-24 — 켜는 것은 사람) · 가격 하나 · ~~프론트 라벨~~ **투영 착지**(2026-09-23, §12.9) · 판정 문장·재접속 복원 착지(§12.10) · 그다음 L3~L7. **D-L1 닫혔다** ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · L6 은 **#23 판정 뒤** |
 
@@ -58,11 +60,12 @@ SandboxConfig.enabled                 = False   (development: true, provider mem
 CodingModelConfig.enabled             = False   (development: true)
 WorkflowConfig.graph_design_enabled   = False
 WorkflowConfig.subagent_nodes_enabled = False
-# J가 더할 것(설계): deep_analysis.code_research_enabled = False
-# L이 더할 것(설계): jev.enabled                    = False
+# J (스키마에 있다):  deep_analysis.code_research_enabled = False
+# L (스키마에 있다):  jev.enabled                    = False
 #                    jev.tool_risk_shadow_enabled   = False
 #                    jev.tool_risk_gate_enabled     = False
-#                    jev.judge_shadow_enabled       = False
+#                    jev.judge_shadow_enabled       = False   ⚠️ 읽는 코드가 없다 (2026-09-28)
+# ~~J가 더할 것(설계) · L이 더할 것(설계)~~ — 둘 다 착지했다 (2026-09-28 코드 대조)
 ```
 
 ---
@@ -251,7 +254,8 @@ ComputedEvidence
 | 단계 | 내용 | 선행 | 표본 필요 |
 |---|---|---|---|
 | ~~**J0**~~ | ✅ [계약 문서](DEEP_ANALYSIS_CODE_RESEARCH_CONTRACT.md) (2026-09-15): 스펙 셋 · 도구 넷 · `ComputedEvidence` · 거절 코드 다섯 · 이벤트 kind 여섯 · `research-offline-v1` · 불변식 I1~I7 | — | 없음 |
-| **J1** | 도구 경계: `fetch.v1`→`fetch.py`, blob 읽기 전용 마운트, `submit.v1`, 카탈로그 fail-closed 셋째 타입. **S9 바이트 동일 테스트** | J0 | 없음 |
+| **J1** | 도구 경계: `fetch.v1`→`fetch.py`, blob 읽기 전용 마운트, `submit.v1`, 카탈로그 fail-closed 셋째 타입. **S9 바이트 동일 테스트**. 🟡 **부분 착지**(2026-09-28): 계약 §3.2 의 `execute.v1` 표면이 조사 포트에 없다. `check_claims.v1`(J4 몫)은 먼저 들어왔다 | J0 | 없음 |
+| 🆕 **J1.5** | **포트 합성**: `ResearchToolPort` + 질문 샌드박스에 묶인 **게이트된** 코딩 도구(`read_file`·`write_file`·`list_tree`·`search_text`·`execute`) · 스크립트 바이트를 원장 blob 으로 커밋 · 티켓에 repairs·dead_ends 전달(지금은 `goal = question_text or brief` 라 brief 가 버려진다). **완료 조건: `execute.v1` → computed claim → 재실행 → verified E2E** | J1 · **child 도구 게이트**(§11) | 없음 |
 | **J2** | 계산 클레임 채점기 + 재실행 + 이벤트 짝(fixture 양방향) | J1 | 없음(합성 fixture·변이 테스트) |
 | **J3** | **오프라인 섀도**: 저장된 blob·카세트로 코딩 워커를 돌려 제안만 비교. 원장에 쓰지 않는다 | J2 | 없음(카세트) |
 | **J4** | compose 자식 + 클레임 파일 공개 + `check_claims.v1` | **#23 판정** · J3 | 사전 등록 |
@@ -580,6 +584,8 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 - ❌ 5+1 단일 관측으로 인과 주장 · ❌ **여러 변경을 한 표본에**
 - ✅ preflight가 모델을 **실제로 부르는지** 확인(D94)
 - ✅ `manifest.json`에 실행 영수증(PID, UTC start/end, exit)과 구성 지문(model ID, **effort**, threshold, cap, **샌드박스 이미지 digest**)
+- 🆕 ❌ **표본이 도는 동안 재개 버튼을 누르지 않는다** (2026-09-28 코드 대조). `RESUMABLE_STATUSES` 에 `running` 이 들어 있고 DA 에는 실행 lease 가 없다. 살아 있는 run 에 resume 하면 두 번째 실행자가 뜨고, 그 실행자의 `ledger.recover()` 가 `investigating` 질문을 `open` 으로 되돌린다 → 이중 지출 · 원장 작성자 둘. 표본 하나가 그대로 오염된다
+- 🆕 ⚠️ **Celery 모드에서 1시간을 넘기는 표본은 재전달된다**. `task_acks_late=True` 인데 Redis `visibility_timeout` 을 설정한 곳이 없다(kombu 기본 1시간 < DA `job_time_limit`). 원래 워커가 살아 있어도 두 번째 워커가 같은 run 을 잡는다. 고치기 전까지 긴 표본은 인라인 실행으로 돌린다
 
 ### 10.2 증거 보존
 
@@ -596,6 +602,7 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 | 테스트가 심은 AsyncMock이 전역에 남음 | `patch`는 팩토리를 복원하지 캐시된 인스턴스를 복원하지 않는다 |
 | 🆕 **개발 DB 에 테스트 런이 쌓임** (2026-09-24 확인) | DB 를 쓰는 테스트(`test_ledger_purge`·`test_orchestrator_m*` 등)가 `.env` 의 `DATABASE_URL` = **`neos`** 를 그대로 쓴다. 스위트 한 번에 `deep_analysis_runs` 가 ~6 건씩 는다. `neos_test` 는 있는데 아무도 가리키지 않는다. 09-20 의 DB 재구축도 배포 부트스트랩과 pytest 가 같은 `neos` 에서 부딪친 것이었다· ✅ **고쳤다**(2026-09-24): `tests/conftest.py` 가 설정 로드 전에 `DATABASE_URL` 의 DB 이름을 `<이름>_test` 로 바꾼다(이미 `_test` 면 그대로). CI 도 `neos_test` 로 옮겼다. 전체 스위트 전후로 `neos` 490 건 불변, `neos_test` +10 |
 | 🆕 **한 파일만 돌리면 깨지는 설정 테스트** (2026-09-24) | `test_config_loader.py` 10건 — `.env` 를 가린 뒤 development 프로파일을 로드하는데 코딩 루프가 크리덴셜을 요구한다. 전체 스위트에서는 **윗줄의 litellm `load_dotenv()`** 가 키를 프로세스 env 에 넣어 줘서 통과했다. 픽스처가 CI 와 같은 자리표시자를 준다 |
+| 🆕 **lesson·GEPA overlay 가 조용히 꺼짐** (2026-09-28 코드 대조, 운영 경로) | 코딩 Celery 전달이 끝날 때마다 `set_lesson_session_factory(None)` 을 부른다. 이 함수는 모듈 전역 `_USE_MEMORY_ONLY=True` 를 **프로세스 전체에** 고정한다(`neos/learn/lessons.py`). 같은 워커 자식에서 뒤이어 도는 DA·gepa_opt 태스크는 lesson 을 읽지 못하고, overlay 는 예외를 삼켜 `None` 을 돌려준다. 윗줄들과 뿌리가 같다 — 런 컨텍스트를 명시 객체가 아니라 모듈 전역으로 건넨다 |
 
 ### 10.4 검증 명령
 
@@ -643,6 +650,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 |---|---|
 | **사람의 손** 🆕 (2026-09-24) | ① **`TAVILY_API_KEY`** 를 `.env` 에 — **#23 의 유일한 선행**(§7 실행 순서) · ② **L2 섀도 켜기** — 개발 서버를 `NEOS_CONFIG_PATH=config/samples/jev-l2-shadow.yaml` 로 기동하고, 쌓이면 `scripts/jev_l2_shadow_report.py --since <켠 날> --try …` 로 질문별 경계를 고른다(§12.12). 호출당 0.4~0.6 초가 붙는다 · ③ **Jev 가격** — 계정 청구 정보에서 가져와 `models.yaml` 에(L0 잔여). ①·②는 서로 독립이다 — 같은 날 해도 된다 |
 | **사람의 결정** | ~~D-14~~ · **D-12**(동적 합성을 표본 경로에) · **E-S2** · 트랙 G/H 켜기 · 트랙 I 보존 정책 · 🆕 **L6** 판정자 교체 |
+| **사람의 결정** 🆕 (2026-09-28, [분석 §8.6](NEOS_MOMENTUM_ANALYSIS_20260928.md)) | ① **D19 개정 범위** — "자동 변경 금지"를 "자동 후보 생성·자동 롤백 허용, 자동 승격 금지"로 좁힐 것인가 · ② **진화 fitness 정책** — GEPA 는 Jev·verdict 를 fitness 에서 뺐다(GEPA 문서 Non-goals). 결정론 검증기를 1차로 두고 Jev·판정자는 meta-eval 뒤 보조로만 둘 것인가 · ③ **Jev 세 채널** — 도구 위험(좁히기만, 지금) / 결과 판정(L5 를 코딩 VERIFY·DA claim 섀도로 앞당김) / 분기(L7 → **L7′** would-branch 섀도, 선행을 L3 에서 L1 로 완화)로 나눌 것인가 · ④ **크로스 프로바이더 판정자** — B 의 "크로스 프로바이더 폴백 금지"와 별개로 허용할 것인가 · ⑤ **북극성 일반화** — "재실행 가능한 검증이 붙은 코드 실행"을 1차 실행 모델로 둘 것인가. ①~⑤ 는 분석 문서가 **제안**했을 뿐이다. 이 문서의 계획이 되는 것은 결정 뒤다 |
 | **결정됨** 🆕 (2026-09-15) | **K3** 비동기 spawn 채택(§5.3) · **J production 샌드박스는 B2 게이트에 묶는다**(§4.5) · **Fable 5.1 공식 문구 그대로 사용**(§10.5) |
 | **결정됨** 🆕 (2026-09-17) | **K1d** `SubagentSpec.thinking` 은퇴 · **J1 이미지 = 분석 번들**(pandas·numpy·pypdf·bs4) · **compose 는 `final_compose` 계약 그대로** · **analyze 는 같은 질문의 verified 만** |
 | **결정됨** 🆕 (2026-09-22) | **D-L1**(§12.4) — unattended 중간대는 **DENY**, Jev 실패·타임아웃은 **정적 정책 폴백 + `jev_unavailable`**. 받아들인 위험: **Jev 가 죽으면 게이트도 없다** → 감시 조건은 `jev_unavailable` 비율(기준선은 L2 가 만든다) |
@@ -671,6 +679,8 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 🟡 | **A3·A4** | worker/판정자 상한 재보정(thinking 몫 실측 선행 — **K 경계 9와 겹친다**) |
 | 🟡 | **ORPHAN2** | 조립기가 없는 클레임 id를 지어낸다. 감시 조건은 가용 verified 대비 인용 비율 |
 | 🟡 | **D1**(트랙 A) | search 0건 반환 비율 7% |
+| 🟡 | **GRADE1** 🆕 (2026-09-28) | computed 클레임은 `evidence=[]` 로 파싱돼 agentic 단계에서 "(증거 없음)"을 받는다(`submission.py` → `graders/agentic.py`). 재실행을 통과해도 UNRELATED 로 떨어질 수 있다. J1.5 가 computed 경로를 열기 **전에** 닫는다 — agentic 을 건너뛰거나 전제 quote 를 증거로 넘긴다 |
+| 🟡 | **GRADE2** 🆕 (2026-09-28) | 필수 심사 여부(`value_est × confidence ≥ agentic_threshold`)의 `confidence` 가 행위자의 자기 보고다(출처 수 cap 으로 상한만 있다). 낮게 보고하면 샘플율만큼만 심사받는다 — 보상 해킹 표면. 질문 `confidence = max(conf, self_assessment)` 도 같은 입력이다. **#23 전에는 건드리지 않는다**(판정 경계). 기록만 |
 
 ### 트랙 J·K·L 인벤토리 🆕
 
@@ -680,6 +690,8 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | ✅ | ~~**K4b**~~ | **착지**(2026-09-24, §5.6) — 서버 기본은 `omitted`(SDK 독스트링이 틀렸다). 카탈로그 `thinking_display: updates` 를 Fable 5.1 에만 선언, 어댑터가 싣는다. ⚪ `updates` 가 **비지 않은** 블록은 네 세션에서 못 봤다 | — |
 | 🟠 P1 | **K5** | ~~effort 카탈로그 필드(G10 흡수) + 역할별 설정~~ ✅ ①~③ · 채팅 · ④ DA(2026-09-24). **남은 것:** ④ 코딩 루프(설정 칸 + durable·자식·컴팩션 `ModelLimits`) · ⑤ 벤치 러너 | K0 |
 | 🟠 P1 | **K9** | 자율/대면 오버레이(G11). 🔴 **코드보다 결정이 먼저다**(2026-09-25 코드 대조): 모드 신호가 없다 — `CodingLoopConfig.approval_unattended` 는 기본 `False` 이고 `runtime.py` 가 **넘기지 않는다**. 루프 설정은 런타임당 하나라 런마다 바꿀 수도 없다. 같은 이유로 **D-L1 의 unattended DENY 접기가 프로덕션에서 한 번도 타지 않는다**(테스트는 설정을 직접 넣어 초록). DA 워커의 system 은 `"Follow the user instructions."` 한 줄 — 여기 넣으면 DA 전 호출이 바뀌므로 #23 전 금지 | 모드를 어디서 받나(런 요청 필드 · 진입점 · 설정) — 사람 |
+| 🔴 P0 | **CHILD-GATE** 🆕 (2026-09-28) | **자식의 도구 호출이 게이트 밖에 있다.** 코딩 루프의 implement child: `CodingToolPort.execute`(`neos/coding/subagent_port.py`)가 스펙 allowlist·검증·위험 등급만 보고 executor 를 **직접** 부른다. approval·Jev·hook 을 거치지 않고 `execute.v1`·`rm.v1` 을 쓸 수 있다. 게이트를 타는 것은 부모의 `spawn_agent(spec=implement)` 한 번뿐이다. DA 조사 자식도 `ChildStepper` 라 승인 경로가 없다. §12.3 "같은 게이트"는 **반증됐다**. 판정이 만들어지는 자리(`approvals.py`)를 자식 경로도 타게 한다 — 사본을 만들지 않는다. **변이 테스트:** 자식의 `rm.v1` 이 approval 이벤트를 남긴다 | — |
+| 🔴 P0 | **J1.5** 🆕 (2026-09-28) | 포트 합성 · 스크립트 원장 커밋 · brief 전달(§4.5). **J4 보다 먼저다.** 이것 없이 C-계열(J5)을 돌리면 J 를 재는 게 아니라 "샌드박스를 가진 fetch 자식"을 잰다 | **CHILD-GATE** · GRADE1 |
 | 🟠 P1 | **K10** | 배칭 넛지 | K2 |
 | 🟢 P2 | **J3** | 오프라인 섀도(카세트) — ✅ **착지**(2026-09-21): 섀도 원장 · blob 보관소 · 제안 비교 · LLM 카세트(`CassetteModel`) · `scripts/deep_analysis_offline_shadow.py`. brief 는 `assignment.build_assignment` 로 오케스트레이터와 **공유**한다(추출 시 바이트 동일성 측정 확인). ⚠️ brief 가 **지금** 원장 상태로 조립되므로 이 섀도는 "그때 그 패스"의 재현이 아니다 — 보고서가 그렇게 말한다 | J2 |
 | 🟡 P2 | **K8 · K11** | K8: R-08 문구 없음, 카탈로그에 `thinking_budgets` 선언 모델 없음 → `thinking_budget=0`. 발동 조건(`xhigh`/`max`)이 없는 동안 **잠들어 있다** · K11: 코딩 `_tone` 의 `"No play-by-play"` 가 P-07 ② 가 지목한 바로 그 문구다(K4a 상태 줄과도 반대 방향). DA·자식 프롬프트엔 억제 문구 없음 | K8 은 K5 값 뒤 |
@@ -772,7 +784,7 @@ response = await client.system_one(      # AsyncTypeSafeClient. state·questions
 | 자리 | 기존 코드 | Jev 가 더하는 것 |
 |---|---|---|
 | 도구 위험 | `ToolRisk`(4값) · `ApprovalPolicyOutcome`(`ALLOW`/`DENY`/`REQUIRE_APPROVAL`) | 정적 정책이 `DENY` 를 내지 **않은** 호출에만 Noul 밴딩을 얹는다 |
-| DA 워커 도구 | J1 이 여는 표면(`fetch.v1` · `execute.v1` · `write_file`) | **같은 게이트.** DA 전용 판정 경로를 새로 만들지 않는다 |
+| DA 워커 도구 | J1 이 여는 표면(`fetch.v1` · `execute.v1` · `write_file`) | ~~**같은 게이트.**~~ **DA 전용 판정 경로를 새로 만들지 않는다.** 🔴 2026-09-28 코드 대조: "같은 게이트"는 **아직 참이 아니다.** 조사 자식은 `ChildStepper` 로 돌아 승인 경로가 없다. 코딩 implement child 도 `subagent_port.py` 에서 게이트를 우회한다. `execute.v1` 은 조사 포트에 아예 없다(§1 J 행) → §11 **CHILD-GATE** |
 | 판정 | `AgenticGrader` (judge `claude-opus-4-8`) | Choice 밴딩. **L6 전에는 섀도**, 원장 판정은 바뀌지 않는다 |
 
 세 자리 모두 **호출부가 하나여야 한다.** 승인 판정이 만들어지는 자리는 `neos/coding/domain/approvals.py`
@@ -1230,6 +1242,16 @@ D3b는 D4의 결과다. citation은 스킬화하지 않는다.
 플랜 14개 완료, E-S2만 남았고 배포 결정이다. 잔여 스트림 정본은 [PLAN_260913.md](PLAN_260913.md).
 **J는 E의 루프·샌드박스·서브에이전트를 재사용한다 — 새로 짓지 않는다.** B2 managed provider 게이트는
 [재검토 §8.2](MANAGED_SANDBOX_PROVIDER_REVIEW_260914.md) · [B2 설계](MANAGED_SANDBOX_B2_DESIGN_260915.md).
+🆕 (2026-09-28 코드 대조) E 쪽에 J 가 기대는 구멍이 둘 있다. 정본은 PLAN_260913 이지만 J 의 선행이므로 여기에도 적는다.
+- **VERIFY verdict 를 아무도 읽지 않는다.** `state.verdict` 는 codec 직렬화에만 쓰인다. FAIL 이 재진입·재계획·에스컬레이션을 부르지 않는다. 코딩 태스크에는 `DeterministicGrader` 에 해당하는 결과 라벨이 없다
+- **Docker·managed 세션에는 `clone_with_workspace` 구현이 없다.** 그래서 쓰기 자식(implement)이 격리 없는 memory 세션에서만 돈다
+
+### E′. 자기개선 — GEPA 🆕 (포인터만, 2026-09-28)
+`neos/gepa_opt/` 는 **착지한 코드**다(커밋 `99d05697`~`403aeb77`, 8개). 코딩 overlay 하나를 staged → 사람 승인 → 주입하는 구조이고, 기본 off 다.
+그런데 이 정본은 지금까지 그 존재를 적지 않았다. 운영 호출자는 없다 — evaluator 등록 0 · run 생성 0 · `approve` 호출 0.
+held-out test 점수는 기록만 하고 staged 를 막지 않는다(설계가 고른 동작이다 — GEPA 문서 Risks. 게이트로 쓸지는 다시 열 문제다). 트랙으로 세울지는 §11 "사람의 결정" ①·② 뒤다.
+정본은 [GEPA_SELF_IMPROVEMENT_MIGRATION.md](GEPA_SELF_IMPROVEMENT_MIGRATION.md), 레시피 관점은 [AGENT_RECIPE_DISTILLATION_260927.md](AGENT_RECIPE_DISTILLATION_260927.md).
+> F 와의 차이: F 는 **진단자가 제안**했고, GEPA 는 **평가기가 선택**한다. F 를 닫게 만든 실패는 GEPA 에 그대로 옮겨 오지 않는다. 다만 평가기가 없으면 GEPA 도 같은 자리에 선다.
 
 ### F. 개선 루프 서브에이전트화 — 닫혔다
 진단자가 표본을 읽지 않고 한 이야기를 반복했다(11개 중 10개에서 3/3 같은 라벨). 채점기·정답키·기준선은
@@ -1307,3 +1329,6 @@ Jev 가 `ALLOW` 로 되돌리는 경로는 없다. 📌 되돌리지 말 것: `D
 - **설정·모델 정본:** [CONFIGURATION.md](CONFIGURATION.md)
 - **전체 로드맵:** [ROADMAP.md](ROADMAP.md) — R1·R2·R6이 W6의 관문
 - **평가 증거:** `artifacts/deep-analysis-funnel/<ts>/` (gitignore, 재생성 불가) · `deep_analysis_events`
+- 🆕 **방향 점검 (2026-09-28):** [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) — 코딩 루프 · Jev · 자기개선 · 동시성을 코드와 대조했다. 이 문서에 옮긴 것은 코드로 확인한 사실과 결정 대기뿐이다. 트랙 신설(M·N·O·P)은 **제안**이고 계획이 아니다
+- 🆕 **자기개선:** [GEPA_SELF_IMPROVEMENT_MIGRATION.md](GEPA_SELF_IMPROVEMENT_MIGRATION.md) · [AGENT_RECIPE_DISTILLATION_260927.md](AGENT_RECIPE_DISTILLATION_260927.md)
+- 🆕 **서비스·동시성:** [MICROSERVICE_REVIEW_260927.md](MICROSERVICE_REVIEW_260927.md) — DA lease · 테넌트 격리 · 브로커는 여기서 다룬다
