@@ -79,8 +79,17 @@ class ChildStepper:
         input_cost_micros_per_million: int = 0,
         output_cost_micros_per_million: int = 0,
         nested_spawn: NestedSpawnHost | None = None,
+        effort: str = "",
+        effort_model: str = "",
     ) -> None:
         self._model = model
+        # 부모가 해석한 사고량과 **그것을 해석한 모델** (K5 ④). 티켓에 싣지
+        # 않는 이유: 재개하면 티켓의 모델 핀은 저장소의 provider·model 로만
+        # 다시 지어지고(`SubagentRuntime`) 새 필드는 사라진다. 모델을 짝으로
+        # 쥐는 이유: 사고량은 모델마다 받는 레벨이 다르고, 다른 모델로 도는
+        # 자식에게 부모 모델의 레벨을 보내면 400 이다.
+        self._effort = effort
+        self._effort_model = effort_model
         self._tools = tools
         self._nested_spawn = nested_spawn
         self._input_cost_micros_per_million = max(
@@ -89,6 +98,9 @@ class ChildStepper:
         self._output_cost_micros_per_million = max(
             0, int(output_cost_micros_per_million or 0)
         )
+
+    def _effort_for(self, model: str) -> str:
+        return self._effort if model and model == self._effort_model else ""
 
     async def step(
         self,
@@ -131,7 +143,9 @@ class ChildStepper:
             ),
             model=ticket.model.alias or ticket.model.model,
             limits=ModelLimits(
-                max_output_tokens=CHILD_MAX_OUTPUT_TOKENS, timeout_sec=120
+                max_output_tokens=CHILD_MAX_OUTPUT_TOKENS,
+                timeout_sec=120,
+                effort=self._effort_for(ticket.model.alias or ticket.model.model),
             ),
             task_id=run_id,
             run_id=run_id,

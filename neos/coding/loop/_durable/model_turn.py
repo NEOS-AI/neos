@@ -285,6 +285,7 @@ class ModelTurnMixin:
             context_window=self._config.context_window,
             input_limit=self._config.input_limit,
             thinking_budget=self._config.thinking_budget,
+            effort=self._config.effort,
         )
 
     # -- stage 2: stream -----------------------------------------------------

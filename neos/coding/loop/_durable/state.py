@@ -49,6 +49,9 @@ class CodingLoopConfig:
     context_window: int | None = None
     input_limit: int | None = None
     thinking_budget: int = 0
+    #: 해석된 사고량(K5 ④). 빈 문자열 = 보내지 않는다 -- 요청 바이트가 이전과
+    #: 같다. 해석과 게이트는 `resolve_coding_effort` 가 했다.
+    effort: str = ""
     max_transcript_messages: int = 100
     max_transcript_bytes: int = 1_048_576
     max_transcript_tokens: int = DEFAULT_MAX_TRANSCRIPT_TOKENS
