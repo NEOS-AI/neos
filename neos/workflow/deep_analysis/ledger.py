@@ -22,7 +22,14 @@ from neos.database.deep_analysis_models import (
     DARun,
 )
 
-from .models import ProposedBlob, ProposedClaim, RepairResult, Verdict, WorkerResult
+from .models import (
+    ComputedEvidence,
+    ProposedBlob,
+    ProposedClaim,
+    RepairResult,
+    Verdict,
+    WorkerResult,
+)
 from .text_norm import claim_hash
 
 
@@ -129,6 +136,18 @@ def _computation_json(claim: ProposedClaim) -> str | None:
     if computation is None:
         return None
     return json.dumps(asdict(computation), ensure_ascii=False)
+
+
+def stored_computation(raw: str | None) -> ComputedEvidence | None:
+    """`_computation_json` 의 역. 행의 JSON 을 다시 `ComputedEvidence` 로.
+
+    수리가 클레임을 `pending` 으로 되돌리면 오케스트레이터가 행에서 클레임을
+    다시 짓는다. 여기서 계산을 되살리지 못하면 계산 클레임이 **인용 클레임으로
+    재채점**되어 `E_NO_EVIDENCE` 를 받는다 -- 재실행도 판정자도 거치지 않고.
+    """
+    if not raw:
+        return None
+    return ComputedEvidence(**json.loads(raw))
 
 
 async def create_run(
@@ -1090,6 +1109,14 @@ class Ledger:
             if url not in urls:
                 urls.append(url)
         return urls
+
+    async def claim_evidence(self, claim_id: str) -> list[DAEvidence]:
+        """A claim's evidence rows, run-scoped. Read-only.
+
+        The judge reads a computed claim through its premises' excerpts
+        (GRADE1); this is how the orchestrator gets them.
+        """
+        return await self._evidence_for_claim(claim_id)
 
     async def get_blob(self, content_hash: str) -> DABlob | None:
         return await self.db.get(DABlob, (self.run_id, content_hash))

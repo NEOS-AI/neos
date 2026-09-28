@@ -601,7 +601,33 @@ class Orchestrator:
         elif exc is not None and exc.cause == "input_bound":
             await self._mark_investigation_stopped_at_input_bound(exc)
 
-    async def _grade(self, claim, value_est):
+    async def _computed_judge_context(self, claim, question_id):
+        """GRADE1: what the judge reads instead of excerpts for a computed claim.
+
+        Only called after the deterministic tier passed, so every premise is
+        a verified quote claim of this run.
+        """
+        from .graders.agentic import ComputedJudgeContext
+
+        question = (
+            await self.ledger.get_question(question_id) if question_id else None
+        )
+        premises = []
+        for claim_id in claim.computation.premises:
+            premise = await self.ledger.get_claim(claim_id)
+            if premise is None:
+                continue
+            evidence = await self.ledger.claim_evidence(claim_id)
+            premises.append(
+                (premise.text, tuple(item.excerpt for item in evidence))
+            )
+        return ComputedJudgeContext(
+            question_text=question.text if question is not None else "",
+            computed_value=claim.computation.claimed_value,
+            premises=tuple(premises),
+        )
+
+    async def _grade(self, claim, value_est, question_id=None):
         """Two-stage grading: deterministic tier first; only claims that pass
         it (and only when an agentic grader is configured) proceed to the
         agentic semantic tier. A deterministic failure short-circuits so the
@@ -626,7 +652,14 @@ class Orchestrator:
                 },
             )
         try:
-            agentic_verdict = await self.agentic_grader.grade(claim, value_est)
+            if getattr(claim, "kind", "quote") == "computed":
+                agentic_verdict = await self.agentic_grader.grade(
+                    claim,
+                    value_est,
+                    computed=await self._computed_judge_context(claim, question_id),
+                )
+            else:
+                agentic_verdict = await self.agentic_grader.grade(claim, value_est)
             agentic_state = agentic_verdict.diagnostics.get(
                 "agentic",
                 ("attempted_passed" if agentic_verdict.ok else "attempted_rejected"),
@@ -669,9 +702,14 @@ class Orchestrator:
         """Re-grade claims that repair processing pushed back to `pending`
         (weakened/negated forms) so a successful repair converges to verified
         immediately, and a still-failing one accrues toward the retry cap."""
+        from .ledger import stored_computation
         from .models import ProposedClaim, ProposedEvidence
 
         for claim, evidence in await self.ledger.pending_claims(question_id):
+            # `kind` and `computation` come back with the row. Without them a
+            # repaired computed claim was regraded as a quote with no excerpts
+            # and could only fail E_NO_EVIDENCE (GRADE1 follow-up).
+            kind = getattr(claim, "kind", None) or "quote"
             proposed = ProposedClaim(
                 text=claim.text,
                 confidence=claim.confidence,
@@ -679,8 +717,14 @@ class Orchestrator:
                     ProposedEvidence(e.source_url, e.excerpt, e.raw_ref)
                     for e in evidence
                 ],
+                kind=kind,
+                computation=(
+                    stored_computation(getattr(claim, "computation", None))
+                    if kind == "computed"
+                    else None
+                ),
             )
-            verdict = await self._grade(proposed, value_est)
+            verdict = await self._grade(proposed, value_est, question_id)
             await self.ledger.regrade_claim(question_id, claim.id, verdict)
 
     async def _run_worker(
@@ -1373,7 +1417,7 @@ class Orchestrator:
             verdicts = {}
             judge_tokens_spent = 0
             for claim in result.claims:
-                verdict = await self._grade(claim, value_est)
+                verdict = await self._grade(claim, value_est, result.question_id)
                 judge_tokens_spent += verdict.tokens_spent
                 verdicts[claim.text] = verdict
             await self.ledger.commit_pass(

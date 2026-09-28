@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 
 from ..llm import call_json, JSONParseError, TruncatedResponseError
 from ..models import ProposedClaim, Verdict
@@ -13,6 +14,34 @@ _MAP = {
     "UNRELATED": lambda r: Verdict(ok=False, code="E_UNSUPPORTED", label="UNRELATED", detail=r),
     "CONTRADICTS": lambda r: Verdict(ok=False, code="E_CONTRADICTED", label="CONTRADICTS", detail=r),
 }
+
+
+@dataclass(frozen=True)
+class ComputedJudgeContext:
+    """What the judge needs to read a computed claim (GRADE1, contract §5).
+
+    A computed claim carries no excerpts -- its support is a re-executed
+    script. Handed to the quote prompt, the judge saw "(증거 없음)" and could
+    only answer UNRELATED, so a claim that had passed re-execution was
+    rejected on the semantic tier. The contract gives the judge a narrower
+    question for these: does the sentence stay within the value and its
+    premises, and does the computation answer the question. The arithmetic is
+    the deterministic grader's.
+
+    `premises` pairs each premise claim's text with its verified excerpts.
+    """
+
+    question_text: str
+    computed_value: str
+    premises: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+def _premise_block(premises) -> str:
+    lines = []
+    for text, excerpts in premises:
+        lines.append(f"<premise>{text}</premise>")
+        lines.extend(f"<evidence>{excerpt}</evidence>" for excerpt in excerpts)
+    return "\n".join(lines)
 
 
 class AgenticGrader:
@@ -95,7 +124,13 @@ class AgenticGrader:
             tokens_spent=tokens,
         )
 
-    async def grade(self, claim: ProposedClaim, value_est: float) -> Verdict:
+    async def grade(
+        self,
+        claim: ProposedClaim,
+        value_est: float,
+        *,
+        computed: ComputedJudgeContext | None = None,
+    ) -> Verdict:
         mandatory = self.is_mandatory(value_est, claim.confidence)
         if not mandatory and self.sampler() >= self.sample_rate:
             # 디스패치가 없었으므로 tokens_spent=0 -- judge_tokens 와 같은 값
@@ -106,10 +141,35 @@ class AgenticGrader:
                 diagnostics=self._diagnostics("skipped", None, 0),
                 tokens_spent=0,
             )
-        evidence_block = "\n".join(
-            f"<evidence>{e.excerpt}</evidence>" for e in claim.evidence
-        ) or "(증거 없음)"
-        prompt = render("judge", claim_text=claim.text, evidence_block=evidence_block)
+        if claim.kind == "computed":
+            if computed is None or not computed.premises:
+                # Never judge a computed claim against an empty block: that
+                # is the GRADE1 failure. The deterministic tier already
+                # rejects computed claims without premises, so reaching here
+                # means the caller did not pass the context -- a wiring bug,
+                # rejected loudly rather than judged blind. Nothing was sent.
+                return Verdict(
+                    ok=False,
+                    code="E_UNSUPPORTED",
+                    label=None,
+                    detail="computed_context_missing",
+                    diagnostics=self._diagnostics("attempted_rejected", None, 0),
+                    tokens_spent=0,
+                )
+            prompt = render(
+                "judge_computed",
+                question_text=computed.question_text,
+                claim_text=claim.text,
+                computed_value=computed.computed_value,
+                premise_block=_premise_block(computed.premises),
+            )
+        else:
+            evidence_block = "\n".join(
+                f"<evidence>{e.excerpt}</evidence>" for e in claim.evidence
+            ) or "(증거 없음)"
+            prompt = render(
+                "judge", claim_text=claim.text, evidence_block=evidence_block
+            )
         try:
             data, response = await call_json(
                 self.judge_model,
