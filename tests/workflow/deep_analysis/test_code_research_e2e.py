@@ -218,6 +218,7 @@ async def test_a_script_the_child_ran_becomes_a_verified_claim(
         script_row = await ledger.get_blob(ran["script_ref"])
         denied = await _events(session, run_id, "code_tool_denied")
         reexecuted = await _events(session, run_id, "compute_reexecuted")
+        executed = await _events(session, run_id, "script_executed")
 
     assert ran["stdout"] == "2.3", ran
     assert computed.kind == "computed"
@@ -231,3 +232,9 @@ async def test_a_script_the_child_ran_becomes_a_verified_claim(
     assert script_row is not None and is_script_blob(script_row)
     assert reexecuted, "the grader must have re-run the script"
     assert denied == []
+    # S8: the run that produced the claim is on the ledger with the same
+    # digest the claim carries, and the evidence it could read.
+    [run] = executed
+    assert run["script_ref"] == ran["script_ref"]
+    assert run["output_digest"] == ran["output_digest"]
+    assert run["evidence_refs"] == [_blob_hash(_BODY, _URL, 200)]

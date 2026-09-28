@@ -40,9 +40,9 @@
     { "kind": "claim_rejected", "labeled": true },
     { "kind": "claim_unverified", "labeled": true },
     { "kind": "claim_verified", "labeled": true },
+    { "kind": "code_tool_denied", "labeled": true },
     { "kind": "code_worker_started", "labeled": true },
     { "kind": "code_worker_submitted", "labeled": true },
-    { "kind": "code_tool_denied", "labeled": true },
     { "kind": "code_worker_unsubmitted", "labeled": true },
     {
       "kind": "compute_reexecuted",
@@ -92,6 +92,11 @@
     { "kind": "report_assembly_degraded", "labeled": true },
     { "kind": "report_graded", "labeled": true },
     { "kind": "run_manifest", "labeled": true },
+    {
+      "kind": "script_executed",
+      "labeled": false,
+      "reason": "execute.v1 마다 발행되는 기록이다(S8). compute_reexecuted 를 면제한 것과 같은 이유로, 라벨을 붙이면 활동 줄이 실행 로그로 뒤덮인다. 계산이 쓰였는지는 claim_verified / claim_rejected 가 말한다."
+    },
     { "kind": "split", "labeled": true },
     { "kind": "stall_terminated", "labeled": true },
     {

@@ -78,6 +78,9 @@ class LedgerEvidenceStore:
     def __init__(self, ledger: Any, *, question_id: str) -> None:
         self._ledger = ledger
         self._question_id = question_id
+        # 이 샌드박스에 지금 놓인 증거 -- 복원한 것과 이번에 가져온 것.
+        # 실행 기록(`record_execution`)이 싣는다.
+        self._present: list[str] = []
 
     async def _question(self) -> Any:
         question = await self._ledger.get_question(self._question_id)
@@ -129,6 +132,7 @@ class LedgerEvidenceStore:
                 raise KeyError(raw_ref)
             await sandbox.materialize_evidence(raw_ref, blob.raw_text or "")
             restored.append(raw_ref)
+        self._note_present(restored)
         return restored
 
     async def commit_script(self, text: str, *, path: str) -> str:
@@ -159,4 +163,45 @@ class LedgerEvidenceStore:
             "evidence_fetched_for_sandbox",
             self._question_id,
             {"raw_ref": raw_ref, "path": path},
+        )
+        self._note_present([raw_ref])
+
+    def _note_present(self, refs: list[str]) -> None:
+        for raw_ref in refs:
+            if raw_ref not in self._present:
+                self._present.append(raw_ref)
+
+    async def record_execution(
+        self,
+        *,
+        script_ref: str,
+        output_digest: str | None,
+        exit_code: int | None,
+        timed_out: bool,
+        stdout_truncated: bool,
+    ) -> None:
+        """`execute.v1` 한 번을 원장에 적는다 (S8, 2026-09-28).
+
+        스크립트 바이트는 `commit_script` 가 이미 넣었다. 그것만으로는 **그
+        실행이 무엇을 냈는지**가 원장에 없다 -- 클레임이 인용한 실행만
+        `output_digest` 를 남겼다. 인용되지 않은 실행(버린 시도, 틀린 계산)이
+        사라지면 원장은 워커가 무엇을 해 봤는지 말하지 못한다.
+
+        `evidence_refs` 는 그 실행 때 샌드박스에 **놓여 있던** 증거다. 스크립트가
+        실제로 연 파일은 샌드박스 밖에서 알 수 없으므로 상한 집합이다 --
+        입력은 이 안에 있다. 클레임의 `inputs` 가 정확한 목록을 따로 싣는다.
+
+        `output_digest` 가 None 이면 한도에 걸린 실행이다(답을 내지 못했다).
+        """
+        await self._ledger.log(
+            "script_executed",
+            self._question_id,
+            {
+                "script_ref": script_ref,
+                "output_digest": output_digest,
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "stdout_truncated": stdout_truncated,
+                "evidence_refs": list(self._present),
+            },
         )

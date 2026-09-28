@@ -124,6 +124,16 @@ class EvidenceStore(Protocol):
 
     async def commit_script(self, text: str, *, path: str) -> str: ...
 
+    async def record_execution(
+        self,
+        *,
+        script_ref: str,
+        output_digest: str | None,
+        exit_code: int | None,
+        timed_out: bool,
+        stdout_truncated: bool,
+    ) -> None: ...
+
 
 class QuestionWorkspace(Protocol):
     """`QuestionSandbox` 가 만족한다."""
@@ -344,6 +354,15 @@ class ResearchToolPort:
         # 한도에 걸린 실행에는 digest 를 주지 않는다. 재실행기도 같은 자리에서
         # digest 를 비운다 -- 준다면 워커는 **답이 아닌 것**을 인용한다.
         complete = not result.timed_out and not result.stdout_truncated
+        # S8: 인용되든 아니든 실행마다 원장에 남는다. 워커에게 결과를 주기
+        # **전에** 적는다 -- 워커가 본 실행은 원장에도 있어야 한다.
+        await self._store.record_execution(
+            script_ref=script_ref,
+            output_digest=digest if complete else None,
+            exit_code=result.exit_code,
+            timed_out=result.timed_out,
+            stdout_truncated=result.stdout_truncated,
+        )
         return {
             "exit_code": result.exit_code,
             "stdout": stdout[:_PREVIEW_CHARS],

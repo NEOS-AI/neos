@@ -607,3 +607,95 @@ async def test_a_new_rounds_sandbox_has_the_evidence_earlier_rounds_fetched(
     # 다시 가져온 것이 아니다: 청구도 기록도 없다.
     assert ledger.events == []
     assert ledger.order == []
+
+
+# --- 7. 실행마다 원장에 (S8) -----------------------------------------------------
+
+
+def _executions(ledger: _Ledger) -> list[dict]:
+    return [payload for kind, _, payload in ledger.events if kind == "script_executed"]
+
+
+@pytest.mark.asyncio
+async def test_every_run_is_recorded_not_only_the_cited_ones(tmp_path) -> None:
+    """S8: the ledger says what each run produced, cited or not.
+
+    Before, only a claim's `computation` carried an `output_digest`; a run
+    the worker threw away left its script blob and nothing else.
+    Mutation: skip `record_execution` -> no event.
+    """
+    ledger = _Ledger()
+    ledger.blobs["e" * 16] = SimpleNamespace(raw_text="A revenue 46")
+
+    async def refs(question_id):
+        return ["e" * 16]
+
+    ledger.sandbox_evidence_refs = refs
+    session = await _session(tmp_path, ledger)
+    try:
+        await session.port.execute(
+            "write_file.v1", {"path": "calc.py", "content": _SCRIPT}
+        )
+        result = await session.port.execute(
+            "execute.v1", {"argv": ["python3", "calc.py"]}
+        )
+    finally:
+        await session.close()
+
+    assert _executions(ledger) == [
+        {
+            "script_ref": result["script_ref"],
+            "output_digest": result["output_digest"],
+            "exit_code": 0,
+            "timed_out": False,
+            "stdout_truncated": False,
+            # The restored evidence was there when it ran. Mutation: forget
+            # to note restored refs -> empty.
+            "evidence_refs": ["e" * 16],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_capped_run_is_recorded_without_a_digest(tmp_path) -> None:
+    ledger = _Ledger()
+    session = await _session(
+        tmp_path, ledger, limits=CommandLimits(timeout_sec=10.0, output_bytes=64)
+    )
+    try:
+        await session.port.execute(
+            "write_file.v1", {"path": "big.py", "content": "print('x' * 10000)\n"}
+        )
+        await session.port.execute("execute.v1", {"argv": ["python3", "big.py"]})
+    finally:
+        await session.close()
+
+    [run] = _executions(ledger)
+    assert run["output_digest"] is None
+    assert run["stdout_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_evidence_fetched_this_round_is_in_the_run_record(tmp_path) -> None:
+    """Mutation: note only restored refs, not fetched ones -> empty."""
+    from neos.workflow.deep_analysis.fetch import _blob_hash
+    from neos.workflow.deep_analysis.models import ProposedBlob
+
+    body = "B revenue 20"
+
+    async def fetch(url: str):
+        return ProposedBlob(_blob_hash(body, url, 200), url, 200, body)
+
+    ledger = _Ledger()
+    session = await _session(tmp_path, ledger, fetch_fn=fetch)
+    try:
+        fetched = await session.port.execute("fetch.v1", {"url": "https://x"})
+        await session.port.execute(
+            "write_file.v1", {"path": "calc.py", "content": _SCRIPT}
+        )
+        await session.port.execute("execute.v1", {"argv": ["python3", "calc.py"]})
+    finally:
+        await session.close()
+
+    [run] = _executions(ledger)
+    assert run["evidence_refs"] == [fetched["raw_ref"]]
