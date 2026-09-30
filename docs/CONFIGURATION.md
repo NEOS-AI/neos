@@ -850,6 +850,14 @@ per owner, ignoring case and surrounding space. Someone else's agent answers
 404, exactly like a missing one. `GET /api/v1/standing-agents/me` is an alias
 for the only agent.
 
+Creating an agent also opens one `background` coding task, its
+self-introduction (the response carries `onboarding_task_id`; `null` if it could
+not start -- the agent is still created). The prompt lists the enabled channels
+the owner is mapped to and the model-invocable skills, by name and description
+only. When that task completes, its final answer is stored as a **staged** memo
+titled `자기소개`; a failed or cancelled introduction leaves none. This costs one
+background model run per created agent.
+
 `GET /api/v1/standing-agents/{agent_id}/activity?after=<next>&limit=` merges the
 ledger events of every task the agent opened. The cursor is the writing
 transaction id (`coding_events.xact_id`, migration 072) and the reader stops

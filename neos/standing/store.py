@@ -49,6 +49,14 @@ class StandingAgentStore(Protocol):
 
     async def delete(self, owner_id: str, agent_id: str) -> bool: ...
 
+    async def set_onboarding_task(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        """자기소개 태스크를 적는다. 이미 있으면 덮어쓰지 않고 False."""
+        ...
+
+    async def claim_onboarded(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        """이 태스크가 자기소개이고 아직 메모가 없으면 표시하고 True -- 한 번만."""
+        ...
+
 
 class InMemoryStandingAgentStore:
     """테스트와 로컬용. 두 인덱스를 코드로 흉내 낸다 -- 순서도 DB 와 같다."""
@@ -118,6 +126,24 @@ class InMemoryStandingAgentStore:
         if await self.get_owned(owner_id, agent_id) is None:
             return False
         del self._live[agent_id]
+        return True
+
+    async def set_onboarding_task(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        current = await self.get_owned(owner_id, agent_id)
+        if current is None or current.onboarding_task_id is not None:
+            return False
+        self._live[agent_id] = replace(current, onboarding_task_id=task_id)
+        return True
+
+    async def claim_onboarded(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        current = await self.get_owned(owner_id, agent_id)
+        if (
+            current is None
+            or current.onboarding_task_id != task_id
+            or current.onboarded_at is not None
+        ):
+            return False
+        self._live[agent_id] = replace(current, onboarded_at=self._clock())
         return True
 
 
@@ -231,11 +257,50 @@ class PostgresStandingAgentStore:
                 )
         return bool(result.rowcount)
 
+    async def set_onboarding_task(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        return await self._set_once(
+            "onboarding_task_id = :task_id",
+            "onboarding_task_id IS NULL",
+            owner_id, agent_id, task_id,
+        )
+
+    async def claim_onboarded(self, owner_id: str, agent_id: str, task_id: str) -> bool:
+        return await self._set_once(
+            "onboarded_at = :now",
+            "onboarding_task_id = :task_id AND onboarded_at IS NULL",
+            owner_id, agent_id, task_id,
+        )
+
+    async def _set_once(
+        self, assignment: str, condition: str, owner_id: str, agent_id: str, task_id: str
+    ) -> bool:
+        """조건부 UPDATE 한 문장 -- 둘이 동시에 불러도 한쪽만 True 다."""
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        f"""
+                        UPDATE standing_agents
+                        SET {assignment}, updated_at = :now
+                        WHERE owner_id = :owner_id AND agent_id = :agent_id
+                          AND deleted_at IS NULL AND {condition}
+                        """
+                    ),
+                    {
+                        "owner_id": owner_id,
+                        "agent_id": agent_id,
+                        "task_id": task_id,
+                        "now": self._clock(),
+                    },
+                )
+        return bool(result.rowcount)
+
     async def _select(self, where: str, params: dict[str, Any]) -> list[StandingAgent]:
         async with await self._session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT agent_id, owner_id, name, status, created_at, updated_at "
+                    "SELECT agent_id, owner_id, name, status, created_at, updated_at, "
+                    "onboarding_task_id, onboarded_at "
                     f"FROM standing_agents {where}"
                 ),
                 params,
@@ -248,6 +313,8 @@ class PostgresStandingAgentStore:
                     status=StandingAgentStatus(row.status),
                     created_at=row.created_at,
                     updated_at=row.updated_at,
+                    onboarding_task_id=row.onboarding_task_id,
+                    onboarded_at=row.onboarded_at,
                 )
                 for row in result
             ]

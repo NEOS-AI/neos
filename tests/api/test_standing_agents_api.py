@@ -27,15 +27,27 @@ from neos.standing.tasks import open_agent_task
 pytestmark = pytest.mark.no_db
 
 
-@pytest.fixture
-def api():
-    store = InMemoryStandingAgentStore()
-    user = SimpleNamespace(user_id="alice")
+def _app(store, coding, user):
     app = FastAPI()
     app.include_router(mod.router)
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[mod.get_standing_agent_store] = lambda: store
-    return TestClient(app), user
+    app.dependency_overrides[mod.get_task_opener] = lambda: coding
+    app.dependency_overrides[mod.get_inventory_reader] = lambda: (
+        lambda _owner: (["slack"], ["- pdf: read PDFs"])
+    )
+    return app
+
+
+def _coding():
+    return CodingTaskService(InMemoryCodingTaskRepository(), InMemoryCodingEventStore())
+
+
+@pytest.fixture
+def api():
+    store = InMemoryStandingAgentStore()
+    user = SimpleNamespace(user_id="alice")
+    return TestClient(_app(store, _coding(), user)), user
 
 
 @pytest.fixture
@@ -45,10 +57,7 @@ def feed_api():
     repo, events = InMemoryCodingTaskRepository(), InMemoryCodingEventStore()
     coding = CodingTaskService(repo, events)
     user = SimpleNamespace(user_id="alice")
-    app = FastAPI()
-    app.include_router(mod.router)
-    app.dependency_overrides[get_current_user] = lambda: user
-    app.dependency_overrides[mod.get_standing_agent_store] = lambda: store
+    app = _app(store, coding, user)
     app.dependency_overrides[mod.get_activity_source] = lambda: InMemoryActivitySource(
         repo, events
     )
@@ -173,10 +182,12 @@ def test_the_default_app_does_not_mount_the_routes() -> None:
 
 
 async def test_the_feed_pages_with_next_and_sends_the_ledger_shape(feed_api) -> None:
+    """Creating the agent already opened its self-introduction (Q13f), so the
+    feed starts with that task; a second task follows."""
     http, _, store, coding = feed_api
-    agent_id = _create(http).json()["agent_id"]
+    created = _create(http).json()
+    agent_id = created["agent_id"]
     task = await open_agent_task(store, coding, owner_id="alice", prompt="look")
-    await coding.events.append(task_id=task.task_id, event_type="model.delta", payload={})
 
     first = http.get(f"/standing-agents/{agent_id}/activity", params={"limit": 1}).json()
     second = http.get(
@@ -186,9 +197,11 @@ async def test_the_feed_pages_with_next_and_sends_the_ledger_shape(feed_api) -> 
         f"/standing-agents/{agent_id}/activity", params={"after": second["next"]}
     ).json()
 
-    assert [e["type"] for e in first["events"]] == ["task.created"]
+    assert [(e["task_id"], e["type"]) for e in first["events"]] == [
+        (created["onboarding_task_id"], "task.created")
+    ]
     assert first["events"][0]["payload"]["actor"] == f"agent:{agent_id}"
-    assert [(e["task_id"], e["seq"]) for e in second["events"]] == [(task.task_id, 2)]
+    assert [(e["task_id"], e["seq"]) for e in second["events"]] == [(task.task_id, 1)]
     assert empty == {"events": [], "next": second["next"]}
 
 
@@ -207,3 +220,32 @@ def test_an_unreadable_cursor_is_unprocessable(feed_api) -> None:
     response = http.get(f"/standing-agents/{agent_id}/activity", params={"after": "x"})
 
     assert response.status_code == 422
+
+
+# -- self-introduction (Q13f) --------------------------------------------------
+
+
+def test_creating_an_agent_opens_its_background_self_introduction(feed_api) -> None:
+    http, _, _, coding = feed_api
+
+    created = _create(http).json()
+
+    task = coding.tasks._tasks[created["onboarding_task_id"]]
+    assert task.mode.value == "background"
+    assert task.agent_id == created["agent_id"]
+    assert "slack" in task.prompt and "pdf: read PDFs" in task.prompt
+
+
+def test_the_agent_is_made_even_if_the_self_introduction_cannot_start(feed_api) -> None:
+    http, _, _, _ = feed_api
+    http.app.dependency_overrides[mod.get_inventory_reader] = lambda: _broken
+
+    response = _create(http)
+
+    assert response.status_code == 201
+    assert response.json()["onboarding_task_id"] is None
+    assert http.get("/standing-agents/me").status_code == 200
+
+
+def _broken(_owner):
+    raise RuntimeError("inventory down")

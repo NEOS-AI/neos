@@ -171,3 +171,42 @@ async def test_a_retired_agent_still_holds_the_one_slot(store) -> None:
 
     with pytest.raises(StandingAgentConflict):
         await store.create(ALICE, "Another")
+
+
+# -- Q13f: the self-introduction ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_onboarding_task_is_set_once(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    assert await store.set_onboarding_task(ALICE, agent.agent_id, "ct_1") is True
+    assert await store.set_onboarding_task(ALICE, agent.agent_id, "ct_2") is False
+    assert (await store.get_owned(ALICE, agent.agent_id)).onboarding_task_id == "ct_1"
+
+
+@pytest.mark.asyncio
+async def test_onboarded_is_claimed_once_and_only_for_that_task(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+    await store.set_onboarding_task(ALICE, agent.agent_id, "ct_1")
+
+    assert await store.claim_onboarded(ALICE, agent.agent_id, "ct_other") is False
+    assert await store.claim_onboarded(ALICE, agent.agent_id, "ct_1") is True
+    assert await store.claim_onboarded(ALICE, agent.agent_id, "ct_1") is False
+    assert (await store.get_owned(ALICE, agent.agent_id)).onboarded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_claimed_before_an_onboarding_task_exists(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    assert await store.claim_onboarded(ALICE, agent.agent_id, "ct_1") is False
+
+
+@pytest.mark.asyncio
+async def test_someone_else_cannot_set_or_claim(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    assert await store.set_onboarding_task(BOB, agent.agent_id, "ct_1") is False
+    await store.set_onboarding_task(ALICE, agent.agent_id, "ct_1")
+    assert await store.claim_onboarded(BOB, agent.agent_id, "ct_1") is False

@@ -26,6 +26,9 @@ class StandingAgent:
     status: StandingAgentStatus
     created_at: datetime
     updated_at: datetime
+    #: Q13f -- 자기소개 태스크와, 그 메모를 남긴 시각(마이그레이션 073).
+    onboarding_task_id: str | None = None
+    onboarded_at: datetime | None = None
 
 
 class StandingAgentConflict(Exception):

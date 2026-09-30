@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Protocol
@@ -12,7 +14,11 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
-from neos.coding.domain.models import CodingTaskStatus, TERMINAL_TASK_STATUSES
+from neos.coding.domain.models import (
+    CodingTask,
+    CodingTaskStatus,
+    TERMINAL_TASK_STATUSES,
+)
 from neos.coding.domain.phases import (
     CodingCheckpoint,
     CodingRun,
@@ -30,6 +36,34 @@ from neos.coding.loop.base import (
 
 
 _EXPECTED_CHECKPOINT_OMITTED = object()
+
+logger = logging.getLogger(__name__)
+
+#: A run finished **successfully**: the task and its last checkpoint's loop state.
+CompletionHook = Callable[[CodingTask, Mapping[str, Any] | None], Awaitable[None]]
+
+
+async def _standing_agent_completion(
+    task: CodingTask, loop_state: Mapping[str, Any] | None
+) -> None:
+    """The default hook: a standing agent's self-introduction (track Q13f).
+
+    Imported late -- `neos.coding` does not depend on `neos.standing` at import
+    time -- and a no-op unless the task is an agent's and the feature is on.
+    """
+    if task.agent_id is None:
+        return
+    from neos.config.settings import settings
+
+    if not settings.config.standing_agents.enabled:
+        return
+    from neos.database.connection import db_manager
+    from neos.standing.onboarding import final_answer, finish_onboarding
+    from neos.standing.store import PostgresStandingAgentStore
+
+    await finish_onboarding(
+        PostgresStandingAgentStore(db_manager.get_session), task, final_answer(loop_state)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +109,7 @@ class CodingRunService:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         execution_lease: timedelta = timedelta(seconds=30),
         workspace_edit_batch_size: int = 20,
+        on_completed: CompletionHook | None = _standing_agent_completion,
     ) -> None:
         if execution_lease.total_seconds() <= 0:
             raise ValueError("execution_lease must be positive")
@@ -89,6 +124,7 @@ class CodingRunService:
         self._clock = clock
         self._execution_lease = execution_lease
         self._workspace_edit_batch_size = workspace_edit_batch_size
+        self._on_completed = on_completed
 
     async def ensure_started(self, *, task_id: str) -> CodingRun:
         task = await self._tasks.get(task_id)
@@ -309,12 +345,14 @@ class CodingRunService:
                         )
                     )
                     await self._release_lease(lease)
+                    await self._after_completed(task_id)
                     return event
                 if event.checkpoint_id is not None:
                     await self._release_lease(lease)
                     return event
             committed = await self._runs.complete_run(lease=lease, now=self._clock())
             await self._release_lease(lease)
+            await self._after_completed(task_id)
             return committed.event
         except asyncio.CancelledError:
             try:
@@ -340,6 +378,22 @@ class CodingRunService:
             if unbind is not None:
                 unbind(run.run_id)
         return None
+
+    async def _after_completed(self, task_id: str) -> None:
+        """Both ways a run completes come here. A hook failure is logged and
+        never fails the run -- the run is already committed as completed."""
+        if self._on_completed is None:
+            return
+        try:
+            task = await self._tasks.get(task_id)
+            if task is None:
+                return
+            checkpoint = await self._runs.latest_checkpoint(task_id)
+            await self._on_completed(
+                task, checkpoint.loop_state if checkpoint is not None else None
+            )
+        except Exception:
+            logger.exception("coding completion hook failed task_id=%s", task_id)
 
     @staticmethod
     def _workspace_edit_contexts(

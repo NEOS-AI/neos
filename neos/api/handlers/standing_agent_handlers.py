@@ -5,6 +5,7 @@
 - `/me` 는 편의 별칭이다. `/{agent_id}` 보다 **먼저** 선언해야 id 로 잡히지 않는다.
 - 하나를 찾는 조회는 전부 `resolve_agent` 를 거친다. 남의 에이전트는 없는 것과
   똑같이 404 다(존재를 확인해 주지 않는다).
+- 만들면 자기소개 background 태스크를 연다(Q13f, `neos/standing/onboarding.py`).
 - `/{agent_id}/activity` 는 활동 피드(Q13d, `neos/standing/activity.py`)다.
 - 플래그(`standing_agents.enabled`)가 꺼져 있으면 `main.py` 가 이 라우터를
   마운트하지 않는다 -- 거절하는 라우트가 아니라 라우트가 없다.
@@ -12,6 +13,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Literal
 
@@ -28,9 +30,13 @@ from neos.standing.activity import (
     PostgresActivitySource,
     agent_activity,
 )
+from neos.standing.onboarding import available_channels, skill_lines, start_onboarding
 from neos.standing.models import StandingAgent, StandingAgentConflict, StandingAgentStatus
 from neos.standing.resolve import resolve_agent
 from neos.standing.store import PostgresStandingAgentStore, StandingAgentStore
+from neos.standing.tasks import TaskOpener
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/standing-agents", tags=["Standing Agents"])
 
@@ -43,12 +49,35 @@ def get_activity_source() -> ActivitySource:
     return PostgresActivitySource(db_manager.get_session)
 
 
+def get_task_opener() -> TaskOpener:
+    """The coding service the self-introduction opens its task in (Q13f).
+    Imported late: the coding runtime is heavy and this module is mounted
+    only when the feature is on."""
+    from neos.coding.runtime import coding_service
+
+    return coding_service
+
+
+def get_onboarding_inventory(user_id: str) -> tuple[list[str], list[str]]:
+    """(channels, skills) the self-introduction may mention -- names only."""
+    from neos.config.settings import settings
+    from neos.skills.markdown_catalog import list_skills
+
+    return available_channels(user_id, settings.config.channels), skill_lines(list_skills())
+
+
+def get_inventory_reader():
+    return get_onboarding_inventory
+
+
 class StandingAgentOut(BaseModel):
     agent_id: str
     name: str
     status: str
     created_at: datetime
     updated_at: datetime
+    #: 자기소개 태스크(Q13f). 열지 못했으면 None -- 에이전트는 그래도 만들어진다.
+    onboarding_task_id: str | None = None
 
 
 class ActivityOut(BaseModel):
@@ -79,6 +108,7 @@ def _out(agent: StandingAgent) -> StandingAgentOut:
         status=agent.status.value,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
+        onboarding_task_id=agent.onboarding_task_id,
     )
 
 
@@ -99,13 +129,23 @@ async def create_standing_agent(
     body: CreateStandingAgentIn,
     current_user: User = Depends(get_current_user),
     store: StandingAgentStore = Depends(get_standing_agent_store),
+    coding: TaskOpener = Depends(get_task_opener),
+    inventory=Depends(get_inventory_reader),
 ) -> StandingAgentOut:
     try:
-        return _out(await store.create(current_user.user_id, body.name))
+        agent = await store.create(current_user.user_id, body.name)
     except StandingAgentConflict as error:
         raise _conflict(error) from error
     except ValueError as error:
         raise _unprocessable(error) from error
+    # 자기소개(Q13f, 설계 결정 1: 명시적으로 만들 때만). 실패해도 에이전트는 남는다.
+    try:
+        channels, skills = inventory(agent.owner_id)
+        await start_onboarding(store, coding, agent, channels=channels, skills=skills)
+        agent = await store.get_owned(agent.owner_id, agent.agent_id) or agent
+    except Exception:
+        logger.exception("standing agent onboarding did not start agent_id=%s", agent.agent_id)
+    return _out(agent)
 
 
 @router.get("", response_model=list[StandingAgentOut])
