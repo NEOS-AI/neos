@@ -836,6 +836,20 @@ A coding task created with `mode: background` is unattended and capped at the
 validated risk `read_only`. Writes, commands and questions are refused as
 `policy_mode_ceiling`, even when an allow list says allow.
 
+### Standing agents
+
+```yaml
+standing_agents:
+  enabled: false   # off: the /api/v1/standing-agents routes are not mounted at all
+```
+
+Roadmap track Q13 (`docs/Q13_STANDING_AGENT_DESIGN_260930.md`). One agent per
+user, created explicitly with `POST /api/v1/standing-agents`; a second one is
+`409 {"code": "one_per_owner"}`. Names have no length limit and must be unique
+per owner, ignoring case and surrounding space. Someone else's agent answers
+404, exactly like a missing one. `GET /api/v1/standing-agents/me` is an alias
+for the only agent.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

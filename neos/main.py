@@ -601,6 +601,13 @@ _include_router_for_runtime(model_preference_router, prefix=settings.API_V1_PREF
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 _include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])
+# 상시 에이전트(트랙 Q13b). 꺼져 있으면 라우트가 **없다** -- 거절하는 라우트가 아니다.
+if settings.config.standing_agents.enabled:
+    from neos.api.handlers.standing_agent_handlers import router as standing_agent_router
+
+    _include_router_for_runtime(
+        standing_agent_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
+    )
 # 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
 # (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
 _include_router_for_runtime(

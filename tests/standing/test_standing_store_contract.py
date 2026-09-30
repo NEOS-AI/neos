@@ -132,3 +132,42 @@ async def test_the_name_index_refuses_a_duplicate_once_many_are_allowed() -> Non
             assert "uq_standing_agents_name_per_owner" in str(raised.value)
         finally:
             await transaction.rollback()
+
+
+@pytest.mark.asyncio
+async def test_update_renames_and_changes_status(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    renamed = await store.update(ALICE, agent.agent_id, name="  Dotty ")
+    paused = await store.update(ALICE, agent.agent_id, status=StandingAgentStatus.PAUSED)
+
+    assert renamed.name == "Dotty"
+    assert paused.name == "Dotty"
+    assert paused.status is StandingAgentStatus.PAUSED
+    assert (await store.get_owned(ALICE, agent.agent_id)).status is StandingAgentStatus.PAUSED
+
+
+@pytest.mark.asyncio
+async def test_update_of_someone_elses_agent_is_none(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    assert await store.update(BOB, agent.agent_id, name="Mine") is None
+    assert (await store.get_owned(ALICE, agent.agent_id)).name == "Dot"
+
+
+@pytest.mark.asyncio
+async def test_update_refuses_an_empty_name(store) -> None:
+    agent = await store.create(ALICE, "Dot")
+
+    with pytest.raises(ValueError):
+        await store.update(ALICE, agent.agent_id, name="   ")
+
+
+@pytest.mark.asyncio
+async def test_a_retired_agent_still_holds_the_one_slot(store) -> None:
+    """Both indexes see only `deleted_at IS NULL` -- retire is not delete."""
+    agent = await store.create(ALICE, "Dot")
+    await store.update(ALICE, agent.agent_id, status=StandingAgentStatus.RETIRED)
+
+    with pytest.raises(StandingAgentConflict):
+        await store.create(ALICE, "Another")

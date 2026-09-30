@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -36,6 +37,15 @@ class StandingAgentStore(Protocol):
     async def get_owned(self, owner_id: str, agent_id: str) -> StandingAgent | None: ...
 
     async def list_for_owner(self, owner_id: str) -> list[StandingAgent]: ...
+
+    async def update(
+        self,
+        owner_id: str,
+        agent_id: str,
+        *,
+        name: str | None = None,
+        status: StandingAgentStatus | None = None,
+    ) -> StandingAgent | None: ...
 
     async def delete(self, owner_id: str, agent_id: str) -> bool: ...
 
@@ -77,6 +87,32 @@ class InMemoryStandingAgentStore:
             (agent for agent in self._live.values() if agent.owner_id == owner_id),
             key=lambda agent: agent.created_at,
         )
+
+    async def update(
+        self,
+        owner_id: str,
+        agent_id: str,
+        *,
+        name: str | None = None,
+        status: StandingAgentStatus | None = None,
+    ) -> StandingAgent | None:
+        current = await self.get_owned(owner_id, agent_id)
+        if current is None:
+            return None
+        stored = normalize_agent_name(name) if name is not None else current.name
+        if any(
+            other.agent_id != agent_id and agent_name_key(other.name) == agent_name_key(stored)
+            for other in await self.list_for_owner(owner_id)
+        ):
+            raise StandingAgentConflict("name_taken")
+        updated = replace(
+            current,
+            name=stored,
+            status=status if status is not None else current.status,
+            updated_at=self._clock(),
+        )
+        self._live[agent_id] = updated
+        return updated
 
     async def delete(self, owner_id: str, agent_id: str) -> bool:
         if await self.get_owned(owner_id, agent_id) is None:
@@ -126,11 +162,7 @@ class PostgresStandingAgentStore:
                         },
                     )
         except IntegrityError as error:
-            message = str(error)
-            for index, reason in _CONFLICTS.items():
-                if index in message:
-                    raise StandingAgentConflict(reason) from error
-            raise
+            _raise_conflict(error)
         return agent
 
     async def get_owned(self, owner_id: str, agent_id: str) -> StandingAgent | None:
@@ -145,6 +177,43 @@ class PostgresStandingAgentStore:
             "WHERE owner_id = :owner_id AND deleted_at IS NULL ORDER BY created_at",
             {"owner_id": owner_id},
         )
+
+    async def update(
+        self,
+        owner_id: str,
+        agent_id: str,
+        *,
+        name: str | None = None,
+        status: StandingAgentStatus | None = None,
+    ) -> StandingAgent | None:
+        stored = normalize_agent_name(name) if name is not None else None
+        try:
+            async with await self._session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        text(
+                            """
+                            UPDATE standing_agents
+                            SET name = COALESCE(:name, name),
+                                status = COALESCE(:status, status),
+                                updated_at = :now
+                            WHERE owner_id = :owner_id AND agent_id = :agent_id
+                              AND deleted_at IS NULL
+                            RETURNING agent_id
+                            """
+                        ),
+                        {
+                            "name": stored,
+                            "status": status.value if status is not None else None,
+                            "now": self._clock(),
+                            "owner_id": owner_id,
+                            "agent_id": agent_id,
+                        },
+                    )
+                    changed = result.first() is not None
+        except IntegrityError as error:
+            _raise_conflict(error)
+        return await self.get_owned(owner_id, agent_id) if changed else None
 
     async def delete(self, owner_id: str, agent_id: str) -> bool:
         async with await self._session_factory() as session:
@@ -182,3 +251,12 @@ class PostgresStandingAgentStore:
                 )
                 for row in result
             ]
+
+
+def _raise_conflict(error: IntegrityError) -> None:
+    """어느 인덱스가 막았는지를 사유로. 모르는 무결성 오류는 그대로 올린다."""
+    message = str(error)
+    for index, reason in _CONFLICTS.items():
+        if index in message:
+            raise StandingAgentConflict(reason) from error
+    raise error

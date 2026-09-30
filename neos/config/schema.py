@@ -689,6 +689,16 @@ class MemoryConfig(StrictConfigModel):
     max_context_items: int = 10
 
 
+class StandingAgentsConfig(StrictConfigModel):
+    """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
+
+    꺼져 있으면 API 라우터를 **마운트하지 않는다**(`main.py`). 거절하는 라우트가
+    아니라 라우트가 없다.
+    """
+
+    enabled: bool = False
+
+
 class LearnConfig(StrictConfigModel):
     write_approval: bool = True
     coding_lessons: bool = False
@@ -2177,6 +2187,7 @@ class AppConfig(StrictConfigModel):
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     learn: LearnConfig = Field(default_factory=LearnConfig)
+    standing_agents: StandingAgentsConfig = Field(default_factory=StandingAgentsConfig)
     query_classifier: QueryClassifierConfig = Field(default_factory=QueryClassifierConfig)
     executive_summary: ExecutiveSummaryConfig = Field(default_factory=ExecutiveSummaryConfig)
     query_expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)
