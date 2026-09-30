@@ -54,7 +54,7 @@
 CREATE TABLE IF NOT EXISTS standing_agents (
     agent_id    VARCHAR(64)  PRIMARY KEY,                       -- 'sa_' + hex
     owner_id    VARCHAR(255) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    name        VARCHAR(80)  NOT NULL,
+    name        TEXT         NOT NULL CHECK (btrim(name) <> ''),   -- 길이 제한 없음(결정 Q13-3)
     status      VARCHAR(16)  NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active', 'paused', 'retired')),
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS standing_agents (
 -- 결정 6 의 "하나" 는 이 인덱스 하나에만 산다. 여럿으로 늘릴 때 지우는 것이 이것 하나다.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_standing_agents_one_per_owner
     ON standing_agents(owner_id) WHERE deleted_at IS NULL;
+
+-- 결정 Q13-3: 같은 소유자 안에서 이름 중복 금지. 대소문자·앞뒤 공백 무시.
+-- 이름 자체가 아니라 **해시**로 건다 -- 길이 제한이 없는 TEXT 를 btree 에 그대로 넣으면
+-- 약 2.7KB 를 넘는 이름이 INSERT 에서 실패한다. 이 인덱스는 여럿으로 늘릴 때도 남는다.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_standing_agents_name_per_owner
+    ON standing_agents(owner_id, md5(lower(btrim(name)))) WHERE deleted_at IS NULL;
 ```
 
 - **소유자는 사용자만.** Q17(조직 에이전트)은 트랙 P 테넌트 격리 뒤다. 지금 `owner_kind` 같은 열을 미리 두지 않는다 —
@@ -72,7 +78,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_standing_agents_one_per_owner
   `organization_id` 를 더하고 소유 CHECK 를 그때 쓴다
 - **`status` 는 에이전트 단위다.** 태스크의 `PAUSED`(Q5 감시자의 출구)와 다르다. 에이전트 `paused` 는 **새 태스크를
   만들지 않는다**(트리거·상시 질문이 멈춘다). 이미 돌고 있는 태스크는 건드리지 않는다 — 태스크 멈춤은 태스크 상태의 일이다
-- **`retired` 와 `deleted_at` 을 둘 다 둔다.** retired 는 사용자가 멈춘 것(이력은 보인다), `deleted_at` 은 삭제다
+- **`retired` 와 `deleted_at` 을 둘 다 둔다.** retired 는 사용자가 멈춘 것(이력은 보인다), `deleted_at` 은 삭제다.
+  두 인덱스는 `deleted_at IS NULL` 만 보므로 **retired 도 "하나"를 차지한다** — 새로 만들려면 지운다
+- **이름 중복의 범위는 소유자 안이다.** 전역으로 막으면 남의 에이전트 이름이 있는지 알아낼 수 있다(N8 의 "존재를 확인해 주지 않는다")
 
 ### 4.2 에이전트에 딸리는 행 — `agent_id` 를 더한다
 
@@ -152,7 +160,7 @@ GET    /api/v1/standing-agents/me              # 별칭: 유일한 에이전트 
 
 | 단계 | 무엇 | 테스트가 확인할 것 | 선행 |
 |---|---|---|---|
-| **Q13a** | 마이그레이션(`standing_agents` + 부분 unique 인덱스) · 도메인 · 저장소 · `resolve_agent` | 두 번째 생성이 409 · 삭제 후 다시 만들 수 있다(부분 인덱스) · 남의 id 는 404 · 부트스트랩 2회 적용 | — |
+| **Q13a** ✅ **착지(2026-09-30)** | 마이그레이션 070(`standing_agents` + 부분 unique 인덱스 둘) · `neos/standing/`(models · store · resolve) | 메모리·Postgres **같은 계약 테스트**(실 DB) · 둘째 생성 `one_per_owner` · 삭제 후 재생성 · 남의 id 는 None · 10,000자 이름 · 하나 제약을 지운 트랜잭션 안에서 이름 인덱스가 대소문자·공백 변형을 막는다 · 틀린 id 가 소유자의 에이전트로 새지 않는다 · 신선한 DB 2회 적용 · 테스트 27 · 변이 10/10. 409 는 Q13b(API)의 일이다 — 저장소는 `StandingAgentConflict(reason)` 을 낸다 | — |
 | **Q13b** | API (§7, 활동 피드 제외) · 플래그 | 플래그 off 면 라우트가 없다 · 목록이 배열 · `/me` | Q13a |
 | **Q13c** | `coding_tasks.agent_id` · 에이전트가 태스크를 만드는 서비스 함수(기본 모드 `background`, `actor` 기록) | 에이전트 태스크의 `owner_id` = 에이전트 소유자 · 소유 검사가 새 경로를 만들지 않는다 | Q13a · Q1 ✅ |
 | **Q13d** | 활동 피드 | 합친 커서가 두 태스크의 이벤트를 빠짐없이 한 번씩 · 남의 태스크 이벤트가 섞이지 않는다 | Q13c |
@@ -171,7 +179,13 @@ GET    /api/v1/standing-agents/me              # 별칭: 유일한 에이전트 
 - 읽는 코드 없이 열·상태·필드를 먼저 두기(`owner_kind`, 미래 트랙의 FK) → 스키마에만 사는 필드
 - 에이전트 태스크를 `interactive` 로 만들기 → 사람이 보고 있다는 거짓 신호다
 
-## 10. 열린 질문 (사람의 결정)
+## 10. 결정 (2026-09-30, 사람의 결정)
+
+1. ✅ **만드는 시점** — 사용자가 **명시적으로** 만든다(`POST`). 첫 사용 때 자동으로 만들지 않는다
+2. ✅ **`paused` 에이전트의 진행 중 태스크** — **건드리지 않는다.** `PAUSED` 의 작성자는 결정 3 대로 감시자·예산 둘뿐이다
+3. ✅ **이름** — 길이 제한 없음(빈 이름만 거절) · **같은 소유자 안에서 중복 금지**, 대소문자·앞뒤 공백 무시(§4.1 해시 인덱스)
+
+## 10′. ~~열린 질문 (사람의 결정)~~ → 위 §10 으로 닫혔다
 
 1. **만드는 시점** — 사용자가 명시적으로 만든다(dots 방식, 이 설계의 가정) / 첫 사용 때 자동으로. 자동이면 모든
    사용자가 에이전트를 갖게 되고 Q13f 자기소개가 모두에게 돈다(비용)
