@@ -98,6 +98,68 @@ def _key_from_environment() -> str:
         return ""
 
 
+def build_trajectory_monitor(
+    config: "JevConfig",
+    *,
+    api_key: str | None = None,
+    client=None,
+):
+    """궤적 감시자(트랙 Q5)를 만든다. 꺼져 있으면 `None`.
+
+    도구 위험 게이트와 같은 규율이다: 켜졌는지 판단하는 자리는 여기 하나이고,
+    키 없음·모델 미핀은 "감시자 없음"이 아니라 기동 실패다.
+    """
+    from neos.coding.monitor.monitor import TrajectoryMonitor
+    from neos.coding.monitor.rules import FallbackThresholds
+
+    monitor = config.monitor
+    if not (config.enabled and monitor.shadow_enabled):
+        return None
+    if monitor.pause_at_or_above is None:
+        raise MisconfiguredJev("jev.monitor.pause_at_or_above 가 없다")
+    if api_key is None:
+        api_key = _key_from_environment()
+    if not api_key or not api_key.strip():
+        raise MisconfiguredJev(
+            "궤적 감시자가 켜져 있는데 TYPESAFE_API_KEY 가 없다. "
+            "오설정은 '감시자 없음' 으로 번역되지 않는다."
+        )
+    if not config.model:
+        raise MisconfiguredJev("jev.model 이 비어 있다 -- 별칭으로 돈 판정은 재현할 수 없다.")
+    nouls = _noul_questions(monitor.rubric)
+    if len(nouls) != 1:
+        raise MisconfiguredJev(
+            f"궤적 루브릭 {monitor.rubric!r} 은 noul 질문이 하나여야 한다: {nouls}"
+        )
+    if client is None:
+        from typesafe_sdk import AsyncTypeSafeClient
+
+        client = AsyncTypeSafeClient(
+            api_key=api_key, model=config.model, timeout=config.timeout_sec
+        )
+    return TrajectoryMonitor(
+        scorer=TypeSafeToolRiskScorer(
+            client=client,
+            model=config.model,
+            rubric=load_rubric(monitor.rubric),
+            question=nouls[0],
+            timeout_sec=config.timeout_sec,
+        ),
+        pause_at_or_above=monitor.pause_at_or_above,
+        limits=FallbackThresholds(
+            user_only=monitor.user_only,
+            mode_ceiling=monitor.mode_ceiling,
+            denial_window=monitor.denial_window,
+            denials_in_window=monitor.denials_in_window,
+            repeated_call=monitor.repeated_call,
+            refusals=monitor.refusals,
+            spend_multiple=monitor.spend_multiple,
+            spend_warmup_turns=monitor.spend_warmup_turns,
+        ),
+        every_n_tool_results=monitor.every_n_tool_results,
+    )
+
+
 def _noul_questions(rubric_name: str) -> tuple[str, ...]:
     """루브릭의 noul 질문 이름들, 루브릭에 적힌 순서대로."""
     rubric = load_rubric(rubric_name)

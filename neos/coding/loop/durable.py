@@ -113,6 +113,7 @@ class DurableCodingLoop(
         hooks: CodingHookPort | None = None,
         subagents=None,
         jev=None,
+        monitor=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -129,6 +130,8 @@ class DurableCodingLoop(
         self._subagents = subagents
         # `None` 이 off 다. 루프는 설정을 읽지 않는다 -- 조립하는 쪽이 정한다.
         self._jev = jev
+        # 궤적 감시자(트랙 Q5). 섀도 -- 원장에 판정을 남길 뿐 행동을 바꾸지 않는다.
+        self._monitor = monitor
 
     async def run(
         self,

@@ -1596,6 +1596,38 @@ class JevBandThresholds(StrictConfigModel):
         return self
 
 
+class JevMonitorConfig(StrictConfigModel):
+    """궤적 감시자 -- 로드맵 트랙 Q5 (docs/OPENAI_DOTS_ANALYSIS_260930.md §6.1).
+
+    판정자는 Jev 다(결정 5). Jev 가 대답하지 못하면 그 판정 한 번을 폴백 규칙
+    FB1~FB6 이 대신한다. **섀도만 있다** -- 기록할 뿐 멈추게 하지 않는다.
+
+    폴백 임계값은 첫 기본값이고 **더 엄하게만** 움직인다(결정 9) -- 각 필드의
+    경계가 기본값이다. Jev 의 멈춤 경계(`pause_at_or_above`)는 기본값이 없다:
+    L2 섀도처럼 실측이 정한다(§12.4).
+    """
+
+    shadow_enabled: bool = False
+    #: 궤적 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    rubric: str = "trajectory_scope"
+    #: `p >= pause_at_or_above` 면 would_pause. 기본값 없음 -- 켜려면 명시한다.
+    pause_at_or_above: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: 도구 결과(`tool.completed`·`tool.denied`) 몇 개마다 한 번 판정하는가.
+    every_n_tool_results: int = Field(default=5, ge=1)
+    #: 한 번에 읽는 원장 이벤트 상한. 넘으면 최근 것만 본다.
+    max_events: int = Field(default=2000, ge=100)
+
+    # -- 폴백 FB1~FB6. 경계가 기본값이다: 낮추기만(FB3 창·FB6 배수는 방향이 반대).
+    user_only: int = Field(default=1, ge=1, le=1)
+    mode_ceiling: int = Field(default=2, ge=1, le=2)
+    denial_window: int = Field(default=10, ge=10)
+    denials_in_window: int = Field(default=3, ge=1, le=3)
+    repeated_call: int = Field(default=3, ge=2, le=3)
+    refusals: int = Field(default=1, ge=1, le=1)
+    spend_multiple: float = Field(default=4.0, gt=1.0, le=4.0)
+    spend_warmup_turns: int = Field(default=5, ge=1, le=5)
+
+
 class JevConfig(StrictConfigModel):
     """Jev 확률 판정 층 -- 로드맵 §12(트랙 L).
 
@@ -1628,6 +1660,8 @@ class JevConfig(StrictConfigModel):
     tool_risk_rubric: str = "tool_risk_split"
     #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
     timeout_sec: float = Field(default=5.0, gt=0, le=60)
+    #: 궤적 감시자(트랙 Q5). `enabled` 와 `monitor.shadow_enabled` 가 둘 다 참일 때만 돈다.
+    monitor: JevMonitorConfig = Field(default_factory=JevMonitorConfig)
 
     @field_validator("model")
     @classmethod
@@ -1661,8 +1695,13 @@ class JevConfig(StrictConfigModel):
                     "jev.high_at_or_above 는 jev.low_below 보다 작을 수 없다: "
                     f"{self.low_below} > {self.high_at_or_above}"
                 )
+        if self.monitor.shadow_enabled and self.monitor.pause_at_or_above is None:
+            raise ValueError(
+                "궤적 감시자(jev.monitor)를 켜려면 jev.monitor.pause_at_or_above 를 "
+                "명시해야 한다. 기본값은 없다 -- 섀도 실측이 정한다."
+            )
         if not self.enabled and (
-            banding_on or self.judge_shadow_enabled
+            banding_on or self.judge_shadow_enabled or self.monitor.shadow_enabled
         ):
             raise ValueError(
                 "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "

@@ -787,6 +787,55 @@ Three properties are enforced rather than documented:
 While enforcement is on, the loop stops speculatively prefetching read-only
 tools: that path executes a tool before the decision and would outrun the gate.
 
+#### Trajectory monitor (shadow)
+
+`jev.monitor` judges a coding task's *flow* rather than one call: recent tool
+calls, their outcomes, the denial reasons and the task mode. It is roadmap
+track Q5 (`docs/OPENAI_DOTS_ANALYSIS_260930.md`). It is shadow-only: every
+judgement is one `monitor.judged` ledger event with `enforced: false`, and no
+task is paused.
+
+```yaml
+jev:
+  enabled: true                    # required by the monitor too
+  model: jev-1.13.0
+  monitor:
+    shadow_enabled: false
+    rubric: trajectory_scope       # one noul question
+    pause_at_or_above: null        # no default -- required when enabled
+    every_n_tool_results: 5        # judge after this many tool results
+    max_events: 2000               # most recent ledger events read
+    # Fallback rules FB1-FB6. Defaults are also the loosest allowed values:
+    user_only: 1                   # FB1 policy_user_only denials
+    mode_ceiling: 2                # FB2 policy_mode_ceiling denials
+    denial_window: 10              # FB3 window (may only grow)
+    denials_in_window: 3           # FB3 denials within the window
+    repeated_call: 3               # FB4 same tool + same preview
+    refusals: 1                    # FB5 model.refused
+    spend_multiple: 4.0            # FB6 turn tokens vs median of earlier turns
+    spend_warmup_turns: 5          # FB6 turns before it judges
+```
+
+Jev is the judge. When it errors, times out, is blocked, or returns no
+probability, the fallback rules judge that one time and the event says so
+(`judge: fallback_rules`, `jev_unavailable: true`, `ruleset`). The rules read
+only the ledger. **Config can only make them stricter**: each field's default is
+its bound, so validation rejects a looser value. The monitor reads the ledger
+through the event store's `list_after`; a sink without it is never judged, and a
+monitor error is logged and never changes the run.
+
+### Coding approval: USER_ONLY and background mode
+
+`coding_model.approval_user_only_extra` adds argv prefixes (for example
+`"gh workflow run"`) to `USER_ONLY_COMMANDS` in `neos/coding/domain/approvals.py`.
+Those commands are refused even with approval, auto mode or allow lists, with
+reason `policy_user_only`. The setting is merged as a union; there is no way to
+remove a built-in entry.
+
+A coding task created with `mode: background` is unattended and capped at the
+validated risk `read_only`. Writes, commands and questions are refused as
+`policy_mode_ceiling`, even when an allow list says allow.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:
