@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from neos.coding.domain.events import CodingEvent
+
 
 class CreateCodingTaskRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=100_000)
@@ -41,6 +43,24 @@ class CodingEventResponse(BaseModel):
     turn_id: str | None = None
     tool_call_id: str | None = None
     checkpoint_id: str | None = None
+
+
+def event_response(event: CodingEvent) -> dict:
+    """The wire shape of one ledger event -- the HTTP list, the WS stream and
+    the standing agent activity feed (Q13d) all send this."""
+    return {
+        "v": event.version,
+        "task_id": event.task_id,
+        "seq": event.seq,
+        "event_id": event.event_id,
+        "type": event.type,
+        "ts": event.created_at.isoformat(),
+        "payload": dict(event.payload),
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "tool_call_id": event.tool_call_id,
+        "checkpoint_id": event.checkpoint_id,
+    }
 
 
 class CodingEventListResponse(BaseModel):

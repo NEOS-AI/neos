@@ -11,6 +11,9 @@ class InMemoryCodingEventStore:
 
     def __init__(self) -> None:
         self._events: dict[str, list[CodingEvent]] = defaultdict(list)
+        #: Every task's events in append order -- the in-memory stand-in for
+        #: the Postgres `xact_id` the activity feed pages by (Q13d).
+        self._log: list[CodingEvent] = []
         self._lock = asyncio.Lock()
 
     async def append(
@@ -40,6 +43,7 @@ class InMemoryCodingEventStore:
                 checkpoint_id=checkpoint_id,
             )
             self._events[task_id].append(event)
+            self._log.append(event)
             return event
 
     async def append_event(self, event: CodingEvent) -> CodingEvent:
@@ -50,6 +54,7 @@ class InMemoryCodingEventStore:
                     f"expected event seq {expected_seq}, received {event.seq}"
                 )
             self._events[event.task_id].append(event)
+            self._log.append(event)
             return event
 
     async def list_after(
@@ -62,6 +67,9 @@ class InMemoryCodingEventStore:
         return [
             event for event in self._events[task_id] if event.seq > after_seq
         ][:limit]
+
+    def in_append_order(self) -> list[CodingEvent]:
+        return list(self._log)
 
     async def head_seq(self, task_id: str) -> int:
         return len(self._events[task_id])

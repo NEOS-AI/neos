@@ -15,7 +15,14 @@ from fastapi.testclient import TestClient
 
 import neos.api.handlers.standing_agent_handlers as mod
 from neos.api.dependencies.auth import get_current_user
+from neos.coding.application.task_service import (
+    CodingTaskService,
+    InMemoryCodingTaskRepository,
+)
+from neos.coding.events.store import InMemoryCodingEventStore
+from neos.standing.activity import InMemoryActivitySource
 from neos.standing.store import InMemoryStandingAgentStore
+from neos.standing.tasks import open_agent_task
 
 pytestmark = pytest.mark.no_db
 
@@ -29,6 +36,23 @@ def api():
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[mod.get_standing_agent_store] = lambda: store
     return TestClient(app), user
+
+
+@pytest.fixture
+def feed_api():
+    """The API plus the coding service the agent opens tasks in."""
+    store = InMemoryStandingAgentStore()
+    repo, events = InMemoryCodingTaskRepository(), InMemoryCodingEventStore()
+    coding = CodingTaskService(repo, events)
+    user = SimpleNamespace(user_id="alice")
+    app = FastAPI()
+    app.include_router(mod.router)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[mod.get_standing_agent_store] = lambda: store
+    app.dependency_overrides[mod.get_activity_source] = lambda: InMemoryActivitySource(
+        repo, events
+    )
+    return TestClient(app), user, store, coding
 
 
 def _create(http, name="Dot"):
@@ -143,3 +167,43 @@ def test_the_default_app_does_not_mount_the_routes() -> None:
     served = _routes()
     assert ("POST", "/api/v1/coding/tasks") in served
     assert not [path for _method, path in served if "/standing-agents" in path]
+
+
+# -- activity feed (Q13d) ---------------------------------------------------
+
+
+async def test_the_feed_pages_with_next_and_sends_the_ledger_shape(feed_api) -> None:
+    http, _, store, coding = feed_api
+    agent_id = _create(http).json()["agent_id"]
+    task = await open_agent_task(store, coding, owner_id="alice", prompt="look")
+    await coding.events.append(task_id=task.task_id, event_type="model.delta", payload={})
+
+    first = http.get(f"/standing-agents/{agent_id}/activity", params={"limit": 1}).json()
+    second = http.get(
+        f"/standing-agents/{agent_id}/activity", params={"after": first["next"]}
+    ).json()
+    empty = http.get(
+        f"/standing-agents/{agent_id}/activity", params={"after": second["next"]}
+    ).json()
+
+    assert [e["type"] for e in first["events"]] == ["task.created"]
+    assert first["events"][0]["payload"]["actor"] == f"agent:{agent_id}"
+    assert [(e["task_id"], e["seq"]) for e in second["events"]] == [(task.task_id, 2)]
+    assert empty == {"events": [], "next": second["next"]}
+
+
+def test_someone_elses_feed_is_a_404(feed_api) -> None:
+    http, user, _, _ = feed_api
+    agent_id = _create(http).json()["agent_id"]
+    user.user_id = "bob"
+
+    assert http.get(f"/standing-agents/{agent_id}/activity").status_code == 404
+
+
+def test_an_unreadable_cursor_is_unprocessable(feed_api) -> None:
+    http, _, _, _ = feed_api
+    agent_id = _create(http).json()["agent_id"]
+
+    response = http.get(f"/standing-agents/{agent_id}/activity", params={"after": "x"})
+
+    assert response.status_code == 422

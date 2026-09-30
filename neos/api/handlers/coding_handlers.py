@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from neos.api.dependencies.auth import get_current_user
+from neos.api.models.coding_models import event_response  # noqa: F401 -- coding_ws_handlers imports it from here
 from neos.api.models.coding_models import (
     CodingApprovalDecisionRequest,
     CodingApprovalSnapshot,
@@ -38,7 +39,6 @@ from neos.coding.application.task_service import (
 )
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.models import CodingTaskMode
-from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import CodingTask
 from neos.coding.domain.phases import SteeringMode
 from neos.coding.domain.workspace_edits import WorkspaceEditConflict
@@ -166,22 +166,6 @@ def _list_item(task: CodingTask) -> dict:
     if len(prompt) > _LIST_PROMPT_MAX:
         prompt = prompt[:_LIST_PROMPT_MAX]
     return {**_task_response(task), "prompt": prompt}
-
-
-def event_response(event: CodingEvent) -> dict:
-    return {
-        "v": event.version,
-        "task_id": event.task_id,
-        "seq": event.seq,
-        "event_id": event.event_id,
-        "type": event.type,
-        "ts": event.created_at.isoformat(),
-        "payload": dict(event.payload),
-        "run_id": event.run_id,
-        "turn_id": event.turn_id,
-        "tool_call_id": event.tool_call_id,
-        "checkpoint_id": event.checkpoint_id,
-    }
 
 
 @router.post(

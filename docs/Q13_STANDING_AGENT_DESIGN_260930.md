@@ -86,7 +86,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_standing_agents_name_per_owner
 
 | 대상 | 변경 | 없으면 |
 |---|---|---|
-| `coding_tasks` | `agent_id VARCHAR(64) NULL REFERENCES standing_agents(agent_id)` + 인덱스 `(agent_id, last_activity_at DESC)` | NULL = 사람이 직접 만든 태스크(지금까지의 전부) |
+| `coding_tasks` | `agent_id VARCHAR(64) NULL REFERENCES standing_agents(agent_id)` + 인덱스 ~~`(agent_id, last_activity_at DESC)`~~ `(agent_id) WHERE agent_id IS NOT NULL`(Q13d, 읽는 쪽에 맞췄다) | NULL = 사람이 직접 만든 태스크(지금까지의 전부) |
 | `deep_analysis_runs` | 같은 열 — **Q13 이 아니라 Q3(상시 질문)가 더한다** (§8) | NULL |
 | `scheduled_tasks` | 같은 열 — **Q3·Q4 가 더한다** (§8) | NULL = 기존 사용자 cron |
 | `learned_lessons` | 변경 없음 — `namespace = 'agent:{agent_id}'` | — |
@@ -153,7 +153,13 @@ GET    /api/v1/standing-agents/me              # 별칭: 유일한 에이전트 
 새 테이블이 아니라 **조회**다: `coding_tasks.agent_id` 로 태스크를 고르고 그 태스크들의 코딩 원장 이벤트를 시간순으로
 합친다. `monitor.judged`(Q5)도 여기서 보인다 — 사람이 섀도 판정을 읽는 첫 자리다.
 
-- 커서는 `(created_at, event_id)` 쌍. 태스크마다 `seq` 가 따로라 `seq` 하나로는 합친 스트림의 커서가 되지 못한다
+- ~~커서는 `(created_at, event_id)` 쌍~~ → **커서는 `(xact_id, task_id, seq)`**(Q13d 구현 때 바꿨다, 2026-09-30). 태스크마다 `seq`
+  가 따로라 `seq` 하나로는 합친 스트림의 커서가 되지 못한다. `created_at` 도 못 된다 — 호출자가 넘긴 시계이고 태스크마다
+  다른 트랜잭션이 따로 커밋하므로, 이른 `created_at` 이 늦게 커밋되면 **이미 지나간 커서 뒤로 떨어져 영영 건너뛰어진다**.
+  `xact_id` 는 이벤트를 쓴 트랜잭션 id(마이그레이션 072, `xid8`)이고, 독자는 `pg_snapshot_xmin` **미만만** 읽는다 — 그 아래는
+  전부 끝났고 앞으로 커밋될 것은 전부 그 이상이다. 대가: 오래 열린 트랜잭션이 있으면 피드가 그만큼 **늦는다**(건너뛰지는 않는다)
+- 목록 순서는 커밋 순서에 가깝지 시계 순서가 아니다. 한 태스크 안의 순서는 `seq` 가 정본이다 — 화면은 `seq` 로 정렬할 수 있다
+- 보관(archived)된 태스크의 이벤트는 피드에서도 빠진다 — 태스크 목록·이벤트 API 에서 빠지는 것과 같다
 - DA 런(Q3)이 붙으면 DA 원장 이벤트도 합친다 — 두 원장의 어휘는 각자의 fixture 가 이미 고정한다
 
 ## 8. 단계 — 전부 플래그 off 로 착지한다
@@ -163,7 +169,7 @@ GET    /api/v1/standing-agents/me              # 별칭: 유일한 에이전트 
 | **Q13a** ✅ **착지(2026-09-30)** | 마이그레이션 070(`standing_agents` + 부분 unique 인덱스 둘) · `neos/standing/`(models · store · resolve) | 메모리·Postgres **같은 계약 테스트**(실 DB) · 둘째 생성 `one_per_owner` · 삭제 후 재생성 · 남의 id 는 None · 10,000자 이름 · 하나 제약을 지운 트랜잭션 안에서 이름 인덱스가 대소문자·공백 변형을 막는다 · 틀린 id 가 소유자의 에이전트로 새지 않는다 · 신선한 DB 2회 적용 · 테스트 27 · 변이 10/10. 409 는 Q13b(API)의 일이다 — 저장소는 `StandingAgentConflict(reason)` 을 낸다 | — |
 | **Q13b** ✅ **착지(2026-09-30)** | API (§7, 활동 피드 제외) · 플래그 `standing_agents.enabled` · 저장소 `update`(이름·상태, 두 저장소 계약 테스트) | 플래그 off 면 **제공되는** 라우트 목록에 없다(실제 앱) · 목록이 배열 · `/me` 가 id 로 잡히지 않는다 · 남의 에이전트는 모든 동사에서 404 · 409 에 사유 코드 · 빈 PATCH 는 422 · retired 도 하나를 차지한다 · 테스트 22 · 변이 9/9. ⚠️ 플래그 **on** 분기(`main.py` 세 줄)는 테스트가 없다 — 앱은 import 때 한 번 조립된다 | Q13a |
 | **Q13c** ✅ **착지(2026-09-30)** | 마이그레이션 071 `coding_tasks.agent_id`(FK, `ON DELETE` 없음) · `neos/standing/tasks.py` `open_agent_task`(기본 `background`, `autonomous` 허용, `interactive` 거절 · `active` 가 아닌 에이전트는 `agent_paused`/`agent_retired` · 에이전트는 `resolve_agent` 로만 찾는다) · `task.created` payload 의 `actor = agent:{id}`(사람이 연 태스크에는 없다) · 두 서비스가 `task_created_payload` 하나를 함께 쓴다 · 행→`CodingTask` 변환 다섯 곳 중 읽는 세 곳을 `TASK_COLUMNS` + `task_from_row` 하나로 합쳤다 | 에이전트 태스크의 `owner_id` = 에이전트 소유자 · 소유자는 기존 `snapshot`/`list_owned` 로 보고 남은 못 본다(새 소유 검사 경로 없음) · 메모리·Postgres **같은 계약** · Postgres 읽기 다섯 곳이 전부 `agent_id` 를 돌려준다(이름으로) · 사용자 삭제가 에이전트와 태스크를 한 문장에서 함께 지운다(NO ACTION 이 막지 않는다) · 테스트 20 · 변이 11/11. ⚠️ **부르는 곳이 아직 없다** — 첫 호출자는 Q13f(자기소개)·Q4(트리거). `(agent_id, last_activity_at)` 인덱스는 그것을 읽는 Q13d 로 미뤘다(§9) | Q13a · Q1 ✅ |
-| **Q13d** | 활동 피드 · 인덱스 `coding_tasks(agent_id, last_activity_at DESC)`(§4.2 — Q13c 에서 미뤘다) | 합친 커서가 두 태스크의 이벤트를 빠짐없이 한 번씩 · 남의 태스크 이벤트가 섞이지 않는다 | Q13c |
+| **Q13d** ✅ **착지(2026-09-30)** | `GET /standing-agents/{agent_id}/activity?after=&limit=` → `{events, next}`(이벤트 모양은 코딩 이벤트 API 와 같은 `event_response`) · `neos/standing/activity.py`(메모리·Postgres 원천) · 마이그레이션 072: `coding_events.xact_id xid8`(NULL 로 더한 뒤 기본값 — 테이블 재작성 없음) + 인덱스 `(task_id, xact_id, seq)` · `coding_tasks(agent_id) WHERE agent_id IS NOT NULL`. §4.2 의 `(agent_id, last_activity_at)` 는 읽는 쪽이 없어 **만들지 않았다** · 커서를 §7.1 설계에서 바꿨다(위) | limit 1·2·100 으로 끝까지 넘겨도 두 태스크 이벤트가 **빠짐없이 한 번씩**, 태스크 안에서는 `seq` 순 · 사람 태스크·남의 에이전트 태스크가 섞이지 않는다 · **커서보다 이른 시각이 찍힌 이벤트도 온다** · **늦게 커밋되는 트랜잭션을 건너뛰지 않는다**(열린 동안은 보류, 커밋 뒤 도착 — 실 DB) · 보관된 태스크는 빠진다 · 남의 에이전트는 None/404 · 읽을 수 없는 커서는 422 · 테스트 25 · 변이 14/14 | Q13c |
 | **Q13e** | 메모 — `memory_gate` 경유, 네임스페이스 `agent:{id}` | 메모는 STAGED 로만 쓰인다 · GEPA 평가 세트에 들어가지 않는다(F18) | Q13a |
 | **Q13f** | 자기소개(온보딩) — 만들어질 때 background 태스크 하나: 쓸 수 있는 채널·스킬을 읽고 자기소개 메모를 남긴다 | background 천장 안에서만 돈다 | Q13c · Q13e |
 

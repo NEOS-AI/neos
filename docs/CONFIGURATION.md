@@ -850,6 +850,13 @@ per owner, ignoring case and surrounding space. Someone else's agent answers
 404, exactly like a missing one. `GET /api/v1/standing-agents/me` is an alias
 for the only agent.
 
+`GET /api/v1/standing-agents/{agent_id}/activity?after=<next>&limit=` merges the
+ledger events of every task the agent opened. The cursor is the writing
+transaction id (`coding_events.xact_id`, migration 072) and the reader stops
+below `pg_snapshot_xmin`, so a long-open transaction anywhere in the database
+**delays** the feed (it never skips). If the feed looks stuck, look for
+`idle in transaction` sessions in `pg_stat_activity`.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

@@ -85,6 +85,16 @@ class InMemoryCodingTaskRepository:
         self._deleted_at.pop(task_id, None)
         return True
 
+    def agent_task_ids(self, owner_id: str, agent_id: str) -> set[str]:
+        """The owner's live tasks opened by this agent (Q13d activity feed)."""
+        return {
+            task.task_id
+            for task in self._tasks.values()
+            if task.owner_id == owner_id
+            and task.agent_id == agent_id
+            and task.task_id not in self._deleted_at
+        }
+
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
         owned = [
             task
