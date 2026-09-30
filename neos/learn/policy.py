@@ -79,6 +79,24 @@ def namespace(owner_id: str, workspace_id: str | None = None) -> str:
     return f"owner:{owner}"
 
 
+AGENT_NAMESPACE_PREFIX = "agent:"
+
+
+def agent_namespace(agent_id: str) -> str:
+    """상시 에이전트 자신의 메모 (트랙 Q13e). 소유자의 `owner:` 네임스페이스와 섞이지
+    않는다 -- 소유자 네임스페이스를 읽는 주입 경로에 에이전트 메모가 끼지 않는다."""
+    agent = (agent_id or "").strip()
+    if not agent:
+        raise ValueError("agent_id is required")
+    return f"{AGENT_NAMESPACE_PREFIX}{agent}"
+
+
+def is_agent_namespace(value: str) -> bool:
+    """F18: 에이전트 메모는 학습(GEPA 예제·평가 세트)에 쓰지 않는다. 학습 데이터를
+    고르는 코드는 전부 이 판별 하나를 쓴다."""
+    return (value or "").startswith(AGENT_NAMESPACE_PREFIX)
+
+
 def is_protected_name(name: str) -> bool:
     return name in PROTECTED_SKILL_NAMES
 

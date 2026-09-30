@@ -32,6 +32,17 @@ async def _persist_staged_lesson(lesson: Lesson) -> Lesson:
     return get_lesson_store().add(lesson)
 
 
+async def stage_memo(*, namespace: str, title: str, body: str, kind: str) -> Lesson:
+    """STAGED 로**만** 쓴다 -- `write_approval` 설정과 무관하다(트랙 Q13e).
+
+    `maybe_learn_ltm` 은 `write_approval` 이 꺼져 있으면 장기 메모리에 바로 쓴다.
+    아무도 시키지 않은 쪽(상시 에이전트)의 메모는 그 스위치를 따르지 않는다(D19).
+    """
+    return await _persist_staged_lesson(
+        new_lesson(namespace=namespace, title=title, body=body, kind=kind)
+    )
+
+
 async def maybe_learn_ltm(
     user_id: str,
     key: str,
