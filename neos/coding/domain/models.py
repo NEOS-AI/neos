@@ -118,6 +118,10 @@ class CodingTask:
     created_at: datetime
     updated_at: datetime
     mode: CodingTaskMode = CodingTaskMode.INTERACTIVE
+    #: 트랙 Q13c -- 이 태스크를 연 상시 에이전트. None 이면 사람이 열었다.
+    #: 권한에 쓰지 않는다: 소유 검사는 `owner_id` 하나다(에이전트 태스크의
+    #: `owner_id` 는 에이전트의 소유자).
+    agent_id: str | None = None
 
 
 def transition_task(

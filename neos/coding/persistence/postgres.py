@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from neos.coding.application.task_service import (
     CodingTaskSnapshot,
     clamp_task_list_limit,
+    task_created_payload,
 )
 from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.events import CodingEvent
@@ -19,6 +20,7 @@ from neos.coding.domain.models import (
     CodingTaskMode,
     CodingTaskStatus,
 )
+from neos.coding.repositories.task_repository import TASK_COLUMNS, task_from_row
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,7 @@ class PostgresCodingService:
         prompt: str,
         task_id: str | None = None,
         mode: CodingTaskMode = CodingTaskMode.INTERACTIVE,
+        agent_id: str | None = None,
     ) -> CodingTask:
         now = datetime.now(UTC)
         task = CodingTask(
@@ -75,6 +78,7 @@ class PostgresCodingService:
             created_at=now,
             updated_at=now,
             mode=mode,
+            agent_id=agent_id,
         )
         async with await self._session_factory() as session:
             async with session.begin():
@@ -83,10 +87,11 @@ class PostgresCodingService:
                         """
                         INSERT INTO coding_tasks
                             (task_id, owner_id, prompt, status, version, last_seq,
-                             created_at, updated_at, last_activity_at, mode)
+                             created_at, updated_at, last_activity_at, mode,
+                             agent_id)
                         VALUES
                             (:task_id, :owner_id, :prompt, :status, 1, 0,
-                             :now, :now, :now, :mode)
+                             :now, :now, :now, :mode, :agent_id)
                         """
                     ),
                     {
@@ -96,17 +101,14 @@ class PostgresCodingService:
                         "status": task.status.value,
                         "now": now,
                         "mode": task.mode.value,
+                        "agent_id": agent_id,
                     },
                 )
                 event = await self._append_in_session(
                     session,
                     task_id=task.task_id,
                     event_type="task.created",
-                    payload={
-                        "status": task.status.value,
-                        "prompt": prompt,
-                        "mode": task.mode.value,
-                    },
+                    payload=task_created_payload(task),
                     now=now,
                 )
         if self._wake_outbox is not None:
@@ -274,9 +276,8 @@ class PostgresCodingService:
         async with await self._session_factory() as session:
             result = await session.execute(
                 text(
-                    """
-                    SELECT task_id, owner_id, prompt, status, version, last_seq,
-                           created_at, updated_at, mode
+                    f"""
+                    SELECT {TASK_COLUMNS}
                     FROM coding_tasks
                     WHERE task_id = :task_id AND owner_id = :owner_id
                       AND deleted_at IS NULL
@@ -284,14 +285,9 @@ class PostgresCodingService:
                 ),
                 {"task_id": task_id, "owner_id": owner_id},
             )
-            row = result.first()
-        if row is None:
+            task = task_from_row(result.first())
+        if task is None:
             return None
-        task = CodingTask(
-            task_id=row[0], owner_id=row[1], prompt=row[2],
-            status=CodingTaskStatus(row[3]), version=row[4], last_seq=row[5],
-            created_at=row[6], updated_at=row[7], mode=CodingTaskMode(row[8]),
-        )
         return CodingTaskSnapshot(task=task, head_seq=task.last_seq)
 
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
@@ -299,9 +295,8 @@ class PostgresCodingService:
         async with await self._session_factory() as session:
             result = await session.execute(
                 text(
-                    """
-                    SELECT task_id, owner_id, prompt, status, version, last_seq,
-                           created_at, updated_at, mode
+                    f"""
+                    SELECT {TASK_COLUMNS}
                     FROM coding_tasks
                     WHERE owner_id = :owner AND deleted_at IS NULL
                     ORDER BY last_activity_at DESC, task_id DESC
@@ -311,20 +306,7 @@ class PostgresCodingService:
                 {"owner": owner_id, "limit": bound},
             )
             rows = result.all()
-        return [
-            CodingTask(
-                task_id=row[0],
-                owner_id=row[1],
-                prompt=row[2],
-                status=CodingTaskStatus(row[3]),
-                version=row[4],
-                last_seq=row[5],
-                created_at=row[6],
-                updated_at=row[7],
-                mode=CodingTaskMode(row[8]),
-            )
-            for row in rows
-        ]
+        return [task for row in rows if (task := task_from_row(row)) is not None]
 
     async def archive(self, task_id: str, owner_id: str) -> bool:
         now = datetime.now(UTC)

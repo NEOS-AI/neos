@@ -101,6 +101,21 @@ class InMemoryCodingTaskRepository:
         return owned[: clamp_task_list_limit(limit)]
 
 
+def task_created_payload(task: CodingTask) -> dict[str, str]:
+    """`task.created` 의 payload. 두 서비스(메모리·Postgres)가 함께 쓴다.
+
+    `actor` 는 에이전트가 연 태스크에만 있다(Q13 설계 §5) -- 없으면 사람이다.
+    """
+    payload = {
+        "status": task.status.value,
+        "prompt": task.prompt,
+        "mode": task.mode.value,
+    }
+    if task.agent_id is not None:
+        payload["actor"] = f"agent:{task.agent_id}"
+    return payload
+
+
 @dataclass(frozen=True, slots=True)
 class CodingTaskSnapshot:
     task: CodingTask
@@ -145,6 +160,7 @@ class CodingTaskService:
         prompt: str,
         task_id: str | None = None,
         mode: CodingTaskMode = CodingTaskMode.INTERACTIVE,
+        agent_id: str | None = None,
     ) -> CodingTask:
         now = self._clock()
         task = CodingTask(
@@ -157,16 +173,13 @@ class CodingTaskService:
             created_at=now,
             updated_at=now,
             mode=mode,
+            agent_id=agent_id,
         )
         await self.tasks.create(task)
         event = await self.events.append(
             task_id=task.task_id,
             event_type="task.created",
-            payload={
-                "status": task.status.value,
-                "prompt": prompt,
-                "mode": task.mode.value,
-            },
+            payload=task_created_payload(task),
             now=now,
         )
         task = replace(task, last_seq=event.seq)

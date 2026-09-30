@@ -64,6 +64,7 @@ async def test_get_owned_maps_task_row() -> None:
             "2026-07-18T10:00:00+00:00",
             "2026-07-18T10:01:00+00:00",
             "autonomous",
+            "sa_1",
         )
     )
 
@@ -78,6 +79,8 @@ async def test_get_owned_maps_task_row() -> None:
     # mapping -> an autonomous task resumes as interactive.
     assert task.mode.value == "autonomous"
     assert "mode" in db.calls[0][0]
+    # Q13c: the agent that opened the task travels with the row.
+    assert task.agent_id == "sa_1"
 
 
 async def test_list_owned_scopes_query_to_owner_and_orders_by_activity() -> None:
