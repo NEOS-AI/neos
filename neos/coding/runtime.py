@@ -724,6 +724,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         approval_deny_tools=frozenset(coding.approval_deny_tools),
         approval_allow_tools=frozenset(coding.approval_allow_tools),
         approval_always_allow=frozenset(coding.approval_always_allow),
+        approval_user_only_extra=frozenset(
+            tuple(entry.split()) for entry in coding.approval_user_only_extra if entry.split()
+        ),
         subagent_enabled=coding.subagent_enabled,
         subagent_max_active=coding.subagent_max_active,
         subagent_async_spawn=coding.subagent_async_spawn,

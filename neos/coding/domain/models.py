@@ -102,6 +102,9 @@ class CodingTaskMode(StrEnum):
 
     INTERACTIVE = "interactive"
     AUTONOMOUS = "autonomous"
+    #: 트랙 Q1 -- 아무도 시키지 않은 일(선제적 조사). 보는 사람이 없고(autonomous
+    #: 처럼 접힌다) 천장이 READ_ONLY 다. 결과는 메모·알림 후보뿐이다.
+    BACKGROUND = "background"
 
 
 @dataclass(frozen=True, slots=True)

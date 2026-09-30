@@ -347,7 +347,10 @@ class SubagentSpawnMixin:
         that asks to retry is a deny for the same reason -- the child has no
         retry turn to spend it on.
         """
-        from neos.coding.domain.approvals import ApprovalPolicyOutcome
+        from neos.coding.domain.approvals import (
+            ApprovalPolicyOutcome,
+            policy_denial_reason,
+        )
         from neos.coding.tools.registry import ToolValidationError
 
         reason: str | None = None
@@ -369,7 +372,9 @@ class SubagentSpawnMixin:
                 validated, state, deps, task_id, None, unattended=True
             )
             if outcome is not ApprovalPolicyOutcome.ALLOW:
-                reason = "policy_approval_denied"
+                reason = policy_denial_reason(
+                    validated, self._approval_gate(state, unattended=True)
+                )
         if reason is None:
             return validated, None
         await self._record_child_denial(

@@ -25,6 +25,7 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     approval_remember_key,
     denial_envelope,
+    policy_denial_reason,
 )
 from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.model.base import (
@@ -235,12 +236,25 @@ class ToolExecutionMixin:
             input.task_id,
             call.tool_call_id,
             unattended=_unattended(input),
+            read_only_ceiling=_background(input),
         )
         if outcome is ApprovalPolicyOutcome.DENY:
             return _Halt(
                 (
                     await self._commit_denied_tool(
-                        input, state, bound, deps, call, "policy_approval_denied"
+                        input,
+                        state,
+                        bound,
+                        deps,
+                        call,
+                        policy_denial_reason(
+                            validated,
+                            self._approval_gate(
+                                state,
+                                unattended=_unattended(input),
+                                read_only_ceiling=_background(input),
+                            ),
+                        ),
                     ),
                 )
             )
@@ -612,6 +626,7 @@ class ToolExecutionMixin:
                 input.task_id,
                 call.tool_call_id,
                 unattended=_unattended(input),
+                read_only_ceiling=_background(input),
             )
             if outcome is not ApprovalPolicyOutcome.ALLOW:
                 return None
@@ -958,4 +973,9 @@ def _unattended(input) -> bool:
     because a test could tell the difference; a mutation removing it there
     survives, and that is why.
     """
-    return getattr(input, "mode", "interactive") == "autonomous"
+    return getattr(input, "mode", "interactive") in {"autonomous", "background"}
+
+
+def _background(input) -> bool:
+    """트랙 Q1: 아무도 시키지 않은 일 -- 천장이 READ_ONLY 다."""
+    return getattr(input, "mode", "interactive") == "background"

@@ -1869,6 +1869,10 @@ class CodingModelConfig(StrictConfigModel):
     approval_deny_tools: list[str] = Field(default_factory=list)
     approval_allow_tools: list[str] = Field(default_factory=list)
     approval_always_allow: list[str] = Field(default_factory=list)
+    # 트랙 Q2: 승인으로도 위임할 수 없는 명령을 **더한다**("gh workflow run" 처럼
+    # 공백으로 나눈 argv 접두). 코드의 USER_ONLY_COMMANDS 와 합집합으로만 쓰이고,
+    # 거기서 빼는 설정은 없다.
+    approval_user_only_extra: list[str] = Field(default_factory=list)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     notebook_edit: bool = False
     image_tool: bool = False
