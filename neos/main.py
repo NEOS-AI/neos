@@ -608,6 +608,17 @@ if settings.config.standing_agents.enabled:
     _include_router_for_runtime(
         standing_agent_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
     )
+    # 이벤트 트리거(트랙 Q4a). 배달 라우트는 인증 의존성이 없다 -- 서명이 인증이다.
+    if settings.config.standing_agents.triggers.enabled:
+        from neos.api.handlers.standing_trigger_handlers import (
+            delivery_router as standing_trigger_delivery_router,
+            router as standing_trigger_router,
+        )
+
+        for _router in (standing_trigger_router, standing_trigger_delivery_router):
+            _include_router_for_runtime(
+                _router, prefix=settings.API_V1_PREFIX, tags=["Standing Agent Triggers"]
+            )
 # 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
 # (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
 _include_router_for_runtime(

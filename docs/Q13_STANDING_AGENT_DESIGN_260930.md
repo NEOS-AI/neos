@@ -100,8 +100,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_standing_agents_name_per_owner
 | 트랙 | 테이블(안) | 키 |
 |---|---|---|
 | Q8 채널 횡단 스레드 | `standing_agent_threads` | `agent_id` + 채널 세션 → 스레드 |
-| Q10 예산 봉투 | `standing_agent_budgets` | `(agent_id, period_start)` |
-| Q4 트리거 규칙 | `standing_agent_triggers` | `agent_id` |
+| Q10 예산 봉투 | ~~`standing_agent_budgets`~~ **만들지 않았다**(Q10a, 2026-10-01 — 지출은 체크포인트에서 읽는다, [Q4·Q10 설계 §3.1](Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md)) | ~~`(agent_id, period_start)`~~ |
+| Q4 트리거 규칙 | `standing_agent_triggers` ✅ (074, Q4a) | `agent_id` |
 
 📌 **되돌리지 말 것:** 위 테이블 어느 것도 `user_id`/`owner_id` 를 **키**로 쓰지 않는다. 소유 검사용으로 에이전트를
 거쳐 조인할 뿐이다.

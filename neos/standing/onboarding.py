@@ -20,6 +20,7 @@ from typing import Any
 
 from neos.coding.domain.models import CodingTask, CodingTaskMode
 from neos.learn.lessons import Lesson
+from neos.standing.budget import AgentBudgetEnvelope
 from neos.standing.memos import AgentMemoRefused, write_agent_memo
 from neos.standing.models import StandingAgent
 from neos.standing.resolve import resolve_agent
@@ -87,6 +88,7 @@ async def start_onboarding(
     *,
     channels: Sequence[str],
     skills: Sequence[str],
+    envelope: AgentBudgetEnvelope | None = None,
 ) -> CodingTask:
     task = await open_agent_task(
         agents,
@@ -95,6 +97,7 @@ async def start_onboarding(
         agent_id=agent.agent_id,
         prompt=onboarding_prompt(agent, channels, skills),
         mode=CodingTaskMode.BACKGROUND,
+        envelope=envelope,
     )
     await agents.set_onboarding_task(agent.owner_id, agent.agent_id, task.task_id)
     return task

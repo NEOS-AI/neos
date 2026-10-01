@@ -8,6 +8,8 @@
   일이면 `autonomous`. `interactive` 는 사람이 보고 있다는 뜻이라 거절한다(§9).
 - 멈춘(paused)·은퇴한(retired) 에이전트는 새 태스크를 열지 않는다. 이미 도는
   태스크는 건드리지 않는다(결정 2) -- 여기는 새 일을 여는 입구일 뿐이다.
+- 예산 봉투(Q10a)가 주어지면 그 모드로 더 쓸 수 없는 에이전트는 새 태스크를 열지
+  않는다. 사유는 봉투의 사유 코드 그대로다(`budget.py`). `None` 이 off 다.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from neos.coding.domain.models import CodingTask, CodingTaskMode
+from neos.standing.budget import AgentBudgetEnvelope
 from neos.standing.models import StandingAgentStatus
 from neos.standing.resolve import resolve_agent
 from neos.standing.store import StandingAgentStore
@@ -52,6 +55,7 @@ async def open_agent_task(
     prompt: str,
     agent_id: str | None = None,
     mode: CodingTaskMode = CodingTaskMode.BACKGROUND,
+    envelope: AgentBudgetEnvelope | None = None,
 ) -> CodingTask:
     if mode not in AGENT_TASK_MODES:
         raise AgentTaskRefused("interactive_mode")
@@ -61,6 +65,10 @@ async def open_agent_task(
         raise AgentTaskRefused("agent_not_found")
     if agent.status is not StandingAgentStatus.ACTIVE:
         raise AgentTaskRefused(f"agent_{agent.status.value}")
+    if envelope is not None:
+        verdict = await envelope.judge(agent.agent_id, mode)
+        if verdict.over:
+            raise AgentTaskRefused(str(verdict.reason))
     return await coding.create_task(
         owner_id=agent.owner_id,
         prompt=prompt,

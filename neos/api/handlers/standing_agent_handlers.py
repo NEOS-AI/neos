@@ -30,6 +30,7 @@ from neos.standing.activity import (
     PostgresActivitySource,
     agent_activity,
 )
+from neos.standing.budget import AgentBudgetEnvelope, build_agent_envelope
 from neos.standing.onboarding import available_channels, skill_lines, start_onboarding
 from neos.standing.models import StandingAgent, StandingAgentConflict, StandingAgentStatus
 from neos.standing.resolve import resolve_agent
@@ -56,6 +57,13 @@ def get_task_opener() -> TaskOpener:
     from neos.coding.runtime import coding_service
 
     return coding_service
+
+
+def get_envelope() -> AgentBudgetEnvelope | None:
+    """예산 봉투(Q10a). `None` 이 off 다 -- 켜졌는지는 `build_agent_envelope` 가 정한다."""
+    from neos.config.settings import settings
+
+    return build_agent_envelope(settings.config.standing_agents, db_manager.get_session)
 
 
 def get_onboarding_inventory(user_id: str) -> tuple[list[str], list[str]]:
@@ -131,6 +139,7 @@ async def create_standing_agent(
     store: StandingAgentStore = Depends(get_standing_agent_store),
     coding: TaskOpener = Depends(get_task_opener),
     inventory=Depends(get_inventory_reader),
+    envelope: AgentBudgetEnvelope | None = Depends(get_envelope),
 ) -> StandingAgentOut:
     try:
         agent = await store.create(current_user.user_id, body.name)
@@ -141,7 +150,9 @@ async def create_standing_agent(
     # 자기소개(Q13f, 설계 결정 1: 명시적으로 만들 때만). 실패해도 에이전트는 남는다.
     try:
         channels, skills = inventory(agent.owner_id)
-        await start_onboarding(store, coding, agent, channels=channels, skills=skills)
+        await start_onboarding(
+            store, coding, agent, channels=channels, skills=skills, envelope=envelope
+        )
         agent = await store.get_owned(agent.owner_id, agent.agent_id) or agent
     except Exception:
         logger.exception("standing agent onboarding did not start agent_id=%s", agent.agent_id)

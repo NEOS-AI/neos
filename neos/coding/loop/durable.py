@@ -114,6 +114,7 @@ class DurableCodingLoop(
         subagents=None,
         jev=None,
         monitor=None,
+        envelope=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -132,6 +133,8 @@ class DurableCodingLoop(
         self._jev = jev
         # 궤적 감시자(트랙 Q5). 섀도 -- 원장에 판정을 남길 뿐 행동을 바꾸지 않는다.
         self._monitor = monitor
+        # 상시 에이전트 예산 봉투(트랙 Q10a). 섀도 -- 넘으면 `budget.judged` 를 남길 뿐이다.
+        self._envelope = envelope
 
     async def run(
         self,

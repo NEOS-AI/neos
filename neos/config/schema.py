@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 # 같은 이름 상수와 값이 반드시 같아야 한다 -- 이 파일은 `neos.coding.*` 기능
 # 모듈에 의존하지 않는 계층 경계를 지키려고 상수를 공유하지 않고 각자 둔다.
 _MANAGED_CIPHER_KEY_VALID_BYTE_LENGTHS = frozenset({16, 24, 32})
+# 트리거 서명 마스터 키의 최소 길이. HMAC-SHA256 키로 32자(예: `openssl rand -hex 32` 는 64자).
+STANDING_TRIGGER_KEY_MIN_CHARS = 32
 
 
 def _split_csv(value: Any) -> Any:
@@ -448,6 +450,9 @@ class SecretsConfig(StrictConfigModel):
     # 참조 봉인 키와 **다른** 키여야 한다 -- 한 키가 새면 봉인과 소유권 증명이
     # 함께 무너지지 않게 한다 (neos/coding/sandbox/managed/identity.py).
     managed_coding_ownership_key: str | None = Field(default=None, repr=False)
+    # 상시 에이전트 트리거(Q4a)의 서명 마스터 키. 트리거마다의 webhook 비밀은
+    # HMAC(이 키, trigger_id) 로 파생한다 -- DB 에는 비밀이 없다.
+    standing_trigger_signing_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -689,6 +694,35 @@ class MemoryConfig(StrictConfigModel):
     max_context_items: int = 10
 
 
+class StandingTriggersConfig(StrictConfigModel):
+    """이벤트 트리거 -- 트랙 Q4a (docs/Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md).
+
+    꺼져 있으면 트리거 라우터를 마운트하지 않는다. 켜려면
+    `secrets.standing_trigger_signing_key`(`NEOS_TRIGGER_SIGNING_KEY`)가 있어야 한다 --
+    트리거마다의 서명 비밀은 이 키에서 파생하고 DB 에는 없다.
+    """
+
+    enabled: bool = False
+    #: 배달 본문 상한. 넘으면 서명을 보기 전에 413 이다.
+    max_body_bytes: int = Field(default=65_536, ge=1)
+    #: 서명 시각과 받은 시각의 허용 차이(초). 재전송 창이다.
+    timestamp_tolerance_seconds: int = Field(default=300, ge=1)
+
+
+class StandingBudgetConfig(StrictConfigModel):
+    """에이전트 예산 봉투 -- 트랙 Q10a (docs/Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md).
+
+    봉투는 **에이전트 × 달력 월(UTC)** 이다. 지출은 그 달에 연 에이전트 태스크들의
+    누적 `cost_micros` 합이다. 꺼져 있으면 아무것도 막지 않고 섀도 판정도 없다.
+    """
+
+    enabled: bool = False
+    #: 한 에이전트가 한 달에 쓸 수 있는 비용(마이크로달러). 기본 $20.
+    monthly_limit_micros: int = Field(default=20_000_000, ge=0)
+    #: background 태스크가 쓸 수 있는 봉투의 몫. 사용자가 맡긴 autonomous 일은 봉투 전부를 쓴다.
+    background_share: float = Field(default=0.5, gt=0.0, le=1.0)
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -697,6 +731,8 @@ class StandingAgentsConfig(StrictConfigModel):
     """
 
     enabled: bool = False
+    triggers: StandingTriggersConfig = Field(default_factory=StandingTriggersConfig)
+    budget: StandingBudgetConfig = Field(default_factory=StandingBudgetConfig)
 
 
 class LearnConfig(StrictConfigModel):
@@ -2350,6 +2386,21 @@ class AppConfig(StrictConfigModel):
                     "managed_coding_ownership_key must differ from "
                     "managed_provider_reference_key"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_standing_trigger_signing_key(self) -> "AppConfig":
+        """트리거가 켜졌는데 서명 키가 없거나 짧으면 시작하지 않는다 -- 키 없이는
+        어떤 배달도 검증할 수 없으므로 라우트를 여는 것 자체가 잘못이다."""
+        if not self.standing_agents.triggers.enabled:
+            return self
+        key = self.secrets.standing_trigger_signing_key or ""
+        if len(key) < STANDING_TRIGGER_KEY_MIN_CHARS:
+            raise ValueError(
+                "standing_agents.triggers.enabled requires "
+                f"secrets.standing_trigger_signing_key of at least "
+                f"{STANDING_TRIGGER_KEY_MIN_CHARS} characters"
+            )
         return self
 
     @model_validator(mode="after")

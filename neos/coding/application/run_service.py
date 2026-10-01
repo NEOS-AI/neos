@@ -301,6 +301,7 @@ class CodingRunService:
                 workspace_edits=self._workspace_edit_contexts(checkpoint),
                 owner_id=task.owner_id if task is not None else None,
                 mode=task.mode.value if task is not None else "interactive",
+                agent_id=task.agent_id if task is not None else None,
             ),
             checkpoint,
             LoopDependencies(

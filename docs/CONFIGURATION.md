@@ -865,6 +865,81 @@ below `pg_snapshot_xmin`, so a long-open transaction anywhere in the database
 **delays** the feed (it never skips). If the feed looks stuck, look for
 `idle in transaction` sessions in `pg_stat_activity`.
 
+#### Webhook triggers (track Q4a)
+
+```yaml
+standing_agents:
+  triggers:
+    enabled: false                  # off: no trigger routes are mounted
+    max_body_bytes: 65536           # larger deliveries are 413, before the signature is read
+    timestamp_tolerance_seconds: 300
+```
+
+```bash
+NEOS_TRIGGER_SIGNING_KEY=...        # required when triggers are on, >= 32 chars (openssl rand -hex 32)
+```
+
+Both `standing_agents.enabled` and `standing_agents.triggers.enabled` must be on.
+With triggers on and the key missing or shorter than 32 characters, config
+validation refuses to start. Design: `docs/Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md`.
+
+`POST /api/v1/standing-agents/{agent_id}/triggers` with
+`{"prompt_template": "...", "filters": [{"path": "action", "equals": "opened"}]}`
+returns the trigger, its `delivery_path` and its `secret`. **The secret is shown
+only here.** It is not stored: it is `HMAC(NEOS_TRIGGER_SIGNING_KEY, trigger_id)`,
+so changing the master key changes every trigger's secret. Filters match the JSON
+body by dotted path and exact JSON type (`1` is not `"1"` and not `true`); all must
+match, and no filters means every delivery fires.
+
+A sender delivers with:
+
+```
+POST /api/v1/standing-triggers/{trigger_id}/deliveries
+X-Neos-Timestamp: <unix seconds>
+X-Neos-Delivery:  <unique id, [A-Za-z0-9_:-]{1,128}>
+X-Neos-Signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<delivery>." + raw body)>
+```
+
+```python
+import hashlib, hmac, time
+ts = str(int(time.time()))
+sig = hmac.new(secret.encode(), f"{ts}.{delivery}.".encode() + body, hashlib.sha256).hexdigest()
+headers = {"X-Neos-Timestamp": ts, "X-Neos-Delivery": delivery, "X-Neos-Signature": f"v1={sig}"}
+```
+
+Any authentication failure (unknown trigger, bad signature, clock off by more
+than the tolerance, malformed headers) is the same `401`. An authenticated
+delivery is always `202 {"status", "task_id", "reason"}` with status `fired`,
+`duplicate` (same delivery id again: same `task_id`), `filtered`, or `refused`
+(`trigger_disabled`, `agent_paused`, `agent_retired`, or a budget reason below).
+A fired delivery opens one **background** (read-only) task of the agent; the
+body is wrapped as an untrusted document after the owner's template. A refused
+delivery leaves no idempotency record, so a retry after the agent is resumed
+fires.
+
+#### Budget envelope (track Q10a)
+
+```yaml
+standing_agents:
+  budget:
+    enabled: false
+    monthly_limit_micros: 20000000   # per agent per UTC calendar month ($20)
+    background_share: 0.5            # background tasks may spend only this share
+```
+
+Spend is not counted separately: it is the sum of the latest checkpoint's
+cumulative `cost_micros` over every task the agent opened in the month (a task
+belongs to the month it was opened in; archived tasks still count). An agent at
+or over its limit opens no new task (`budget_envelope_exhausted`); background
+work stops at its share (`budget_background_share_exhausted`) while work the
+user handed over (`autonomous`) may use the whole envelope. This applies to the
+self-introduction and to triggers alike.
+
+Running tasks are **not** stopped yet. When one is over the envelope at a model
+turn, the ledger gets one `budget.judged` event per run (`enforced: false`),
+visible in the activity feed. Pausing a running task is a later step shared with
+the trajectory monitor (Q5).
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

@@ -75,6 +75,9 @@ _METRIC_STOP_REASONS = frozenset({"tool_use", "end_turn", "max_tokens", "refusal
 #: Past this many prompt-too-long retries the turn fails. The first retry
 #: compacts (with one LLM summary), the rest drop the oldest turn each.
 _PROMPT_TOO_LONG_RETRIES = 4
+#: 봉투 섀도가 "이 런에 이미 판정이 있나"를 볼 때 읽는 최근 원장 수. 판정 기준이
+#: 아니라 중복 방지 창이라 설정이 아니다 -- 창 밖으로 밀려나면 한 번 더 남을 뿐이다.
+_ENVELOPE_LEDGER_WINDOW = 2000
 
 
 def _request_fingerprint(system: str, tools: Sequence[ToolDefinition]) -> str:
@@ -147,6 +150,38 @@ class ModelTurnMixin:
         except Exception:  # noqa: BLE001 -- 섀도는 런을 바꾸지 않는다
             logger.warning("trajectory monitor failed", exc_info=True)
 
+    async def _envelope_safe_point(self, input, deps) -> None:
+        """상시 에이전트 예산 봉투(트랙 Q10a)의 자리. **섀도** -- 넘어도 런은 그대로다.
+
+        에이전트가 연 태스크만 본다. 넘었을 때만 원장을 읽고, 이 런에 아직 판정이
+        없으면 `budget.judged` 하나를 남긴다 -- 넘은 동안 매 턴 쌓이지 않게. 멈추게
+        하는 길(`PAUSED`)은 감시자(Q5)와 함께 쓰는 별도 단계다.
+        """
+        envelope = getattr(self, "_envelope", None)
+        agent_id = getattr(input, "agent_id", None)
+        reader = getattr(deps.events, "list_after", None)
+        if envelope is None or agent_id is None or not callable(reader):
+            return
+        mode = getattr(input, "mode", "background")
+        try:
+            verdict = await envelope.judge(agent_id, mode)
+            if not verdict.over:
+                return
+            events = await _read_ledger(reader, input.task_id, limit=_ENVELOPE_LEDGER_WINDOW)
+            if any(
+                event.type == "budget.judged" and event.run_id == input.run_id
+                for event in events
+            ):
+                return
+            await deps.events.append(
+                task_id=input.task_id,
+                event_type="budget.judged",
+                payload=verdict.payload(mode=mode),
+                run_id=input.run_id,
+            )
+        except Exception:  # noqa: BLE001 -- 섀도는 런을 바꾸지 않는다
+            logger.warning("agent budget envelope failed", exc_info=True)
+
     async def _advance_one_model_turn(self, input, state, bound, deps):
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
@@ -157,6 +192,7 @@ class ModelTurnMixin:
         # and it lands as an append, ahead of the thinking guard below.
         state = await self._advance_detached_children(state, bound, deps)
         await self._monitor_safe_point(input, deps)
+        await self._envelope_safe_point(input, deps)
         state, system, tools = await self._prepare_turn(input, state, bound)
         request = ModelRequest(
             system=system,

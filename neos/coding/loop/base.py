@@ -49,6 +49,9 @@ class LoopInput:
     #: 태스크의 모드 (K9). `"autonomous"` 면 부모의 승인 판정이 unattended 로
     #: 돈다 -- REQUIRE_APPROVAL 을 기다리지 않고 거절로 접는다(D-L1).
     mode: str = "interactive"
+    #: 트랙 Q13c -- 태스크를 연 상시 에이전트. 사람이 연 태스크면 None. 예산 봉투(Q10a)의
+    #: 섀도 판정이 읽는다 -- 권한에는 쓰지 않는다(소유 검사는 owner_id 하나다).
+    agent_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

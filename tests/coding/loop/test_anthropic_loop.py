@@ -171,6 +171,7 @@ def harness(
     subagents=None,
     command_allowlist=frozenset({"git"}),
     monitor=None,
+    envelope=None,
 ):
     repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
     repository.execution_leases["ct_1"] = LEASE
@@ -194,6 +195,7 @@ def harness(
         hooks=hooks,
         subagents=subagents,
         monitor=monitor,
+        envelope=envelope,
     )
     deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
     return Harness(loop, repository, events, model, executor, bindings, deps)
