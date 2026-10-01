@@ -910,6 +910,59 @@ value through the CLI's environment, never its argv). Values are sealed with
 AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
 makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
 
+### Coding agent browser (track Q14a)
+
+```yaml
+coding_model:
+  web_fetch_hosts: [docs.example.com]   # the browser uses this same allowlist; empty -> refuses to start
+  browser:
+    enabled: false                      # off: tool list, prompts and events are unchanged
+    allow_outside_development: false    # required outside `environment: development` (B2 not met)
+    navigation_timeout_sec: 15
+    action_timeout_sec: 10
+    max_navigations: 30                 # per task
+    max_requests: 500                   # per browser context, subresources included
+    max_response_bytes: 5242880
+    max_request_body_bytes: 1048576
+    snapshot_max_chars: 20000
+    idle_timeout_sec: 300               # must not exceed max_lifetime_sec
+    max_lifetime_sec: 1800
+    max_contexts: 2                     # per worker process
+```
+
+Two coding tools, both `COMMAND` risk: `browser.v1` (`navigate` / `snapshot` /
+`click` / `type` / `close`, elements addressed by the snapshot's `[ref=eN]`) and
+`browser_fill_secret.v1` (`{ref, secret: "secret://name", origin}`). They are
+separate so a user rule (track Q2) can allow browsing while logins still need
+approval.
+
+The browser is a headless Chromium **on the backend host**, not in the sandbox:
+Docker sandboxes have no network and the managed sandbox (B2) gate is not met.
+Chromium itself has no network (every name fails to resolve and the proxy is
+dead); every request the page makes -- subresources, redirects and form posts
+included -- is intercepted and judged by the same functions as `web_fetch.v1`
+(allowlist, no userinfo, no secret-named query parameters, every resolved
+address public), then fetched by the host for one hop with the IP pinned. Only
+https and GET/HEAD/POST pass. Blocked requests are reported to the model as
+counts per reason code only.
+
+Startup is refused when `web_fetch_hosts` is empty or holds an IP literal, a
+wildcard or a one-label suffix, when `approval_allow_tools` /
+`approval_always_allow` name a browser tool, or outside development without
+`allow_outside_development`. Each task gets its own ephemeral context (no
+profile, no cookies shared across tasks); it is closed when the task ends, after
+`idle_timeout_sec`, or after `max_lifetime_sec`, and it is not checkpointed.
+
+Logins go only through the credential broker (track Q6, which must be on): the
+value is typed into a field whose page and document origin equal `origin`, is
+never returned, may not leave for another origin in any later request, and is
+scrubbed from every snapshot, title and URL along with password-field values.
+The gate is Q6's: a human approval or an owner `allow` rule on
+`browser_fill_secret.v1`. Background tasks are refused (`policy_mode_ceiling`),
+subagents and the deep-analysis research path never see the browser. Requires
+`playwright install chromium`; without it the tools answer `browser_unavailable`.
+Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
+
 ### Standing agents
 
 ```yaml

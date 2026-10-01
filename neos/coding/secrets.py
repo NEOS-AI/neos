@@ -68,9 +68,14 @@ def secret_env_refs(env: object) -> dict[str, str]:
 
 
 def carries_secret_refs(call: Any) -> bool:
-    if getattr(call, "name", None) != "execute.v1":
+    """이 호출이 금고의 비밀을 쓰는가. 게이트(S7)와 자식 거절(S8)이 같이 쓰는 판정 하나다."""
+    name = getattr(call, "name", None)
+    data = getattr(call, "input", {})
+    if name == "browser_fill_secret.v1":  # 트랙 Q14a
+        return secret_ref_name(data.get("secret")) is not None
+    if name != "execute.v1":
         return False
-    return bool(secret_env_refs(getattr(call, "input", {}).get("env")))
+    return bool(secret_env_refs(data.get("env")))
 
 
 def secret_env_name_allowed(name: str) -> bool:

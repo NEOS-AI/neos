@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import logging
 import re
 from typing import Any, Literal
@@ -1932,6 +1933,39 @@ class SandboxConfig(StrictConfigModel):
     managed: ManagedSandboxConfig = Field(default_factory=ManagedSandboxConfig)
 
 
+#: 트랙 Q14a 브라우저 도구 이름 -- `neos.coding.tools.registry.BROWSER_TOOL_NAMES` 와 같다.
+#: 이 계층은 `neos.coding.*` 에 의존하지 않으므로 따로 둔다(테스트가 둘이 같음을 고정한다).
+CODING_BROWSER_TOOL_NAMES = frozenset({"browser.v1", "browser_fill_secret.v1"})
+
+
+class CodingBrowserConfig(StrictConfigModel):
+    """트랙 Q14a -- 에이전트 브라우저 (docs/Q14_AGENT_BROWSER_DESIGN_261001.md).
+
+    브라우저는 **백엔드 호스트**에서 돈다(W1). 관리형 샌드박스(B2) 게이트가 닫혀 있으므로
+    development 밖에서는 `allow_outside_development` 를 운영자가 명시해야 켜진다.
+    허용 호스트는 `coding_model.web_fetch_hosts` 하나를 같이 쓴다(W3).
+    """
+
+    enabled: bool = False
+    allow_outside_development: bool = False
+    navigation_timeout_sec: float = Field(default=15, gt=0, le=60)
+    action_timeout_sec: float = Field(default=10, gt=0, le=60)
+    max_navigations: int = Field(default=30, ge=1, le=500)
+    max_requests: int = Field(default=500, ge=1, le=5000)
+    max_response_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
+    max_request_body_bytes: int = Field(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024)
+    snapshot_max_chars: int = Field(default=20_000, ge=1000, le=200_000)
+    idle_timeout_sec: int = Field(default=300, ge=10, le=3600)
+    max_lifetime_sec: int = Field(default=1800, ge=60, le=14_400)
+    max_contexts: int = Field(default=2, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def validate_lifetime(self) -> "CodingBrowserConfig":
+        if self.idle_timeout_sec > self.max_lifetime_sec:
+            raise ValueError("coding_model.browser idle_timeout_sec exceeds max_lifetime_sec")
+        return self
+
+
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["anthropic", "openai", "gemini", "ollama"] = "anthropic"
@@ -1981,6 +2015,8 @@ class CodingModelConfig(StrictConfigModel):
     secret_broker: bool = False
     secret_broker_max: int = Field(default=50, ge=1, le=1000)
     web_fetch_hosts: list[str] = Field(default_factory=list)
+    # 트랙 Q14a: 에이전트 브라우저. 끄면 도구 목록·프롬프트·이벤트 어휘가 오늘과 같다.
+    browser: CodingBrowserConfig = Field(default_factory=CodingBrowserConfig)
     notebook_edit: bool = False
     image_tool: bool = False
     pdf_tool: bool = False
@@ -2437,6 +2473,51 @@ class AppConfig(StrictConfigModel):
                 "coding_model.secret_broker requires "
                 f"secrets.secret_broker_key of at least "
                 f"{SECRET_BROKER_KEY_MIN_CHARS} characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_coding_browser(self) -> "AppConfig":
+        """트랙 Q14a. 브라우저는 호스트에서 돈다 -- B2(관리형 샌드박스)가 아니다.
+
+        development 밖에서는 운영자의 명시적 동의(`allow_outside_development`)가 있어야
+        켜진다(S10·I7 과 같은 fail-closed 모양). 어디서 켜든 허용 호스트가 이름이어야 하고,
+        운영자 allow 목록은 브라우저 도구를 담지 못한다 -- 사람 승인 또는 소유자 규칙만 넘는다.
+        """
+        browser = self.coding_model.browser
+        if not browser.enabled:
+            return self
+        if self.environment != "development" and not browser.allow_outside_development:
+            raise ValueError(
+                "coding_model.browser outside development runs a browser on the "
+                "backend host, not in the managed sandbox (B2 gate not met); set "
+                "coding_model.browser.allow_outside_development to accept that"
+            )
+        hosts = self.coding_model.web_fetch_hosts
+        if not hosts:
+            raise ValueError("coding_model.browser requires coding_model.web_fetch_hosts")
+        for raw in hosts:
+            host = raw.strip().lower().lstrip(".")
+            try:
+                ipaddress.ip_address(host.strip("[]"))
+            except ValueError:
+                pass
+            else:
+                raise ValueError(f"coding_model.web_fetch_hosts entry is an IP literal: {raw!r}")
+            if (
+                "." not in host
+                or not re.fullmatch(r"[a-z0-9.-]+", host)
+                or host.startswith("-")
+            ):
+                raise ValueError(
+                    f"coding_model.browser needs host names in web_fetch_hosts, got {raw!r}"
+                )
+        operator = set(self.coding_model.approval_allow_tools) | set(
+            self.coding_model.approval_always_allow
+        )
+        if operator & CODING_BROWSER_TOOL_NAMES:
+            raise ValueError(
+                "browser tools cannot be in approval_allow_tools or approval_always_allow"
             )
         return self
 

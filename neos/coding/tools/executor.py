@@ -47,6 +47,7 @@ from neos.coding.tools.notebook import (
     is_notebook_path,
 )
 from neos.coding.tools.registry import (
+    BROWSER_TOOL_NAMES,
     CodingToolRegistry,
     ValidatedToolCall,
     optional_tool_enabled,
@@ -584,10 +585,16 @@ class SandboxToolExecutor:
         known_reads: frozenset[str] = frozenset(),
         known_stamps: Mapping[str, Mapping[str, object]] | None = None,
         secrets: SecretLookup | None = None,
+        browser: Any = None,
     ) -> ToolResult:
         """`secrets` 는 소유자의 금고(트랙 Q6). `None` 이면 참조를 모른다 --
-        `secret://x` 는 문자 그대로 간다(플래그 off, S9)."""
+        `secret://x` 는 문자 그대로 간다(플래그 off, S9).
+
+        `browser` 는 이 태스크에 묶인 브라우저(트랙 Q14a). 부모 루프만 넘긴다 --
+        자식 포트·DA 포트·추측 실행은 넘기지 않으므로 거기서는 브라우저가 없다."""
         self._hydrate_stamps(session, known_stamps)
+        if call.name in BROWSER_TOOL_NAMES:
+            return await self._browser(session, call, browser, secrets)
         result = await self._attempt(
             session, call, known_reads=known_reads, secrets=secrets
         )
@@ -1373,6 +1380,42 @@ class SandboxToolExecutor:
             checksum=str(bounded["checksum"]),
             workspace_revision=await self._revision(session),
             entries=({"url": final_url, "text": wrapped},),
+        )
+
+    async def _browser(
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        browser: Any,
+        secrets: SecretLookup | None,
+    ) -> ToolResult:
+        """트랙 Q14a. 문자열은 세션이 이미 가리고 감쌌다 -- 여기서는 자르기만 한다."""
+        if browser is None:
+            return self._failure("denied", "browser_unavailable")
+        outcome = await browser.run(call, secrets=secrets)
+        audit = {"secret_refs": list(outcome.secret_refs)} if outcome.secret_refs else None
+        if outcome.status != "ok":
+            failed = self._failure(outcome.status, outcome.reason)
+            return replace(failed, audit=audit) if audit else failed
+        encoded = outcome.text.encode("utf-8")
+        bounded = self._bytes_mapping(encoded)
+        entry: dict[str, object] = {
+            "url": outcome.url,
+            "title": outcome.title,
+            "text": outcome.text,
+        }
+        if outcome.blocked:
+            entry["blocked_requests"] = dict(sorted(outcome.blocked.items()))
+        return ToolResult(
+            status="ok",
+            reason_code="ok",
+            preview=str(bounded["preview"]),
+            original_bytes=len(encoded),
+            truncated=bool(bounded["truncated"]),
+            checksum=str(bounded["checksum"]),
+            workspace_revision=await self._revision(session),
+            entries=(entry,),
+            audit=audit,
         )
 
     @staticmethod

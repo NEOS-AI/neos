@@ -117,6 +117,7 @@ class DurableCodingLoop(
         envelope=None,
         user_rules=None,
         secrets=None,
+        browser=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -141,6 +142,8 @@ class DurableCodingLoop(
         self._user_rules = user_rules
         # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다 -- 참조는 문자 그대로 간다.
         self._secrets = secrets
+        # 에이전트 브라우저 세션들(트랙 Q14a). `None` 이 off 다.
+        self._browser = browser
 
     async def run(
         self,
@@ -152,6 +155,11 @@ class DurableCodingLoop(
         if lease is None:
             raise RuntimeError("real coding loop requires an execution lease")
         state = await self._with_user_rules(input, self._restore(input, checkpoint))
+        if self._browser is not None:
+            # 트랙 Q14a: 쉬었거나 오래 산 세션을 닫고, 끝난 태스크의 세션은 지금 닫는다.
+            await self._browser.sweep()
+            if state.terminal_pending:
+                await self._browser.close(input.task_id)
         if state.terminal_pending:
             return
         if state.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
@@ -363,6 +371,7 @@ class DurableCodingLoop(
         known_stamps,
         prefetched=None,
         owner_id=None,
+        task_id=None,
     ):
         try:
             if prefetched is not None:
@@ -370,6 +379,9 @@ class DurableCodingLoop(
             else:
                 lookup = self._secret_lookup(owner_id)
                 extra = {"secrets": lookup} if lookup is not None else {}
+                if self._browser is not None and task_id:
+                    # 이 태스크의 세션에만 닿는 손잡이(트랙 Q14a). 부모의 이 자리만 넘긴다.
+                    extra["browser"] = self._browser.bind(task_id)
                 executed = await self._executor.execute(
                     bound.session,
                     validated,

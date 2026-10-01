@@ -725,6 +725,20 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
             summary["patch"] = preview
         summary["truncated"] = truncated
         return redact_sensitive(summary)
+    if call.name in {"browser.v1", "browser_fill_secret.v1"}:
+        # 트랙 Q14a. 승인하는 사람이 **어디로** 가는지·어느 출처에 비밀이 들어가는지 본다.
+        summary = {"operation": call.name}
+        for key in ("action", "url", "ref", "origin", "submit"):
+            value = call.input.get(key)
+            if value not in (None, False, ""):
+                summary[key] = value
+        # 참조는 값이 아니다 -- `secret` 키는 가려지므로 `secret_ref` 로 싣는다.
+        if isinstance(call.input.get("secret"), str):
+            summary["secret_ref"] = call.input["secret"]
+        text = call.input.get("text")
+        if isinstance(text, str) and text:
+            summary["text"], summary["truncated"] = _truncated_text(text)
+        return redact_sensitive(summary)
     path = call.input.get("path")
     if isinstance(path, str):
         return redact_sensitive({"path": path})
@@ -770,6 +784,15 @@ _DENIAL_REASONS = {
         "that secret is bound to a different environment variable; use its own name"
     ),
     "secret_env_unsupported": "this sandbox cannot carry secrets; do not retry",
+    "browser_unavailable": "the browser is not available here; do not retry",
+    "browser_no_page": "no page is open; navigate first",
+    "browser_secret_origin_mismatch": (
+        "the page or field is not on that origin; do not retry -- navigate to "
+        "the login page of that origin first"
+    ),
+    "browser_secret_unavailable": "stored secrets are not enabled; do not retry",
+    "browser_navigation_cap": "this task used all its page loads; do not retry",
+    "browser_capacity": "too many browser sessions are open; try again later",
     "policy_user_only": (
         "only the user can do this, even with approval; do not retry -- "
         "tell the user what to run and why"

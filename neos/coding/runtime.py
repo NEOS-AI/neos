@@ -23,6 +23,7 @@ from neos.jev.assembly import build_tool_risk_gate, build_trajectory_monitor
 from neos.standing.budget import build_agent_envelope
 from neos.coding.application.user_rules import build_user_rule_source
 from neos.coding.secrets import build_secret_source
+from neos.coding.browser.session import build_browser_sessions
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -779,6 +780,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             user_rules=build_user_rule_source(coding, db_manager.get_session),
             # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다.
             secrets=build_secret_source(coding, config.secrets, db_manager.get_session),
+            # 에이전트 브라우저(트랙 Q14a). `None` 이 off 다.
+            browser=build_browser_sessions(config),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라
