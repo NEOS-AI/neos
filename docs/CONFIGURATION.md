@@ -836,6 +836,41 @@ A coding task created with `mode: background` is unattended and capped at the
 validated risk `read_only`. Writes, commands and questions are refused as
 `policy_mode_ceiling`, even when an allow list says allow.
 
+### Coding approval: user rules (track Q2)
+
+```yaml
+coding_model:
+  approval_user_rules: false      # off: rules are not read and the API is not mounted
+  approval_user_rules_max: 100    # rules per user
+```
+
+Each user keeps their own `allow` / `require` / `block` rules, matched by tool
+name and, for `execute.v1`, an argv prefix (same matching as USER_ONLY: wrappers
+such as `env`/`timeout` are stripped, and flags are skipped):
+
+```
+GET    /api/v1/coding/approval-rules
+POST   /api/v1/coding/approval-rules   {"effect": "block", "tool": "execute.v1", "argv_prefix": ["git", "push"]}
+DELETE /api/v1/coding/approval-rules/{rule_id}
+```
+
+Rules are evaluated **after** the base policy and can only narrow it, except
+that `allow` lifts the approval a call would otherwise need because of its risk
+class:
+
+```
+USER_ONLY > base deny (ceiling, secret paths, deny_tools) > user block
+  > protected-file approval > user require > operator allow / remembered approvals
+  > phase-change approval > read-only allow > user allow > risk default
+```
+
+A blocked call is refused with reason `policy_user_rule_blocked`. In unattended
+runs (`autonomous`, `background`) a `require` folds to a refusal. Standing agent
+tasks use their owner's rules. The loop reads the rules at **every step** and
+never stores them in a checkpoint, so a rule added while a task runs applies
+from its next step; if the rules cannot be read, the step fails retryably
+(`user_rules_unavailable`) rather than deciding without them.
+
 ### Standing agents
 
 ```yaml
@@ -916,6 +951,35 @@ A fired delivery opens one **background** (read-only) task of the agent; the
 body is wrapped as an untrusted document after the owner's template. A refused
 delivery leaves no idempotency record, so a retry after the agent is resumed
 fires.
+
+#### Channel triggers (track Q4b)
+
+With triggers on, a trigger can watch a chat channel instead of a webhook:
+
+```json
+{"prompt_template": "Triage this report.", "source": "channel",
+ "channel_type": "slack", "channel_id": "C0123", "allowed_senders": ["U0456"]}
+```
+
+Channel triggers have no secret (`secret` and `delivery_path` are `null`) and
+cannot be fired through the webhook path. A message fires the trigger when:
+
+- it is in that channel and has text (attachments alone do not fire);
+- the sender is mapped to the agent's owner in `channels.principals`, or is
+  listed in `allowed_senders`; bots and NEOS itself never fire triggers;
+- the operator's `ignored_channels` / `allowed_channels` admit the channel.
+
+The mention rule and `allowed_users` are chat rules and do not apply. Triggers
+run as a side effect just before the chat gate: whether the message also gets a
+chat reply is unchanged. The task body is the message as JSON
+(`channel_type`, `channel_id`, `sender`, `thread_id`, `text`), so filters can
+use those paths, e.g. `{"path": "thread_id", "equals": null}` to skip thread
+replies. The same message delivered twice opens one task.
+
+The adapter must receive messages that do not mention the bot: Slack needs the
+`message.channels` (and `message.groups` for private channels) event
+subscription, Discord the Message Content intent, and Telegram groups need the
+bot's privacy mode off.
 
 #### Budget envelope (track Q10a)
 
