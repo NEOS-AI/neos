@@ -207,6 +207,10 @@ class AgentLoopState:
     # system + tools + those messages. See `_guard_thinking_prefix`.
     sent_prefix_count: int = 0
     sent_prefix_digest: str = ""
+    #: 태스크 소유자의 승인 규칙(트랙 Q2). **체크포인트에 싣지 않는다** -- `run()` 이 매
+    #: 단계 새로 읽어 채운다(`codec._dump_loop_state` 에 없는 것이 의도다). 실행 중에
+    #: 더한 block 이 다음 단계부터 걸리게.
+    user_rules: tuple = ()
 
     @property
     def has_pending_tool(self) -> bool:

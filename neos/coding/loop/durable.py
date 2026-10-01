@@ -115,6 +115,7 @@ class DurableCodingLoop(
         jev=None,
         monitor=None,
         envelope=None,
+        user_rules=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -135,6 +136,8 @@ class DurableCodingLoop(
         self._monitor = monitor
         # 상시 에이전트 예산 봉투(트랙 Q10a). 섀도 -- 넘으면 `budget.judged` 를 남길 뿐이다.
         self._envelope = envelope
+        # 사용자 승인 규칙(트랙 Q2)의 원천. `None` 이 off 다.
+        self._user_rules = user_rules
 
     async def run(
         self,
@@ -145,7 +148,7 @@ class DurableCodingLoop(
         lease = deps.lease
         if lease is None:
             raise RuntimeError("real coding loop requires an execution lease")
-        state = self._restore(input, checkpoint)
+        state = await self._with_user_rules(input, self._restore(input, checkpoint))
         if state.terminal_pending:
             return
         if state.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
@@ -205,7 +208,24 @@ class DurableCodingLoop(
             current_phase=state.phase,
             unattended=self._config.approval_unattended or unattended,
             read_only_ceiling=read_only_ceiling,
+            user_rules=state.user_rules,
         )
+
+    async def _with_user_rules(self, input: LoopInput, state: AgentLoopState) -> AgentLoopState:
+        """소유자의 규칙을 이 단계의 상태에 싣는다(트랙 Q2). 저장은 하지 않는다.
+
+        읽지 못하면 이 단계는 재시도 가능한 실패다 -- 규칙 없이 판정하면 사용자의
+        block 이 조용히 빠진다.
+        """
+        source = self._user_rules
+        owner_id = getattr(input, "owner_id", None)
+        if source is None or not owner_id:
+            return state
+        try:
+            rules = await source.list_for_user(owner_id)
+        except Exception as error:  # noqa: BLE001 -- 원인과 상관없이 닫는다
+            raise CodingLoopFailure("user_rules_unavailable", retryable=True) from error
+        return replace(state, user_rules=tuple(rules))
 
     def _evaluate_static_call(
         self,

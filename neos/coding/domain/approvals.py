@@ -41,6 +41,34 @@ class ApprovalMode(StrEnum):
     AUTO = "auto"
 
 
+class UserRuleEffect(StrEnum):
+    """사용자 규칙의 효과 (트랙 Q2). 기본 정책 **뒤에서** 평가된다:
+
+    `USER_ONLY > 기본 DENY > 사용자 block > 기본 REQUIRE(보호 파일) > 사용자 require
+    > 운영자 allow > 사용자 allow > 기본값`. 사용자 allow 는 위험 등급이 정하는
+    기본 REQUIRE_APPROVAL 만 ALLOW 로 바꾼다 -- 기본 정책의 DENY 도, 보호 파일의
+    REQUIRE 도, 단계 전환 승인도 넘지 못한다.
+    """
+
+    ALLOW = "allow"
+    REQUIRE = "require"
+    BLOCK = "block"
+
+
+@dataclass(frozen=True, slots=True)
+class UserApprovalRule:
+    """사용자 한 명의 규칙 하나. 도구 이름 + (execute.v1 이면) argv 접두.
+
+    argv 접두는 USER_ONLY 와 **같은 규칙**으로 맞춘다(래퍼를 벗기고, 플래그 값
+    읽기 둘 다 시도) -- 사본을 만들면 한쪽만 고쳐진다.
+    """
+
+    rule_id: str
+    effect: UserRuleEffect
+    tool: str
+    argv_prefix: tuple[str, ...] = ()
+
+
 #: 승인으로도 위임할 수 없는 명령 -- 사람이 직접 한다 (로드맵 트랙 Q2, 결정 2).
 #:
 #: **코드에 고정한다.** 설정(`approval_user_only_extra`)은 여기에 **더하기만**
@@ -84,6 +112,8 @@ class ApprovalGate:
     user_only_extra: frozenset[tuple[str, ...]] = frozenset()
     #: background 모드(트랙 Q1) -- 아무것도 바꿀 수 없는 호출만 통과한다.
     read_only_ceiling: bool = False
+    #: 태스크 소유자의 규칙(트랙 Q2). 에이전트 태스크도 소유자의 규칙을 쓴다.
+    user_rules: tuple[UserApprovalRule, ...] = ()
 
 
 
@@ -490,6 +520,26 @@ def _argv_has_prefix(command: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
     return False
 
 
+def user_rule_matches(rule: UserApprovalRule, call: ValidatedToolCall) -> bool:
+    if call.name != rule.tool:
+        return False
+    if not rule.argv_prefix:
+        return True
+    if call.name != "execute.v1":
+        return False
+    argv = call.input.get("argv")
+    if not isinstance(argv, (list, tuple)) or not argv:
+        return False
+    command = _innermost_command(tuple(str(part) for part in argv))
+    return _argv_has_prefix(command, rule.argv_prefix)
+
+
+def has_user_rule(call: ValidatedToolCall, gate: ApprovalGate, effect: UserRuleEffect) -> bool:
+    return any(
+        rule.effect is effect and user_rule_matches(rule, call) for rule in gate.user_rules
+    )
+
+
 def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     """background 모드에서 이 호출이 천장을 넘는가 (트랙 Q1).
 
@@ -517,6 +567,11 @@ def policy_denial_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str:
         pass
     if exceeds_mode_ceiling(call, gate):
         return "policy_mode_ceiling"
+    try:
+        if has_user_rule(call, gate, UserRuleEffect.BLOCK):
+            return "policy_user_rule_blocked"
+    except Exception:
+        pass
     return "policy_approval_denied"
 
 
@@ -533,10 +588,16 @@ def _evaluate_approval(
         return ApprovalPolicyOutcome.DENY
     if call.name in gate.deny_tools:
         return ApprovalPolicyOutcome.DENY
+    # 사용자 block(트랙 Q2) -- 기본 DENY 뒤, 그 밖의 모든 것 앞.
+    if has_user_rule(call, gate, UserRuleEffect.BLOCK):
+        return ApprovalPolicyOutcome.DENY
     # Instruction files persist agent behavior; never auto-approve writes.
     if _is_protected_instruction_write(call, gate.workspace_root):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if _is_sensitive_config_write(call):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 사용자 require -- 운영자 allow 와 "항상 허용" 기억보다 앞이다(좁히기만).
+    if has_user_rule(call, gate, UserRuleEffect.REQUIRE):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
@@ -551,6 +612,9 @@ def _evaluate_approval(
     from neos.coding.tools.registry import ToolRisk
 
     if call.risk is ToolRisk.READ_ONLY:
+        return ApprovalPolicyOutcome.ALLOW
+    # 사용자 allow -- 위험 등급이 정하는 기본 REQUIRE 만 바꾼다. 위의 어떤 판정도 넘지 못한다.
+    if has_user_rule(call, gate, UserRuleEffect.ALLOW):
         return ApprovalPolicyOutcome.ALLOW
     if call.risk in {
         ToolRisk.WORKSPACE_WRITE,
@@ -663,6 +727,10 @@ _DENIAL_REASONS = {
     "policy_mode_ceiling": (
         "this is a background task: read only, no writes, commands or "
         "questions; do not retry -- note what should be done instead"
+    ),
+    "policy_user_rule_blocked": (
+        "the user has a rule blocking this action; do not retry -- "
+        "choose another way or tell the user why it is needed"
     ),
     "policy_user_only": (
         "only the user can do this, even with approval; do not retry -- "
