@@ -256,3 +256,77 @@ def test_the_key_comes_from_the_environment_by_name() -> None:
     assert SECRET_ENV_MAPPING["NEOS_TRIGGER_SIGNING_KEY"] == "secrets.standing_trigger_signing_key"
     template = (Path(__file__).resolve().parents[2] / ".env.template").read_text()
     assert "\nNEOS_TRIGGER_SIGNING_KEY=\n" in template
+
+
+# -- channel source (Q4b) ---------------------------------------------------------
+
+
+def _create_channel(world, agent_id, **extra):
+    return world.http.post(
+        f"/standing-agents/{agent_id}/triggers",
+        json={"prompt_template": "Triage it.", "source": "channel", "channel_type": "slack",
+              "channel_id": "C_ops", **extra},
+    )
+
+
+async def test_a_channel_trigger_has_no_secret_and_shows_its_channel(world) -> None:
+    agent = await _agent(world)
+
+    created = _create_channel(world, agent.agent_id, allowed_senders=["U_carol"])
+
+    assert created.status_code == 201
+    body = created.json()
+    assert (body["source"], body["channel_type"], body["channel_id"], body["allowed_senders"]) == (
+        "channel", "slack", "C_ops", ["U_carol"]
+    )
+    assert body["secret"] is None and body["delivery_path"] is None
+    webhook = _create(world, agent.agent_id).json()
+    assert webhook["channel_type"] is None and webhook["allowed_senders"] is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"source": "webhook", "channel_type": "slack", "channel_id": "C1"},
+        {"source": "webhook", "allowed_senders": ["U1"]},
+        {"source": "channel", "channel_type": "slack"},
+        {"source": "channel", "channel_id": "C1"},
+        {"source": "channel", "channel_type": "irc", "channel_id": "C1"},
+        {"source": "pigeon"},
+    ],
+)
+async def test_a_mixed_shape_is_422(world, extra) -> None:
+    agent = await _agent(world)
+
+    response = world.http.post(
+        f"/standing-agents/{agent.agent_id}/triggers",
+        json={"prompt_template": "p", **extra},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_a_channel_trigger_cannot_be_fired_through_the_webhook_path(world) -> None:
+    """Its secret derives from its id like any other -- the source decides, same 401."""
+    from neos.standing.triggers import trigger_secret
+
+    agent = await _agent(world)
+    trigger_id = _create_channel(world, agent.agent_id).json()["trigger_id"]
+
+    response = _deliver(world, trigger_id, trigger_secret(KEY, trigger_id))
+
+    assert response.status_code == 401
+    assert await world.coding.list_owned("alice", limit=10) == []
+
+
+async def test_senders_are_edited_on_channel_triggers_and_refused_on_webhooks(world) -> None:
+    agent = await _agent(world)
+    channel_id = _create_channel(world, agent.agent_id).json()["trigger_id"]
+    webhook_id = _create(world, agent.agent_id).json()["trigger_id"]
+    base = f"/standing-agents/{agent.agent_id}/triggers"
+
+    edited = world.http.patch(f"{base}/{channel_id}", json={"allowed_senders": ["U_dan"]})
+    refused = world.http.patch(f"{base}/{webhook_id}", json={"allowed_senders": ["U_dan"]})
+
+    assert edited.json()["allowed_senders"] == ["U_dan"]
+    assert refused.status_code == 422

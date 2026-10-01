@@ -1963,6 +1963,11 @@ class CodingModelConfig(StrictConfigModel):
     # 공백으로 나눈 argv 접두). 코드의 USER_ONLY_COMMANDS 와 합집합으로만 쓰이고,
     # 거기서 빼는 설정은 없다.
     approval_user_only_extra: list[str] = Field(default_factory=list)
+    # 트랙 Q2: 사용자별 승인 규칙(allow/require/block). 끄면 루프가 규칙을 읽지 않고
+    # 규칙 API 도 마운트되지 않는다. 규칙은 기본 정책 **뒤에서** 평가된다 -- 사용자 allow 는
+    # 기본 DENY·USER_ONLY·보호 파일 승인을 넘지 못한다.
+    approval_user_rules: bool = False
+    approval_user_rules_max: int = Field(default=100, ge=1, le=1000)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     notebook_edit: bool = False
     image_tool: bool = False

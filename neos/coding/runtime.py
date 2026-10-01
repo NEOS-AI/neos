@@ -21,6 +21,7 @@ from neos.coding.application.workspace_stream_service import (
 from neos.coding.loop.base import CodingLoop
 from neos.jev.assembly import build_tool_risk_gate, build_trajectory_monitor
 from neos.standing.budget import build_agent_envelope
+from neos.coding.application.user_rules import build_user_rule_source
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -771,6 +772,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             monitor=build_trajectory_monitor(config.jev),
             # 상시 에이전트 예산 봉투(트랙 Q10a). 섀도 전용, 같은 규율로 여기서만 켜진다.
             envelope=build_agent_envelope(config.standing_agents, db_manager.get_session),
+            # 사용자 승인 규칙(트랙 Q2). `None` 이 off 다.
+            user_rules=build_user_rule_source(coding, db_manager.get_session),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라

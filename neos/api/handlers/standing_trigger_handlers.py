@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -44,12 +44,14 @@ from neos.standing.resolve import resolve_agent
 from neos.standing.store import StandingAgentStore
 from neos.standing.tasks import TaskOpener
 from neos.standing.triggers import (
+    WEBHOOK,
     PostgresTriggerStore,
     StandingTrigger,
     TriggerStore,
     create_trigger,
     filters_json,
     fire_trigger,
+    parse_channel_source,
     parse_filters,
     trigger_secret,
     verify_delivery,
@@ -95,29 +97,54 @@ class TriggerOut(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
+    #: 채널 원천(Q4b)일 때만. webhook 이면 None.
+    channel_type: str | None = None
+    channel_id: str | None = None
+    allowed_senders: list[str] | None = None
 
 
 class CreatedTriggerOut(TriggerOut):
-    #: 만들 때 한 번만 싣는다.
-    secret: str
-    #: 배달할 경로. API 접두를 포함한다.
-    delivery_path: str
+    #: webhook 만, 만들 때 한 번만 싣는다. 채널 원천은 None -- 서명이 아니라 발신자가 인증이다.
+    secret: str | None = None
+    #: 배달할 경로(webhook 만). API 접두를 포함한다.
+    delivery_path: str | None = None
 
 
 class CreateTriggerIn(BaseModel):
     prompt_template: str
     filters: list[dict[str, Any]] = []
+    source: Literal["webhook", "channel"] = "webhook"
+    channel_type: str | None = None
+    channel_id: str | None = None
+    allowed_senders: list[str] = []
+
+    @model_validator(mode="after")
+    def shape_matches_source(self) -> "CreateTriggerIn":
+        channel_fields = (self.channel_type, self.channel_id)
+        if self.source == "webhook" and (any(channel_fields) or self.allowed_senders):
+            raise ValueError("webhook triggers take no channel fields")
+        if self.source == "channel" and not all(channel_fields):
+            raise ValueError("channel triggers need channel_type and channel_id")
+        return self
 
 
 class UpdateTriggerIn(BaseModel):
     enabled: bool | None = None
     prompt_template: str | None = None
     filters: list[dict[str, Any]] | None = None
+    allowed_senders: list[str] | None = None
 
     @model_validator(mode="after")
     def something_to_apply(self) -> "UpdateTriggerIn":
-        if self.enabled is None and self.prompt_template is None and self.filters is None:
-            raise ValueError("enabled · prompt_template · filters 중 하나는 있어야 한다")
+        if (
+            self.enabled is None
+            and self.prompt_template is None
+            and self.filters is None
+            and self.allowed_senders is None
+        ):
+            raise ValueError(
+                "enabled · prompt_template · filters · allowed_senders 중 하나는 있어야 한다"
+            )
         return self
 
 
@@ -131,6 +158,9 @@ def _out(trigger: StandingTrigger) -> TriggerOut:
         enabled=trigger.enabled,
         created_at=trigger.created_at,
         updated_at=trigger.updated_at,
+        channel_type=trigger.channel.channel_type if trigger.channel else None,
+        channel_id=trigger.channel.channel_id if trigger.channel else None,
+        allowed_senders=list(trigger.channel.allowed_senders) if trigger.channel else None,
     )
 
 
@@ -159,6 +189,11 @@ async def create_standing_trigger(
 ) -> CreatedTriggerOut:
     try:
         filters = parse_filters(body.filters)
+        channel = (
+            parse_channel_source(body.channel_type, body.channel_id, body.allowed_senders)
+            if body.source == "channel"
+            else None
+        )
         trigger = await create_trigger(
             agents,
             triggers,
@@ -166,6 +201,7 @@ async def create_standing_trigger(
             agent_id=agent_id,
             prompt_template=body.prompt_template,
             filters=filters,
+            channel=channel,
         )
     except LookupError as error:
         raise HTTPException(status_code=404, detail="standing agent not found") from error
@@ -173,6 +209,8 @@ async def create_standing_trigger(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if trigger is None:
         raise HTTPException(status_code=404, detail="standing agent not found")
+    if trigger.source != WEBHOOK:
+        return CreatedTriggerOut(**_out(trigger).model_dump())
     master_key = trigger_settings[0]
     return CreatedTriggerOut(
         **_out(trigger).model_dump(),
@@ -213,6 +251,7 @@ async def update_standing_trigger(
                 enabled=body.enabled,
                 prompt_template=body.prompt_template,
                 filters=filters,
+                allowed_senders=body.allowed_senders,
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -278,7 +317,9 @@ async def deliver_to_trigger(
         tolerance_seconds=tolerance,
     ):
         raise _unauthorized()
-    if trigger is None:
+    # 채널 트리거도 trigger_id 로 비밀이 파생된다 -- 원천이 webhook 이 아니면 이 경로로는
+    # 발동하지 않는다. 모르는 트리거와 같은 401 이다.
+    if trigger is None or trigger.source != WEBHOOK:
         raise _unauthorized()
     firing = await fire_trigger(
         agents,

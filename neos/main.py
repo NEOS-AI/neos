@@ -601,6 +601,13 @@ _include_router_for_runtime(model_preference_router, prefix=settings.API_V1_PREF
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 _include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])
+# 사용자 승인 규칙(트랙 Q2). 꺼져 있으면 라우트가 없다.
+if settings.config.coding_model.approval_user_rules:
+    from neos.api.handlers.user_rule_handlers import router as user_rule_router
+
+    _include_router_for_runtime(
+        user_rule_router, prefix=settings.API_V1_PREFIX, tags=["Coding Approval Rules"]
+    )
 # 상시 에이전트(트랙 Q13b). 꺼져 있으면 라우트가 **없다** -- 거절하는 라우트가 아니다.
 if settings.config.standing_agents.enabled:
     from neos.api.handlers.standing_agent_handlers import router as standing_agent_router

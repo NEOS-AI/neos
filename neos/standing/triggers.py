@@ -38,6 +38,10 @@ from neos.standing.tasks import AgentTaskRefused, TaskOpener, open_agent_task
 from neos.univer.ports import wrap_untrusted_document
 
 WEBHOOK = "webhook"
+CHANNEL = "channel"
+#: 채널 원천이 받는 플랫폼(076 CHECK 와 같다).
+CHANNEL_TYPES = frozenset({"slack", "discord", "telegram"})
+MAX_ALLOWED_SENDERS = 100
 SIGNATURE_VERSION = "v1"
 MAX_DELIVERY_ID_CHARS = 128
 #: 배달 id 에 `.` 이 없어야 서명 대상의 경계가 하나로 정해진다. 있으면 (id "a", 본문
@@ -62,6 +66,40 @@ class TriggerFilter:
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelSource:
+    """채널 원천(트랙 Q4b). 이 채널의 메시지가 발동시킨다.
+
+    `allowed_senders` 는 플랫폼 사용자 id 다. 소유자에게 매핑된 사람(`channels.principals`)은
+    목록에 없어도 발동시킨다 -- 목록은 소유자 **밖의** 사람을 더할 때만 쓴다.
+    """
+
+    channel_type: str
+    channel_id: str
+    allowed_senders: tuple[str, ...] = ()
+
+
+def parse_channel_source(
+    channel_type: str, channel_id: str, allowed_senders: Sequence[Any] = ()
+) -> ChannelSource:
+    kind = (channel_type or "").strip().lower()
+    if kind not in CHANNEL_TYPES:
+        raise ValueError(f"channel_type is one of {sorted(CHANNEL_TYPES)}")
+    where = (channel_id or "").strip()
+    if not where or len(where) > 255:
+        raise ValueError("channel_id must not be empty")
+    return ChannelSource(kind, where, parse_allowed_senders(allowed_senders))
+
+
+def parse_allowed_senders(raw: Sequence[Any]) -> tuple[str, ...]:
+    senders = tuple(raw or ())
+    if len(senders) > MAX_ALLOWED_SENDERS:
+        raise ValueError(f"allowed_senders has at most {MAX_ALLOWED_SENDERS} entries")
+    if any(not isinstance(s, str) or not s.strip() or s != s.strip() for s in senders):
+        raise ValueError("allowed_senders are platform user ids")
+    return tuple(dict.fromkeys(senders))
+
+
+@dataclass(frozen=True, slots=True)
 class StandingTrigger:
     trigger_id: str
     agent_id: str
@@ -72,7 +110,12 @@ class StandingTrigger:
     enabled: bool
     created_at: datetime
     updated_at: datetime
-    source: str = WEBHOOK
+    #: None 이면 webhook 원천이다.
+    channel: ChannelSource | None = None
+
+    @property
+    def source(self) -> str:
+        return WEBHOOK if self.channel is None else CHANNEL
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +224,7 @@ class TriggerStore(Protocol):
         *,
         prompt_template: str,
         filters: Sequence[TriggerFilter] = (),
+        channel: ChannelSource | None = None,
     ) -> StandingTrigger: ...
 
     async def get_owned(self, owner_id: str, trigger_id: str) -> StandingTrigger | None: ...
@@ -191,6 +235,11 @@ class TriggerStore(Protocol):
 
     async def list_for_agent(self, owner_id: str, agent_id: str) -> list[StandingTrigger]: ...
 
+    async def list_for_channel(self, channel_type: str, channel_id: str) -> list[StandingTrigger]:
+        """채널 메시지 하나에 대해 부르는 조회(트랙 Q4b). 발신자를 보기 **전**이다 --
+        누가 발동시킬 수 있는지는 `channel_triggers.sender_admitted` 가 정한다."""
+        ...
+
     async def update(
         self,
         owner_id: str,
@@ -199,6 +248,7 @@ class TriggerStore(Protocol):
         enabled: bool | None = None,
         prompt_template: str | None = None,
         filters: Sequence[TriggerFilter] | None = None,
+        allowed_senders: Sequence[str] | None = None,
     ) -> StandingTrigger | None: ...
 
     async def delete(self, owner_id: str, trigger_id: str) -> bool: ...
@@ -230,7 +280,7 @@ class InMemoryTriggerStore:
         agent = await self._agents.get_owned(trigger.owner_id, trigger.agent_id)
         return trigger if agent is not None else None
 
-    async def create(self, owner_id, agent_id, *, prompt_template, filters=()):
+    async def create(self, owner_id, agent_id, *, prompt_template, filters=(), channel=None):
         if await self._agents.get_owned(owner_id, agent_id) is None:
             raise LookupError("agent not found")
         now = self._clock()
@@ -243,6 +293,7 @@ class InMemoryTriggerStore:
             enabled=True,
             created_at=now,
             updated_at=now,
+            channel=channel,
         )
         self._live[trigger.trigger_id] = trigger
         return trigger
@@ -263,10 +314,25 @@ class InMemoryTriggerStore:
         alive = [trigger for trigger in found if await self._alive(trigger) is not None]
         return sorted(alive, key=lambda trigger: trigger.created_at)
 
-    async def update(self, owner_id, trigger_id, *, enabled=None, prompt_template=None, filters=None):
+    async def list_for_channel(self, channel_type, channel_id):
+        found = [
+            trigger
+            for trigger in self._live.values()
+            if trigger.channel is not None
+            and (trigger.channel.channel_type, trigger.channel.channel_id)
+            == (channel_type, channel_id)
+        ]
+        alive = [trigger for trigger in found if await self._alive(trigger) is not None]
+        return sorted(alive, key=lambda trigger: trigger.created_at)
+
+    async def update(
+        self, owner_id, trigger_id, *, enabled=None, prompt_template=None, filters=None,
+        allowed_senders=None,
+    ):
         current = await self.get_owned(owner_id, trigger_id)
         if current is None:
             return None
+        channel = _with_senders(current, allowed_senders)
         updated = replace(
             current,
             enabled=current.enabled if enabled is None else enabled,
@@ -276,6 +342,7 @@ class InMemoryTriggerStore:
                 else normalize_template(prompt_template)
             ),
             filters=current.filters if filters is None else tuple(filters),
+            channel=channel,
             updated_at=self._clock(),
         )
         self._live[trigger_id] = updated
@@ -288,9 +355,21 @@ class InMemoryTriggerStore:
         return True
 
 
+def _with_senders(
+    current: StandingTrigger, allowed_senders: Sequence[str] | None
+) -> ChannelSource | None:
+    """발신자 목록 교체. webhook 트리거에는 발신자가 없다 -- 서명이 발신자다."""
+    if allowed_senders is None:
+        return current.channel
+    if current.channel is None:
+        raise ValueError("allowed_senders applies to channel triggers only")
+    return replace(current.channel, allowed_senders=parse_allowed_senders(allowed_senders))
+
+
 _SELECT = """
     SELECT t.trigger_id, t.agent_id, a.owner_id, t.source, t.prompt_template, t.filters,
-           t.enabled, t.created_at, t.updated_at
+           t.enabled, t.created_at, t.updated_at, t.channel_type, t.channel_id,
+           t.allowed_senders
     FROM standing_agent_triggers t
     JOIN standing_agents a ON a.agent_id = t.agent_id
     WHERE t.deleted_at IS NULL AND a.deleted_at IS NULL
@@ -307,7 +386,7 @@ class PostgresTriggerStore:
         self._session_factory = session_factory
         self._clock = clock
 
-    async def create(self, owner_id, agent_id, *, prompt_template, filters=()):
+    async def create(self, owner_id, agent_id, *, prompt_template, filters=(), channel=None):
         template = normalize_template(prompt_template)
         trigger_id = new_trigger_id()
         now = self._clock()
@@ -318,10 +397,12 @@ class PostgresTriggerStore:
                     text(
                         """
                         INSERT INTO standing_agent_triggers
-                            (trigger_id, agent_id, prompt_template, filters,
+                            (trigger_id, agent_id, source, prompt_template, filters,
+                             channel_type, channel_id, allowed_senders,
                              created_at, updated_at)
-                        SELECT :trigger_id, a.agent_id, :template,
-                               CAST(:filters AS JSONB), :now, :now
+                        SELECT :trigger_id, a.agent_id, :source, :template,
+                               CAST(:filters AS JSONB), :channel_type, :channel_id,
+                               CAST(:allowed_senders AS JSONB), :now, :now
                         FROM standing_agents a
                         WHERE a.agent_id = :agent_id AND a.owner_id = :owner_id
                           AND a.deleted_at IS NULL
@@ -334,6 +415,12 @@ class PostgresTriggerStore:
                         "owner_id": owner_id,
                         "template": template,
                         "filters": json.dumps(filters_json(filters)),
+                        "source": WEBHOOK if channel is None else CHANNEL,
+                        "channel_type": channel.channel_type if channel else None,
+                        "channel_id": channel.channel_id if channel else None,
+                        "allowed_senders": json.dumps(
+                            list(channel.allowed_senders) if channel else []
+                        ),
                         "now": now,
                     },
                 )
@@ -355,14 +442,33 @@ class PostgresTriggerStore:
         rows = await self._select("AND t.trigger_id = :trigger_id", {"trigger_id": trigger_id})
         return rows[0] if rows else None
 
+    async def list_for_channel(self, channel_type, channel_id):
+        # `t.source = 'channel'` 은 결과를 바꾸지 않는다(076 CHECK 가 webhook 행의 channel_type 을
+        # NULL 로 묶는다). 076 의 부분 인덱스 조건과 같아서 플래너가 그 인덱스를 쓰게 하려고 둔다.
+        return await self._select(
+            "AND t.source = 'channel' AND t.channel_type = :channel_type "
+            "AND t.channel_id = :channel_id ORDER BY t.created_at",
+            {"channel_type": channel_type, "channel_id": channel_id},
+        )
+
     async def list_for_agent(self, owner_id, agent_id):
         return await self._select(
             "AND t.agent_id = :agent_id AND a.owner_id = :owner_id ORDER BY t.created_at",
             {"agent_id": agent_id, "owner_id": owner_id},
         )
 
-    async def update(self, owner_id, trigger_id, *, enabled=None, prompt_template=None, filters=None):
+    async def update(
+        self, owner_id, trigger_id, *, enabled=None, prompt_template=None, filters=None,
+        allowed_senders=None,
+    ):
         template = normalize_template(prompt_template) if prompt_template is not None else None
+        senders = None
+        if allowed_senders is not None:
+            current = await self.get_owned(owner_id, trigger_id)
+            if current is None:
+                return None
+            channel = _with_senders(current, allowed_senders)
+            senders = json.dumps(list(channel.allowed_senders))
         async with await self._session_factory() as session:
             async with session.begin():
                 result = await session.execute(
@@ -372,6 +478,9 @@ class PostgresTriggerStore:
                         SET enabled = COALESCE(:enabled, t.enabled),
                             prompt_template = COALESCE(:template, t.prompt_template),
                             filters = COALESCE(CAST(:filters AS JSONB), t.filters),
+                            allowed_senders = COALESCE(
+                                CAST(:senders AS JSONB), t.allowed_senders
+                            ),
                             updated_at = :now
                         FROM standing_agents a
                         WHERE a.agent_id = t.agent_id AND a.owner_id = :owner_id
@@ -384,6 +493,7 @@ class PostgresTriggerStore:
                         "enabled": enabled,
                         "template": template,
                         "filters": None if filters is None else json.dumps(filters_json(filters)),
+                        "senders": senders,
                         "now": self._clock(),
                         "owner_id": owner_id,
                         "trigger_id": trigger_id,
@@ -418,12 +528,20 @@ class PostgresTriggerStore:
                     trigger_id=row.trigger_id,
                     agent_id=row.agent_id,
                     owner_id=row.owner_id,
-                    source=row.source,
                     prompt_template=row.prompt_template,
                     filters=parse_filters(row.filters),
                     enabled=row.enabled,
                     created_at=row.created_at,
                     updated_at=row.updated_at,
+                    channel=(
+                        ChannelSource(
+                            row.channel_type,
+                            row.channel_id,
+                            tuple(str(sender) for sender in row.allowed_senders),
+                        )
+                        if row.source == CHANNEL
+                        else None
+                    ),
                 )
                 for row in result
             ]
@@ -491,11 +609,13 @@ async def create_trigger(
     agent_id: str,
     prompt_template: str,
     filters: Sequence[TriggerFilter] = (),
+    channel: ChannelSource | None = None,
 ) -> StandingTrigger | None:
     """에이전트는 `resolve_agent` 로만 찾는다. 남의 에이전트면 None."""
     agent = await resolve_agent(agents, owner_id, agent_id)
     if agent is None:
         return None
     return await triggers.create(
-        agent.owner_id, agent.agent_id, prompt_template=prompt_template, filters=filters
+        agent.owner_id, agent.agent_id, prompt_template=prompt_template, filters=filters,
+        channel=channel,
     )

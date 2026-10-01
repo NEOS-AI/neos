@@ -302,6 +302,10 @@ class DiscordAdapter(ChannelAdapterBase):
             bound_session=bound,
             has_attachment=has_attachment,
         )
+        # 상시 에이전트 채널 트리거(Q4b) -- 대화 게이트와 독립인 부작용, 던지지 않는다.
+        from neos.standing.channel_triggers import observe_channel_message
+
+        await observe_channel_message(ctx, message_id=str(getattr(message, "id", "") or ""))
         decision = evaluate_channel_gate(ctx, policy_from_settings(self.channel_type))
         if not decision.allowed:
             logger.info(
