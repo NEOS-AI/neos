@@ -5,7 +5,8 @@
 
 - 요청의 `user_id` 가 이 연결의 사용자와 다르면 보내지 않는다(`device_bridge_owner_mismatch`)
 - 답은 이 연결이 보낸 요청 id 에만 붙는다 -- 모르는 id 의 답은 버린다
-- 무인 규칙은 연결이 쥔 **지금의** `allow_unattended` 로 한 번 더 본다(`device_unattended_refused`)
+- 무인 규칙은 연결이 쥔 **지금의** `allow_unattended` 로 한 번 더 본다(`device_unattended_refusal`)
+- 쓰기(Q16b)는 보내기 직전에 자격증명을 **다시 읽어** `allow_writes` 를 본다(BW2) -- 무인 쓰기는 늘 거절
 - 걸린 호출 수 상한 · 메시지 크기 상한 · 갱신마다 자격증명을 다시 읽는다(폐기·설정 변경 감지)
 
 닫는 코드: 4401 폐기 · 4409 다른 연결에 밀림(브리지는 다시 붙지 않는다) ·
@@ -21,7 +22,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from neos.coding.bridge.catalog import DEVICE_TOOLS, device_unattended_refused
+from neos.coding.bridge.catalog import DEVICE_TOOLS, WRITE_TOOLS, device_unattended_refusal
 from neos.coding.bridge.relay import DISPLACED, KICKED, BridgeView, DeviceBridgeRelay
 
 logger = logging.getLogger(__name__)
@@ -75,13 +76,20 @@ class BridgeSocketSession:
         if spec is None or tool not in self.view.tools:
             await self._answer(request_id, ok=False, error="device_tool_not_offered")
             return
-        if device_unattended_refused(
+        refusal = device_unattended_refusal(
             spec.tool.name,
             unattended=request.get("unattended") is not False,
             allowed=self.view.allow_unattended,
-        ):
-            await self._answer(request_id, ok=False, error="policy_device_unattended")
+        )
+        if refusal is not None:
+            await self._answer(request_id, ok=False, error=refusal)
             return
+        if tool in WRITE_TOOLS:
+            # 쓰기는 드물고 사람이 승인한다 -- 한 번 더 읽는 값이 싸다. 못 읽으면 꺼진 것이다.
+            current = await self._recheck_safely()
+            if current is None or getattr(current, "allow_writes", False) is not True:
+                await self._answer(request_id, ok=False, error="device_writes_off")
+                return
         if len(self._inflight) >= int(self._config.max_inflight_per_bridge):
             await self._answer(request_id, ok=False, error="device_bridge_busy")
             return
@@ -150,6 +158,9 @@ class BridgeSocketSession:
         if current is None:
             return CLOSE_REVOKED
         if bool(getattr(current, "allow_unattended", False)) != self.view.allow_unattended:
+            return CLOSE_RECONNECT
+        if self.view.tools & WRITE_TOOLS and getattr(current, "allow_writes", False) is not True:
+            # 쓰기를 껐다 -- 다시 붙으면 쓰기 선언이 거절된다(4403). 켠 쪽은 그대로 둔다.
             return CLOSE_RECONNECT
         if not await attachment.refresh():
             return await self._closing_code_for(attachment.reason)

@@ -253,7 +253,8 @@ class DurableCodingLoop(
         """소유자의 연결된 브리지를 이 단계의 상태에 싣는다(트랙 Q16a). 저장은 하지 않는다.
 
         아무도 보지 않는 런이고 브리지가 무인 읽기를 허락하지 않았으면 싣지 않는다 --
-        도구가 보이지 않는다(B7). 이름으로 불러도 게이트가 같은 함수로 거절한다.
+        도구가 보이지 않는다(B7). 쓰기 도구는 아무도 보지 않는 런에 늘 보이지 않는다(Q16b BW4).
+        이름으로 불러도 게이트가 같은 함수로 거절한다.
         읽지 못하면 브리지가 없는 것이다(서비스가 그렇게 돌려준다 -- 좁히는 쪽).
         """
         source = self._device_bridge
@@ -270,6 +271,19 @@ class DurableCodingLoop(
             allowed=view.allow_unattended,
         ):
             view = None
+        if view is not None:
+            refused = frozenset(
+                name
+                for name in view.tools
+                if name in DEVICE_TOOLS
+                and device_unattended_refused(
+                    DEVICE_TOOLS[name].tool.name,
+                    unattended=unattended,
+                    allowed=view.allow_unattended,
+                )
+            )
+            if refused:
+                view = replace(view, tools=view.tools - refused)
         return replace(state, device_bridge=view)
 
     def _evaluate_static_call(

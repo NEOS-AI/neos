@@ -101,6 +101,62 @@ async def test_limits_and_names_are_per_user(store) -> None:
     await store.create(BOB, "one")  # same name, other user
 
 
+WRITES_MIGRATION = MIGRATION.with_name("083_add_device_bridge_writes.sql")
+
+
+#: Not `test%@%` -- the shared test DB's cleanup of those users races with other suites;
+#: this test owns these two rows and removes them itself.
+WRITER, OTHER = "q16b_bridge_writer", "q16b_bridge_other"
+
+
+@pytest.fixture
+async def writer_store():
+    async with await db_manager.get_session() as session:
+        for user_id in (WRITER, OTHER):
+            await session.execute(
+                text("INSERT INTO users (user_id, email) VALUES (:u, :e) ON CONFLICT DO NOTHING"),
+                {"u": user_id, "e": f"{user_id}@example.org"},
+            )
+        await session.commit()
+    yield PostgresBridgeCredentialStore(db_manager.get_session, max_bridges=2)
+    async with await db_manager.get_session() as session:
+        await session.execute(
+            text("DELETE FROM users WHERE user_id IN (:a, :b)"), {"a": WRITER, "b": OTHER}
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_writes_migration_applies_twice_and_defaults_off(writer_store) -> None:
+    """Q16b, 083. A bridge made before 083 (or without the flag) cannot declare writes."""
+    from tests.conftest import _run_sql_file
+
+    store = writer_store
+
+    await _run_sql_file(WRITES_MIGRATION)
+    await _run_sql_file(WRITES_MIGRATION)
+    async with await db_manager.get_session() as session:
+        column = (
+            await session.execute(
+                text(
+                    "SELECT is_nullable, column_default FROM information_schema.columns "
+                    "WHERE table_name = 'device_bridges' AND column_name = 'allow_writes'"
+                )
+            )
+        ).one()
+    assert column.is_nullable == "NO" and column.column_default == "false"
+
+    info, token = await store.create(WRITER, "writer")
+    assert info.allow_writes is False
+    flipped = await store.set_writes(WRITER, info.bridge_id, True)
+    assert flipped is not None and flipped.allow_writes is True
+    assert flipped.allow_unattended is False  # the two settings are separate
+    assert (await store.authenticate(token)).allow_writes is True
+    assert await store.set_writes(OTHER, info.bridge_id, False) is None
+    made_on = (await store.create(WRITER, "both", allow_writes=True))[0]
+    assert made_on.allow_writes is True
+
+
 @pytest.mark.asyncio
 async def test_deleting_the_user_deletes_their_bridges(store) -> None:
     _info, token = await store.create(ALICE, "gone")

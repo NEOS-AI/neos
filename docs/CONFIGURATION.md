@@ -1137,9 +1137,9 @@ NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
 ```
 
 The bridge dials out (no inbound port on the device), sends the token in the
-`Authorization` header, and declares its tools with a risk. Anything but
-`read_only` -- including a missing risk -- refuses the whole registration
-(`device_tool_risk_refused`). Tool names, descriptions and schemas are the
+`Authorization` header, and declares its tools with a risk. A risk other than
+the tool's own -- including a missing one -- refuses the whole registration
+(`device_tool_risk_refused`); writes are below. Tool names, descriptions and schemas are the
 server's; the bridge only says which it offers.
 
 The existing approval gate applies unchanged (user `block`/`require`/`allow`
@@ -1162,6 +1162,57 @@ the newest wins and the displaced client stops (close 4409). `PATCH` and
 every refresh. nginx routes the socket through its own upgrade location.
 Design: `docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md`; threat model:
 `docs/Q16_DEVICE_BRIDGE_THREAT_MODEL.md`.
+
+#### Device writes (track Q16b)
+
+```yaml
+coding_model:
+  device_bridge:
+    max_write_bytes: 262144      # one device_write_file.v1 body (UTF-8 bytes); the client caps too
+```
+
+One write tool, `device_write_file.v1` (risk `workspace_write`): it writes a
+whole text file inside the shared folder. It needs **two keys**, both off by
+default: the credential's `allow_writes` (migration 083; set it on `POST` or
+`PATCH {"allow_writes": true}`) and the client's `--allow-writes` flag:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/notes --allow-writes
+```
+
+A client that declares `write_file` against a credential without
+`allow_writes` is refused whole (`device_writes_not_enabled`, close 4403).
+Turning writes off drops the live connection, and the socket rereads the
+credential before every write (`device_writes_off`).
+
+- **Every write asks a person.** Only the owner's own `allow` rule for
+  `device_write_file.v1` skips the question; the operator's
+  `approval_allow_tools`, auto mode and a remembered "always allow" do not.
+  Agent instruction files (`AGENTS.md`, ...) always ask.
+- **Never unattended.** `autonomous` / `background` runs neither see nor may
+  call it, whatever `allow_unattended` or any allow rule says
+  (`policy_device_write_unattended`); background mode's read-only ceiling
+  refuses it first. Subagents never may (`policy_device_child`). Phases that
+  block writes hide it.
+- **Read before write.** To replace a file, pass `base_sha256` -- the digest a
+  complete `device_read_file.v1` of that file printed (only shown while the
+  bridge offers writes; truncated reads have none). Omit it to create a file
+  that must not exist. A mismatch is `precondition_stale_read`; overwriting
+  without one is `precondition_read_required`.
+- **On the device:** no symlink anywhere in the path (each directory opened
+  with `O_NOFOLLOW`), no dot paths (`.git/`, `.github/`, shell rc files ...),
+  no launchable types (`.command`, `.desktop`, `.lnk`, `.bat`, `.ps1`,
+  `.plist` ...), no secret paths, parent folders must exist, text only; new
+  files are `0644 & ~umask` and executable files are never overwritten. The
+  write goes to a temp file in the same folder, is fsynced, then renamed
+  (replace) or hard-linked (create, no clobber).
+- Failures: `policy_device_write_path`, `policy_device_write_binary`,
+  `policy_device_write_executable`, `device_write_too_large`,
+  `device_no_space`.
+
+The Redis relay has a real-Redis integration test that runs only when
+`NEOS_TEST_REDIS_URL` is set (`tests/coding/test_device_bridge_relay_redis.py`).
 
 ### Standing agents
 

@@ -182,6 +182,55 @@ def test_the_default_app_mounts_neither_the_api_nor_the_socket() -> None:
     assert not [p for _m, p in served if p.startswith("/api/v1/coding/device-bridge")]
 
 
+# -- writes (Q16b, BW2) ----------------------------------------------------------------
+
+WRITE_DECL = READ_ONLY + [{"name": "write_file", "risk": "workspace_write"}]
+
+
+def test_a_write_declaration_needs_the_credential_to_allow_writes(world) -> None:
+    """BW2 at the wire: the client's `--allow-writes` alone is not enough. Mutation: pass
+    `allow_writes=True` (or drop the argument's check) in the socket handler -> ready."""
+    http, _store, relay, _user = world
+    token = _pair(http)
+
+    with _connect(http, token) as ws:
+        ws.send_text(json.dumps({"type": "hello", "tools": WRITE_DECL}))
+        refused = ws.receive_json()
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_text()
+    assert refused == {"v": 1, "type": "refused", "code": "device_writes_not_enabled"}
+    assert closed.value.code == ws_mod.CLOSE_REFUSED and relay._live == {}
+
+    created = http.post("/coding/device-bridges", json={"name": "desk", "allow_writes": True}).json()
+    assert created["allow_writes"] is True and created["allow_unattended"] is False
+    with _connect(http, created["token"]) as ws:
+        ws.send_text(json.dumps({"type": "hello", "tools": WRITE_DECL}))
+        ready = ws.receive_json()
+        assert ready["type"] == "ready" and "write_file" in ready["tools"]
+        assert relay._live["alice"].view.tools >= {"write_file"}
+
+
+def test_flipping_writes_kicks_the_live_connection(world) -> None:
+    """Mutation: drop the kick on a write-setting change -> the live socket keeps writing until
+    its next refresh (the socket's per-write recheck is the wall behind this one)."""
+    http, _store, relay, _user = world
+    bridge = http.post("/coding/device-bridges", json={"name": "laptop"}).json()["bridge_id"]
+    assert http.get("/coding/device-bridges").json()[0]["allow_writes"] is False
+
+    live = _live(relay, bridge)
+    patched = http.patch(f"/coding/device-bridges/{bridge}", json={"allow_writes": True})
+    assert patched.status_code == 200 and patched.json()["allow_writes"] is True
+    assert patched.json()["allow_unattended"] is False and live.reason == "kicked"
+
+    live = _live(relay, bridge)
+    both = http.patch(
+        f"/coding/device-bridges/{bridge}", json={"allow_writes": False, "allow_unattended": True}
+    ).json()
+    assert (both["allow_writes"], both["allow_unattended"]) == (False, True)
+    assert live.reason == "kicked"
+    assert http.patch(f"/coding/device-bridges/{bridge}", json={}).status_code == 422
+
+
 def test_the_socket_path_is_the_one_nginx_upgrades() -> None:
     from tests.api.test_nginx_websocket_routes import _socket_paths, _upgrade_locations
 

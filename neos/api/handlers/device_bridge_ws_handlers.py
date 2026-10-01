@@ -7,7 +7,8 @@ WS /api/v1/coding/device-bridge/ws      subprotocol neos.device-bridge.v1
 브리지가 **밖으로** 연다(기기에 열린 포트가 없다). 자격증명은 코딩 소켓과 같은 자리에서
 읽는다(`ticket_from_websocket`: `x-neos-ticket` · `Authorization: Bearer` · `neos.ticket.*`
 subprotocol) -- 쿼리 문자열은 받지 않는다(접근 로그에 남는다). 접속 뒤 첫 메시지는 도구
-선언(hello)이고, READ_ONLY 가 아닌 것이 하나라도 있으면 전부 거절한다(B3).
+선언(hello)이고, 받는 등급 밖이 하나라도 있으면 전부 거절한다(B3). 쓰기 도구는 자격증명의
+`allow_writes` 가 참일 때만 받는다 -- 아니면 역시 전부 거절(`device_writes_not_enabled`, Q16b BW2).
 
 `coding_model.device_bridge.enabled` 가 꺼져 있으면 `main.py` 가 마운트하지 않는다.
 nginx 는 이 경로를 업그레이드 location 으로 받는다(`config/nginx/nginx.conf`).
@@ -76,7 +77,7 @@ async def device_bridge_websocket(
         hello = json.loads(raw) if len(raw) <= 65_536 else None
         if not isinstance(hello, dict) or hello.get("type") != "hello":
             raise DeviceDeclarationRefused("device_declaration_invalid")
-        tools = parse_declaration(hello.get("tools"))
+        tools = parse_declaration(hello.get("tools"), allow_writes=info.allow_writes)
     except (ValueError, DeviceDeclarationRefused) as error:
         code = error.code if isinstance(error, DeviceDeclarationRefused) else "device_declaration_invalid"
         await websocket.send_json({"v": 1, "type": "refused", "code": code})

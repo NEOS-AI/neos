@@ -1,6 +1,6 @@
 # Q16 사용자 기기 브리지 — 설계 (2026-10-01)
 
-> **지위:** Q16a 착지(플래그 off). 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** Q16a 착지(플래그 off) · **Q16b 착지**(쓰기 도구 하나, 자격증명·클라이언트 두 열쇠 모두 기본 off — §6). 설계와 코드가 어긋나면 코드가 이긴다.
 > 상위: [로드맵 §1 Q 행](DEEP_ANALYSIS_HARNESS_ROADMAP.md) · [dots 분석 §4.2 Q16](OPENAI_DOTS_ANALYSIS_260930.md).
 > 위협 모델: [Q16_DEVICE_BRIDGE_THREAT_MODEL.md](Q16_DEVICE_BRIDGE_THREAT_MODEL.md) — 등급을 넓힐 때마다 한 줄씩.
 > 결정 B1~B13 은 위임받아 Claude 가 골랐다(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
@@ -105,9 +105,33 @@ python -m neos.bridge ──wss──> /coding/device-bridge/ws
 
 ## 5. 남은 것
 
-- **Q16b** 쓰기 등급(WORKSPACE_WRITE) — 위협 모델 한 줄이 먼저. 후보: 브리지 루트 안 쓰기 + 사람 승인 필수
+- ~~**Q16b** 쓰기 등급(WORKSPACE_WRITE)~~ — 착지(§6)
 - **Q16c** 명령 실행(COMMAND) — 기기 쪽 샌드박스·허용 목록·USER_ONLY 와의 관계를 먼저 정한다
 - 에이전트별 부여(Q17 과 함께) · 여러 기기 동시 연결(지금은 하나) · 웹 UI 의 페어링 화면 · 패키지로 배포하는 클라이언트(지금은 저장소에서 `python -m`)
-- Redis 중계의 실 Redis 통합 시험(오늘은 계약 가짜로 시험했다 — Lua 두 개는 `RedisCodingTicketStore` 와 같은 모양)
+- ~~Redis 중계의 실 Redis 통합 시험~~ — Q16b 에서 더했다(§6 BW10). CI 에는 Redis 가 없어 `NEOS_TEST_REDIS_URL` 이 있을 때만 돈다 — CI 서비스 컨테이너로 올리는 것은 남았다
 - 소켓마다 구독 연결이 하나다(API 프로세스의 Redis 풀을 쓴다). 브리지가 많아지면 워커당 패턴 구독 하나로 묶는다
-- 호출 시간 제한(`call_timeout_seconds`, 기본 20초)은 도구 claim TTL(기본 30초)보다 짧아야 한다 — 길면 claim 이 먼저 끝나 같은 읽기가 한 번 더 돈다(READ_ONLY 라 해는 없지만 낭비다). 지금은 검사하지 않는다
+- 호출 시간 제한(`call_timeout_seconds`, 기본 20초)은 도구 claim TTL(기본 30초)보다 짧아야 한다 — 길면 claim 이 먼저 끝나 같은 읽기가 한 번 더 돈다(READ_ONLY 라 해는 없지만 낭비다). 지금은 검사하지 않는다. 쓰기는 다시 돌지 않는다: 루프가 READ_ONLY 아닌 재획득 claim 을 `tool_outcome_unknown` 으로 끝내고, 그래도 돈다면 다이제스트가 이미 바뀌어 stale 이다(BW5)
+
+## 6. Q16b — 쓰기 등급 (2026-10-02)
+
+위협 모델 §3 의 Q16b 줄과 §4 의 표가 **먼저** 들어갔다(같은 커밋). 결정 BW1~BW11 은 위임받아 Claude 가 골랐다. 사람이 뒤집을 수 있다.
+
+| # | 결정 | 이유 |
+|---|---|---|
+| **BW1** | **쓰기 도구는 하나 — `device_write_file.v1`(파일 전체 쓰기).** `edit`·`mkdir`·`rm`·`mv`·`chmod` 는 열지 않는다 | 다이제스트를 낀 전체 쓰기 하나로 "만들기"와 "고치기"가 다 된다. 도구가 늘수록 위협 모델의 줄이 는다 — 지우기·옮기기는 되돌릴 수 없는 정도가 한 단계 더 크다. 부분 편집은 같은 등급이라 나중에 줄 없이 더할 수 있다 |
+| **BW2** | **두 열쇠, 둘 다 기본 off.** 자격증명 `allow_writes`(083, `allow_unattended` 와 따로) **와** 클라이언트 `--allow-writes`. 쓰기를 선언했는데 자격증명이 꺼져 있으면 쓰기만 빼지 않고 **등록 전체**를 거절한다(`device_writes_not_enabled`, 4403). 켜고 끄면 붙은 연결을 끊고, 소켓은 갱신마다 + **쓰기마다** 자격증명을 다시 읽는다(`device_writes_off`) | 기기 쪽 열쇠는 "이 폴더에 쓰게 하겠다", 서버 쪽 열쇠는 "이 브리지에 쓰기를 맡기겠다"다 — 한쪽만으로 열리면 다른 쪽의 사람이 모른다. 일부만 받는 등록은 B3 과 같은 이유로 거절(브리지가 자기가 무엇을 열었는지 모른다). 쓰기는 드물고 사람이 승인하므로 DB 한 번 더 읽는 값이 싸다 |
+| **BW3** | **쓰기마다 사람 승인.** 게이트에서 비밀 참조(Q6 S7)와 같은 자리: 운영자 allow 목록·auto 모드·"항상 허용" 기억은 넘지 못하고, **소유자의 allow 규칙만** 넘는다. 지시 파일(`AGENTS.md` 등)·민감 설정은 그 allow 도 넘지 못한다(`_INSTRUCTION_WRITE_TOOLS` 에 더했다). 승인 화면에 경로·본문 미리보기·덮는지/새로 만드는지가 실린다(이벤트에는 본문이 없다 — `write_file.v1` 과 같다) | 기기는 사람의 것이라(B1) 그것을 바꾸는 허락을 줄 수 있는 것도 그 사람뿐이다. 운영자 설정은 모든 사용자에게 걸린다 |
+| **BW4** | **무인 쓰기는 늘 거절** — 브리지의 `allow_unattended` 와 **어떤 allow 로도**. `device_unattended_refusal` 하나가 이유 코드(`policy_device_write_unattended`)를 돌려주고 노출 · 게이트(Q1 천장 바로 뒤) · 소켓 · 서비스가 그것을 쓴다(📌 "고침은 한 호출부에만 도착한다" — 함수가 하나라 부모·자식·소켓이 같은 판정). background 는 Q1 천장이 먼저 막는다(`policy_mode_ceiling`, 손대지 않았다). 쓰기를 막는 단계(EXPLORE·PLAN·VERIFY)에서는 도구 목록에서도 빠진다 | `allow_unattended` 는 **읽기**에 대한 허락이다. 사람의 기기를 사람 없이 바꾸는 허락은 이 슬라이스에 없다 — 좁히기만 한다 |
+| **BW5** | **read-before-write 는 다이제스트로.** 덮을 때는 `base_sha256` = 그 파일을 **온전히** 읽었을 때의 SHA-256, 새로 만들 때는 없음. 기기가 지금 파일을 해시해서 다르면 `precondition_stale_read`, 있는 파일에 없으면 `precondition_read_required`(샌드박스 쓰기와 같은 이름). 다이제스트는 `device_read_file.v1` 결과의 untrusted 경계 **밖** 한 줄로 보이고(서버가 16진 64자인지 확인), 잘린 읽기에는 없으며, 브리지가 쓰기를 내놓았을 때만 붙는다. rename 직전에 한 번 더 해시한다 | 상태가 없다: 루프 상태·체크포인트·워커를 넘나드는 "읽은 파일" 기록이 필요 없고, 다이제스트를 아는 것 자체가 지금 내용을 안다는 증명이다(주입된 글이 파일 자신의 해시를 지어낼 수는 없다). 다시 돈 쓰기·늦은 답 뒤의 재시도는 다이제스트가 이미 바뀌어 stale 이다. 쓰기가 없는 브리지의 읽기 결과는 Q16a 와 바이트가 같다 |
+| **BW6** | **기기 쪽 경계(쓰기).** 읽기의 경계(B10) + 링크가 **하나도 없는** 경로(루트부터 성분마다 `O_NOFOLLOW|O_DIRECTORY` 디렉터리 fd, 마지막 성분도 그 fd 안에서 `lstat`) · dot 성분 전부 거절(`.git/`·`.github/`·`.vscode/`·셸 rc·`.envrc`…) · OS 가 열면 실행하는 확장자 거절 · 부모가 있어야 한다(만들지 않는다) · 텍스트만 · 새 파일 `0644 & ~umask` · 실행 비트가 선 파일은 덮지 않는다(`policy_device_write_executable`) · 덮을 때 원래 권한 유지 | 루트 안이라도 링크를 따라 쓰면 쓰는 곳이 승인 화면의 경로와 다르다. fd 를 쥐고 내려가면 검사와 쓰기 사이에 중간 디렉터리를 바꿔치는 경쟁이 닫힌다(B10 의 남는 위험이 쓰기에서는 닫혔다). 실행 비트·자동 실행 위치·dotfile 이 "쓰기"를 "실행"으로 바꾸는 길이다 |
+| **BW7** | **원자적 쓰기.** 같은 디렉터리 임시 파일(`O_CREAT|O_EXCL|O_NOFOLLOW`) → fsync → 덮기는 `rename`, 새로 만들기는 `link`(있으면 실패 — 그 사이 생긴 파일을 덮지 않는다) → 디렉터리 fsync. 어떤 실패든 임시 파일을 지운다. 공간 부족은 `device_no_space` | 반쯤 쓴 파일이 남지 않는다. rename 은 디렉터리 항목을 바꾸므로 다른 곳의 하드 링크로 내용이 새지 않는다. POSIX(`openat`) 가 없는 기기는 쓰기 클라이언트를 만들지 않는다 |
+| **BW8** | **경로 규칙은 함수 하나** — `neos/coding/bridge/write_policy.py:device_write_refusal`. 서버 검증기(`policy_device_write_path`)와 클라이언트가 같은 것을 import 한다(무거운 import 없음) | B10 의 `is_denied_secret_path` 와 같은 이유: 사본이 둘이면 한쪽만 새 이름을 안다 |
+| **BW9** | **쓰기 결과는 서버가 만든 한 줄** — 새로/덮음 · 바이트 수 · 검증한 다이제스트. 기기 문자열이 없어 untrusted 경계도 필요 없다. 이유 코드는 여전히 서버 목록에서만 | 다음 쓰기의 `base_sha256` 이 여기서 나온다. B9 그대로 |
+| **BW10** | **실 Redis 시험** — `tests/coding/test_device_bridge_relay_redis.py`, `NEOS_TEST_REDIS_URL` 이 있을 때만. API 쪽은 `cache_manager` 와 같은 풀(바이트·health check), 워커 쪽은 연산마다 새 클라이언트. presence TTL·compare-and-refresh(진 쪽이 TTL 을 늘리지 못한다)·자기 값만 지우는 release·연결별 채널·답 목록 TTL·시간 초과·구독자 없음·깨진 답·kick·소켓 세션 ↔ 서비스 끝까지(쓰기 포함)·밀려난 소켓 4409 | 계약 가짜는 Lua 를 문자열로 흉내 낸다 — 진짜 Redis 에서 한 번은 돌아야 했다(2026-10-02 `redis:7-alpine` 로컬 7/7 통과, 가짜가 숨긴 결함은 찾지 못했다) |
+| **BW11** | **크기 상한** `device_bridge.max_write_bytes`(기본 256 KiB, 1 KiB~4 MiB). 서비스가 보내기 전에 보고(`device_write_too_large`), 기기에 같은 값을 넘겨 기기도 자기 상한과 함께 본다. 스키마 절대 상한 4 MiB | 디스크 채우기·거대한 메시지를 양쪽에서 막는다. 쓰기마다 사람 승인이 곧 속도 제한이라 별도 횟수 상한은 두지 않았다 |
+
+**변하지 않은 것:** B8(비밀 참조는 본문까지 어디에든 있으면 거절) · B11(자식 거절 — 이름으로 보므로 쓰기도 같다) · B12(플래그 off, 그리고 **켜도 쓰기가 없는 브리지**면 도구 목록·시스템 프롬프트·읽기 결과·이벤트가 `01968004` 와 바이트가 같다 — 로컬에서 두 트리를 덤프해 비교했다) · B13(기기 호출은 투기적으로 돌지 않는다).
+
+**표면:** 083 `device_bridges.allow_writes`(BOOLEAN NOT NULL DEFAULT FALSE, 두 번 적용해도 같다) · `POST`/`PATCH` 에 `allow_writes` · `python -m neos.bridge --allow-writes [--max-write-bytes N]` · 새 이벤트 kind 없음 · 새 환경변수 없음(시험용 `NEOS_TEST_REDIS_URL` 만).
+
+**남은 것(Q16b 뒤):** Q16c 명령 실행(COMMAND) · 부분 편집 도구(같은 등급) · 지우기·옮기기(다음 증분 — 위협 모델 줄이 먼저) · 무인 쓰기는 지금 닫혀 있다 — 연다면 별도 증분과 줄 · 실 Redis 시험을 CI 서비스 컨테이너로 · 임시 파일(`.neos-bridge-*.tmp`)이 클라이언트가 죽으면 남는다(dot 파일이라 목록에는 보인다 — 시작할 때 청소하는 것은 남았다)

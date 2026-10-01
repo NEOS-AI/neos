@@ -93,6 +93,8 @@ _POLICY_FIX_NOTES = {
     "policy_browser_use_fill_secret": "use browser_fill_secret.v1 for secrets",
     "policy_browser_secret_disabled": "stored secrets are not enabled",
     "policy_device_secret_ref": "device tools never receive secrets",
+    "policy_device_write_path": "device writes refuse dot paths and launchable file types",
+    "policy_device_write_binary": "device writes take text only",
 }
 _EXECUTE_WRAPPERS = frozenset(
     {

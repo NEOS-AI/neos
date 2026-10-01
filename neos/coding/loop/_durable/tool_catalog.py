@@ -93,8 +93,12 @@ class ToolCatalogMixin:
             # 트랙 Q16a: 소유자의 브리지가 지금 붙어 있을 때만, 끝에 덧붙인다. 붙고 끊길 때
             # 배열이 바뀌는 것은 `_guard_thinking_prefix` 가 사고 블록을 한 번 벗겨 받는다.
             from neos.coding.bridge.catalog import device_tool_definitions
+            from neos.coding.phases import write_risk_blocked
+            from neos.coding.tools.registry import ToolRisk
 
-            definitions = tuple(definitions) + device_tool_definitions(view.tools)
+            # Q16b: 쓰기를 막는 단계에서는 기기 쓰기도 보이지 않는다(게이트도 같은 규칙으로 막는다).
+            writes = not write_risk_blocked(ToolRisk.WORKSPACE_WRITE, state.phase)
+            definitions = tuple(definitions) + device_tool_definitions(view.tools, writes=writes)
         if state.allowed_tools:
             definitions = tuple(
                 item

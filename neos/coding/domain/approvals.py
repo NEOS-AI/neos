@@ -351,6 +351,8 @@ _INSTRUCTION_WRITE_TOOLS = frozenset(
         "rm.v1",
         "mv.v1",
         "chmod.v1",
+        # 트랙 Q16b: 기기 쓰기도 지시 파일·민감 설정이면 소유자 allow 가 있어도 묻는다.
+        "device_write_file.v1",
     }
 )
 _SENSITIVE_CONFIG_BASENAMES = frozenset(
@@ -555,13 +557,23 @@ def uses_secret_refs(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     return carries_secret_refs(call)
 
 
-def refuses_device_unattended(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
-    """아무도 보지 않는 런의 기기 읽기 (트랙 Q16a, B7). 판정은 카탈로그의 함수 하나다."""
-    from neos.coding.bridge.catalog import device_unattended_refused
+def device_unattended_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str | None:
+    """아무도 보지 않는 런의 기기 호출 (트랙 Q16a B7 · Q16b BW4). 판정은 카탈로그의 함수 하나다."""
+    from neos.coding.bridge.catalog import device_unattended_refusal
 
-    return device_unattended_refused(
+    return device_unattended_refusal(
         call.name, unattended=gate.unattended, allowed=gate.device_unattended
     )
+
+
+def refuses_device_unattended(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    return device_unattended_reason(call, gate) is not None
+
+
+def is_device_write(call: ValidatedToolCall) -> bool:
+    from neos.coding.bridge.catalog import is_device_write_tool
+
+    return is_device_write_tool(call.name)
 
 
 def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
@@ -592,8 +604,9 @@ def policy_denial_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str:
     if exceeds_mode_ceiling(call, gate):
         return "policy_mode_ceiling"
     try:
-        if refuses_device_unattended(call, gate):
-            return "policy_device_unattended"
+        device_reason = device_unattended_reason(call, gate)
+        if device_reason is not None:
+            return device_reason
     except Exception:
         pass
     try:
@@ -619,6 +632,7 @@ def _evaluate_approval(
     if exceeds_mode_ceiling(call, gate):
         return ApprovalPolicyOutcome.DENY
     # 무인 기기 읽기(트랙 Q16a, B7) -- 천장 바로 뒤. 사용자 allow 도 운영자 allow 도 넘지 못한다.
+    # 무인 기기 쓰기(Q16b, BW4)는 브리지의 무인 허락과도 상관없이 여기서 닫힌다.
     if refuses_device_unattended(call, gate):
         return ApprovalPolicyOutcome.DENY
     if any(is_denied_secret_path(path) for path in _call_paths(call)):
@@ -639,6 +653,12 @@ def _evaluate_approval(
     # 비밀 참조(트랙 Q6, S7) -- 사용자 require 와 같은 자리다. 운영자 allow 목록·
     # "항상 허용" 기억·auto 모드는 넘지 못하고, 소유자의 allow 규칙만 넘는다.
     if uses_secret_refs(call, gate):
+        if has_user_rule(call, gate, UserRuleEffect.ALLOW):
+            return ApprovalPolicyOutcome.ALLOW
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 기기 쓰기(트랙 Q16b, BW3) -- 비밀 참조와 같은 자리. 운영자 allow 목록·"항상 허용"
+    # 기억·auto 모드는 넘지 못한다: 기기는 사람의 것이라 넘길 수 있는 것은 소유자뿐이다.
+    if is_device_write(call):
         if has_user_rule(call, gate, UserRuleEffect.ALLOW):
             return ApprovalPolicyOutcome.ALLOW
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
@@ -745,6 +765,18 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
             summary["patch"] = preview
         summary["truncated"] = truncated
         return redact_sensitive(summary)
+    if call.name == "device_write_file.v1":
+        # 트랙 Q16b. 승인하는 사람이 **무엇을** 쓰는지와 덮는지 새로 만드는지 본다.
+        base = call.input.get("base_sha256")
+        preview, truncated = _truncated_text(str(call.input.get("content") or ""))
+        summary = {
+            "operation": call.name,
+            "path": call.input.get("path"),
+            "replaces": f"sha256:{str(base)[:12]}" if base else "new file",
+            "preview": preview,
+            "truncated": truncated,
+        }
+        return redact_sensitive(summary)
     if call.name in {"browser.v1", "browser_fill_secret.v1"}:
         # 트랙 Q14a. 승인하는 사람이 **어디로** 가는지·어느 출처에 비밀이 들어가는지 본다.
         summary = {"operation": call.name}
@@ -837,6 +869,13 @@ _DENIAL_REASONS = {
     "policy_device_unattended": (
         "the user's device bridge does not allow reads while nobody is watching; "
         "do not retry -- work without the device or leave a note for the user"
+    ),
+    "policy_device_write_unattended": (
+        "nobody is watching, and the user's device is never changed without a person; "
+        "do not retry -- leave the change as a note for the user"
+    ),
+    "device_writes_off": (
+        "this device bridge does not allow writes; do not retry -- tell the user what to change"
     ),
     "policy_device_child": (
         "subagents cannot reach the user's device; do not retry -- "

@@ -2,8 +2,8 @@
 
 ```
 GET    /api/v1/coding/device-bridges                # 내 브리지 목록 (+ 지금 붙어 있는가)
-POST   /api/v1/coding/device-bridges                # {name, allow_unattended?} -- 토큰은 이 응답에만
-PATCH  /api/v1/coding/device-bridges/{bridge_id}    # {allow_unattended} -- 붙어 있으면 끊어 다시 붙게 한다
+POST   /api/v1/coding/device-bridges                # {name, allow_unattended?, allow_writes?} -- 토큰은 이 응답에만
+PATCH  /api/v1/coding/device-bridges/{bridge_id}    # {allow_unattended?, allow_writes?} -- 붙어 있으면 끊어 다시 붙게 한다
 DELETE /api/v1/coding/device-bridges/{bridge_id}    # 폐기 -- 붙어 있으면 끊는다
 ```
 
@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from neos.api.dependencies.auth import get_current_user
 from neos.coding.bridge.credentials import (
@@ -77,6 +77,8 @@ class BridgeOut(BaseModel):
     created_at: datetime
     last_connected_at: datetime | None
     connected: bool = False
+    #: 쓰기 도구를 선언해도 되는가(Q16b). 클라이언트의 `--allow-writes` 와 둘 다 있어야 한다.
+    allow_writes: bool = False
 
 
 class CreatedBridgeOut(BridgeOut):
@@ -87,10 +89,18 @@ class CreatedBridgeOut(BridgeOut):
 class CreateBridgeIn(BaseModel):
     name: str
     allow_unattended: bool = False
+    allow_writes: bool = False
 
 
 class UpdateBridgeIn(BaseModel):
-    allow_unattended: bool
+    allow_unattended: bool | None = None
+    allow_writes: bool | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> "UpdateBridgeIn":
+        if self.allow_unattended is None and self.allow_writes is None:
+            raise ValueError("set allow_unattended or allow_writes")
+        return self
 
 
 def _out(info: BridgeCredentialInfo, *, connected: bool = False) -> BridgeOut:
@@ -101,6 +111,7 @@ def _out(info: BridgeCredentialInfo, *, connected: bool = False) -> BridgeOut:
         created_at=info.created_at,
         last_connected_at=info.last_connected_at,
         connected=connected,
+        allow_writes=info.allow_writes,
     )
 
 
@@ -140,7 +151,10 @@ async def create_device_bridge(
 ) -> CreatedBridgeOut:
     try:
         info, token = await store.create(
-            current_user.user_id, body.name, allow_unattended=body.allow_unattended
+            current_user.user_id,
+            body.name,
+            allow_unattended=body.allow_unattended,
+            allow_writes=body.allow_writes,
         )
     except BridgeLimit as error:
         raise HTTPException(status_code=409, detail={"code": "device_bridge_limit"}) from error
@@ -159,7 +173,11 @@ async def update_device_bridge(
     store: BridgeCredentialStore = Depends(get_bridge_credential_store),
     relay: DeviceBridgeRelay | None = Depends(get_device_bridge_relay),
 ) -> BridgeOut:
-    info = await store.set_unattended(current_user.user_id, bridge_id, body.allow_unattended)
+    info = await store.get(current_user.user_id, bridge_id)
+    if info is not None and body.allow_unattended is not None:
+        info = await store.set_unattended(current_user.user_id, bridge_id, body.allow_unattended)
+    if info is not None and body.allow_writes is not None:
+        info = await store.set_writes(current_user.user_id, bridge_id, body.allow_writes)
     if info is None:
         raise HTTPException(status_code=404, detail="device bridge not found")
     # 붙어 있는 연결은 옛 설정을 쥐고 있다 -- 끊어서 새 설정으로 다시 붙게 한다.

@@ -1,4 +1,4 @@
-"""루프가 쥐는 것 -- 소유자의 브리지를 보고, 호출하고, 결과를 감싼다 (트랙 Q16a).
+"""루프가 쥐는 것 -- 소유자의 브리지를 보고, 호출하고, 결과를 감싼다 (트랙 Q16a · Q16b).
 
 어떤 실패도 예외로 루프에 올리지 않는다: 연결이 없거나, 늦거나, 답이 어긋나면 이름 붙은
 `ToolResult` 하나가 된다. 연결 표시를 읽지 못하면 **브리지가 없는 것**으로 본다 --
@@ -12,8 +12,9 @@ import uuid
 from typing import Any
 
 from neos.coding.bridge.catalog import (
+    WRITE_TOOLS,
     bridge_tool_name,
-    device_unattended_refused,
+    device_unattended_refusal,
     failure_result,
     shape_reply,
 )
@@ -49,12 +50,19 @@ class DeviceBridgeService:
         if bridge_name not in view.tools:
             return failure_result("device_tool_not_offered", revision=revision)
         # 게이트가 이미 봤다. 단계 시작과 호출 사이에 설정이 바뀌었을 수 있어 한 번 더 -- 같은 함수로.
-        if device_unattended_refused(
+        refusal = device_unattended_refusal(
             call.name, unattended=unattended, allowed=view.allow_unattended
-        ):
-            return failure_result("policy_device_unattended", revision=revision)
+        )
+        if refusal is not None:
+            return failure_result(refusal, revision=revision)
         args = dict(call.input)
-        if bridge_name == "read_file":
+        if bridge_name in WRITE_TOOLS:
+            # 운영 상한(BW11). 기기도 같은 값을 받아 한 번 더 본다.
+            cap = int(self._config.max_write_bytes)
+            if len(str(args.get("content", "")).encode("utf-8")) > cap:
+                return failure_result("device_write_too_large", revision=revision)
+            args["max_bytes"] = cap
+        elif bridge_name == "read_file":
             args["max_bytes"] = int(self._config.max_read_bytes)
         elif bridge_name == "list_dir":
             args["max_entries"] = int(self._config.max_list_entries)
@@ -82,6 +90,7 @@ class DeviceBridgeService:
             revision=revision,
             max_read_bytes=int(self._config.max_read_bytes),
             max_list_entries=int(self._config.max_list_entries),
+            digests=bool(view.tools & WRITE_TOOLS),
         )
 
 

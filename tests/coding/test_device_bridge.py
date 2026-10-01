@@ -98,10 +98,16 @@ def test_anything_but_read_only_refuses_the_whole_registration(declaration, code
     assert error.value.code == code
 
 
-def test_q16a_opens_read_only_and_nothing_else() -> None:
-    """B3: widening is a code change *and* a threat-model row -- this pins the starting set."""
-    assert ALLOWED_DEVICE_RISKS == frozenset({ToolRisk.READ_ONLY})
-    assert {spec.risk for spec in DEVICE_TOOLS.values()} == {ToolRisk.READ_ONLY}
+def test_the_opened_risks_are_read_only_and_one_write_tool() -> None:
+    """B3: widening is a code change *and* a threat-model row -- this pins the set.
+    Q16a opened READ_ONLY, Q16b opened WORKSPACE_WRITE for `write_file` alone; COMMAND is closed."""
+    assert ALLOWED_DEVICE_RISKS == frozenset({ToolRisk.READ_ONLY, ToolRisk.WORKSPACE_WRITE})
+    assert {name: spec.risk for name, spec in DEVICE_TOOLS.items()} == {
+        "list_dir": ToolRisk.READ_ONLY,
+        "stat": ToolRisk.READ_ONLY,
+        "read_file": ToolRisk.READ_ONLY,
+        "write_file": ToolRisk.WORKSPACE_WRITE,
+    }
 
 
 def test_tool_names_fit_the_user_rule_shape() -> None:
@@ -109,7 +115,12 @@ def test_tool_names_fit_the_user_rule_shape() -> None:
     from neos.coding.application.user_rules import _TOOL_RE
 
     names = [spec.tool.name for spec in DEVICE_TOOLS.values()]
-    assert names == ["device_list_dir.v1", "device_stat.v1", "device_read_file.v1"]
+    assert names == [
+        "device_list_dir.v1",
+        "device_stat.v1",
+        "device_read_file.v1",
+        "device_write_file.v1",
+    ]
     assert all(_TOOL_RE.fullmatch(name) for name in names)
 
 
