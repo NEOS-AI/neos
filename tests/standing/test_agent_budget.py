@@ -30,6 +30,7 @@ from neos.database.connection import db_manager
 from neos.standing.budget import (
     OVER_BACKGROUND_SHARE,
     OVER_ENVELOPE,
+    OVER_HANDED_OVER_SHARE,
     AgentBudgetEnvelope,
     AgentSpend,
     InMemoryAgentSpendSource,
@@ -49,13 +50,14 @@ OCT = datetime(2026, 10, 1, tzinfo=UTC)
 START = datetime(2026, 10, 1, tzinfo=UTC)
 
 
-def _verdict(total, background=0, *, mode="background", limit=100, share=0.5):
+def _verdict(total, background=0, *, mode="background", limit=100, share=0.5, reserve=False):
     return envelope_verdict(
         AgentSpend(total_micros=total, background_micros=background),
         limit_micros=limit,
         background_share=share,
         mode=mode,
         period_start=START,
+        reserve_background_share=reserve,
     )
 
 
@@ -103,9 +105,50 @@ def test_the_payload_can_recompute_the_verdict() -> None:
         "background_spent_micros": 50,
         "background_limit_micros": 50,
         "period_start": "2026-10-01T00:00:00+00:00",
+        "reserve_background_share": False,
         "mode": "background",
         "enforced": False,
     }
+
+
+# -- the reserved share (reserve_background_share) -------------------------------
+
+
+def test_reserved_share_stops_handed_over_work_at_the_rest() -> None:
+    """Limit 100, share 50 reserved: autonomous may spend 50 of its own, not the 50 kept for background."""
+    assert _verdict(50, 0, mode="autonomous", reserve=True).reason == OVER_HANDED_OVER_SHARE
+    assert not _verdict(49, 0, mode="autonomous", reserve=True).over
+
+
+def test_reserved_share_counts_only_handed_over_spend_against_the_rest() -> None:
+    """Background spend does not use up the autonomous part."""
+    assert not _verdict(90, 45, mode="autonomous", reserve=True).over
+    assert _verdict(95, 45, mode="autonomous", reserve=True).reason == OVER_HANDED_OVER_SHARE
+
+
+def test_reserving_leaves_background_work_unchanged() -> None:
+    assert not _verdict(90, 49, mode="background", reserve=True).over
+    assert _verdict(60, 50, mode="background", reserve=True).reason == OVER_BACKGROUND_SHARE
+
+
+def test_the_whole_envelope_still_wins_when_reserving() -> None:
+    assert _verdict(100, 10, mode="autonomous", reserve=True).reason == OVER_ENVELOPE
+
+
+def test_without_reserving_handed_over_work_may_eat_the_share() -> None:
+    """The default is unchanged: autonomous runs up to the whole envelope."""
+    assert not _verdict(99, 0, mode="autonomous").over
+
+
+def test_reserving_the_whole_envelope_leaves_nothing_for_handed_over_work() -> None:
+    assert _verdict(0, 0, mode="autonomous", share=1.0, reserve=True).reason == OVER_HANDED_OVER_SHARE
+
+
+def test_the_payload_says_whether_the_share_was_reserved() -> None:
+    payload = _verdict(50, 0, mode="autonomous", reserve=True).payload(mode="autonomous")
+
+    assert payload["reserve_background_share"] is True
+    assert payload["reason"] == OVER_HANDED_OVER_SHARE
 
 
 @pytest.mark.parametrize(
@@ -135,6 +178,25 @@ def test_off_builds_no_envelope() -> None:
     assert build_agent_envelope(StandingAgentsConfig(), lambda: None) is None
     on = StandingAgentsConfig(budget={"enabled": True, "monthly_limit_micros": 7})
     assert isinstance(build_agent_envelope(on, lambda: None), AgentBudgetEnvelope)
+    assert StandingAgentsConfig().budget.reserve_background_share is False
+
+
+@pytest.mark.asyncio
+async def test_the_setting_reaches_the_verdict() -> None:
+    """The factory carries reserve_background_share into the envelope it builds."""
+    from neos.config.schema import StandingAgentsConfig
+
+    class Fixed:
+        async def spent(self, *_args):
+            return AgentSpend(total_micros=50, background_micros=0)
+
+    config = StandingAgentsConfig(
+        budget={"enabled": True, "monthly_limit_micros": 100, "reserve_background_share": True}
+    )
+    envelope = build_agent_envelope(config, lambda: None)
+    envelope._source = Fixed()
+
+    assert (await envelope.judge("sa_1", "autonomous")).reason == OVER_HANDED_OVER_SHARE
 
 
 # -- the spend source: one contract, two sources --------------------------------
@@ -288,8 +350,11 @@ async def test_archived_tasks_still_count() -> None:
 # -- the gate: an agent over its envelope opens nothing --------------------------
 
 
-def _envelope(source, *, limit=100, share=0.5, now=OCT + timedelta(days=2)):
-    return AgentBudgetEnvelope(source, limit_micros=limit, background_share=share, clock=lambda: now)
+def _envelope(source, *, limit=100, share=0.5, reserve=False, now=OCT + timedelta(days=2)):
+    return AgentBudgetEnvelope(
+        source, limit_micros=limit, background_share=share,
+        reserve_background_share=reserve, clock=lambda: now,
+    )
 
 
 @pytest.mark.asyncio
@@ -378,3 +443,20 @@ async def test_the_self_introduction_is_inside_the_envelope() -> None:
 
     assert raised.value.reason == OVER_ENVELOPE
     assert (await world.agents.get_owned(ALICE, agent.agent_id)).onboarding_task_id is None
+
+
+@pytest.mark.asyncio
+async def test_a_reserved_share_keeps_background_work_open_after_handed_over_work(world) -> None:
+    agent = await world.agents.create(ALICE, "Dot")
+    await world.task(owner=ALICE, agent_id=agent.agent_id, mode="autonomous",
+                     created_at=OCT + timedelta(days=1), costs=[50])
+    envelope = _envelope(world.source, reserve=True)
+
+    with pytest.raises(AgentTaskRefused) as raised:
+        await open_agent_task(world.agents, world.coding, owner_id=ALICE, prompt="p",
+                              mode=CodingTaskMode.AUTONOMOUS, envelope=envelope)
+    task = await open_agent_task(world.agents, world.coding, owner_id=ALICE, prompt="p",
+                                 envelope=envelope)
+
+    assert raised.value.reason == OVER_HANDED_OVER_SHARE
+    assert task.mode is CodingTaskMode.BACKGROUND

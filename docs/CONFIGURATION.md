@@ -925,6 +925,7 @@ standing_agents:
     enabled: false
     monthly_limit_micros: 20000000   # per agent per UTC calendar month ($20)
     background_share: 0.5            # background tasks may spend only this share
+    reserve_background_share: false  # true: autonomous work may not spend that share either
 ```
 
 Spend is not counted separately: it is the sum of the latest checkpoint's
@@ -932,8 +933,12 @@ cumulative `cost_micros` over every task the agent opened in the month (a task
 belongs to the month it was opened in; archived tasks still count). An agent at
 or over its limit opens no new task (`budget_envelope_exhausted`); background
 work stops at its share (`budget_background_share_exhausted`) while work the
-user handed over (`autonomous`) may use the whole envelope. This applies to the
-self-introduction and to triggers alike.
+user handed over (`autonomous`) may use the whole envelope. With
+`reserve_background_share: true` the share is reserved instead: autonomous work
+stops once its own spend (total minus background) reaches the rest of the
+envelope (`budget_handed_over_share_exhausted`), so background work is never
+starved by it. With `background_share: 1.0` and the reservation on, autonomous
+work gets nothing. This applies to the self-introduction and to triggers alike.
 
 Running tasks are **not** stopped yet. When one is over the envelope at a model
 turn, the ledger gets one `budget.judged` event per run (`enforced: false`),

@@ -108,10 +108,15 @@ POST /api/v1/standing-triggers/{trigger_id}/deliveries    ← 인증 의존성 �
 |---|---|
 | 전체 지출 ≥ 월 한도 | `budget_envelope_exhausted` (모든 모드) |
 | background 이고 background 지출 ≥ ⌊한도 × `background_share`⌋ | `budget_background_share_exhausted` |
+| background 가 아니고 `reserve_background_share` 가 켜졌고 (전체 − background) 지출 ≥ 한도 − ⌊한도 × 몫⌋ | `budget_handed_over_share_exhausted` |
 
 - 경계에 **닿으면** 넘은 것이다 — 남은 것이 0 인 봉투로 연 태스크는 첫 턴에서 넘는다
 - background 는 고정 몫만, 사용자가 맡긴 autonomous 는 봉투 전부. background 지출도 전체에 들어간다
-- 설정: `standing_agents.budget.{enabled=false, monthly_limit_micros=20_000_000, background_share=0.5}` — 매직넘버 없음(§9)
+- 🆕 **`reserve_background_share`**(기본 off, 2026-10-01): 켜면 background 몫은 **예약**이다 — autonomous 는 그 몫을 뺀 나머지까지만
+  쓰고, 그 판정은 autonomous **자기 지출**(전체 − background)로 한다. 꺼져 있으면 autonomous 가 몫을 먹어 그달 background 가
+  아무것도 못 할 수 있다 — 상시 에이전트가 "상시"이려면 켜는 쪽이다. 몫 1.0 으로 켜면 autonomous 몫은 0 이다. 판정 payload 가
+  이 값을 싣는다(재계산 가능)
+- 설정: `standing_agents.budget.{enabled=false, monthly_limit_micros=20_000_000, background_share=0.5, reserve_background_share=false}` — 매직넘버 없음(§9)
 
 ### 3.3 두 자리
 

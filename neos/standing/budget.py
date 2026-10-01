@@ -10,7 +10,8 @@
   `cost_micros` 합. 카운터가 없으니 이중 계상도, 재시도 때 빠지는 것도 없다.
 - 태스크는 **연 달**에 속한다. 달을 넘겨 도는 태스크의 지출은 연 달에 남는다.
 - background 는 봉투의 고정 몫(`background_share`)만 쓴다. 사용자가 맡긴 autonomous
-  일은 봉투 전부를 쓴다. background 지출도 전체에 들어간다.
+  일은 봉투 전부를 쓴다 -- `reserve_background_share` 를 켜면 그 몫을 뺀 나머지만.
+  background 지출도 전체에 들어간다.
 - 두 자리에서 읽는다: 새 태스크를 열 때(`open_agent_task` -- **막는다**), 진행 중
   태스크의 모델 턴 safe point(**섀도** -- `budget.judged` 만 남기고 멈추지 않는다).
   `PAUSED` 로 보내는 길은 Q5 와 함께 쓰는 별도 단계다(분석 §6 결정 3).
@@ -30,6 +31,8 @@ from neos.coding.domain.models import CodingTaskMode
 #: 봉투를 넘었다는 사유 코드. `AgentTaskRefused.reason` 과 `budget.judged` 가 같은 값을 쓴다.
 OVER_ENVELOPE = "budget_envelope_exhausted"
 OVER_BACKGROUND_SHARE = "budget_background_share_exhausted"
+#: background 몫을 예약했을 때(`reserve_background_share`), 사용자가 맡긴 일이 나머지를 다 썼다.
+OVER_HANDED_OVER_SHARE = "budget_handed_over_share_exhausted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +52,7 @@ class EnvelopeVerdict:
     background_spent_micros: int
     background_limit_micros: int
     period_start: datetime
+    reserve_background_share: bool = False
 
     def payload(self, *, mode: str) -> dict[str, Any]:
         """`budget.judged` 의 payload. 판정을 다시 계산할 수 있는 값을 전부 싣는다."""
@@ -60,6 +64,7 @@ class EnvelopeVerdict:
             "background_spent_micros": self.background_spent_micros,
             "background_limit_micros": self.background_limit_micros,
             "period_start": self.period_start.isoformat(),
+            "reserve_background_share": self.reserve_background_share,
             "mode": mode,
             "enforced": False,
         }
@@ -86,17 +91,27 @@ def envelope_verdict(
     background_share: float,
     mode: CodingTaskMode | str,
     period_start: datetime,
+    reserve_background_share: bool = False,
 ) -> EnvelopeVerdict:
     """이 모드의 일을 더 해도 되는가. 경계에 **닿으면** 넘은 것이다 -- 남은 것이
-    0 인 봉투로 여는 태스크는 첫 턴에서 넘는다."""
+    0 인 봉투로 여는 태스크는 첫 턴에서 넘는다.
+
+    `reserve_background_share` 가 켜지면 background 몫은 예약이다: background 가 아닌
+    일은 봉투에서 그 몫을 뺀 나머지까지만 쓴다. 꺼져 있으면 그 일은 봉투 전부를 쓴다.
+    """
     share_limit = background_limit(limit_micros, background_share)
+    background = CodingTaskMode(mode) is CodingTaskMode.BACKGROUND
     reason = None
     if spend.total_micros >= limit_micros:
         reason = OVER_ENVELOPE
-    elif CodingTaskMode(mode) is CodingTaskMode.BACKGROUND and (
-        spend.background_micros >= share_limit
-    ):
+    elif background and spend.background_micros >= share_limit:
         reason = OVER_BACKGROUND_SHARE
+    elif (
+        not background
+        and reserve_background_share
+        and spend.total_micros - spend.background_micros >= limit_micros - share_limit
+    ):
+        reason = OVER_HANDED_OVER_SHARE
     return EnvelopeVerdict(
         over=reason is not None,
         reason=reason,
@@ -105,6 +120,7 @@ def envelope_verdict(
         background_spent_micros=spend.background_micros,
         background_limit_micros=share_limit,
         period_start=period_start,
+        reserve_background_share=reserve_background_share,
     )
 
 
@@ -121,11 +137,13 @@ class AgentBudgetEnvelope:
         *,
         limit_micros: int,
         background_share: float,
+        reserve_background_share: bool = False,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._source = source
         self._limit = limit_micros
         self._share = background_share
+        self._reserve = reserve_background_share
         self._clock = clock
 
     async def judge(self, agent_id: str, mode: CodingTaskMode | str) -> EnvelopeVerdict:
@@ -137,6 +155,7 @@ class AgentBudgetEnvelope:
             background_share=self._share,
             mode=mode,
             period_start=start,
+            reserve_background_share=self._reserve,
         )
 
 
@@ -220,5 +239,6 @@ def build_agent_envelope(
         PostgresAgentSpendSource(session_factory),
         limit_micros=budget.monthly_limit_micros,
         background_share=budget.background_share,
+        reserve_background_share=budget.reserve_background_share,
     )
 
