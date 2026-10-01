@@ -29,6 +29,7 @@ from neos.coding.sandbox.base import (
 from neos.coding.sandboxd.guest import (
     CAPABILITIES,
     PROTOCOL_VERSION,
+    SECRET_ENV_CAPABILITY,
     FrameError,
     bundle_digest,
     decode_payload,
@@ -38,6 +39,10 @@ from neos.coding.sandboxd.guest import (
 
 _HEADER_BYTES = 4
 _CONNECTION_LOST = "sandboxd_connection_lost"
+#: Capabilities a session checks per call instead of requiring at handshake.
+#: A guest pinned by an older digest still serves everything else; only the
+#: feature it does not advertise is refused (track Q6b: secrets).
+OPTIONAL_CAPABILITIES = frozenset({SECRET_ENV_CAPABILITY})
 
 
 class SandboxdChannel(Protocol):
@@ -85,7 +90,7 @@ class SandboxdExpectation:
     bundle_digest: str
     protocol_version: int = PROTOCOL_VERSION
     required_capabilities: frozenset[str] = field(
-        default_factory=lambda: frozenset(CAPABILITIES)
+        default_factory=lambda: frozenset(CAPABILITIES) - OPTIONAL_CAPABILITIES
     )
 
     @classmethod
@@ -143,6 +148,10 @@ class SandboxdClient:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    def supports(self, capability: str) -> bool:
+        """Did the pinned guest advertise ``capability`` in its hello?"""
+        return self.hello is not None and capability in self.hello.capabilities
 
     async def handshake(
         self,

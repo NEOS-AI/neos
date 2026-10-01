@@ -47,6 +47,7 @@ from neos.coding.sandbox.paths import (
     normalize_workspace_path,
 )
 from neos.coding.sandboxd.client import SandboxdClient
+from neos.coding.sandboxd.guest import SECRET_ENV_CAPABILITY
 
 _GIT_SAFE = ("git", "--no-pager", "-c", "core.pager=cat")
 _RESERVED_GUEST_ENV = frozenset({"PATH", "HOME", "TMPDIR"})
@@ -76,6 +77,10 @@ class SandboxdAttachment(Protocol):
 
     @property
     def max_pty_sessions(self) -> int: ...
+
+    #: 트랙 Q6b: 이 attachment 의 운반로가 비밀을 실어도 될 만큼 사적인가. 선언하지
+    #: 않은 구현은 `False` 로 읽는다(fail closed) -- `execute` 가 `getattr` 로 본다.
+    confidential_channel: bool
 
     async def attach(self) -> SandboxdLease:
         """Verify ownership and RUNNING state; return the current client."""
@@ -374,9 +379,8 @@ class SandboxdSession:
         disallowed = set(request.env) - self._attachment.allowed_env_names
         if disallowed:
             raise SandboxPolicyViolation("environment_not_allowed")
-        if request.secret_env:
-            # 트랙 Q6: RPC 에 비밀 채널이 없다. `env` 로 실으면 guest 로그·RPC 추적에
-            # 남을 수 있다 -- 싣지 않고 거절한다(Q6b 가 채널을 더할 때 연다).
+        if request.secret_env and not getattr(self._attachment, "confidential_channel", False):
+            # 트랙 Q6b C1: 운반로가 사적이라고 보일 수 없는 attachment 에는 싣지 않는다.
             raise SandboxPolicyViolation("secret_env_unsupported")
         cwd = normalize_workspace_path(request.cwd).as_posix()
         env = {
@@ -388,17 +392,29 @@ class SandboxdSession:
             if len(request.stdin) > limits.max_stdin_bytes:
                 raise SandboxPolicyViolation("command_stdin_limit_exceeded")
             timeout = min(request.timeout_sec, limits.command_timeout_sec)
+            args: dict[str, Any] = {
+                "argv": list(request.argv),
+                "cwd": cwd,
+                "env": env,
+                "stdin": _b64(request.stdin),
+                "timeout_sec": timeout,
+                "max_output_bytes": min(request.max_output_bytes, limits.max_output_bytes),
+                "max_stdin_bytes": limits.max_stdin_bytes,
+            }
+            if request.secret_env:
+                # C3: 판정은 이 연결의 hello 에 묶는다 -- 연결 밖에 캐시하면 재접속 뒤 근거가 없다.
+                # 모르는 guest 는 필드를 조용히 버린다. 보내지 않고 거절한다.
+                if not lease.client.supports(SECRET_ENV_CAPABILITY):
+                    raise SandboxPolicyViolation("secret_env_unsupported")
+                # C2: `env` 와 다른 필드. 예약 이름은 여기서 한 번, guest 에서 또 한 번 거른다.
+                args["secret_env"] = {
+                    key: value
+                    for key, value in request.secret_env.items()
+                    if key not in _RESERVED_GUEST_ENV
+                }
             result = await lease.client.call(
                 "exec",
-                {
-                    "argv": list(request.argv),
-                    "cwd": cwd,
-                    "env": env,
-                    "stdin": _b64(request.stdin),
-                    "timeout_sec": timeout,
-                    "max_output_bytes": min(request.max_output_bytes, limits.max_output_bytes),
-                    "max_stdin_bytes": limits.max_stdin_bytes,
-                },
+                args,
                 # The guest enforces the command deadline; the RPC deadline
                 # only has to outlast it plus the workspace scans around it.
                 timeout_sec=timeout + self._attachment.operation_timeout_sec,

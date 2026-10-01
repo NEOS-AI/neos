@@ -904,9 +904,13 @@ A call that carries a reference needs a human approval or an owner `allow` rule
 lift it. Unattended runs without such a rule are refused with
 `policy_secret_ref_unapproved`; subagents are always refused
 (`policy_secret_ref_child`). Other refusals: `secret_not_found`,
-`secret_env_name_mismatch`, `secret_env_unsupported` (sandboxd and managed
-sandboxes cannot carry secrets yet; memory and Docker can -- Docker gets the
-value through the CLI's environment, never its argv). Values are sealed with
+`secret_env_name_mismatch`, `secret_env_unsupported` (memory and Docker carry
+secrets -- Docker gets the value through the CLI's environment, never its argv.
+sandboxd carries them in a separate `secret_env` field of the `exec` RPC (track
+Q6b), but only when the guest advertises `exec.secret_env.v1` and the transport
+is shown to be private; managed E2B/Modal sandboxes still refuse because their
+vendor exec channel cannot be shown to be private --
+`docs/Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md`). Values are sealed with
 AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
 makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
 

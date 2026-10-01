@@ -42,7 +42,7 @@ Q6 은 Q11(MCP)·Q14(브라우저)·Q16(기기 브리지)의 공통 선행이다
 | `secret_not_found` | 소유자 금고에 그 이름이 없다 | 도구 결과 `denied` — 모델이 사용자에게 등록을 부탁할 수 있다 |
 | `secret_env_name_mismatch` | 비밀의 `env_name` 과 다른 변수에 넣었다 | 도구 결과 `denied` |
 | `secret_store_unavailable` | 금고를 읽지 못했다 | 도구 결과 `error`. 풀지 못한 값으로 **돌리지 않는다** |
-| `secret_env_unsupported` | 그 샌드박스 provider 가 비밀 env 를 못 싣는다(sandboxd·managed) | 도구 결과 `denied` — 아래 §3 |
+| `secret_env_unsupported` | 그 샌드박스 provider 가 비밀 env 를 못 싣는다(managed · 기능을 광고하지 않는 sandboxd guest) | 도구 결과 `denied` — 아래 §3 |
 
 ## 3. 샌드박스 경계
 
@@ -53,7 +53,8 @@ Q6 은 Q11(MCP)·Q14(브라우저)·Q16(기기 브리지)의 공통 선행이다
 |---|---|---|
 | memory(development) | 자식 프로세스 환경에 직접 | ✅ |
 | Docker | `docker exec --env NAME`(값 없이) + docker CLI 프로세스의 환경에 값 — **호스트 `ps` 에 값이 보이지 않는다** | ✅ |
-| sandboxd · managed | 거절 `secret_env_unsupported` | 📐 RPC 에 비밀 채널을 더할 때 연다 |
+| sandboxd(`LocalSandboxd`, 테스트 대역) | `exec` 의 별도 필드 `secret_env` — guest 가 `exec.secret_env.v1` 을 광고하고 attachment 가 기밀 채널을 선언할 때만 | ✅ Q6b — [Q6b 설계](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md) C2·C3 |
+| managed(E2B · Modal) | 거절 `secret_env_unsupported` — 벤더 exec stdio 중계의 기밀성을 보일 수 없다 | ⛔ Q6b C1 — 여는 증거 목록은 [Q6b 설계 §4](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md) |
 
 > ⚠️ 오늘 `execute.v1` 은 네트워크 클라이언트를 막고 Docker 는 `network=none` 이다. 그래서 첫 소비자의 실용은 좁다
 > (오프라인 라이선스 키·로컬 서명 도구 정도). **Q6a 의 값은 부품이다** — Q11 의 MCP 커넥터 인증, Q14 의 로그인,
@@ -76,5 +77,6 @@ Q6 은 Q11(MCP)·Q14(브라우저)·Q16(기기 브리지)의 공통 선행이다
 
 ## 5. 남은 것
 
-- **Q6b** sandboxd·managed 의 비밀 채널 · 에이전트별 부여(Q17 과 함께) · 프롬프트에 이름 목록
+- ~~**Q6b** sandboxd 비밀 채널~~ ✅ 2026-10-02 [Q6b 설계](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md) — managed 는 증거가 생길 때(그 문서 §4)
+- 에이전트별 부여(Q17 과 함께) · 프롬프트에 이름 목록
 - **Q11·Q14·Q16** 이 이 부품을 소비한다 — 각자의 실행기 자리에서 `resolve → 실행 → scrub`
