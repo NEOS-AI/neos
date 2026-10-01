@@ -2077,6 +2077,38 @@ class CodingMcpConfig(StrictConfigModel):
             for value in server.credential_values()
         )
 
+class DeviceBridgeConfig(StrictConfigModel):
+    """사용자 기기 브리지 -- 트랙 Q16a (docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md).
+
+    꺼져 있으면 자격증명 API 와 브리지 소켓을 **마운트하지 않고**, 도구 목록·프롬프트·
+    이벤트 어휘가 오늘과 바이트가 같다. 브리지 도구는 READ_ONLY 만 받는다(B3).
+    소켓을 받는 API 프로세스와 루프를 도는 워커는 Redis 로 잇는다(B6).
+    """
+
+    enabled: bool = False
+    #: 사용자당 페어링한 브리지(자격증명) 상한. 동시에 붙는 것은 하나다(B5).
+    max_bridges_per_user: int = Field(default=5, ge=1, le=50)
+    #: 한 호출이 브리지의 답을 기다리는 시간.
+    call_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    #: 브리지 하나에 동시에 걸린 호출 수.
+    max_inflight_per_bridge: int = Field(default=4, ge=1, le=64)
+    #: `device_read_file.v1` 이 돌려받는 본문 상한(UTF-8 바이트).
+    max_read_bytes: int = Field(default=262_144, ge=1024, le=4_194_304)
+    #: `device_list_dir.v1` 이 싣는 항목 수 상한.
+    max_list_entries: int = Field(default=500, ge=1, le=5000)
+    #: 브리지가 보내는 메시지 하나의 상한. 넘으면 소켓을 닫는다.
+    max_message_bytes: int = Field(default=2_097_152, ge=4096, le=16_777_216)
+    #: 연결 표시(presence)의 수명. 소켓이 이 1/3 마다 갱신하고 자격증명을 다시 읽는다.
+    presence_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    #: 접속 뒤 도구 선언(hello)을 기다리는 시간.
+    hello_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _message_fits_a_read(self) -> "DeviceBridgeConfig":
+        if self.max_message_bytes <= self.max_read_bytes:
+            raise ValueError("device_bridge.max_message_bytes must exceed max_read_bytes")
+        return self
+
 
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
@@ -2129,6 +2161,8 @@ class CodingModelConfig(StrictConfigModel):
     # 트랙 Q11a: 운영자가 정한 MCP 서버의 도구를 `mcp__<server>__<tool>` 로 노출한다.
     # 위험을 선언하지 않은 도구는 등록되지 않는다. 기본 off.
     mcp: CodingMcpConfig = Field(default_factory=CodingMcpConfig)
+    # 트랙 Q16a: 사용자 기기 브리지. 끄면 라우트가 없고 도구 목록이 오늘과 같다.
+    device_bridge: DeviceBridgeConfig = Field(default_factory=DeviceBridgeConfig)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     # 트랙 Q14a: 에이전트 브라우저. 끄면 도구 목록·프롬프트·이벤트 어휘가 오늘과 같다.
     browser: CodingBrowserConfig = Field(default_factory=CodingBrowserConfig)

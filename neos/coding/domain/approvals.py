@@ -117,6 +117,9 @@ class ApprovalGate:
     #: 자격증명 브로커(트랙 Q6)가 켜져 있다 -- `secret://` 참조를 실은 호출은 사람
     #: 승인 또는 소유자의 allow 규칙으로만 돈다. 꺼져 있으면 참조를 모른다(S9).
     secret_broker: bool = False
+    #: 소유자의 연결된 브리지가 무인 읽기를 허락했다(트랙 Q16a, B7). 기본 False --
+    #: 모르면 허락하지 않은 것이다.
+    device_unattended: bool = False
 
 
 
@@ -552,6 +555,15 @@ def uses_secret_refs(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     return carries_secret_refs(call)
 
 
+def refuses_device_unattended(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """아무도 보지 않는 런의 기기 읽기 (트랙 Q16a, B7). 판정은 카탈로그의 함수 하나다."""
+    from neos.coding.bridge.catalog import device_unattended_refused
+
+    return device_unattended_refused(
+        call.name, unattended=gate.unattended, allowed=gate.device_unattended
+    )
+
+
 def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     """background 모드에서 이 호출이 천장을 넘는가 (트랙 Q1).
 
@@ -580,6 +592,11 @@ def policy_denial_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str:
     if exceeds_mode_ceiling(call, gate):
         return "policy_mode_ceiling"
     try:
+        if refuses_device_unattended(call, gate):
+            return "policy_device_unattended"
+    except Exception:
+        pass
+    try:
         if has_user_rule(call, gate, UserRuleEffect.BLOCK):
             return "policy_user_rule_blocked"
     except Exception:
@@ -600,6 +617,9 @@ def _evaluate_approval(
         return ApprovalPolicyOutcome.DENY
     # 모드의 천장도 운영자의 allow 목록보다 앞이다.
     if exceeds_mode_ceiling(call, gate):
+        return ApprovalPolicyOutcome.DENY
+    # 무인 기기 읽기(트랙 Q16a, B7) -- 천장 바로 뒤. 사용자 allow 도 운영자 allow 도 넘지 못한다.
+    if refuses_device_unattended(call, gate):
         return ApprovalPolicyOutcome.DENY
     if any(is_denied_secret_path(path) for path in _call_paths(call)):
         return ApprovalPolicyOutcome.DENY
@@ -809,6 +829,14 @@ _DENIAL_REASONS = {
     "policy_connector_child": (
         "subagents cannot call connector tools; do not retry -- return the "
         "call to the parent instead"
+    ),
+    "policy_device_unattended": (
+        "the user's device bridge does not allow reads while nobody is watching; "
+        "do not retry -- work without the device or leave a note for the user"
+    ),
+    "policy_device_child": (
+        "subagents cannot reach the user's device; do not retry -- "
+        "return the request to the parent instead"
     ),
     "policy_user_only": (
         "only the user can do this, even with approval; do not retry -- "

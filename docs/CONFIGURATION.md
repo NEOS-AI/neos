@@ -1035,6 +1035,72 @@ the Q6 codes `secret_not_found`, `secret_env_name_mismatch`,
 user -- list only commands you would run there yourself. Design:
 `docs/Q11_MCP_CLIENT_DESIGN_261001.md`.
 
+### Coding device bridge (track Q16a)
+
+```yaml
+coding_model:
+  device_bridge:
+    enabled: false               # off: no pairing API, no socket, tool list unchanged
+    max_bridges_per_user: 5      # paired credentials; only one is connected at a time
+    call_timeout_seconds: 20
+    max_inflight_per_bridge: 4
+    max_read_bytes: 262144       # device_read_file.v1 body cap (UTF-8 bytes)
+    max_list_entries: 500
+    max_message_bytes: 2097152   # one bridge message; larger closes the socket (1009)
+    presence_ttl_seconds: 30     # the socket refreshes every third and rereads its credential
+    hello_timeout_seconds: 10
+```
+
+No new environment keys: the relay uses `REDIS_URL`.
+
+A user pairs a device, runs the reference client there, and the coding loop of
+**that user's** tasks gains three read-only tools while the bridge is connected:
+`device_list_dir.v1`, `device_stat.v1`, `device_read_file.v1` (paths relative to
+the one folder the user shared).
+
+```
+GET    /api/v1/coding/device-bridges                 # bridges + whether one is connected
+POST   /api/v1/coding/device-bridges                 {"name": "laptop", "allow_unattended": false}
+PATCH  /api/v1/coding/device-bridges/{bridge_id}     {"allow_unattended": true}
+DELETE /api/v1/coding/device-bridges/{bridge_id}     # revoke
+WS     /api/v1/coding/device-bridge/ws               subprotocol neos.device-bridge.v1
+```
+
+`POST` returns the token **once** (`ndb_...`); only its SHA-256 is stored. On the
+device:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/notes
+```
+
+The bridge dials out (no inbound port on the device), sends the token in the
+`Authorization` header, and declares its tools with a risk. Anything but
+`read_only` -- including a missing risk -- refuses the whole registration
+(`device_tool_risk_refused`). Tool names, descriptions and schemas are the
+server's; the bridge only says which it offers.
+
+The existing approval gate applies unchanged (user `block`/`require`/`allow`
+rules accept the device tool names). Unattended runs (`autonomous`,
+`background`) neither see nor may call device tools unless that bridge has
+`allow_unattended: true` (`policy_device_unattended`); subagents never may
+(`policy_device_child`). Arguments carrying `secret://` anywhere are refused
+(`policy_device_secret_ref`) -- a bridge never receives a secret. Results are
+capped, wrapped as untrusted device content, redacted and recorded like any
+tool result. Failures are named: `device_bridge_unavailable`,
+`device_bridge_timeout`, `device_bridge_busy`, `device_bridge_disconnected`,
+`device_result_too_large`, `device_result_invalid`, `device_path_escape`,
+`device_not_found`.
+
+The socket lands on an API worker and the loop runs on a Celery worker, so the
+two meet through Redis: a per-user presence key (compare-and-refresh) and a
+per-connection channel with a per-request reply list. One connection per user;
+the newest wins and the displaced client stops (close 4409). `PATCH` and
+`DELETE` drop the live connection; the socket also rereads its credential on
+every refresh. nginx routes the socket through its own upgrade location.
+Design: `docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md`; threat model:
+`docs/Q16_DEVICE_BRIDGE_THREAT_MODEL.md`.
+
 ### Standing agents
 
 ```yaml

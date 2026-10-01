@@ -615,6 +615,23 @@ if settings.config.coding_model.secret_broker:
     _include_router_for_runtime(
         secret_router, prefix=settings.API_V1_PREFIX, tags=["Coding Secrets"]
     )
+# 사용자 기기 브리지(트랙 Q16a). 꺼져 있으면 페어링 API 도 소켓도 **없다**.
+# 소켓은 코딩 소켓처럼 자기 인증(페어링 토큰)을 가지므로 `_include_router_for_runtime` 이
+# 떼어 내지 않게 직접 붙인다.
+if settings.config.coding_model.device_bridge.enabled:
+    from neos.api.handlers.device_bridge_handlers import router as device_bridge_router
+    from neos.api.handlers.device_bridge_ws_handlers import (
+        router as device_bridge_ws_router,
+    )
+
+    _include_router_for_runtime(
+        device_bridge_router, prefix=settings.API_V1_PREFIX, tags=["Coding Device Bridges"]
+    )
+    app.include_router(
+        device_bridge_ws_router,
+        prefix=settings.API_V1_PREFIX,
+        tags=["Coding Device Bridge"],
+    )
 # 상시 에이전트(트랙 Q13b). 꺼져 있으면 라우트가 **없다** -- 거절하는 라우트가 아니다.
 if settings.config.standing_agents.enabled:
     from neos.api.handlers.standing_agent_handlers import router as standing_agent_router

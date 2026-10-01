@@ -353,6 +353,7 @@ class SubagentSpawnMixin:
             uses_secret_refs,
         )
         from neos.coding.connectors import is_connector_tool_name
+        from neos.coding.bridge.catalog import is_device_tool
         from neos.coding.tools.registry import ToolValidationError
 
         reason: str | None = None
@@ -376,6 +377,10 @@ class SubagentSpawnMixin:
             # 트랙 Q6 S8: 자식은 승인할 사람에게 닿지 못하고 포트에는 풀 소유자 맥락이
             # 없다. 소유자의 allow 규칙이 있어도 자식에게는 넘기지 않는다.
             reason = "policy_secret_ref_child"
+        if reason is None and is_device_tool(validated.name):
+            # 트랙 Q16a: 자식은 사람의 기기에 닿지 않는다 -- 도구 목록에도 없고(포트의
+            # `definitions()` 에 브리지 도구가 없다), 이름으로 불러도 여기서 닫는다.
+            reason = "policy_device_child"
         if reason is None:
             task_id = getattr(getattr(deps, "lease", None), "task_id", None)
             outcome = await self._evaluate_call(

@@ -92,6 +92,7 @@ _POLICY_FIX_NOTES = {
     "policy_use_read_pdf": "use read_pdf.v1 for PDFs",
     "policy_browser_use_fill_secret": "use browser_fill_secret.v1 for secrets",
     "policy_browser_secret_disabled": "stored secrets are not enabled",
+    "policy_device_secret_ref": "device tools never receive secrets",
 }
 _EXECUTE_WRAPPERS = frozenset(
     {
@@ -1009,6 +1010,7 @@ class CodingToolRegistry:
         allowed_env_names: frozenset[str],
         secret_env_refs: bool = False,
         connectors: Any = None,
+        device_tools: bool = False,
     ) -> None:
         if (
             max_command_timeout_sec <= 0
@@ -1033,6 +1035,13 @@ class CodingToolRegistry:
         # 트랙 Q11a: 위험을 선언한 MCP 도구(`ConnectorCatalog`). `None` 이 off 다 --
         # 그러면 도구 목록·검증이 오늘과 같다(M10).
         self._connectors = connectors
+        # 트랙 Q16a: 켜져 있으면 브리지 도구를 **검증만** 한다. `definitions()` 에는 없다 --
+        # 소유자의 브리지가 붙어 있을 때 루프가 그 상태에서 덧붙인다(B4).
+        self._device_tools = device_tools
+        if device_tools:
+            from neos.coding.bridge.catalog import device_registered_tools
+
+            self._tools.update({tool.name: tool for tool in device_registered_tools()})
 
     @classmethod
     def default(
@@ -1045,6 +1054,7 @@ class CodingToolRegistry:
         allowed_env_names: frozenset[str] = frozenset(),
         secret_env_refs: bool = False,
         connectors: Any = None,
+        device_tools: bool = False,
     ) -> CodingToolRegistry:
         return cls(
             command_allowlist=command_allowlist,
@@ -1054,6 +1064,7 @@ class CodingToolRegistry:
             allowed_env_names=allowed_env_names,
             secret_env_refs=secret_env_refs,
             connectors=connectors,
+            device_tools=device_tools,
         )
 
     def _connector_definitions(self) -> tuple[ToolDefinition, ...]:
@@ -1248,7 +1259,17 @@ class CodingToolRegistry:
             ):
                 if key not in provided:
                     data.pop(key, None)
+        device_call = self._device_tools and name.startswith("device_")
+        if device_call:
+            from neos.coding.bridge.catalog import check_device_input, is_device_tool
+
+            device_call = is_device_tool(name)
+        if device_call:
+            # 정규화 **전**에 본다 -- 경로 정규화가 `secret://x` 를 `secret:/x` 로 접는다.
+            check_device_input(data, stage="raw")
         self._normalize_paths(name, data)
+        if device_call:
+            check_device_input(data, stage="normalized")
         if name == "chmod.v1":
             data["mode"] = _parse_numeric_mode(data["mode"])
             self._deny_secret_world_writable(data)

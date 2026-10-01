@@ -88,6 +88,13 @@ class ToolCatalogMixin:
                 for item in definitions
                 if getattr(item, "name", item) not in _CONTROL_PLANE_TOOLS
             )
+        view = getattr(state, "device_bridge", None)
+        if view is not None:
+            # 트랙 Q16a: 소유자의 브리지가 지금 붙어 있을 때만, 끝에 덧붙인다. 붙고 끊길 때
+            # 배열이 바뀌는 것은 `_guard_thinking_prefix` 가 사고 블록을 한 번 벗겨 받는다.
+            from neos.coding.bridge.catalog import device_tool_definitions
+
+            definitions = tuple(definitions) + device_tool_definitions(view.tools)
         if state.allowed_tools:
             definitions = tuple(
                 item
