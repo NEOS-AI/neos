@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 _MANAGED_CIPHER_KEY_VALID_BYTE_LENGTHS = frozenset({16, 24, 32})
 # 트리거 서명 마스터 키의 최소 길이. HMAC-SHA256 키로 32자(예: `openssl rand -hex 32` 는 64자).
 STANDING_TRIGGER_KEY_MIN_CHARS = 32
+# 트랙 Q6 -- `neos.coding.secrets.SECRET_BROKER_KEY_MIN_CHARS` 와 같은 값이다. 이 계층은
+# `neos.coding.*` 에 의존하지 않으므로 이름 붙인 상수로 따로 둔다(managed 키와 같은 이유).
+SECRET_BROKER_KEY_MIN_CHARS = 32
 
 
 def _split_csv(value: Any) -> Any:
@@ -453,6 +456,9 @@ class SecretsConfig(StrictConfigModel):
     # 상시 에이전트 트리거(Q4a)의 서명 마스터 키. 트리거마다의 webhook 비밀은
     # HMAC(이 키, trigger_id) 로 파생한다 -- DB 에는 비밀이 없다.
     standing_trigger_signing_key: str | None = Field(default=None, repr=False)
+    # 자격증명 브로커(Q6)의 봉인 마스터 키. 사용자 비밀의 AES-GCM 키는
+    # HMAC(이 키, 고정 info) 로 파생한다 -- DB 에는 키가 없다.
+    secret_broker_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -1968,6 +1974,12 @@ class CodingModelConfig(StrictConfigModel):
     # 기본 DENY·USER_ONLY·보호 파일 승인을 넘지 못한다.
     approval_user_rules: bool = False
     approval_user_rules_max: int = Field(default=100, ge=1, le=1000)
+    # 트랙 Q6: 자격증명 브로커. 켜면 execute.v1 의 env 값 `secret://<name>` 을 실행기가
+    # 소유자의 금고에서 풀어 쓰고, 그 호출은 사람 승인 또는 소유자의 allow 규칙으로만
+    # 돈다. 끄면 참조는 문자 그대로이고 금고 API 도 마운트되지 않는다.
+    # 켜려면 `secrets.secret_broker_key`(`NEOS_SECRET_BROKER_KEY`)가 있어야 한다.
+    secret_broker: bool = False
+    secret_broker_max: int = Field(default=50, ge=1, le=1000)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     notebook_edit: bool = False
     image_tool: bool = False
@@ -2410,6 +2422,21 @@ class AppConfig(StrictConfigModel):
                 "standing_agents.triggers.enabled requires "
                 f"secrets.standing_trigger_signing_key of at least "
                 f"{STANDING_TRIGGER_KEY_MIN_CHARS} characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_secret_broker_key(self) -> "AppConfig":
+        """브로커가 켜졌는데 봉인 키가 없거나 짧으면 시작하지 않는다 -- 키 없이는
+        어떤 비밀도 봉인하거나 풀 수 없으므로 금고를 여는 것 자체가 잘못이다."""
+        if not self.coding_model.secret_broker:
+            return self
+        key = self.secrets.secret_broker_key or ""
+        if len(key) < SECRET_BROKER_KEY_MIN_CHARS:
+            raise ValueError(
+                "coding_model.secret_broker requires "
+                f"secrets.secret_broker_key of at least "
+                f"{SECRET_BROKER_KEY_MIN_CHARS} characters"
             )
         return self
 

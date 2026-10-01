@@ -935,6 +935,7 @@ class DockerSandboxSession(HelperScriptSandboxSession):
         workdir: str,
         env: Mapping[str, str],
         timeout_sec: float,
+        secret_env: Mapping[str, str] | None = None,
     ):
         args = ["exec"]
         if request.stdin:
@@ -942,8 +943,20 @@ class DockerSandboxSession(HelperScriptSandboxSession):
         args.extend(("--workdir", workdir))
         for key, value in env.items():
             args.extend(("--env", f"{key}={value}"))
+        # 트랙 Q6: 이름만 argv 에 싣는다. `--env NAME` 은 docker CLI 프로세스의
+        # 환경에서 값을 가져간다 -- 값이 호스트 `ps` 에 보이지 않는다.
+        for key in secret_env or {}:
+            args.extend(("--env", key))
         args.append(self._record.container_name)
         args.extend(request.argv)
+        if secret_env:
+            return await self._provider._runner.run(
+                *args,
+                timeout_sec=timeout_sec,
+                allowed_exit_codes=tuple(range(256)),
+                input=request.stdin,
+                env=secret_env,
+            )
         return await self._provider._runner.run(
             *args,
             timeout_sec=timeout_sec,

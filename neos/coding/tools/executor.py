@@ -13,7 +13,7 @@ import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import PurePosixPath
@@ -33,6 +33,7 @@ from neos.coding.sandbox.base import (
 )
 from neos.coding.sandbox.observability import bounded_executable_category
 from neos.coding.sandbox.paths import normalize_workspace_path
+from neos.coding.secrets import SecretLookup, SecretNotFound, secret_env_refs
 from neos.coding.tools.media import (
     MediaError,
     extract_pdf_text,
@@ -195,7 +196,7 @@ _FS_FIX_NOTES = {
 def _passthrough_policy_reason(error: SandboxPolicyViolation) -> str:
     code = str(error)
     if code.isidentifier() and code.startswith(
-        ("workspace_", "file_", "policy_")
+        ("workspace_", "file_", "policy_", "secret_")
     ):
         return code
     return "sandbox_policy_violation"
@@ -582,9 +583,14 @@ class SandboxToolExecutor:
         *,
         known_reads: frozenset[str] = frozenset(),
         known_stamps: Mapping[str, Mapping[str, object]] | None = None,
+        secrets: SecretLookup | None = None,
     ) -> ToolResult:
+        """`secrets` 는 소유자의 금고(트랙 Q6). `None` 이면 참조를 모른다 --
+        `secret://x` 는 문자 그대로 간다(플래그 off, S9)."""
         self._hydrate_stamps(session, known_stamps)
-        result = await self._attempt(session, call, known_reads=known_reads)
+        result = await self._attempt(
+            session, call, known_reads=known_reads, secrets=secrets
+        )
         if result.status != "error" or not result.retryable or result.fix is None:
             return result
         merged = ValidatedToolCall(
@@ -592,7 +598,9 @@ class SandboxToolExecutor:
             {**dict(call.input), **result.fix},
             call.risk,
         )
-        return await self._attempt(session, merged, known_reads=known_reads)
+        return await self._attempt(
+            session, merged, known_reads=known_reads, secrets=secrets
+        )
 
     def export_read_stamps(self) -> dict[str, dict[str, object]]:
         exported: dict[str, dict[str, object]] = {}
@@ -630,8 +638,11 @@ class SandboxToolExecutor:
         call: ValidatedToolCall,
         *,
         known_reads: frozenset[str],
+        secrets: SecretLookup | None = None,
     ) -> ToolResult:
         try:
+            if secrets is not None and call.name == "execute.v1":
+                return await self._execute_with_secrets(session, call, secrets)
             return await self._execute(session, call, known_reads=known_reads)
         except SandboxTimeout:
             return self._failure("error", "sandbox_timeout")
@@ -1043,6 +1054,64 @@ class SandboxToolExecutor:
             await self._revision(session),
             matches=matches,
             fix_note=_policy_fix_note(reason),
+        )
+
+    async def _execute_with_secrets(
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        secrets: SecretLookup,
+    ) -> ToolResult:
+        """`execute.v1` 의 `env` 참조를 풀어 실행하고 결과를 가린다 (트랙 Q6).
+
+        풀린 값은 이 함수의 지역 변수로만 산다. `call.input` 은 바꾸지 않는다 --
+        원장·전사에 남는 것은 참조다.
+        """
+        refs = secret_env_refs(call.input.get("env"))
+        if not refs:
+            return await self._execute(session, call, known_reads=frozenset())
+        try:
+            resolved = await secrets(sorted(set(refs.values())))
+        except SecretNotFound:
+            return self._failure("denied", "secret_not_found")
+        except Exception:  # noqa: BLE001 -- 원인과 상관없이 돌리지 않는다
+            return self._failure("error", "secret_store_unavailable")
+        secret_env: dict[str, str] = {}
+        for env_name, name in refs.items():
+            secret = resolved.values.get(name)
+            if secret is None:
+                return self._failure("denied", "secret_not_found")
+            if secret.env_name != env_name:
+                return self._failure("denied", "secret_env_name_mismatch")
+            secret_env[env_name] = secret.value
+        argv = _argv_with_git_safety(tuple(str(value) for value in call.input["argv"]))
+        plain_env = {
+            str(key): str(value)
+            for key, value in dict(call.input["env"]).items()
+            if str(key) not in refs
+        }
+        request = CommandRequest(
+            argv=argv,
+            cwd=str(call.input["cwd"]),
+            env=plain_env,
+            secret_env=secret_env,
+            stdin=str(call.input["stdin"]).encode(),
+            timeout_sec=float(call.input["timeout_sec"]),
+            max_output_bytes=int(call.input["max_output_bytes"]),
+        )
+        result = await session.execute(request)
+        scrubbed = replace(
+            result,
+            stdout=resolved.scrub_bytes(result.stdout, truncated=result.stdout_truncated),
+            stderr=resolved.scrub_bytes(result.stderr, truncated=result.stderr_truncated),
+        )
+        return self._command_result(
+            scrubbed,
+            await self._revision(session),
+            audit={
+                "executable_category": bounded_executable_category(argv[0]),
+                "secret_refs": list(resolved.names),
+            },
         )
 
     async def _dispatch_non_file_tool(

@@ -147,6 +147,9 @@ class CommandRequest:
     stdin: bytes = b""
     timeout_sec: float = 30.0
     max_output_bytes: int = 1024 * 1024
+    #: 풀린 비밀(트랙 Q6) -- `env` 와 다른 필드다. `env` 의 이름 허용 목록을 넓히지 않고
+    #: 비밀만 따로 싣는다. 못 싣는 provider 는 `secret_env_unsupported` 로 거절한다.
+    secret_env: Mapping[str, str] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if not self.argv:
@@ -165,6 +168,8 @@ class CommandRequest:
         if self.max_output_bytes <= 0:
             raise SandboxPolicyViolation("command_output_limit_must_be_positive")
         if any("\0" in key or "\0" in value for key, value in self.env.items()):
+            raise SandboxPolicyViolation("command_environment_contains_nul")
+        if any("\0" in key or "\0" in value for key, value in self.secret_env.items()):
             raise SandboxPolicyViolation("command_environment_contains_nul")
 
 

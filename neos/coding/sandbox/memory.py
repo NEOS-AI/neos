@@ -1087,6 +1087,15 @@ class MemorySandboxSession:
             ),
         )
         environment = _guest_env(self._record.workspace, request.env)
+        # 풀린 비밀(트랙 Q6). 허용 목록은 `env` 에만 걸린다 -- 비밀의 변수 이름은
+        # 검증기와 금고가 이미 묶었다(S3). 실행 환경이 정하는 이름은 덮지 못한다.
+        environment.update(
+            {
+                key: value
+                for key, value in request.secret_env.items()
+                if key not in _RESERVED_GUEST_ENV
+            }
+        )
         async with self._record.lock:
             await self._require_running()
             before = self._workspace_fingerprint()

@@ -116,6 +116,7 @@ class DurableCodingLoop(
         monitor=None,
         envelope=None,
         user_rules=None,
+        secrets=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -138,6 +139,8 @@ class DurableCodingLoop(
         self._envelope = envelope
         # 사용자 승인 규칙(트랙 Q2)의 원천. `None` 이 off 다.
         self._user_rules = user_rules
+        # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다 -- 참조는 문자 그대로 간다.
+        self._secrets = secrets
 
     async def run(
         self,
@@ -209,6 +212,7 @@ class DurableCodingLoop(
             unattended=self._config.approval_unattended or unattended,
             read_only_ceiling=read_only_ceiling,
             user_rules=state.user_rules,
+            secret_broker=self._secrets is not None,
         )
 
     async def _with_user_rules(self, input: LoopInput, state: AgentLoopState) -> AgentLoopState:
@@ -330,18 +334,48 @@ class DurableCodingLoop(
             return "deny", "hook_error", None
         return parse_pre_tool_decision(raw)
 
+    def _secret_lookup(self, owner_id):
+        """소유자의 금고를 이 호출에만 묶는다 (트랙 Q6). 소유자가 없으면 풀 금고도 없다."""
+        source = self._secrets
+        if source is None:
+            return None
+        if not owner_id:
+
+            async def nobody(names):
+                from neos.coding.secrets import SecretNotFound
+
+                raise SecretNotFound(sorted(names)[0] if names else "")
+
+            return nobody
+
+        async def lookup(names):
+            return await source.resolve(owner_id, names)
+
+        return lookup
+
     async def _execute_validated(
-        self, bound, deps, validated, *, known_reads, known_stamps, prefetched=None
+        self,
+        bound,
+        deps,
+        validated,
+        *,
+        known_reads,
+        known_stamps,
+        prefetched=None,
+        owner_id=None,
     ):
         try:
             if prefetched is not None:
                 executed = prefetched
             else:
+                lookup = self._secret_lookup(owner_id)
+                extra = {"secrets": lookup} if lookup is not None else {}
                 executed = await self._executor.execute(
                     bound.session,
                     validated,
                     known_reads=known_reads,
                     known_stamps=known_stamps,
+                    **extra,
                 )
         except asyncio.CancelledError:
             raise

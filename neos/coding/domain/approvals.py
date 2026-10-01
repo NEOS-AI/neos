@@ -114,6 +114,9 @@ class ApprovalGate:
     read_only_ceiling: bool = False
     #: 태스크 소유자의 규칙(트랙 Q2). 에이전트 태스크도 소유자의 규칙을 쓴다.
     user_rules: tuple[UserApprovalRule, ...] = ()
+    #: 자격증명 브로커(트랙 Q6)가 켜져 있다 -- `secret://` 참조를 실은 호출은 사람
+    #: 승인 또는 소유자의 allow 규칙으로만 돈다. 꺼져 있으면 참조를 모른다(S9).
+    secret_broker: bool = False
 
 
 
@@ -540,6 +543,15 @@ def has_user_rule(call: ValidatedToolCall, gate: ApprovalGate, effect: UserRuleE
     )
 
 
+def uses_secret_refs(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """이 호출이 금고의 비밀을 쓰는가 (트랙 Q6). 브로커가 꺼져 있으면 늘 아니다."""
+    if not gate.secret_broker:
+        return False
+    from neos.coding.secrets import carries_secret_refs
+
+    return carries_secret_refs(call)
+
+
 def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     """background 모드에서 이 호출이 천장을 넘는가 (트랙 Q1).
 
@@ -572,6 +584,11 @@ def policy_denial_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str:
             return "policy_user_rule_blocked"
     except Exception:
         pass
+    try:
+        if uses_secret_refs(call, gate):
+            return "policy_secret_ref_unapproved"
+    except Exception:
+        pass
     return "policy_approval_denied"
 
 
@@ -598,6 +615,12 @@ def _evaluate_approval(
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     # 사용자 require -- 운영자 allow 와 "항상 허용" 기억보다 앞이다(좁히기만).
     if has_user_rule(call, gate, UserRuleEffect.REQUIRE):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 비밀 참조(트랙 Q6, S7) -- 사용자 require 와 같은 자리다. 운영자 allow 목록·
+    # "항상 허용" 기억·auto 모드는 넘지 못하고, 소유자의 allow 규칙만 넘는다.
+    if uses_secret_refs(call, gate):
+        if has_user_rule(call, gate, UserRuleEffect.ALLOW):
+            return ApprovalPolicyOutcome.ALLOW
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
@@ -732,6 +755,21 @@ _DENIAL_REASONS = {
         "the user has a rule blocking this action; do not retry -- "
         "choose another way or tell the user why it is needed"
     ),
+    "policy_secret_ref_unapproved": (
+        "this call uses a stored secret and nobody can approve it now; do not "
+        "retry -- ask the user to add an allow rule for this command"
+    ),
+    "policy_secret_ref_child": (
+        "subagents cannot use stored secrets; do not retry -- return the "
+        "command to the parent instead"
+    ),
+    "secret_not_found": (
+        "no stored secret has that name; do not retry -- ask the user to add it"
+    ),
+    "secret_env_name_mismatch": (
+        "that secret is bound to a different environment variable; use its own name"
+    ),
+    "secret_env_unsupported": "this sandbox cannot carry secrets; do not retry",
     "policy_user_only": (
         "only the user can do this, even with approval; do not retry -- "
         "tell the user what to run and why"

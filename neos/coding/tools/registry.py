@@ -907,6 +907,7 @@ class CodingToolRegistry:
         max_command_output_bytes: int,
         max_command_stdin_bytes: int,
         allowed_env_names: frozenset[str],
+        secret_env_refs: bool = False,
     ) -> None:
         if (
             max_command_timeout_sec <= 0
@@ -920,6 +921,9 @@ class CodingToolRegistry:
         self._max_command_output_bytes = max_command_output_bytes
         self._max_command_stdin_bytes = max_command_stdin_bytes
         self._allowed_env_names = allowed_env_names
+        # 트랙 Q6: 켜져 있으면 `secret://<name>` 값을 실은 변수는 허용 목록 밖이어도
+        # 받는다 -- 이름은 `secret_env_name_allowed` 가, 비밀과의 묶임은 실행기가 본다.
+        self._secret_env_refs = secret_env_refs
 
     @classmethod
     def default(
@@ -930,6 +934,7 @@ class CodingToolRegistry:
         max_command_output_bytes: int = 1024 * 1024,
         max_command_stdin_bytes: int = 1024 * 1024,
         allowed_env_names: frozenset[str] = frozenset(),
+        secret_env_refs: bool = False,
     ) -> CodingToolRegistry:
         return cls(
             command_allowlist=command_allowlist,
@@ -937,6 +942,7 @@ class CodingToolRegistry:
             max_command_output_bytes=max_command_output_bytes,
             max_command_stdin_bytes=max_command_stdin_bytes,
             allowed_env_names=allowed_env_names,
+            secret_env_refs=secret_env_refs,
         )
 
     def definitions(
@@ -1194,6 +1200,15 @@ class CodingToolRegistry:
         ):
             raise ToolValidationError("policy_secret_path_denied")
 
+    def _env_entry_allowed(self, key: str, value: str) -> bool:
+        if key in self._allowed_env_names:
+            return True
+        if not self._secret_env_refs:
+            return False
+        from neos.coding.secrets import secret_env_name_allowed, secret_ref_name
+
+        return secret_ref_name(value) is not None and secret_env_name_allowed(key)
+
     def _validate_command(self, data: dict[str, Any]) -> None:
         from neos.coding.domain.approvals import is_denied_secret_path
 
@@ -1283,7 +1298,9 @@ class CodingToolRegistry:
             raise ToolValidationError("policy_command_output_exceeded")
         if len(data["stdin"].encode("utf-8")) > self._max_command_stdin_bytes:
             raise ToolValidationError("policy_command_stdin_exceeded")
-        if not set(data["env"]).issubset(self._allowed_env_names):
+        if not all(
+            self._env_entry_allowed(key, value) for key, value in data["env"].items()
+        ):
             raise ToolValidationError("policy_environment_name_denied")
         if any("\0" in key or "\0" in value for key, value in data["env"].items()):
             raise ToolValidationError("policy_schema_invalid")

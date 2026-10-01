@@ -374,6 +374,10 @@ class SandboxdSession:
         disallowed = set(request.env) - self._attachment.allowed_env_names
         if disallowed:
             raise SandboxPolicyViolation("environment_not_allowed")
+        if request.secret_env:
+            # 트랙 Q6: RPC 에 비밀 채널이 없다. `env` 로 실으면 guest 로그·RPC 추적에
+            # 남을 수 있다 -- 싣지 않고 거절한다(Q6b 가 채널을 더할 때 연다).
+            raise SandboxPolicyViolation("secret_env_unsupported")
         cwd = normalize_workspace_path(request.cwd).as_posix()
         env = {
             key: value for key, value in request.env.items() if key not in _RESERVED_GUEST_ENV

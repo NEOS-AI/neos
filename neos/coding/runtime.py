@@ -22,6 +22,7 @@ from neos.coding.loop.base import CodingLoop
 from neos.jev.assembly import build_tool_risk_gate, build_trajectory_monitor
 from neos.standing.budget import build_agent_envelope
 from neos.coding.application.user_rules import build_user_rule_source
+from neos.coding.secrets import build_secret_source
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -660,6 +661,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         max_command_output_bytes=execution.max_output_bytes,
         max_command_stdin_bytes=execution.max_stdin_bytes,
         allowed_env_names=frozenset(execution.allowed_env_names),
+        # 트랙 Q6. 루프의 금고와 같은 플래그 하나에서 나온다.
+        secret_env_refs=coding.secret_broker,
     )
     # 계측은 전송 계층 **밖에서** 감싼다 (D1c). 프로바이더 구현을 건드리지
     # 않으므로 D4(네이티브 SDK 전환)가 그 아래를 바꿔도 함께 무너지지 않는다.
@@ -774,6 +777,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             envelope=build_agent_envelope(config.standing_agents, db_manager.get_session),
             # 사용자 승인 규칙(트랙 Q2). `None` 이 off 다.
             user_rules=build_user_rule_source(coding, db_manager.get_session),
+            # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다.
+            secrets=build_secret_source(coding, config.secrets, db_manager.get_session),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라

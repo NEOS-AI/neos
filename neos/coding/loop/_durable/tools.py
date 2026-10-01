@@ -418,6 +418,7 @@ class ToolExecutionMixin:
                 known_reads=state.read_paths,
                 known_stamps=state.read_stamps,
                 prefetched=prefetch.get(call.tool_call_id),
+                owner_id=getattr(input, "owner_id", None),
             )
             return result, state
         if call.name == "spawn_agent.v1":

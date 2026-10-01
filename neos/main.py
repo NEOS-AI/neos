@@ -608,6 +608,13 @@ if settings.config.coding_model.approval_user_rules:
     _include_router_for_runtime(
         user_rule_router, prefix=settings.API_V1_PREFIX, tags=["Coding Approval Rules"]
     )
+# 사용자 비밀 금고(트랙 Q6). 꺼져 있으면 라우트가 없다.
+if settings.config.coding_model.secret_broker:
+    from neos.api.handlers.secret_handlers import router as secret_router
+
+    _include_router_for_runtime(
+        secret_router, prefix=settings.API_V1_PREFIX, tags=["Coding Secrets"]
+    )
 # 상시 에이전트(트랙 Q13b). 꺼져 있으면 라우트가 **없다** -- 거절하는 라우트가 아니다.
 if settings.config.standing_agents.enabled:
     from neos.api.handlers.standing_agent_handlers import router as standing_agent_router

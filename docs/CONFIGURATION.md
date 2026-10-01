@@ -871,6 +871,45 @@ never stores them in a checkpoint, so a rule added while a task runs applies
 from its next step; if the rules cannot be read, the step fails retryably
 (`user_rules_unavailable`) rather than deciding without them.
 
+### Coding credential broker (track Q6)
+
+```yaml
+coding_model:
+  secret_broker: false     # off: secret:// is a literal string, the vault API is not mounted
+  secret_broker_max: 50    # secrets per user
+```
+
+```bash
+NEOS_SECRET_BROKER_KEY=...   # required when the broker is on, >= 32 chars (openssl rand -hex 32)
+```
+
+Each user keeps a vault of named secrets. A secret is bound to **one**
+environment variable name, chosen by its owner:
+
+```
+GET    /api/v1/coding/secrets             # names, env names and times -- never values
+PUT    /api/v1/coding/secrets/{name}      {"env_name": "GH_TOKEN", "value": "..."}
+DELETE /api/v1/coding/secrets/{name}
+```
+
+The model writes only a reference, as the whole value of an `execute.v1`
+environment variable: `{"argv": ["gh", "api", "user"], "env": {"GH_TOKEN": "secret://github"}}`.
+The executor resolves it right before running and replaces the value (and a
+truncated tail of it) in stdout/stderr with `<redacted:secret://github>`. The
+transcript, ledger and checkpoints only ever hold the reference. References in
+argv, stdin or file contents are not resolved.
+
+A call that carries a reference needs a human approval or an owner `allow` rule
+(track Q2) -- operator allow lists, remembered approvals and auto mode do not
+lift it. Unattended runs without such a rule are refused with
+`policy_secret_ref_unapproved`; subagents are always refused
+(`policy_secret_ref_child`). Other refusals: `secret_not_found`,
+`secret_env_name_mismatch`, `secret_env_unsupported` (sandboxd and managed
+sandboxes cannot carry secrets yet; memory and Docker can -- Docker gets the
+value through the CLI's environment, never its argv). Values are sealed with
+AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
+makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
+
 ### Standing agents
 
 ```yaml
