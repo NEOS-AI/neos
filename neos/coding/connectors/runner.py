@@ -4,6 +4,10 @@ Q6 의 세 걸음을 그대로 쓴다(`neos/coding/secrets.py` 머리말). 풀�
 지역 변수와 연결 객체 안에서만 산다 -- 결과·사유·로그 어디에도 나가지 않는다.
 결과 본문은 신뢰하지 않는 글이다(M9): 값 자체를 가리고 -> 자르고 -> 정규식 규칙을
 걸고 -> `wrap_untrusted_document` 로 감싼다. 루프가 그 위에 `redact_sensitive` 를 한 번 더 건다.
+
+고정한 도구(트랙 Q11b)는 부르기 **전에** 같은 연결에서 `tools/list` 로 서버의 것과 맞춰
+본다 -- 없거나 스키마가 다르면 `tools/call` 을 보내지 않는다(N4). 이 확인은 승인된 호출
+안에서 같은 자격증명으로 돈다 -- 비밀을 따로 푸는 순간이 없다(N5).
 """
 
 from __future__ import annotations
@@ -15,7 +19,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from neos.coding.connectors.catalog import ConnectorCatalog, ConnectorTool, materialize_credentials
+from neos.coding.connectors.catalog import (
+    ConnectorCatalog,
+    ConnectorTool,
+    canonical_schema,
+    materialize_credentials,
+)
 from neos.coding.connectors.protocol import ConnectorError, open_session
 from neos.coding.secrets import ResolvedSecrets, SecretLookup, SecretNotFound, secret_ref_name
 from neos.univer.ports import wrap_untrusted_document
@@ -30,6 +39,14 @@ CONNECTOR_FIX_NOTES = {
     "connector_protocol_error": "the connector spoke an unexpected protocol; do not retry",
     "connector_call_failed": "the connector rejected the call; fix the arguments",
     "connector_tool_error": "the connector tool reported an error; read it before retrying",
+    "connector_tool_missing": (
+        "the connector no longer offers this tool; do not retry -- tell the user the "
+        "operator must update the pinned tool list"
+    ),
+    "connector_schema_drift": (
+        "the connector changed this tool's input schema; do not retry -- tell the user "
+        "the operator must update the pinned tool list"
+    ),
     "secret_not_found": "no stored secret has that name; do not retry -- ask the user to add it",
     "secret_env_name_mismatch": "that secret is bound to a different environment variable",
     "secret_store_unavailable": "the secret store is unavailable; do not retry now",
@@ -45,6 +62,25 @@ class ConnectorOutcome:
     original_bytes: int | None = None
     truncated: bool = False
     secret_refs: tuple[str, ...] = ()
+
+
+def pin_drift(tool: ConnectorTool, listed: list[Mapping[str, Any]]) -> str | None:
+    """고정한 도구가 서버와 어긋났는가(N4). `None` 이 일치다.
+
+    이름이 없으면 `connector_tool_missing`, 같은 이름의 항목 중 하나라도 `inputSchema` 의
+    정규형이 다르면 `connector_schema_drift`. 설명·annotations 는 보지 않는다 -- 프롬프트에
+    실리는 것은 운영자가 고정한 설명이고, 위험은 서버의 말이 아니다(M4).
+    """
+    if not listed:
+        return "connector_tool_missing"
+    for item in listed:
+        try:
+            live = canonical_schema(item.get("inputSchema"))
+        except (TypeError, ValueError):
+            return "connector_schema_drift"
+        if live != tool.pinned_schema:
+            return "connector_schema_drift"
+    return None
 
 
 def render_content(result: Mapping[str, Any]) -> tuple[str, bool]:
@@ -132,6 +168,13 @@ class ConnectorRunner:
                     max_message_bytes=settings.max_message_bytes,
                     timeout_sec=settings.call_timeout_sec,
                 ) as session:
+                    if tool.pinned_schema is not None:
+                        drift = pin_drift(tool, await session.find_tool(tool.tool))
+                        if drift is not None:
+                            logger.warning("mcp call %s refused (%s)", tool.name, drift)
+                            return ConnectorOutcome(
+                                "error", drift, secret_refs=resolved.names
+                            )
                     raw = await session.call_tool(tool.tool, arguments)
         except ConnectorError as error:
             logger.info("mcp call %s failed (%s)", tool.name, error.reason)
@@ -172,5 +215,6 @@ __all__ = [
     "ConnectorOutcome",
     "ConnectorRunner",
     "build_connector_runner",
+    "pin_drift",
     "render_content",
 ]

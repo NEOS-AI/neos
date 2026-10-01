@@ -967,7 +967,7 @@ subagents and the deep-analysis research path never see the browser. Requires
 `playwright install chromium`; without it the tools answer `browser_unavailable`.
 Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
 
-### Coding MCP connectors (track Q11a)
+### Coding MCP connectors (tracks Q11a, Q11b)
 
 ```yaml
 coding_model:
@@ -1022,7 +1022,7 @@ otherwise. A stdio env entry must use the env name the owner bound the secret to
 human approval or an owner `allow` rule, even for a `read_only` tool; unattended
 runs without such a rule get `policy_secret_ref_unapproved`. At discovery there is
 no owner, so references are left out -- a server that needs a user's credential to
-list its tools cannot be discovered yet (Q11b). A stdio server does **not** inherit
+list its tools cannot be discovered; pin its tools instead (below). A stdio server does **not** inherit
 the worker environment (only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SYSTEMROOT`) and its
 stderr is discarded. HTTP never follows redirects and ignores proxy/`.netrc`
 environment settings. Connections are opened per call; nothing is pooled across
@@ -1038,6 +1038,47 @@ the Q6 codes `secret_not_found`, `secret_env_name_mismatch`,
 `secret_store_unavailable`. Stdio servers run on the host with the worker's OS
 user -- list only commands you would run there yourself. Design:
 `docs/Q11_MCP_CLIENT_DESIGN_261001.md`.
+
+**Pinned tools (track Q11b).** For a server that answers `tools/list` only with the
+owner's credential (most SaaS servers), declare its tools in the config instead of
+discovering them:
+
+```yaml
+      - name: tracker
+        transport: http
+        url: https://mcp.example.com/mcp
+        bearer_token: "secret://tracker"
+        risk: read_only                    # fallback risk for pinned tools ...
+        tool_risks: {create_issue: command} # ... per-tool override (pinned names only)
+        pinned_tools:
+          - name: search_issues
+            description: Search issues in the team tracker.
+            input_schema:                  # copy the server's inputSchema verbatim
+              type: object
+              properties: {q: {type: string}}
+              required: [q]
+          - name: create_issue
+            input_schema: {type: object, properties: {title: {type: string}}}
+            risk: command                  # optional; beats tool_risks and risk
+```
+
+With `pinned_tools` set, the server is never contacted at startup and its tools are
+exactly the pinned list -- anything else the server offers does not exist. Each
+tool's risk is `risk` on the entry, then `tool_risks`, then the server's `risk`; with
+none of them the app refuses to start (a pinned tool never silently disappears). An
+empty list, duplicate names, `tool_risks` naming an unpinned tool, a schema that is
+not `type: object` or not a valid JSON Schema, an exposed name over 64 characters, or
+more tools than `max_tools_per_server` also stop startup. Descriptions are folded and
+labelled like discovered ones.
+
+Every call of a pinned tool first checks the server inside the same connection, with
+the same (already approved) credential: `tools/list` is paged until the tool is found.
+If it is missing the call fails with `connector_tool_missing`; if its `inputSchema`
+differs from `input_schema` (key order ignored, every other difference counts) it
+fails with `connector_schema_drift`. Neither sends `tools/call` -- re-pin the tool.
+The tool list stays fixed for the process and is the same for every owner; nothing is
+cached and no migration is involved. Without `pinned_tools` (the default) a server
+behaves exactly as in Q11a.
 
 ### Coding device bridge (track Q16a)
 

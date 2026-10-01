@@ -347,6 +347,28 @@ class McpSession:
             cursor = next_cursor
         return tools[:max_tools]
 
+    async def find_tool(self, name: str) -> list[Mapping[str, Any]]:
+        """`tools/list` 를 넘기며 이름이 `name` 인 항목을 모은다(트랙 Q11b, N4).
+
+        찾은 페이지에서 멈춘다 -- 고정한 도구가 서버에 아직 있는지만 보면 된다.
+        """
+        found: list[Mapping[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(MAX_LIST_PAGES):
+            params: dict[str, Any] = {} if cursor is None else {"cursor": cursor}
+            result = await self._call("tools/list", params)
+            page = result.get("tools")
+            if not isinstance(page, list):
+                raise ConnectorError("connector_protocol_error")
+            found.extend(
+                item for item in page if isinstance(item, Mapping) and item.get("name") == name
+            )
+            next_cursor = result.get("nextCursor")
+            if found or not isinstance(next_cursor, str) or not next_cursor:
+                break
+            cursor = next_cursor
+        return found
+
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
         return await self._call("tools/call", {"name": name, "arguments": dict(arguments)})
 

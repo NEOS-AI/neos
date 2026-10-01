@@ -2,6 +2,13 @@
 
 `FAKE_MCP_MODE` picks a misbehaviour. It speaks only what the client uses:
 initialize, notifications/initialized, tools/list (two pages), tools/call.
+
+Q11b knobs (test plumbing, not protocol fields):
+- `FAKE_MCP_AUTH=1` -- like most SaaS servers, `tools/list` and `tools/call` answer a
+  JSON-RPC error unless the owner's `FAKE_TOKEN` reached the process
+- `FAKE_MCP_LOG=<path>` -- appends each request's method (and tool name) to that file,
+  so a test can see that `tools/call` was never sent
+- modes `drift_missing` (search is gone) and `drift_schema` (search grew a property)
 """
 
 from __future__ import annotations
@@ -12,6 +19,8 @@ import sys
 import time
 
 MODE = os.environ.get("FAKE_MCP_MODE", "ok")
+AUTH = os.environ.get("FAKE_MCP_AUTH") == "1"
+LOG = os.environ.get("FAKE_MCP_LOG")
 SCHEMA_Q = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
 TOOLS = [
     {
@@ -68,6 +77,29 @@ def call(name: str, args: dict) -> dict:
     }
 
 
+def listed_tools() -> list[dict]:
+    if MODE == "drift_missing":
+        return [tool for tool in TOOLS if tool["name"] != "search"]
+    if MODE == "drift_schema":
+        grown = {
+            "type": "object",
+            "properties": {"q": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["q"],
+        }
+        return [
+            {**tool, "inputSchema": grown} if tool["name"] == "search" else tool
+            for tool in TOOLS
+        ]
+    return TOOLS
+
+
+def log(message: dict) -> None:
+    if LOG:
+        params = message.get("params") or {}
+        with open(LOG, "a") as handle:
+            handle.write(f"{message.get('method')} {params.get('name', '')}".rstrip() + "\n")
+
+
 def main() -> None:
     for line in sys.stdin:
         if not line.strip():
@@ -75,7 +107,17 @@ def main() -> None:
         message = json.loads(line)
         if "id" not in message:
             continue
+        log(message)
         method = message.get("method")
+        if AUTH and method in {"tools/list", "tools/call"} and not os.environ.get("FAKE_TOKEN"):
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "error": {"code": -32001, "message": "unauthorized"},
+                }
+            )
+            continue
         if method == "initialize":
             if MODE == "ping_first":
                 send({"jsonrpc": "2.0", "id": "srv-1", "method": "ping"})
@@ -92,10 +134,11 @@ def main() -> None:
             )
         elif method == "tools/list":
             cursor = (message.get("params") or {}).get("cursor")
+            tools = listed_tools()
             if cursor is None:
-                result(message["id"], {"tools": TOOLS[:2], "nextCursor": "page-2"})
+                result(message["id"], {"tools": tools[:2], "nextCursor": "page-2"})
             else:
-                result(message["id"], {"tools": TOOLS[2:]})
+                result(message["id"], {"tools": tools[2:]})
         elif method == "tools/call":
             params = message["params"]
             if params["name"] == "explode":

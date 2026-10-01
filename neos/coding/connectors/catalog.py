@@ -7,6 +7,10 @@
 발견은 프로세스가 시작할 때 한 번이다(M6). 그래서 도구 배열과 프롬프트가 프로세스
 수명 동안 바뀌지 않는다(K2b 와 같은 이유). 그 순간에는 태스크 소유자가 없으므로
 `secret://` 값은 **빠진 채로** 연결한다.
+
+트랙 Q11b: `pinned_tools` 가 있는 서버는 발견하지 않는다 -- 운영자가 적은 이름·설명·
+스키마·위험이 그대로 도구가 된다(`pin_tools`). 소유자의 자격증명이 있어야 `tools/list` 에
+답하는 서버가 이 길로 들어온다. 서버와 어긋났는지는 호출 때 러너가 본다(N4).
 """
 
 from __future__ import annotations
@@ -99,6 +103,9 @@ class ConnectorTool:
     input_schema: Mapping[str, object]
     #: 이 도구의 서버 설정이 쓰는 비밀 -- 게이트가 S7 로 판정한다(M7).
     secret_refs: tuple[str, ...] = ()
+    #: 트랙 Q11b: 고정한 `inputSchema` 의 정규 JSON. 있으면 러너가 부르기 전에 서버의 것과
+    #: 맞춰 본다(N4). 발견한 도구는 `None` 이다.
+    pinned_schema: str | None = None
     _validator: Any = field(default=None, compare=False, repr=False)
 
     def validate_arguments(self, arguments: Mapping[str, object]) -> dict[str, object]:
@@ -114,6 +121,11 @@ class ConnectorTool:
         if errors:
             raise ValueError("connector_arguments_invalid")
         return json.loads(encoded)
+
+
+def canonical_schema(schema: object) -> str:
+    """스키마 비교의 정규형 -- 키 순서와 공백은 어긋남이 아니다(N4)."""
+    return json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _schema_validator(schema: object) -> Any | None:
@@ -148,6 +160,65 @@ class ConnectorCatalog:
         return None
 
 
+def _build_tool(
+    server: Any,
+    tool: str,
+    raw_risk: str,
+    schema: object,
+    description: object,
+    refs: tuple[str, ...],
+    *,
+    pinned: bool,
+) -> ConnectorTool | str:
+    """도구 하나 -- 발견과 고정이 **이 함수 하나**를 지난다. 못 만들면 사유 코드를 돌려준다."""
+    exposed = f"{CONNECTOR_TOOL_PREFIX}{server.name}__{tool}"
+    if len(exposed) > MAX_EXPOSED_NAME_CHARS:
+        return "name_too_long"
+    validator = _schema_validator(schema)
+    if validator is None:
+        return "bad_schema"
+    risk = ToolRisk(raw_risk)
+    return ConnectorTool(
+        name=exposed,
+        server=server.name,
+        tool=tool,
+        risk=risk,
+        description=clean_description(server.name, tool, risk, description),
+        input_schema=json.loads(json.dumps(schema)),
+        secret_refs=refs,
+        pinned_schema=canonical_schema(schema) if pinned else None,
+        _validator=validator,
+    )
+
+
+def pin_tools(server: Any) -> tuple[ConnectorTool, ...]:
+    """운영자가 고정한 도구(트랙 Q11b, N2). 연결하지 않는다 -- 그래서 비밀도 풀지 않는다(N5).
+
+    위험은 `pinned.risk` → `tool_risks` → 서버의 `risk` 다(M4 그대로). 설정 검사를 지난
+    매니페스트가 여기서 못 쓰이면(이름이 길다 · 스키마가 틀렸다) 시작하지 않는다 --
+    운영자가 적은 것을 조용히 버리지 않는다.
+    """
+    refs = server_secret_refs(server)
+    tools: list[ConnectorTool] = []
+    for pinned in server.pinned_tools:
+        raw_risk = pinned.risk or server.tool_risks.get(pinned.name) or server.risk
+        if raw_risk is None:
+            raise ValueError(f"mcp server {server.name}: pinned tool {pinned.name} has no risk")
+        built = _build_tool(
+            server,
+            pinned.name,
+            raw_risk,
+            pinned.input_schema,
+            pinned.description,
+            refs,
+            pinned=True,
+        )
+        if isinstance(built, str):
+            raise ValueError(f"mcp server {server.name}: pinned tool {pinned.name} ({built})")
+        tools.append(built)
+    return tuple(tools)
+
+
 def declare_tools(
     server: Any, listed: Sequence[Mapping[str, Any]], *, max_tools: int
 ) -> tuple[ConnectorTool, ...]:
@@ -166,31 +237,22 @@ def declare_tools(
         if raw_risk is None:
             skipped.setdefault("undeclared", []).append(tool)
             continue
-        exposed = f"{CONNECTOR_TOOL_PREFIX}{server.name}__{tool}"
-        if len(exposed) > MAX_EXPOSED_NAME_CHARS:
-            skipped.setdefault("name_too_long", []).append(tool)
-            continue
-        schema = item.get("inputSchema")
-        validator = _schema_validator(schema)
-        if validator is None:
-            skipped.setdefault("bad_schema", []).append(tool)
+        built = _build_tool(
+            server,
+            tool,
+            raw_risk,
+            item.get("inputSchema"),
+            item.get("description"),
+            refs,
+            pinned=False,
+        )
+        if isinstance(built, str):
+            skipped.setdefault(built, []).append(tool)
             continue
         if len(declared) >= max_tools:
             skipped.setdefault("over_limit", []).append(tool)
             continue
-        risk = ToolRisk(raw_risk)
-        declared.append(
-            ConnectorTool(
-                name=exposed,
-                server=server.name,
-                tool=tool,
-                risk=risk,
-                description=clean_description(server.name, tool, risk, item.get("description")),
-                input_schema=json.loads(json.dumps(schema)),
-                secret_refs=refs,
-                _validator=validator,
-            )
-        )
+        declared.append(built)
     for reason, names in skipped.items():
         logger.warning(
             "mcp server %s: %d tool(s) not registered (%s): %s",
@@ -221,6 +283,9 @@ async def discover_catalog(settings: Any, *, opener: Any = open_session) -> Conn
         server_secret_refs(server)  # 모양이 틀린 참조는 연결 전에 멈춘다
 
     async def one(server: Any) -> tuple[ConnectorTool, ...]:
+        if server.pinned_tools is not None:
+            # 트랙 Q11b: 고정한 서버에는 연결하지 않는다(N5).
+            return pin_tools(server)
         try:
             listed = await _discover_server(server, settings, opener)
         except ConnectorError as error:
@@ -278,9 +343,11 @@ __all__ = [
     "ConnectorCatalog",
     "ConnectorTool",
     "build_connector_catalog",
+    "canonical_schema",
     "clean_description",
     "declare_tools",
     "discover_catalog",
     "materialize_credentials",
+    "pin_tools",
     "server_secret_refs",
 ]

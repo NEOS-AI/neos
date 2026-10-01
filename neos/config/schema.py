@@ -1988,6 +1988,26 @@ _MCP_TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MCP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
+class CodingMcpPinnedTool(StrictConfigModel):
+    """운영자가 고정한 도구 하나(트랙 Q11b, N2). 발견하지 않고 이것이 도구 배열에 실린다.
+
+    `input_schema` 는 서버의 `tools/list` 가 돌려주는 `inputSchema` 를 그대로 옮긴 것이다 --
+    호출 때 서버의 것과 비교해 다르면 부르지 않는다(N4).
+    """
+
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    description: str = Field(default="", max_length=4000)
+    input_schema: dict[str, Any]
+    # 없으면 `tool_risks[name]` → 서버의 `risk`. 셋 다 없으면 시작하지 않는다(N3).
+    risk: McpToolRisk | None = None
+
+    @model_validator(mode="after")
+    def validate_schema_shape(self) -> "CodingMcpPinnedTool":
+        if self.input_schema.get("type") != "object":
+            raise ValueError(f"pinned mcp tool {self.name}: input_schema type must be object")
+        return self
+
+
 class CodingMcpServerConfig(StrictConfigModel):
     """운영자가 정한 MCP 서버 하나. 모델은 명령도 URL 도 고르지 않는다(M2).
 
@@ -2007,6 +2027,9 @@ class CodingMcpServerConfig(StrictConfigModel):
     # 서버 전체의 위험 선언. 없고 `tool_risks` 에도 없으면 그 도구는 **등록되지 않는다**(M4).
     risk: McpToolRisk | None = None
     tool_risks: dict[str, McpToolRisk] = Field(default_factory=dict)
+    # 트랙 Q11b: 있으면 이 서버는 발견하지 않는다 -- 운영자가 적은 도구가 전부다(N1·N2).
+    # `None` 이 Q11a 그대로(시작할 때 발견)다.
+    pinned_tools: list[CodingMcpPinnedTool] | None = None
 
     @model_validator(mode="after")
     def validate_transport(self) -> "CodingMcpServerConfig":
@@ -2036,7 +2059,27 @@ class CodingMcpServerConfig(StrictConfigModel):
         bad_tools = [key for key in self.tool_risks if not _MCP_TOOL_NAME_RE.fullmatch(key)]
         if bad_tools:
             raise ValueError(f"mcp server {self.name}: bad tool names {bad_tools}")
+        if self.pinned_tools is not None:
+            self._validate_pinned_tools(self.pinned_tools)
         return self
+
+    def _validate_pinned_tools(self, pinned: list[CodingMcpPinnedTool]) -> None:
+        """고정 매니페스트의 위험도 운영자의 선언이다(M4). 빠진 것은 조용히 버리지 않는다."""
+        if not pinned:
+            raise ValueError(f"mcp server {self.name}: pinned_tools is empty; omit it to discover")
+        names = [tool.name for tool in pinned]
+        if len(names) != len(set(names)):
+            raise ValueError(f"mcp server {self.name}: pinned tool names must be unique")
+        undeclared = [
+            tool.name
+            for tool in pinned
+            if (tool.risk or self.tool_risks.get(tool.name) or self.risk) is None
+        ]
+        if undeclared:
+            raise ValueError(f"mcp server {self.name}: pinned tools without a risk {undeclared}")
+        stray = sorted(set(self.tool_risks) - set(names))
+        if stray:
+            raise ValueError(f"mcp server {self.name}: tool_risks names unpinned tools {stray}")
 
     def credential_values(self) -> list[str]:
         values = [*self.env.values(), *self.headers.values()]
@@ -2046,7 +2089,8 @@ class CodingMcpServerConfig(StrictConfigModel):
 
 
 class CodingMcpConfig(StrictConfigModel):
-    """트랙 Q11a. 꺼져 있으면 도구 목록·프롬프트·이벤트가 오늘과 바이트가 같다(M10)."""
+    """트랙 Q11a(+Q11b 고정 매니페스트). 꺼져 있으면 도구 목록·프롬프트·이벤트가
+    오늘과 바이트가 같다(M10)."""
 
     enabled: bool = False
     servers: list[CodingMcpServerConfig] = Field(default_factory=list)
@@ -2067,6 +2111,11 @@ class CodingMcpConfig(StrictConfigModel):
             raise ValueError("coding_model.mcp.servers names must be unique")
         if self.max_output_bytes > self.max_message_bytes:
             raise ValueError("coding_model.mcp.max_output_bytes exceeds max_message_bytes")
+        for server in self.servers:
+            if server.pinned_tools and len(server.pinned_tools) > self.max_tools_per_server:
+                raise ValueError(
+                    f"mcp server {server.name}: pinned_tools exceeds max_tools_per_server"
+                )
         return self
 
     def uses_secret_refs(self) -> bool:
