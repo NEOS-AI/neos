@@ -24,6 +24,8 @@ from neos.standing.budget import build_agent_envelope
 from neos.coding.application.user_rules import build_user_rule_source
 from neos.coding.secrets import build_secret_source
 from neos.coding.browser.session import build_browser_sessions
+from neos.coding.connectors.catalog import build_connector_catalog
+from neos.coding.connectors.runner import build_connector_runner
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -656,6 +658,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     factory = _resolve_coding_session_factory(session_factory)
     repository = PostgresSandboxBindingRepository(factory)
     allowlist = coding.command_allowlist if coding.command_enabled else []
+    # 트랙 Q11a. `None` 이 off 다 -- 켜져 있으면 여기서 한 번 발견하고 프로세스 수명 동안 고정한다(M6).
+    connectors = build_connector_catalog(coding)
     tools = CodingToolRegistry.default(
         command_allowlist=frozenset(allowlist),
         max_command_timeout_sec=coding.tool_timeout_sec,
@@ -664,6 +668,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         allowed_env_names=frozenset(execution.allowed_env_names),
         # 트랙 Q6. 루프의 금고와 같은 플래그 하나에서 나온다.
         secret_env_refs=coding.secret_broker,
+        connectors=connectors,
     )
     # 계측은 전송 계층 **밖에서** 감싼다 (D1c). 프로바이더 구현을 건드리지
     # 않으므로 D4(네이티브 SDK 전환)가 그 아래를 바꿔도 함께 무너지지 않는다.
@@ -680,6 +685,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     executor = SandboxToolExecutor(
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
+        connectors=build_connector_runner(connectors),
     )
     window = catalog_window_for(
         coding_model,

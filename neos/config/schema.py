@@ -1965,6 +1965,118 @@ class CodingBrowserConfig(StrictConfigModel):
             raise ValueError("coding_model.browser idle_timeout_sec exceeds max_lifetime_sec")
         return self
 
+# 트랙 Q11a -- 실제 MCP 클라이언트(docs/Q11_MCP_CLIENT_DESIGN_261001.md).
+# 커넥터 도구가 받을 수 있는 위험 등급. USER_QUESTION 은 사람에게 묻는 도구의 것이라 없다.
+McpToolRisk = Literal["read_only", "workspace_write", "command"]
+#: 우리가 정하는 헤더 -- 설정이 덮으면 프로토콜이 깨지거나 요청이 엉뚱한 곳으로 간다.
+_MCP_RESERVED_HEADERS = frozenset(
+    {
+        "accept",
+        "authorization",  # `bearer_token` 으로만
+        "connection",
+        "content-length",
+        "content-type",
+        "host",
+        "mcp-protocol-version",
+        "mcp-session-id",
+        "transfer-encoding",
+    }
+)
+_MCP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+_MCP_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_MCP_TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MCP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+class CodingMcpServerConfig(StrictConfigModel):
+    """운영자가 정한 MCP 서버 하나. 모델은 명령도 URL 도 고르지 않는다(M2).
+
+    `env`·`headers`·`bearer_token` 값은 문자 그대로이거나 **값 전체가**
+    `secret://<name>` 이다 -- 참조는 태스크 소유자의 금고에서 호출 때 푼다(M7).
+    """
+
+    # 밑줄이 없다 -- 노출 이름 `mcp__<server>__<tool>` 이 모호해지지 않게(M5).
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    transport: Literal["stdio", "http"]
+    command: list[str] = Field(default_factory=list)
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict, repr=False)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict, repr=False)
+    bearer_token: str | None = Field(default=None, repr=False)
+    # 서버 전체의 위험 선언. 없고 `tool_risks` 에도 없으면 그 도구는 **등록되지 않는다**(M4).
+    risk: McpToolRisk | None = None
+    tool_risks: dict[str, McpToolRisk] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_transport(self) -> "CodingMcpServerConfig":
+        if self.transport == "stdio":
+            if not self.command or any(not part for part in self.command):
+                raise ValueError(f"mcp server {self.name}: stdio needs a command argv")
+            if self.url or self.headers or self.bearer_token:
+                raise ValueError(f"mcp server {self.name}: stdio takes no url/headers")
+            bad = [key for key in self.env if not _MCP_ENV_NAME_RE.fullmatch(key)]
+            if bad:
+                raise ValueError(f"mcp server {self.name}: bad env names {bad}")
+        else:
+            if self.command or self.env or self.cwd:
+                raise ValueError(f"mcp server {self.name}: http takes no command/env")
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.url or "")
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError(f"mcp server {self.name}: url must be http(s)")
+            if parsed.username or parsed.password:
+                raise ValueError(f"mcp server {self.name}: no credentials in the url")
+            if parsed.scheme == "http" and parsed.hostname not in _MCP_LOOPBACK_HOSTS:
+                raise ValueError(f"mcp server {self.name}: plain http is loopback only")
+            for key in self.headers:
+                if not _MCP_HEADER_NAME_RE.fullmatch(key) or key.lower() in _MCP_RESERVED_HEADERS:
+                    raise ValueError(f"mcp server {self.name}: header {key!r} is not allowed")
+        bad_tools = [key for key in self.tool_risks if not _MCP_TOOL_NAME_RE.fullmatch(key)]
+        if bad_tools:
+            raise ValueError(f"mcp server {self.name}: bad tool names {bad_tools}")
+        return self
+
+    def credential_values(self) -> list[str]:
+        values = [*self.env.values(), *self.headers.values()]
+        if self.bearer_token is not None:
+            values.append(self.bearer_token)
+        return values
+
+
+class CodingMcpConfig(StrictConfigModel):
+    """트랙 Q11a. 꺼져 있으면 도구 목록·프롬프트·이벤트가 오늘과 바이트가 같다(M10)."""
+
+    enabled: bool = False
+    servers: list[CodingMcpServerConfig] = Field(default_factory=list)
+    # 시작할 때 `tools/list` 를 기다리는 시간(서버마다). 넘으면 그 서버의 도구는 없다.
+    discovery_timeout_sec: float = Field(default=15, gt=0, le=120)
+    # `tools/call` 한 번(연결·초기화 포함)의 상한.
+    call_timeout_sec: float = Field(default=30, gt=0, le=600)
+    # 프로토콜 메시지 하나의 상한. 넘으면 결과를 버린다(`connector_message_too_large`).
+    max_message_bytes: int = Field(default=1024 * 1024, ge=4096, le=16 * 1024 * 1024)
+    # 모델에게 돌려주는 본문의 상한. 넘으면 잘리고 `truncated` 가 선다.
+    max_output_bytes: int = Field(default=64 * 1024, ge=1024, le=1024 * 1024)
+    max_tools_per_server: int = Field(default=64, ge=1, le=256)
+
+    @model_validator(mode="after")
+    def validate_servers(self) -> "CodingMcpConfig":
+        names = [server.name for server in self.servers]
+        if len(names) != len(set(names)):
+            raise ValueError("coding_model.mcp.servers names must be unique")
+        if self.max_output_bytes > self.max_message_bytes:
+            raise ValueError("coding_model.mcp.max_output_bytes exceeds max_message_bytes")
+        return self
+
+    def uses_secret_refs(self) -> bool:
+        # 모양 검사는 `neos.coding.connectors` 가 한다 -- 이 계층은 접두만 본다.
+        return any(
+            value.startswith("secret://")
+            for server in self.servers
+            for value in server.credential_values()
+        )
+
 
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
@@ -2014,6 +2126,9 @@ class CodingModelConfig(StrictConfigModel):
     # 켜려면 `secrets.secret_broker_key`(`NEOS_SECRET_BROKER_KEY`)가 있어야 한다.
     secret_broker: bool = False
     secret_broker_max: int = Field(default=50, ge=1, le=1000)
+    # 트랙 Q11a: 운영자가 정한 MCP 서버의 도구를 `mcp__<server>__<tool>` 로 노출한다.
+    # 위험을 선언하지 않은 도구는 등록되지 않는다. 기본 off.
+    mcp: CodingMcpConfig = Field(default_factory=CodingMcpConfig)
     web_fetch_hosts: list[str] = Field(default_factory=list)
     # 트랙 Q14a: 에이전트 브라우저. 끄면 도구 목록·프롬프트·이벤트 어휘가 오늘과 같다.
     browser: CodingBrowserConfig = Field(default_factory=CodingBrowserConfig)
@@ -2518,6 +2633,18 @@ class AppConfig(StrictConfigModel):
         if operator & CODING_BROWSER_TOOL_NAMES:
             raise ValueError(
                 "browser tools cannot be in approval_allow_tools or approval_always_allow"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_mcp_secret_refs(self) -> "AppConfig":
+        """MCP 서버 설정이 `secret://` 를 쓰는데 브로커가 꺼져 있으면 시작하지 않는다 --
+        풀 금고가 없는 참조는 호출마다 실패하거나, 더 나쁘게는 문자 그대로 나간다(M7)."""
+        mcp = self.coding_model.mcp
+        if mcp.enabled and mcp.uses_secret_refs() and not self.coding_model.secret_broker:
+            raise ValueError(
+                "coding_model.mcp servers use secret:// references; "
+                "they need coding_model.secret_broker"
             )
         return self
 

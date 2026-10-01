@@ -68,7 +68,13 @@ def secret_env_refs(env: object) -> dict[str, str]:
 
 
 def carries_secret_refs(call: Any) -> bool:
-    """이 호출이 금고의 비밀을 쓰는가. 게이트(S7)와 자식 거절(S8)이 같이 쓰는 판정 하나다."""
+    """이 호출이 금고의 비밀을 푸는가. 부모 게이트(S7)와 자식 거절(S8)이 **이 판정 하나**를 쓴다.
+
+    커넥터(트랙 Q11a)는 참조가 입력이 아니라 서버 설정에 있다 -- 검증기가
+    `ValidatedToolCall.secret_refs` 에 실어 온다.
+    """
+    if getattr(call, "secret_refs", ()):
+        return True
     name = getattr(call, "name", None)
     data = getattr(call, "input", {})
     if name == "browser_fill_secret.v1":  # 트랙 Q14a

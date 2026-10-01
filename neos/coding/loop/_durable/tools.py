@@ -39,7 +39,7 @@ from neos.coding.phases import (
 )
 from neos.coding.sandbox.observability import CodingToolAuditEvent
 from neos.coding.tools.executor import ToolResult
-from neos.coding.tools.orchestrator import partition_leading_readonly
+from neos.coding.tools.orchestrator import partition_leading_readonly, speculation_safe
 from neos.coding.tools.registry import (
     _CONTROL_PLANE_TOOLS,
     ToolRisk,
@@ -935,7 +935,7 @@ class ToolExecutionMixin:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError:
             return None
-        if validated.risk is not ToolRisk.READ_ONLY:
+        if not speculation_safe(validated):
             return None
         if self._jev_blocks_speculation():
             # 차단 중인 게이트를 앞지르지 않는다. 본 판정 경로가 대신 본다.

@@ -378,6 +378,9 @@ class ValidatedToolCall:
     name: str
     input: Mapping[str, object]
     risk: ToolRisk
+    #: 입력 밖에서 이 호출이 풀 비밀 -- 커넥터 서버 설정의 `secret://`(트랙 Q11a, M7).
+    #: 게이트는 `carries_secret_refs` 한 판정으로 본다. 내장 도구는 늘 비어 있다.
+    secret_refs: tuple[str, ...] = ()
 
 
 class ToolValidationError(ValueError):
@@ -1005,6 +1008,7 @@ class CodingToolRegistry:
         max_command_stdin_bytes: int,
         allowed_env_names: frozenset[str],
         secret_env_refs: bool = False,
+        connectors: Any = None,
     ) -> None:
         if (
             max_command_timeout_sec <= 0
@@ -1026,6 +1030,9 @@ class CodingToolRegistry:
         # 트랙 Q6: 켜져 있으면 `secret://<name>` 값을 실은 변수는 허용 목록 밖이어도
         # 받는다 -- 이름은 `secret_env_name_allowed` 가, 비밀과의 묶임은 실행기가 본다.
         self._secret_env_refs = secret_env_refs
+        # 트랙 Q11a: 위험을 선언한 MCP 도구(`ConnectorCatalog`). `None` 이 off 다 --
+        # 그러면 도구 목록·검증이 오늘과 같다(M10).
+        self._connectors = connectors
 
     @classmethod
     def default(
@@ -1037,6 +1044,7 @@ class CodingToolRegistry:
         max_command_stdin_bytes: int = 1024 * 1024,
         allowed_env_names: frozenset[str] = frozenset(),
         secret_env_refs: bool = False,
+        connectors: Any = None,
     ) -> CodingToolRegistry:
         return cls(
             command_allowlist=command_allowlist,
@@ -1045,6 +1053,20 @@ class CodingToolRegistry:
             max_command_stdin_bytes=max_command_stdin_bytes,
             allowed_env_names=allowed_env_names,
             secret_env_refs=secret_env_refs,
+            connectors=connectors,
+        )
+
+    def _connector_definitions(self) -> tuple[ToolDefinition, ...]:
+        """커넥터 도구는 내장 도구 **뒤에** 붙는다. 단계로 숨기지 않는다(M12)."""
+        if self._connectors is None:
+            return ()
+        return tuple(
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+            )
+            for tool in self._connectors.tools
         )
 
     def definitions(
@@ -1079,7 +1101,7 @@ class CodingToolRegistry:
                     or optional_tool_enabled(tool.name)
                     or tool.name in deferred
                 )
-            )
+            ) + self._connector_definitions()
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
@@ -1099,7 +1121,7 @@ class CodingToolRegistry:
                 or tool.name in deferred
                 or tool.name in revealed_names
             )
-        )
+        ) + self._connector_definitions()
 
     @classmethod
     def deferred_tool_names(
@@ -1191,6 +1213,10 @@ class CodingToolRegistry:
         self, name: str, input: Mapping[str, object]
     ) -> ValidatedToolCall:
         tool = self._tools.get(name)
+        if tool is None and self._connectors is not None:
+            connector = self._connectors.get(name)
+            if connector is not None:
+                return self._validate_connector(connector, input)
         if tool is None or (
             name in BROWSER_TOOL_NAMES and not optional_tool_enabled(name)
         ):
@@ -1239,6 +1265,20 @@ class CodingToolRegistry:
         if name == "spawn_agent.v1" and str(data.get("spec") or "explore") == "implement":
             risk = ToolRisk.WORKSPACE_WRITE
         return ValidatedToolCall(name=name, input=data, risk=risk)
+
+    @staticmethod
+    def _validate_connector(connector: Any, input: Mapping[str, object]) -> ValidatedToolCall:
+        """위험은 운영자가 선언한 것 그대로다(M4). 서버의 스키마로 인자를 검사한다."""
+        try:
+            data = connector.validate_arguments(input)
+        except ValueError as error:
+            raise ToolValidationError("policy_schema_invalid") from error
+        return ValidatedToolCall(
+            name=connector.name,
+            input=data,
+            risk=connector.risk,
+            secret_refs=tuple(connector.secret_refs),
+        )
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:

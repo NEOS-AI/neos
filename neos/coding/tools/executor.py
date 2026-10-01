@@ -55,6 +55,7 @@ from neos.coding.tools.registry import (
 from neos.coding.tools.web_search import WebSearchError, tavily_search
 
 _WEB_FETCH_TIMEOUT_SEC = 15
+_CONNECTOR_ENVELOPE_BYTES = 512
 _WEB_FETCH_MAX_BYTES = 200_000
 _WEB_FETCH_MAX_REDIRECTS = 5
 _MISSING_PARENT_REASON = "workspace_path_not_resolvable"
@@ -569,11 +570,15 @@ class ToolResult:
 
 
 class SandboxToolExecutor:
-    def __init__(self, max_preview_bytes: int, max_entries: int) -> None:
+    def __init__(
+        self, max_preview_bytes: int, max_entries: int, *, connectors: Any = None
+    ) -> None:
         if max_preview_bytes < 1 or max_entries < 1:
             raise ValueError("executor limits must be positive")
         self._max_preview_bytes = max_preview_bytes
         self._max_entries = max_entries
+        # 트랙 Q11a: `ConnectorRunner`. `None` 이 off 다 -- 커넥터 이름은 모르는 도구다.
+        self._connectors = connectors
         self._read_paths: dict[str, set[str]] = {}
         self._read_stamps: dict[str, dict[str, _ReadStamp]] = {}
 
@@ -648,6 +653,10 @@ class SandboxToolExecutor:
         secrets: SecretLookup | None = None,
     ) -> ToolResult:
         try:
+            if self._connectors is not None:
+                connector = self._connectors.tool(call.name)
+                if connector is not None:
+                    return await self._connector_call(session, call, connector, secrets)
             if secrets is not None and call.name == "execute.v1":
                 return await self._execute_with_secrets(session, call, secrets)
             return await self._execute(session, call, known_reads=known_reads)
@@ -1119,6 +1128,46 @@ class SandboxToolExecutor:
                 "executable_category": bounded_executable_category(argv[0]),
                 "secret_refs": list(resolved.names),
             },
+        )
+
+    async def _connector_call(
+        self,
+        session: SandboxSession,
+        call: ValidatedToolCall,
+        connector: Any,
+        secrets: SecretLookup | None,
+    ) -> ToolResult:
+        """MCP `tools/call` (트랙 Q11a). 풀기·가리기·감싸기는 러너가 한다 -- 여기는 모양만."""
+        from neos.coding.connectors.runner import CONNECTOR_FIX_NOTES
+
+        outcome = await self._connectors.call(
+            connector,
+            call.input,
+            secrets=secrets,
+            # 감싼 글의 머리·꼬리(출처 256자까지)가 미리보기 안에 들어가게 남긴다.
+            output_cap=self._max_preview_bytes - _CONNECTOR_ENVELOPE_BYTES,
+        )
+        preview = None
+        checksum = None
+        truncated = outcome.truncated
+        if outcome.text is not None:
+            bounded = self._bytes_mapping(
+                outcome.text.encode("utf-8"), already_truncated=outcome.truncated
+            )
+            preview = str(bounded["preview"])
+            checksum = str(bounded["checksum"])
+            truncated = bool(bounded["truncated"])
+        return ToolResult(
+            status=outcome.status,
+            reason_code=outcome.reason_code,
+            preview=preview,
+            original_bytes=outcome.original_bytes,
+            truncated=truncated,
+            checksum=checksum,
+            workspace_revision=await self._revision(session),
+            entries=({"server": connector.server, "tool": connector.tool},),
+            audit={"connector": connector.server, "secret_refs": list(outcome.secret_refs)},
+            fix_note=CONNECTOR_FIX_NOTES.get(outcome.reason_code),
         )
 
     async def _dispatch_non_file_tool(

@@ -963,6 +963,78 @@ subagents and the deep-analysis research path never see the browser. Requires
 `playwright install chromium`; without it the tools answer `browser_unavailable`.
 Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
 
+### Coding MCP connectors (track Q11a)
+
+```yaml
+coding_model:
+  mcp:
+    enabled: false              # off: tool list, prompt and events are byte-identical to before
+    discovery_timeout_sec: 15   # per server, at process start
+    call_timeout_sec: 30        # one tools/call, connect + initialize included
+    max_message_bytes: 1048576  # one protocol message; larger -> connector_message_too_large
+    max_output_bytes: 65536     # text returned to the model; larger -> truncated
+    max_tools_per_server: 64    # counted after the declaration filter
+    servers:
+      - name: docs              # [a-z0-9-], no underscores
+        transport: stdio
+        command: ["npx", "-y", "@example/docs-mcp"]
+        env: {DOCS_TOKEN: "secret://docs"}   # literal, or the whole value a secret:// reference
+        risk: read_only         # every tool of this server ...
+        tool_risks:             # ... unless overridden here
+          delete_page: command
+      - name: tracker
+        transport: http         # streamable HTTP; https, or http on loopback only
+        url: https://mcp.example.com/mcp
+        bearer_token: "secret://tracker"     # sent as `Authorization: Bearer ...`
+        headers: {X-Org: "acme"}
+        tool_risks: {search_issues: read_only, create_issue: command}
+```
+
+Only servers the operator lists here exist; the model never chooses a command or
+a URL. NEOS speaks MCP itself (JSON-RPC 2.0 over stdio or streamable HTTP --
+`initialize`, `tools/list`, `tools/call`); no SDK is installed. The modules under
+`neos/tools/*mcp*` and `neos/fsi/mcp_attach.py` are MCP in name only.
+
+**A tool needs a declared risk to exist.** `tool_risks[tool]` wins, then the
+server's `risk`; with neither, the tool is **not registered** -- it does not fall
+back to `read_only`. The server's own `annotations.readOnlyHint` is ignored.
+Registered tools are exposed as `mcp__<server>__<tool>` (a name an owner can use in
+an approval rule) and go through the same gate as built-in tools: `read_only` runs,
+`workspace_write`/`command` need approval, background tasks see only `read_only`,
+user rules and Jev apply unchanged. Subagents never call connector tools
+(`policy_connector_child`).
+
+Discovery runs once when the coding loop is built (API process and worker) and is
+fixed for the process lifetime, so the tool array and prompt do not change between
+turns. A server that fails discovery simply contributes no tools (logged). Server
+descriptions are untrusted: they are folded to one line, capped at 300 characters
+and labelled with the server and risk.
+
+**Credentials.** `env`, `headers` and `bearer_token` values may be `secret://<name>`
+(the whole value). They are resolved from the **task owner's** vault (track Q6) at
+call time, so `coding_model.secret_broker` must be on -- the app refuses to start
+otherwise. A stdio env entry must use the env name the owner bound the secret to
+(`secret_env_name_mismatch`). A call whose server uses a secret follows the Q6 rule:
+human approval or an owner `allow` rule, even for a `read_only` tool; unattended
+runs without such a rule get `policy_secret_ref_unapproved`. At discovery there is
+no owner, so references are left out -- a server that needs a user's credential to
+list its tools cannot be discovered yet (Q11b). A stdio server does **not** inherit
+the worker environment (only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SYSTEMROOT`) and its
+stderr is discarded. HTTP never follows redirects and ignores proxy/`.netrc`
+environment settings. Connections are opened per call; nothing is pooled across
+owners.
+
+**Results are untrusted.** Text content is kept (images and other content become a
+placeholder), resolved secret values are replaced with `<redacted:secret://name>`
+before the output is cut, the usual redaction rules run, and the result is wrapped
+in `<untrusted_document source="mcp:<server>/<tool>">`. Failure codes:
+`connector_unavailable`, `connector_timeout`, `connector_message_too_large`,
+`connector_protocol_error`, `connector_call_failed`, `connector_tool_error`, plus
+the Q6 codes `secret_not_found`, `secret_env_name_mismatch`,
+`secret_store_unavailable`. Stdio servers run on the host with the worker's OS
+user -- list only commands you would run there yourself. Design:
+`docs/Q11_MCP_CLIENT_DESIGN_261001.md`.
+
 ### Standing agents
 
 ```yaml

@@ -739,6 +739,18 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
         if isinstance(text, str) and text:
             summary["text"], summary["truncated"] = _truncated_text(text)
         return redact_sensitive(summary)
+    from neos.coding.connectors import is_connector_tool_name
+
+    if is_connector_tool_name(call.name):
+        # 트랙 Q11a: 승인하는 사람이 무엇을 보내는지 본다. 비밀은 이름만(M7).
+        preview, truncated = _truncated_text(
+            json.dumps(dict(call.input), ensure_ascii=False, sort_keys=True, default=str)
+        )
+        summary = {"operation": call.name, "arguments": preview, "truncated": truncated}
+        refs = tuple(getattr(call, "secret_refs", ()) or ())
+        if refs:
+            summary["secret_refs"] = list(refs)
+        return redact_sensitive(summary)
     path = call.input.get("path")
     if isinstance(path, str):
         return redact_sensitive({"path": path})
@@ -753,6 +765,7 @@ def approval_event_display_summary(
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
+    excerpt.pop("arguments", None)  # 커넥터 인자(Q11a) -- 승인 화면에만, 이벤트에는 싣지 않는다
     return excerpt
 
 
@@ -793,6 +806,10 @@ _DENIAL_REASONS = {
     "browser_secret_unavailable": "stored secrets are not enabled; do not retry",
     "browser_navigation_cap": "this task used all its page loads; do not retry",
     "browser_capacity": "too many browser sessions are open; try again later",
+    "policy_connector_child": (
+        "subagents cannot call connector tools; do not retry -- return the "
+        "call to the parent instead"
+    ),
     "policy_user_only": (
         "only the user can do this, even with approval; do not retry -- "
         "tell the user what to run and why"

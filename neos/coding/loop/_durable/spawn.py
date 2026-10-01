@@ -352,6 +352,7 @@ class SubagentSpawnMixin:
             policy_denial_reason,
             uses_secret_refs,
         )
+        from neos.coding.connectors import is_connector_tool_name
         from neos.coding.tools.registry import ToolValidationError
 
         reason: str | None = None
@@ -367,6 +368,10 @@ class SubagentSpawnMixin:
             reason = "hook_prevented"
         elif decision != "allow":
             reason = "policy_hook_denied"
+        if reason is None and is_connector_tool_name(validated.name):
+            # 트랙 Q11a M11: 커넥터는 바깥 세상에 닿는다. 자식의 spec 목록에도 없지만
+            # 목록이 넓어지는 날을 위해 CHILD-GATE 가 이름으로 한 번 더 닫는다.
+            reason = "policy_connector_child"
         if reason is None and uses_secret_refs(validated, self._approval_gate(state)):
             # 트랙 Q6 S8: 자식은 승인할 사람에게 닿지 못하고 포트에는 풀 소유자 맥락이
             # 없다. 소유자의 allow 규칙이 있어도 자식에게는 넘기지 않는다.
