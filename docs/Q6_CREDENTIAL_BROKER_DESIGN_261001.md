@@ -65,6 +65,10 @@ Q6 은 Q11(MCP)·Q14(브라우저)·Q16(기기 브리지)의 공통 선행이다
 - 설정: `coding_model.secret_broker`(기본 `False`) · `coding_model.secret_broker_max`(사용자당 상한, 기본 50) ·
   `secrets.secret_broker_key`(`NEOS_SECRET_BROKER_KEY`, 32자 이상 — 켰는데 없으면 시작하지 않는다)
 - 마이그레이션 077 `user_secrets`(user_id · name · env_name · ciphertext · created_at · updated_at, `(user_id, name)` 유일)
+  - 📌 **Q14b 가 금고 계약을 넓혔다**(2026-10-02, [Q14 설계 §7](Q14_AGENT_BROWSER_DESIGN_261001.md) X1~X3): 081 이
+    `browser_origins TEXT[]`(기본 빈 배열) 를 더한다 — 브라우저가 이 비밀을 입력해도 되는 https 출처, S3 의 브라우저판이다.
+    비면 브라우저 어디에도 입력되지 않고 `env_name` 은 그대로다. `PUT` 이 `browser_origins` 를 받고(빼면 비운다),
+    `GET` 이 돌려준다(값은 여전히 없다). 출처가 있으면 AAD 끝에 `:origins=…` 가 붙는다 — 없으면 077 의 AAD 그대로
 - API(꺼져 있으면 라우트가 **없다**):
 
   ```

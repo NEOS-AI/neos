@@ -159,6 +159,7 @@ class CodingRunService:
             raise RunAlreadyLeased(task_id)
         try:
             await self._cancel_parent_children(lease, now)
+            await self._close_task_browser(task_id)
             committed = await self._runs.fail_run(
                 lease=lease,
                 error_code=error_code,
@@ -653,6 +654,7 @@ class CodingRunService:
 
     async def _cancel_active_run(self, lease, now: datetime):
         await self._cancel_parent_children(lease, now)
+        await self._close_task_browser(lease.task_id)
         cancel = getattr(self._runs, "cancel_run", None)
         if cancel is not None:
             return await cancel(lease=lease, now=now)
@@ -663,6 +665,17 @@ class CodingRunService:
             replace(run, status=CodingRunStatus.CANCELLED, completed_at=now)
         )
         return None
+
+    async def _close_task_browser(self, task_id: str) -> None:
+        """실패·취소는 루프의 terminal 단계를 거치지 않는다 -- 브라우저 세션(트랙 Q14b)을
+        여기서 닫는다. 닫기 실패가 실패·취소를 막지 않는다."""
+        close = getattr(self._loop, "close_task_browser", None)
+        if close is None:
+            return
+        try:
+            await close(task_id)
+        except Exception:
+            logger.warning("coding browser close failed task_id=%s", task_id)
 
     async def _cancel_parent_children(self, lease, now: datetime) -> None:
         cancel = getattr(self._loop, "cancel_active_child_for_task", None)

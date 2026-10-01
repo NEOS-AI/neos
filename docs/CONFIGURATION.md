@@ -887,10 +887,16 @@ Each user keeps a vault of named secrets. A secret is bound to **one**
 environment variable name, chosen by its owner:
 
 ```
-GET    /api/v1/coding/secrets             # names, env names and times -- never values
-PUT    /api/v1/coding/secrets/{name}      {"env_name": "GH_TOKEN", "value": "..."}
+GET    /api/v1/coding/secrets             # names, env names, browser origins and times -- never values
+PUT    /api/v1/coding/secrets/{name}      {"env_name": "GH_TOKEN", "value": "...", "browser_origins": []}
 DELETE /api/v1/coding/secrets/{name}
 ```
+
+`browser_origins` (track Q14b, migration 081) lists the https origins the agent
+browser may type this secret into (at most 8, e.g. `["https://github.com"]`).
+It is empty by default -- an unbound secret is typed nowhere -- and `env_name`
+keeps working for `execute.v1` and MCP connectors either way. A `PUT` replaces
+the whole row: leaving `browser_origins` out clears the binding.
 
 The model writes only a reference, as the whole value of an `execute.v1`
 environment variable: `{"argv": ["gh", "api", "user"], "env": {"GH_TOKEN": "secret://github"}}`.
@@ -965,6 +971,17 @@ The gate is Q6's: a human approval or an owner `allow` rule on
 `browser_fill_secret.v1`. Background tasks are refused (`policy_mode_ceiling`),
 subagents and the deep-analysis research path never see the browser. Requires
 `playwright install chromium`; without it the tools answer `browser_unavailable`.
+
+Since track Q14b a secret is typed only into an origin its owner listed in the
+secret's `browser_origins` (see the credential broker section); otherwise the
+call is refused with `secret_origin_mismatch` before anything is typed. Secrets
+stored before Q14b have no origins and must be re-`PUT` with them to be used for
+logins. The origins are part of the sealed value's associated data, so editing
+them in the database without the key makes the secret unreadable. A failed or
+cancelled task's browser context is closed on that path by the worker process
+that holds it (the idle/lifetime sweep remains the backstop for other
+processes), and password-field values are masked in every frame, not only the
+main one. There is no new setting.
 Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
 
 ### Coding MCP connectors (tracks Q11a, Q11b)

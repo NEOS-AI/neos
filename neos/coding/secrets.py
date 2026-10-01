@@ -35,6 +35,9 @@ MIN_SECRET_CHARS = 8
 MAX_SECRET_CHARS = 8192
 #: 잘린 출력의 끝에 걸친 접두는 이 길이부터 가린다(S6).
 _TAIL_PREFIX_MIN = 4
+#: 비밀 하나가 입력될 수 있는 브라우저 출처 수 상한(트랙 Q14b, 마이그레이션 081 의 CHECK 와 같다).
+MAX_BROWSER_ORIGINS = 8
+_DNS_HOST_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$")
 
 
 class SecretNotFound(LookupError):
@@ -105,6 +108,27 @@ def parse_secret_fields(name: str, env_name: str, value: str) -> tuple[str, str,
     return name, env_name, value
 
 
+def parse_browser_origins(origins: Iterable[Any] | None) -> tuple[str, ...]:
+    """소유자가 이 비밀을 입력해도 된다고 적은 https 출처들 (트랙 Q14b X1).
+
+    모양은 `browser_fill_secret.v1` 의 `origin` 과 **같은 함수**(`browser_origin`)로
+    정규화한다 -- 비교가 문자열 같음 하나로 끝나게. 비어 있으면 어디에도 입력되지 않는다.
+    IP·와일드카드·한 단계 이름은 허용 호스트가 될 수 없으므로 받지 않는다.
+    """
+    from neos.coding.tools.registry import browser_origin
+
+    seen: set[str] = set()
+    for raw in origins or ():
+        origin = browser_origin(raw)
+        host = origin.removeprefix("https://").rsplit(":", 1)[0] if origin else ""
+        if origin is None or not _DNS_HOST_RE.fullmatch(host):
+            raise ValueError("browser_origins are https origins such as https://github.com")
+        seen.add(origin)
+    if len(seen) > MAX_BROWSER_ORIGINS:
+        raise ValueError(f"browser_origins has at most {MAX_BROWSER_ORIGINS} origins")
+    return tuple(sorted(seen))
+
+
 @dataclass(frozen=True, slots=True)
 class SecretInfo:
     """금고 목록의 한 줄. 값은 **없다** -- API 와 로그가 쥐어도 된다."""
@@ -113,12 +137,15 @@ class SecretInfo:
     env_name: str
     created_at: datetime
     updated_at: datetime
+    browser_origins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedSecret:
     env_name: str
     value: str = field(repr=False)
+    #: 이 값을 입력해도 되는 브라우저 출처(트랙 Q14b). 비면 어디에도 아니다.
+    browser_origins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +184,15 @@ SecretLookup = Callable[[Sequence[str]], Awaitable[ResolvedSecrets]]
 class SecretStore(Protocol):
     async def list_for_user(self, user_id: str) -> list[SecretInfo]: ...
 
-    async def put(self, user_id: str, name: str, *, env_name: str, value: str) -> SecretInfo: ...
+    async def put(
+        self,
+        user_id: str,
+        name: str,
+        *,
+        env_name: str,
+        value: str,
+        browser_origins: Sequence[str] = (),
+    ) -> SecretInfo: ...
 
     async def delete(self, user_id: str, name: str) -> bool: ...
 
@@ -168,26 +203,29 @@ class InMemorySecretStore:
     """테스트·개발용. 값은 평문으로 들고 있다 -- Postgres 와 **같은 계약**만 지킨다."""
 
     def __init__(self, *, max_secrets: int = 50) -> None:
-        self._rows: dict[tuple[str, str], tuple[str, str, datetime, datetime]] = {}
+        self._rows: dict[
+            tuple[str, str], tuple[str, str, datetime, datetime, tuple[str, ...]]
+        ] = {}
         self._max = max_secrets
 
     async def list_for_user(self, user_id):
         mine = [
-            SecretInfo(name, env_name, created, updated)
-            for (owner, name), (env_name, _value, created, updated) in self._rows.items()
+            SecretInfo(name, env_name, created, updated, origins)
+            for (owner, name), (env_name, _value, created, updated, origins) in self._rows.items()
             if owner == user_id
         ]
         return sorted(mine, key=lambda info: info.name)
 
-    async def put(self, user_id, name, *, env_name, value):
+    async def put(self, user_id, name, *, env_name, value, browser_origins=()):
         name, env_name, value = parse_secret_fields(name, env_name, value)
+        origins = parse_browser_origins(browser_origins)
         now = datetime.now(UTC)
         existing = self._rows.get((user_id, name))
         if existing is None and len(await self.list_for_user(user_id)) >= self._max:
             raise SecretLimit()
         created = existing[2] if existing else now
-        self._rows[(user_id, name)] = (env_name, value, created, now)
-        return SecretInfo(name, env_name, created, now)
+        self._rows[(user_id, name)] = (env_name, value, created, now, origins)
+        return SecretInfo(name, env_name, created, now, origins)
 
     async def delete(self, user_id, name):
         return self._rows.pop((user_id, name), None) is not None
@@ -198,7 +236,7 @@ class InMemorySecretStore:
             row = self._rows.get((user_id, name))
             if row is None:
                 raise SecretNotFound(name)
-            values[name] = ResolvedSecret(row[0], row[1])
+            values[name] = ResolvedSecret(row[0], row[1], row[4])
         return ResolvedSecrets(values)
 
 
@@ -214,12 +252,17 @@ def derive_secret_key(master: str) -> bytes:
     return hmac.new(master.encode("utf-8"), _KEY_INFO, hashlib.sha256).digest()
 
 
-def _cipher(key: bytes, user_id: str, name: str):
+def _cipher(key: bytes, user_id: str, name: str, browser_origins: Sequence[str] = ()):
     # 사본을 만들지 않는다 -- managed 의 봉인과 같은 형식(버전 · nonce · AEAD).
     from neos.coding.managed.crypto import AesGcmProviderReferenceCipher
 
+    # 출처 묶임(Q14b X3)도 AAD 에 싣는다 -- 키 없이 DB 만 고쳐 출처를 넓히면 풀리지 않는다.
+    # 비었으면 077 의 AAD 그대로라 묶임 없는 기존 행은 다시 봉인하지 않아도 열린다.
+    aad = f"neos-secret:{user_id}:{name}"
+    if browser_origins:
+        aad += ":origins=" + ",".join(browser_origins)
     return AesGcmProviderReferenceCipher(
-        key=key, key_version=_KEY_VERSION, associated_data=f"neos-secret:{user_id}:{name}"
+        key=key, key_version=_KEY_VERSION, associated_data=aad
     )
 
 
@@ -242,19 +285,26 @@ class PostgresSecretStore:
         async with await self._session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT name, env_name, created_at, updated_at FROM user_secrets "
-                    "WHERE user_id = :user_id ORDER BY name"
+                    "SELECT name, env_name, created_at, updated_at, browser_origins "
+                    "FROM user_secrets WHERE user_id = :user_id ORDER BY name"
                 ),
                 {"user_id": user_id},
             )
             return [
-                SecretInfo(row.name, row.env_name, row.created_at, row.updated_at)
+                SecretInfo(
+                    row.name,
+                    row.env_name,
+                    row.created_at,
+                    row.updated_at,
+                    tuple(row.browser_origins or ()),
+                )
                 for row in result
             ]
 
-    async def put(self, user_id, name, *, env_name, value):
+    async def put(self, user_id, name, *, env_name, value, browser_origins=()):
         name, env_name, value = parse_secret_fields(name, env_name, value)
-        sealed = _cipher(self._key, user_id, name).encrypt(value)
+        origins = parse_browser_origins(browser_origins)
+        sealed = _cipher(self._key, user_id, name, origins).encrypt(value)
         now = datetime.now(UTC)
         async with await self._session_factory() as session:
             async with session.begin():
@@ -267,9 +317,11 @@ class PostgresSecretStore:
                     text(
                         """
                         INSERT INTO user_secrets
-                            (user_id, name, env_name, ciphertext, created_at, updated_at)
+                            (user_id, name, env_name, ciphertext, browser_origins,
+                             created_at, updated_at)
                         SELECT CAST(:user_id AS VARCHAR), CAST(:name AS VARCHAR),
-                               CAST(:env_name AS VARCHAR), :ciphertext, :now, :now
+                               CAST(:env_name AS VARCHAR), :ciphertext,
+                               CAST(:browser_origins AS TEXT[]), :now, :now
                         WHERE EXISTS (SELECT 1 FROM user_secrets
                                       WHERE user_id = CAST(:user_id AS VARCHAR)
                                         AND name = CAST(:name AS VARCHAR))
@@ -278,6 +330,7 @@ class PostgresSecretStore:
                         ON CONFLICT (user_id, name) DO UPDATE
                             SET env_name = EXCLUDED.env_name,
                                 ciphertext = EXCLUDED.ciphertext,
+                                browser_origins = EXCLUDED.browser_origins,
                                 updated_at = EXCLUDED.updated_at
                         RETURNING created_at, updated_at
                         """
@@ -287,6 +340,7 @@ class PostgresSecretStore:
                         "name": name,
                         "env_name": env_name,
                         "ciphertext": sealed,
+                        "browser_origins": list(origins),
                         "now": now,
                         "max": self._max,
                     },
@@ -294,7 +348,7 @@ class PostgresSecretStore:
                 row = result.first()
                 if row is None:
                     raise SecretLimit()
-        return SecretInfo(name, env_name, row.created_at, row.updated_at)
+        return SecretInfo(name, env_name, row.created_at, row.updated_at, origins)
 
     async def delete(self, user_id, name):
         async with await self._session_factory() as session:
@@ -312,7 +366,7 @@ class PostgresSecretStore:
         async with await self._session_factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT name, env_name, ciphertext FROM user_secrets "
+                    "SELECT name, env_name, ciphertext, browser_origins FROM user_secrets "
                     "WHERE user_id = :user_id AND name = ANY(:names)"
                 ),
                 {"user_id": user_id, "names": wanted},
@@ -323,8 +377,9 @@ class PostgresSecretStore:
             row = rows.get(name)
             if row is None:
                 raise SecretNotFound(name)
-            plain = _cipher(self._key, user_id, name).decrypt(bytes(row.ciphertext))
-            values[name] = ResolvedSecret(row.env_name, plain)
+            origins = tuple(row.browser_origins or ())
+            plain = _cipher(self._key, user_id, name, origins).decrypt(bytes(row.ciphertext))
+            values[name] = ResolvedSecret(row.env_name, plain, origins)
         return ResolvedSecrets(values)
 
 
@@ -354,6 +409,7 @@ __all__ = [
     "build_secret_source",
     "carries_secret_refs",
     "derive_secret_key",
+    "parse_browser_origins",
     "parse_secret_fields",
     "secret_env_name_allowed",
     "secret_env_refs",

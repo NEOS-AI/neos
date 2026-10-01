@@ -823,6 +823,10 @@ _DENIAL_REASONS = {
         "the page or field is not on that origin; do not retry -- navigate to "
         "the login page of that origin first"
     ),
+    "secret_origin_mismatch": (
+        "that secret is not allowed on this site; do not retry -- ask the user "
+        "to add this origin to the secret"
+    ),
     "browser_secret_unavailable": "stored secrets are not enabled; do not retry",
     "browser_navigation_cap": "this task used all its page loads; do not retry",
     "browser_capacity": "too many browser sessions are open; try again later",

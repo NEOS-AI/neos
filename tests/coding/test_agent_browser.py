@@ -215,9 +215,9 @@ def _fill(registry, ref="e2", secret="secret://site", origin="https://login.exam
     )
 
 
-async def _vault(value: str = PASSWORD):
+async def _vault(value: str = PASSWORD, origins=("https://login.example.com",)):
     store = InMemorySecretStore()
-    await store.put("alice", "site", env_name="SITE_PASSWORD", value=value)
+    await store.put("alice", "site", env_name="SITE_PASSWORD", value=value, browser_origins=origins)
 
     async def lookup(names):
         return await store.resolve("alice", names)

@@ -69,11 +69,16 @@ class _Page:
             raise _translate(error) from None
 
     async def password_values(self) -> tuple[str, ...]:
+        # 모든 프레임을 본다(트랙 Q14b X6) -- 로그인 칸이 iframe 안에 있는 사이트가 흔하다.
+        # 한 프레임이라도 읽지 못하면 실패다: 못 본 칸을 가렸다고 치지 않는다.
+        found: list[str] = []
         try:
-            values = await self._page.eval_on_selector_all("input[type=password]", _PASSWORDS_JS)
+            for frame in self._page.frames:
+                values = await frame.eval_on_selector_all("input[type=password]", _PASSWORDS_JS)
+                found.extend(str(value) for value in values or () if value)
         except Exception as error:  # noqa: BLE001
             raise _translate(error) from None
-        return tuple(str(value) for value in values or () if value)
+        return tuple(found)
 
     async def element_origin(self, ref: str, *, timeout_ms: float) -> str:
         try:

@@ -56,7 +56,7 @@ class BrowserPage(Protocol):
 
     async def snapshot(self, *, timeout_ms: float) -> str: ...  # locator("body").aria_snapshot(mode="ai")
 
-    async def password_values(self) -> tuple[str, ...]: ...  # eval_on_selector_all("input[type=password]")
+    async def password_values(self) -> tuple[str, ...]: ...  # page.frames 마다 frame.eval_on_selector_all(..)
 
     async def element_origin(self, ref: str, *, timeout_ms: float) -> str: ...  # locator.evaluate(origin)
 

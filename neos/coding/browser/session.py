@@ -5,6 +5,7 @@
 - 모델에게 가는 모든 문자열(스냅샷 · 제목 · URL)은 이 세션이 입력한 비밀과
   비밀번호 칸의 값으로 가린 뒤 자르고 untrusted 로 감싼다(W7·W9)
 - 오류는 **코드만** 돌려준다. 드라이버·페이지의 문구는 싣지 않는다
+- 비밀은 그 주인이 적은 출처(`browser_origins`)에만 입력한다 -- 트랙 Q14b X1
 """
 
 from __future__ import annotations
@@ -341,6 +342,9 @@ class BrowserSessions:
         secret = resolved.values.get(name)
         if secret is None:
             return BrowserOutcome("denied", "secret_not_found")
+        # 비밀의 주인이 적은 출처에만 들어간다(Q14b X1, S3 의 브라우저판). 묶임이 없으면 어디에도.
+        if origin not in secret.browser_origins:
+            return BrowserOutcome("denied", "secret_origin_mismatch")
         # 칸에 넣기 **전에** 기록한다 -- 입력 이벤트가 곧바로 내는 요청도 출구 검사를 받는다.
         session.typed[name] = TypedSecret(name, origin, secret.value)
         await session.page.fill(ref, secret.value, timeout_ms=action_ms)

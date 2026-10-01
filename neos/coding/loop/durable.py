@@ -375,6 +375,15 @@ class DurableCodingLoop(
             return "deny", "hook_error", None
         return parse_pre_tool_decision(raw)
 
+    async def close_task_browser(self, task_id: str) -> None:
+        """실패·취소로 끝난 태스크의 브라우저 세션을 지금 닫는다 (트랙 Q14b X5).
+
+        run service 의 실패·취소 자리가 부른다. 이 프로세스의 세션만 닿는다 -- 다른
+        워커가 들고 있는 세션은 그 프로세스의 `sweep` 이 닫는다. 꺼져 있으면 아무 일도 없다.
+        """
+        if self._browser is not None:
+            await self._browser.close(task_id)
+
     def _secret_lookup(self, owner_id):
         """소유자의 금고를 이 호출에만 묶는다 (트랙 Q6). 소유자가 없으면 풀 금고도 없다."""
         source = self._secrets
