@@ -9,8 +9,8 @@
   있다, `spawn.py`). 봉투 지출 = 이번 달에 연 에이전트 태스크들의 최신 체크포인트
   `cost_micros` 합. 카운터가 없으니 이중 계상도, 재시도 때 빠지는 것도 없다.
 - 태스크는 **연 달**에 속한다. 달을 넘겨 도는 태스크의 지출은 연 달에 남는다.
-- background 는 봉투의 고정 몫(`background_share`)만 쓴다. 사용자가 맡긴 autonomous
-  일은 봉투 전부를 쓴다 -- `reserve_background_share` 를 켜면 그 몫을 뺀 나머지만.
+- background 는 봉투의 고정 몫(`background_share`)만 쓴다. 그 몫은 기본으로 **예약**이라
+  사용자가 맡긴 autonomous 일은 나머지만 쓴다(`reserve_background_share`, 끄면 봉투 전부).
   background 지출도 전체에 들어간다.
 - 두 자리에서 읽는다: 새 태스크를 열 때(`open_agent_task` -- **막는다**), 진행 중
   태스크의 모델 턴 safe point(**섀도** -- `budget.judged` 만 남기고 멈추지 않는다).
@@ -52,7 +52,7 @@ class EnvelopeVerdict:
     background_spent_micros: int
     background_limit_micros: int
     period_start: datetime
-    reserve_background_share: bool = False
+    reserve_background_share: bool = True
 
     def payload(self, *, mode: str) -> dict[str, Any]:
         """`budget.judged` 의 payload. 판정을 다시 계산할 수 있는 값을 전부 싣는다."""
@@ -91,12 +91,12 @@ def envelope_verdict(
     background_share: float,
     mode: CodingTaskMode | str,
     period_start: datetime,
-    reserve_background_share: bool = False,
+    reserve_background_share: bool = True,
 ) -> EnvelopeVerdict:
     """이 모드의 일을 더 해도 되는가. 경계에 **닿으면** 넘은 것이다 -- 남은 것이
     0 인 봉투로 여는 태스크는 첫 턴에서 넘는다.
 
-    `reserve_background_share` 가 켜지면 background 몫은 예약이다: background 가 아닌
+    `reserve_background_share`(기본 켜짐)면 background 몫은 예약이다: background 가 아닌
     일은 봉투에서 그 몫을 뺀 나머지까지만 쓴다. 꺼져 있으면 그 일은 봉투 전부를 쓴다.
     """
     share_limit = background_limit(limit_micros, background_share)
@@ -137,7 +137,7 @@ class AgentBudgetEnvelope:
         *,
         limit_micros: int,
         background_share: float,
-        reserve_background_share: bool = False,
+        reserve_background_share: bool = True,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._source = source

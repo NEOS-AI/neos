@@ -38,7 +38,7 @@
      "sample": {"approval_id": "ap_1", "tool_name": "execute.v1", "risk": "command"}},
     {"kind": "budget.judged", "projected": false,
      "reason": "상시 에이전트 예산 봉투(트랙 Q10a)의 섀도 판정이다. 봉투를 넘은 런에 한 번 남는다. 읽는 사람은 활동 피드와 원장 판독기이고 화면이 아니다 -- enforced 는 언제나 false 라 태스크 상태가 바뀌지 않는다. 봉투가 실제로 멈추게 되면 그 변화는 task.status.changed 로 투영된다.",
-     "sample": {"would_pause": true, "reason": "budget_envelope_exhausted", "spent_micros": 21000000, "limit_micros": 20000000, "background_spent_micros": 9000000, "background_limit_micros": 10000000, "period_start": "2026-10-01T00:00:00+00:00", "reserve_background_share": false, "mode": "background", "enforced": false}},
+     "sample": {"would_pause": true, "reason": "budget_envelope_exhausted", "spent_micros": 21000000, "limit_micros": 20000000, "background_spent_micros": 9000000, "background_limit_micros": 10000000, "period_start": "2026-10-01T00:00:00+00:00", "reserve_background_share": true, "mode": "background", "enforced": false}},
     {"kind": "jev_risk_scored", "projected": true,
      "sample": {"probability": 0.62, "band": "mid", "low_below": 0.3, "high_at_or_above": 0.8,
                 "rubric_digest": "f5faf377", "model": "jev-1.13.0", "static_outcome": "allow",

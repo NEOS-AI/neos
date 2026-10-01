@@ -136,7 +136,7 @@ def test_the_whole_envelope_still_wins_when_reserving() -> None:
 
 
 def test_without_reserving_handed_over_work_may_eat_the_share() -> None:
-    """The default is unchanged: autonomous runs up to the whole envelope."""
+    """Switched off, autonomous runs up to the whole envelope."""
     assert not _verdict(99, 0, mode="autonomous").over
 
 
@@ -178,12 +178,13 @@ def test_off_builds_no_envelope() -> None:
     assert build_agent_envelope(StandingAgentsConfig(), lambda: None) is None
     on = StandingAgentsConfig(budget={"enabled": True, "monthly_limit_micros": 7})
     assert isinstance(build_agent_envelope(on, lambda: None), AgentBudgetEnvelope)
-    assert StandingAgentsConfig().budget.reserve_background_share is False
+    assert StandingAgentsConfig().budget.reserve_background_share is True
 
 
 @pytest.mark.asyncio
 async def test_the_setting_reaches_the_verdict() -> None:
-    """The factory carries reserve_background_share into the envelope it builds."""
+    """The factory carries reserve_background_share into the envelope it builds --
+    switched off here, against the default, so a factory that drops it fails."""
     from neos.config.schema import StandingAgentsConfig
 
     class Fixed:
@@ -191,12 +192,12 @@ async def test_the_setting_reaches_the_verdict() -> None:
             return AgentSpend(total_micros=50, background_micros=0)
 
     config = StandingAgentsConfig(
-        budget={"enabled": True, "monthly_limit_micros": 100, "reserve_background_share": True}
+        budget={"enabled": True, "monthly_limit_micros": 100, "reserve_background_share": False}
     )
     envelope = build_agent_envelope(config, lambda: None)
     envelope._source = Fixed()
 
-    assert (await envelope.judge("sa_1", "autonomous")).reason == OVER_HANDED_OVER_SHARE
+    assert not (await envelope.judge("sa_1", "autonomous")).over
 
 
 # -- the spend source: one contract, two sources --------------------------------
@@ -460,3 +461,24 @@ async def test_a_reserved_share_keeps_background_work_open_after_handed_over_wor
 
     assert raised.value.reason == OVER_HANDED_OVER_SHARE
     assert task.mode is CodingTaskMode.BACKGROUND
+
+
+def test_the_share_is_reserved_unless_switched_off() -> None:
+    """The verdict's own default matches the setting's: reserved."""
+    verdict = envelope_verdict(
+        AgentSpend(total_micros=50), limit_micros=100, background_share=0.5,
+        mode="autonomous", period_start=START,
+    )
+
+    assert verdict.reason == OVER_HANDED_OVER_SHARE
+    assert verdict.reserve_background_share is True
+
+
+@pytest.mark.asyncio
+async def test_an_envelope_built_by_hand_reserves_too() -> None:
+    source = InMemoryAgentSpendSource()
+    source.record("t1", agent_id="sa_1", mode="autonomous", created_at=OCT, cost_micros=50)
+    envelope = AgentBudgetEnvelope(source, limit_micros=100, background_share=0.5,
+                                   clock=lambda: OCT)
+
+    assert (await envelope.judge("sa_1", "autonomous")).reason == OVER_HANDED_OVER_SHARE

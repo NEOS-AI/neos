@@ -721,10 +721,11 @@ class StandingBudgetConfig(StrictConfigModel):
     monthly_limit_micros: int = Field(default=20_000_000, ge=0)
     #: background 태스크가 쓸 수 있는 봉투의 몫. 사용자가 맡긴 autonomous 일은 봉투 전부를 쓴다.
     background_share: float = Field(default=0.5, gt=0.0, le=1.0)
-    #: 켜면 background 몫은 **예약**이다 -- 사용자가 맡긴 autonomous 일은 봉투에서 그 몫을
-    #: 뺀 나머지만 쓴다. 꺼져 있으면(기본) autonomous 는 봉투 전부를 쓸 수 있어 background
-    #: 몫을 먹을 수 있다. 켠 채 `background_share = 1.0` 이면 autonomous 몫은 0 이다.
-    reserve_background_share: bool = False
+    #: 켜져 있으면(기본) background 몫은 **예약**이다 -- 사용자가 맡긴 autonomous 일은 봉투에서
+    #: 그 몫을 뺀 나머지만 쓴다. 상시 에이전트가 사람이 맡긴 일에 밀려 그달 내내 아무것도 못
+    #: 하지 않게 하는 쪽이 기본이다. 끄면 autonomous 는 봉투 전부를 쓸 수 있다(그 몫도 먹는다).
+    #: 켠 채 `background_share = 1.0` 이면 autonomous 몫은 0 이다.
+    reserve_background_share: bool = True
 
 
 class StandingAgentsConfig(StrictConfigModel):
