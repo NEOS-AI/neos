@@ -1,9 +1,9 @@
 # Q16 사용자 기기 브리지 — 설계 (2026-10-01)
 
-> **지위:** Q16a 착지(플래그 off) · **Q16b 착지**(쓰기 도구 하나, 자격증명·클라이언트 두 열쇠 모두 기본 off — §6). 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** Q16a 착지(플래그 off) · Q16b 착지(쓰기 도구 하나, 자격증명·클라이언트 두 열쇠 모두 기본 off — §6) · **Q16c 착지**(명령 도구 하나, 두 열쇠 + 서버 상한 모두 기본 off·비어 있음 — §7). 설계와 코드가 어긋나면 코드가 이긴다.
 > 상위: [로드맵 §1 Q 행](DEEP_ANALYSIS_HARNESS_ROADMAP.md) · [dots 분석 §4.2 Q16](OPENAI_DOTS_ANALYSIS_260930.md).
 > 위협 모델: [Q16_DEVICE_BRIDGE_THREAT_MODEL.md](Q16_DEVICE_BRIDGE_THREAT_MODEL.md) — 등급을 넓힐 때마다 한 줄씩.
-> 결정 B1~B13 은 위임받아 Claude 가 골랐다(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
+> 결정 B1~B13 · BW1~BW11 · BC1~BC12 는 위임받아 Claude 가 골랐다(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
 
 ## 1. 무엇을 사는가
 
@@ -106,7 +106,7 @@ python -m neos.bridge ──wss──> /coding/device-bridge/ws
 ## 5. 남은 것
 
 - ~~**Q16b** 쓰기 등급(WORKSPACE_WRITE)~~ — 착지(§6)
-- **Q16c** 명령 실행(COMMAND) — 기기 쪽 샌드박스·허용 목록·USER_ONLY 와의 관계를 먼저 정한다
+- ~~**Q16c** 명령 실행(COMMAND)~~ — 착지(§7). 기기 쪽 OS 샌드박스는 남았다(BC12)
 - 에이전트별 부여(Q17 과 함께) · 여러 기기 동시 연결(지금은 하나) · 웹 UI 의 페어링 화면 · 패키지로 배포하는 클라이언트(지금은 저장소에서 `python -m`)
 - ~~Redis 중계의 실 Redis 통합 시험~~ — Q16b 에서 더했다(§6 BW10). CI 에는 Redis 가 없어 `NEOS_TEST_REDIS_URL` 이 있을 때만 돈다 — CI 서비스 컨테이너로 올리는 것은 남았다
 - 소켓마다 구독 연결이 하나다(API 프로세스의 Redis 풀을 쓴다). 브리지가 많아지면 워커당 패턴 구독 하나로 묶는다
@@ -134,4 +134,31 @@ python -m neos.bridge ──wss──> /coding/device-bridge/ws
 
 **표면:** 083 `device_bridges.allow_writes`(BOOLEAN NOT NULL DEFAULT FALSE, 두 번 적용해도 같다) · `POST`/`PATCH` 에 `allow_writes` · `python -m neos.bridge --allow-writes [--max-write-bytes N]` · 새 이벤트 kind 없음 · 새 환경변수 없음(시험용 `NEOS_TEST_REDIS_URL` 만).
 
-**남은 것(Q16b 뒤):** Q16c 명령 실행(COMMAND) · 부분 편집 도구(같은 등급) · 지우기·옮기기(다음 증분 — 위협 모델 줄이 먼저) · 무인 쓰기는 지금 닫혀 있다 — 연다면 별도 증분과 줄 · 실 Redis 시험을 CI 서비스 컨테이너로 · 임시 파일(`.neos-bridge-*.tmp`)이 클라이언트가 죽으면 남는다(dot 파일이라 목록에는 보인다 — 시작할 때 청소하는 것은 남았다)
+**남은 것(Q16b 뒤):** ~~Q16c 명령 실행(COMMAND)~~(§7) · 부분 편집 도구(같은 등급) · 지우기·옮기기(다음 증분 — 위협 모델 줄이 먼저) · 무인 쓰기는 지금 닫혀 있다 — 연다면 별도 증분과 줄 · 실 Redis 시험을 CI 서비스 컨테이너로 · 임시 파일(`.neos-bridge-*.tmp`)이 클라이언트가 죽으면 남는다(dot 파일이라 목록에는 보인다 — 시작할 때 청소하는 것은 남았다)
+
+## 7. Q16c — 명령 등급 (2026-10-02)
+
+위협 모델 §3 의 Q16c 줄과 §5 의 표가 **먼저** 들어갔다(같은 커밋, 그 줄이 없으면 `test_every_opened_risk_has_a_threat_model_row` 가 빨갛다). 결정 BC1~BC12 는 위임받아 Claude 가 골랐다. 사람이 뒤집을 수 있다.
+
+| # | 결정 | 이유 |
+|---|---|---|
+| **BC1** | **명령 도구는 하나 — `device_run_command.v1`(argv 하나 실행).** 입력은 `argv`(1~64개) · `cwd`(기본 `.`) · `timeout_sec`(선택) 뿐이다. `stdin`·`env`·셸 문자열 필드는 없다 | 샌드박스 `execute.v1` 보다 좁기만 하다. 입력 필드 하나가 곧 위협 모델의 줄 하나다 — 환경변수 주입·stdin 으로 넘기는 스크립트를 처음부터 열지 않는다 |
+| **BC2** | **두 열쇠, 둘 다 기본 off.** 자격증명 `allow_commands`(090, `allow_writes`·`allow_unattended` 와 따로) **와** 클라이언트 `--allow-commands EXE,…`. 명령을 선언했는데 자격증명이 꺼져 있으면 명령만 빼지 않고 **등록 전체**를 거절한다(`device_commands_not_enabled`, 4403). 켜고 끄면 붙은 연결을 끊고, 소켓은 갱신마다 + **명령마다** 자격증명을 다시 읽는다(`device_commands_off`). 옛 `parse_declaration` 은 명령을 늘 거절하고, 받는 자리는 `parse_bridge_declaration` 하나다 | BW2 와 같은 이유(한쪽만으로 열리면 다른 쪽 사람이 모른다). 쓰기 열쇠로 명령이 열리지 않는다 — 쓰기와 실행은 되돌릴 수 없는 정도가 다르다 |
+| **BC3** | **실행 파일은 클라이언트 선언 ∩ 서버 상한.** 클라이언트가 선언(hello 의 `executables`)하고, 운영자의 `device_bridge.command_allowlist`(기본 **비어 있음**)가 그 전부를 덮어야 받는다 — 하나라도 밖이면 `device_command_not_allowed` 로 전체 거절. 받은 목록은 연결 표시(`BridgeView.executables`)에 실려 워커로 가고, 검증기는 서버 상한으로 · 서비스와 소켓은 그 연결의 선언으로 한 번 더 본다(`device_command_not_offered`) | 사실상 세 번째 열쇠다: 운영자가 이름을 적기 전에는 어떤 기기도 명령을 열 수 없다. 기본이 비어 있어야 "플래그를 켰더니 모든 기기에서 아무 실행 파일이나"가 생기지 않는다. 명령이 없는 브리지의 연결 표시 JSON 은 Q16b 와 바이트가 같다(`executables` 키를 싣지 않는다) |
+| **BC4** | **argv 규칙은 두 함수, 각각 하나.** ① 기기 규칙 `command_policy.device_command_refusal` — 서버 검증기와 클라이언트가 **같은 함수**: 맨 이름 · 허용 목록 · `NEVER_ON_DEVICE`(셸·래퍼·권한 상승·런처·네트워크 클라이언트 — 상한에 적혀 있어도) · 인라인 인터프리터 코드(`python3.12 -c` 처럼 버전 붙은 이름도) · 루트 밖·비밀 경로 피연산자(`--opt=값` 의 값도) · `secret://`. ② 샌드박스 `execute.v1` 의 argv 규칙 — `registry._validate_command` 에서 **떼어낸** `validate_argv` 를 서버 검증기가 그대로 부른다(git 은 status/diff/log, 패키지 설치, 위험한 `rm`, 전용 도구가 있는 명령 …). `NEVER_ON_DEVICE` 는 설정 검증·클라이언트 시작·선언 검사도 같이 본다 | 📌 "고침은 한 호출부에만 도착한다" — 샌드박스 규칙을 베끼면 다음 고침이 한쪽에만 간다. 떼어낸 것은 순수한 이동이다(이유 코드 순서 그대로, 샌드박스 테스트 무변경). 래퍼를 금지 목록에 둔 이유: 허용 목록은 `argv[0]` 만 보므로 `env`·`xargs`·`timeout` 이 있으면 무엇이든 돈다 |
+| **BC5** | **매 호출 사람 승인 — 소유자의 argv 접두 규칙만 대신한다.** 게이트에서 기기 쓰기 바로 뒤: 운영자 allow 목록 · auto 모드 · "항상 허용" 기억 · **도구 이름만 건** 소유자 allow 는 넘지 못하고, `argv_prefix` 가 있고 맞는 소유자 allow(`device_run_command.v1` + `pytest`)만 넘는다(`owner_argv_rule_allows`). 사용자 규칙 API 가 이 도구의 argv 접두를 받는다. USER_ONLY 바닥(`gh auth` …, 운영자 추가분 포함)과 지시 파일 피연산자 규칙은 `execute.v1` 과 같이 걸린다(`ARGV_TOOLS`). 승인 화면에는 argv 전체(가린 뒤)·cwd·시간 제한이 실리고, 이벤트와 거절 봉투에는 실행 파일·cwd 만 간다 | 쓰기(BW3)보다 한 단계 좁다: 도구 전체 allow 는 "무엇이든 돌려도 된다"는 뜻이 돼 버린다. 무엇을 돌려도 되는지 이름으로 말한 규칙만 사람을 대신한다 |
+| **BC6** | **무인 명령은 늘 거절** — 브리지의 `allow_unattended` 와 **어떤 allow 로도**(`policy_device_command_unattended`). `device_unattended_refusal` 한 함수가 노출·게이트·소켓·서비스에서 같은 판정을 낸다. background 는 Q1 천장이 먼저(`policy_mode_ceiling`). 자식은 B11 그대로(`policy_device_child`) | BW4 와 같은 이유 — 사람의 기기에서 사람 없이 무언가를 실행하는 허락은 이 슬라이스에 없다. 좁히기만 한다 |
+| **BC7** | **참조 클라이언트: 프로세스를 띄우는 모듈은 `neos/bridge/commands.py` 하나.** `--allow-commands` 가 무언가를 댈 때만 `__main__` 이 함수 안에서 import 한다. 실행 파일은 시작할 때 `PATH` 에서 찾아 **실경로로 고정**하고, 공유 폴더 안에 있으면 거절한다. `subprocess.Popen(argv, executable=고정 경로, shell=False, stdin=DEVNULL, start_new_session=True, close_fds=True)`. 환경은 `PATH`·`HOME`·`LANG`·`LC_*`·`TMPDIR`·`USER`·`LOGNAME` + `TERM=dumb`·`NO_COLOR=1` 뿐 | B10 의 "실행하지 않는다"는 소스 스캔이 이 파일만 빼고 그대로 지킨다. 이 파일은 별도 스캔이 고정한다(Popen 하나, `shell=False` 상수, `os.system`·`exec*`·`spawn*` 없음, 모듈 최상단 import 없음). 고정 경로 — 나중에 `PATH` 나 루트 안에 같은 이름을 심어도 바뀌지 않는다. 브리지 토큰은 환경변수로 받으므로 환경을 비우지 않으면 자식에게 그대로 간다 |
+| **BC8** | **cwd·시간·출력 경계.** cwd 는 서버에서 상대 경로로 정규화(`..`·절대 거절)되고, 클라이언트가 B10 의 `resolve` 로 실경로·비밀 경로를 다시 봐서 루트 안의 디렉터리여야 한다. 시간은 서버 상한(`command_timeout_seconds`, 기본 60초) · 모델 요청 · 클라이언트 상한(`--max-command-seconds`) 중 가장 작은 것, 넘으면 **프로세스 그룹째** SIGKILL 하고 끝난 뒤에도 그룹을 한 번 더 정리한다. stdout·stderr 는 각각 `max_command_output_bytes`(기본 64 KiB)까지 모으고 나머지는 읽어 버린다 | 그룹 종료가 없으면 `pytest` 가 띄운 서버가 호출 뒤에도 산다. 넘는 출력을 읽지 않으면 파이프가 차서 자식이 멈추고 시간 초과로 둔갑한다. 와이어 인코더는 긴 스트림을 반으로 줄여 메시지 상한을 지킨다(종료 코드는 그대로) |
+| **BC9** | **결과: 출력은 자르고 · 지우고 · 감싼다, 상태는 서버가 정한다.** 각 스트림을 상한까지 자르고, ANSI CSI/OSC 이스케이프와 남은 제어 문자(`\n`·`\t` 빼고)를 지우고, `[stdout]`/`[stderr]` 를 untrusted 경계로 감싼다. 경계 **밖** 첫 줄은 서버가 검사한 값으로 만든다: `exit_code: N`(−255~255 정수) 또는 시간 초과 문장. 상태: 0 → `ok`, 그 밖 → `error`/`command_failed`, 시간 초과 → `error`/`device_command_timeout`. 기기가 보낸 `status` 같은 필드는 읽지 않는다 | B9 그대로. 터미널 이스케이프는 사람이 보는 로그 화면을 위조하는 길이다. 종료 코드를 문자열로 받으면 그것도 주입 표면이다 |
+| **BC10** | **기다림과 claim 은 명령 시간을 덮는다.** 서비스는 `timeout_sec + call_timeout_seconds` 만큼 답을 기다리고, 루프는 기기 명령의 claim 을 `command_timeout_seconds + call_timeout_seconds + 30` 만큼 쥔다(`spawn_agent.v1` 과 같은 방식). 다시 돌지 않는다는 보장은 그대로(READ_ONLY 아닌 재획득 claim 은 `tool_outcome_unknown`) | 일반 도구 claim TTL(30초)이 명령 시간(기본 60초)보다 짧으면, 명령이 도는 중에 claim 이 끝나 재시도가 결과를 모름으로 덮는다. 다시 실행되지는 않지만 결과를 잃는다 |
+| **BC11** | **플래그 off, 그리고 명령을 내놓지 않은 브리지는 바이트가 같다.** 도구 목록·시스템 프롬프트·이벤트 종류가 Q16b 와 같다(루프 테스트가 Q16a 하네스와 직접 비교). 명령 도구는 explore·plan 에서 `execute.v1` 처럼 숨는다(verify·implement 에서 보인다) — `phases._HIDDEN_WRITES` 에 이름을 더했다(레지스트리 정의에는 기기 도구가 없어 다른 목록은 바뀌지 않는다). **새 이벤트 kind 없음** | S9(트랙 I): 켜는 커밋만 경계가 된다. 명령은 평범한 도구 호출이라 이벤트 어휘를 넓힐 이유가 없다 |
+| **BC12** | **OS 샌드박스는 이 슬라이스에 없다.** 허용한 실행 파일은 사용자 권한으로 돌고, 그 실행 파일이 루트 안의 코드를 실행하면(`pytest`·`make`·`npm run`) 그 코드가 무엇이든 돈다 — Q16b 쓰기와 합치면 "쓰고 실행하기"가 된다. 막는 것은 매 호출 사람 승인과, 무엇을 허용할지 사람(클라이언트)·운영자(상한)가 이름으로 고르는 것이다. 위협 모델 §5 "남는 위험" 첫 줄 | seatbelt(macOS)·bubblewrap(Linux)·AppContainer(Windows)는 플랫폼마다 다르고, 반쯤 걸친 샌드박스는 없는 것보다 나쁜 착각을 준다. 다음 증분 후보로 남긴다 — 그때도 위협 모델 줄이 먼저다 |
+
+**변하지 않은 것:** B8(비밀 참조는 argv·cwd 어디에든 있으면 거절 — 정규화 **전**에) · B11(자식 거절) · B13(투기 실행 없음) · BW1~BW11(쓰기는 그대로, 쓰기 열쇠가 명령을 열지 않는다).
+
+**표면:** 090 `device_bridges.allow_commands`(BOOLEAN NOT NULL DEFAULT FALSE, 두 번 적용해도 같다) · `POST`/`PATCH` 에 `allow_commands` · 설정 `device_bridge.command_allowlist`(기본 `[]`) · `command_timeout_seconds`(60, ≤600) · `max_command_output_bytes`(64 KiB, 1 KiB~1 MiB; 상한이 비어 있지 않으면 `max_message_bytes` 가 그 두 배보다 커야 한다) · 사용자 규칙의 `argv_prefix` 가 `device_run_command.v1` 에도 · `python -m neos.bridge --allow-commands pytest,ruff [--max-command-seconds N] [--max-command-output-bytes N]` · 새 이벤트 kind 없음 · 새 환경변수 없음.
+
+**검증:** 새 테스트(서버 · 루프 · 클라이언트 · API · 090 · 실 Redis)와 손 변이 28건(열쇠 · 상한 · 게이트 · 무인 · USER_ONLY · 소켓 재검사 · 서비스 · 두 argv 규칙 · 환경 · 그룹 종료 · cwd · 출력 정리 · 단계 · 노출 · 셸 금지 · claim 등) 전부 빨갛게 됐다. 실 Redis(`redis:7-alpine`, 로컬) 8/8.
+
+**남은 것(Q16c 뒤):** 기기 쪽 OS 샌드박스(BC12) · 명령별 네트워크 차단 · 승인 화면의 "같은 런에서 이 파일을 썼다" 표시(쓰기+실행 결합을 사람이 한눈에) · 세션을 벗어난 손자 프로세스 정리(cgroup/Job Object) · 실 Redis 시험을 CI 서비스 컨테이너로

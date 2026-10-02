@@ -673,6 +673,8 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
         # 트랙 Q16a. 루프의 브리지 서비스와 같은 플래그 하나에서 나온다. 자식 포트도 이
         # 레지스트리를 쓰지만 `definitions()` 에 브리지 도구가 없고 자식 게이트가 닫는다.
         device_tools=coding.device_bridge.enabled,
+        # 트랙 Q16c. 기기 명령의 서버 상한 -- 브리지의 선언과 같은 설정에서 나온다.
+        device_command_allowlist=frozenset(coding.device_bridge.command_allowlist),
     )
     # 계측은 전송 계층 **밖에서** 감싼다 (D1c). 프로바이더 구현을 건드리지
     # 않으므로 D4(네이티브 SDK 전환)가 그 아래를 바꿔도 함께 무너지지 않는다.

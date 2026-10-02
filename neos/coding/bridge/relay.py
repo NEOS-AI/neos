@@ -45,19 +45,21 @@ class BridgeView:
     conn_id: str
     tools: frozenset[str]
     allow_unattended: bool = False
+    #: 브리지가 선언하고 서버 상한이 받은 실행 파일(Q16c). 명령을 내놓지 않으면 비어 있다.
+    executables: frozenset[str] = frozenset()
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "user_id": self.user_id,
-                "bridge_id": self.bridge_id,
-                "conn_id": self.conn_id,
-                "tools": sorted(self.tools),
-                "allow_unattended": self.allow_unattended,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+        data: dict[str, Any] = {
+            "user_id": self.user_id,
+            "bridge_id": self.bridge_id,
+            "conn_id": self.conn_id,
+            "tools": sorted(self.tools),
+            "allow_unattended": self.allow_unattended,
+        }
+        if self.executables:
+            # 명령이 없는 브리지의 연결 표시는 Q16b 와 바이트가 같다.
+            data["executables"] = sorted(self.executables)
+        return json.dumps(data, separators=(",", ":"), sort_keys=True)
 
     @classmethod
     def from_json(cls, raw: object, *, user_id: str) -> BridgeView | None:
@@ -77,12 +79,16 @@ class BridgeView:
             return None
         if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
             return None
+        executables = data.get("executables", [])
+        if not isinstance(executables, list) or not all(isinstance(e, str) for e in executables):
+            return None
         return cls(
             user_id=user_id,
             bridge_id=bridge_id,
             conn_id=conn_id,
             tools=frozenset(tools),
             allow_unattended=data.get("allow_unattended") is True,
+            executables=frozenset(executables),
         )
 
 

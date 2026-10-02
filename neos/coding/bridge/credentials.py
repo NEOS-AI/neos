@@ -1,4 +1,4 @@
-"""브리지 페어링 자격증명 -- 트랙 Q16a (B1) · Q16b (BW2: `allow_writes`, 083).
+"""브리지 페어링 자격증명 -- 트랙 Q16a (B1) · Q16b (BW2: `allow_writes`, 083) · Q16c (BC2: `allow_commands`, 090).
 
 토큰은 만들 때 **한 번만** 보이고, DB 에는 SHA-256 해시만 남는다. 256비트 난수라
 솔트·느린 해시가 필요 없다 -- 코딩 소켓 티켓(`RedisCodingTicketStore`)이 키를 잡는
@@ -42,6 +42,8 @@ class BridgeCredentialInfo:
     last_connected_at: datetime | None = None
     #: 쓰기 도구를 선언해도 되는가(Q16b, BW2). 기본 False -- 클라이언트의 `--allow-writes` 와 둘 다 있어야 한다.
     allow_writes: bool = False
+    #: 명령 도구를 선언해도 되는가(Q16c, BC2). 기본 False -- 클라이언트의 `--allow-commands` 와 둘 다 있어야 한다.
+    allow_commands: bool = False
 
 
 def new_token() -> str:
@@ -65,7 +67,13 @@ def parse_bridge_name(name: object) -> str:
 
 class BridgeCredentialStore(Protocol):
     async def create(
-        self, user_id: str, name: str, *, allow_unattended: bool = False, allow_writes: bool = False
+        self,
+        user_id: str,
+        name: str,
+        *,
+        allow_unattended: bool = False,
+        allow_writes: bool = False,
+        allow_commands: bool = False,
     ) -> tuple[BridgeCredentialInfo, str]: ...
 
     async def list_for_user(self, user_id: str) -> list[BridgeCredentialInfo]: ...
@@ -80,6 +88,10 @@ class BridgeCredentialStore(Protocol):
         self, user_id: str, bridge_id: str, allow_writes: bool
     ) -> BridgeCredentialInfo | None: ...
 
+    async def set_commands(
+        self, user_id: str, bridge_id: str, allow_commands: bool
+    ) -> BridgeCredentialInfo | None: ...
+
     async def delete(self, user_id: str, bridge_id: str) -> bool: ...
 
     async def authenticate(self, token: str) -> BridgeCredentialInfo | None: ...
@@ -92,7 +104,9 @@ class InMemoryBridgeCredentialStore:
         self._rows: dict[str, tuple[BridgeCredentialInfo, str]] = {}
         self._max = max_bridges
 
-    async def create(self, user_id, name, *, allow_unattended=False, allow_writes=False):
+    async def create(
+        self, user_id, name, *, allow_unattended=False, allow_writes=False, allow_commands=False
+    ):
         name = parse_bridge_name(name)
         mine = await self.list_for_user(user_id)
         if any(info.name == name for info in mine):
@@ -107,6 +121,7 @@ class InMemoryBridgeCredentialStore:
             allow_unattended=bool(allow_unattended),
             created_at=datetime.now(UTC),
             allow_writes=bool(allow_writes),
+            allow_commands=bool(allow_commands),
         )
         self._rows[info.bridge_id] = (info, token_hash(token))
         return info, token
@@ -132,6 +147,14 @@ class InMemoryBridgeCredentialStore:
         if info is None:
             return None
         updated = replace(info, allow_writes=bool(allow_writes))
+        self._rows[bridge_id] = (updated, self._rows[bridge_id][1])
+        return updated
+
+    async def set_commands(self, user_id, bridge_id, allow_commands):
+        info = await self.get(user_id, bridge_id)
+        if info is None:
+            return None
+        updated = replace(info, allow_commands=bool(allow_commands))
         self._rows[bridge_id] = (updated, self._rows[bridge_id][1])
         return updated
 
@@ -162,11 +185,13 @@ def _info(row: Any) -> BridgeCredentialInfo:
         created_at=row.created_at,
         last_connected_at=row.last_connected_at,
         allow_writes=bool(row.allow_writes),
+        allow_commands=bool(row.allow_commands),
     )
 
 
 _COLUMNS = (
-    "bridge_id, user_id, name, allow_unattended, created_at, last_connected_at, allow_writes"
+    "bridge_id, user_id, name, allow_unattended, created_at, last_connected_at, allow_writes, "
+    "allow_commands"
 )
 
 
@@ -177,7 +202,9 @@ class PostgresBridgeCredentialStore:
         self._session_factory = session_factory
         self._max = max_bridges
 
-    async def create(self, user_id, name, *, allow_unattended=False, allow_writes=False):
+    async def create(
+        self, user_id, name, *, allow_unattended=False, allow_writes=False, allow_commands=False
+    ):
         name = parse_bridge_name(name)
         token = new_token()
         bridge_id = "dbr_" + secrets.token_hex(12)
@@ -203,9 +230,10 @@ class PostgresBridgeCredentialStore:
                 result = await session.execute(
                     text(
                         "INSERT INTO device_bridges "
-                        "(bridge_id, user_id, name, token_hash, allow_unattended, allow_writes) "
+                        "(bridge_id, user_id, name, token_hash, allow_unattended, allow_writes, "
+                        "allow_commands) "
                         "VALUES (:bridge_id, :user_id, :name, :token_hash, :allow_unattended, "
-                        ":allow_writes) "
+                        ":allow_writes, :allow_commands) "
                         f"RETURNING {_COLUMNS}"
                     ),
                     {
@@ -215,6 +243,7 @@ class PostgresBridgeCredentialStore:
                         "token_hash": token_hash(token),
                         "allow_unattended": bool(allow_unattended),
                         "allow_writes": bool(allow_writes),
+                        "allow_commands": bool(allow_commands),
                     },
                 )
                 info = _info(result.one())
@@ -267,6 +296,20 @@ class PostgresBridgeCredentialStore:
                         f"RETURNING {_COLUMNS}"
                     ),
                     {"user_id": user_id, "bridge_id": bridge_id, "value": bool(allow_writes)},
+                )
+                row = result.first()
+        return _info(row) if row is not None else None
+
+    async def set_commands(self, user_id, bridge_id, allow_commands):
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        "UPDATE device_bridges SET allow_commands = :value "
+                        "WHERE user_id = :user_id AND bridge_id = :bridge_id "
+                        f"RETURNING {_COLUMNS}"
+                    ),
+                    {"user_id": user_id, "bridge_id": bridge_id, "value": bool(allow_commands)},
                 )
                 row = result.first()
         return _info(row) if row is not None else None

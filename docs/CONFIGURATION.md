@@ -1299,6 +1299,72 @@ credential before every write (`device_writes_off`).
   `policy_device_write_executable`, `device_write_too_large`,
   `device_no_space`.
 
+#### Device commands (track Q16c)
+
+```yaml
+coding_model:
+  device_bridge:
+    command_allowlist: []           # server bound on what any bridge may run; empty = no device commands
+    command_timeout_seconds: 60     # one device_run_command.v1 (<= 600); the client caps too
+    max_command_output_bytes: 65536 # stdout and stderr each (UTF-8 bytes); the client caps too
+```
+
+One command tool, `device_run_command.v1` (risk `command`): it runs one argv
+on the user's device with the working directory inside the shared folder.
+There is no shell string, no `stdin` and no `env` input. It needs **three
+things**, all off or empty by default: the credential's `allow_commands`
+(migration 090; `POST` or `PATCH {"allow_commands": true}`), the client's
+`--allow-commands` naming the executables, and the operator's
+`command_allowlist` containing every executable the client names:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/project \
+  --allow-commands pytest,ruff [--max-command-seconds 60] [--max-command-output-bytes 65536]
+```
+
+A client that declares `run_command` against a credential without
+`allow_commands` is refused whole (`device_commands_not_enabled`, close
+4403); one that names an executable outside `command_allowlist` likewise
+(`device_command_not_allowed`). Turning commands off drops the live
+connection, and the socket rereads the credential before every command
+(`device_commands_off`). Shells, wrappers (`env`, `xargs`, `timeout` ...),
+privilege tools (`sudo` ...), launchers (`open`, `osascript` ...) and network
+clients can never be listed -- the config refuses them at load.
+
+- **Every command asks a person.** Only the owner's own `allow` rule **with
+  an argv prefix** (`device_run_command.v1` + `["pytest"]`) skips the
+  question. A tool-wide allow rule, the operator's `approval_allow_tools`,
+  auto mode and a remembered "always allow" do not. The approval screen shows
+  the whole (redacted) argv and cwd; events carry only the executable and cwd.
+- **Never unattended.** `autonomous` / `background` runs neither see nor may
+  call it, whatever `allow_unattended` or any allow rule says
+  (`policy_device_command_unattended`). Subagents never may
+  (`policy_device_child`). `explore` and `plan` hide it like `execute.v1`.
+- **Same argv rules as the sandbox, plus the device's own.** `execute.v1`'s
+  rules apply unchanged (git status/diff/log only, no package installs, no
+  inline `-c`/`-e`, no dangerous `rm`, dedicated tools first), and so do
+  `USER_ONLY` commands (`gh auth`, `npm token` ..., plus
+  `approval_user_only_extra`). Operands and cwd stay inside the shared folder;
+  secret paths and `secret://` anywhere are refused.
+- **On the device:** executables are resolved on `PATH` once at startup and
+  pinned (one inside the shared folder is refused); the child gets no stdin
+  and only `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `USER`, `LOGNAME`,
+  `TERM=dumb`, `NO_COLOR=1` -- never the bridge token; it runs in its own
+  process group, which is killed on timeout and cleaned after exit. Only
+  `neos/bridge/commands.py` starts a process.
+- **Results:** a server-built `exit_code: N` line, then stdout/stderr capped,
+  stripped of ANSI escapes and control characters, wrapped as untrusted
+  device content. Non-zero is `command_failed`; timeout is
+  `device_command_timeout`. Other failures: `policy_device_command_refused`,
+  `policy_executable_not_allowed`, `device_command_not_offered`,
+  `device_command_failed_to_start`.
+- When `command_allowlist` is not empty, `max_message_bytes` must exceed twice
+  `max_command_output_bytes`. There is no OS sandbox on the device: an
+  allowed executable that runs project code (`pytest`, `make`) runs whatever
+  that code is. Design: `docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md` §7; threat
+  model §5.
+
 The Redis relay has a real-Redis integration test that runs only when
 `NEOS_TEST_REDIS_URL` is set (`tests/coding/test_device_bridge_relay_redis.py`).
 

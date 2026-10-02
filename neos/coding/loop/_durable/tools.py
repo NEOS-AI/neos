@@ -27,7 +27,7 @@ from neos.coding.domain.approvals import (
     denial_envelope,
     policy_denial_reason,
 )
-from neos.coding.bridge.catalog import is_device_tool
+from neos.coding.bridge.catalog import is_device_command_tool, is_device_tool
 from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.model.base import (
     ToolCallCompleted,
@@ -312,6 +312,11 @@ class ToolExecutionMixin:
         claim_ttl = self._config.tool_claim_ttl_sec
         if call.name == "spawn_agent.v1" and self._config.subagent_enabled:
             claim_ttl = self._config.timeout_sec + 30
+        bridge = getattr(self, "_device_bridge", None)
+        if bridge is not None and is_device_command_tool(call.name):
+            # 트랙 Q16c: 기기 명령은 자기 시간 제한까지 돈다 -- claim 이 그보다 먼저 끝나 다른
+            # 시도가 결과를 `tool_outcome_unknown` 으로 덮지 않게 그만큼 쥔다(다시 돌지는 않는다).
+            claim_ttl = max(claim_ttl, float(getattr(bridge, "command_claim_seconds", 0) or 0))
         claim = await deps.repository.claim_tool_execution(
             lease=deps.lease,
             tool_call_id=call.tool_call_id,

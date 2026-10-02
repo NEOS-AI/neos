@@ -2252,7 +2252,8 @@ class DeviceBridgeConfig(StrictConfigModel):
     """사용자 기기 브리지 -- 트랙 Q16a (docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md).
 
     꺼져 있으면 자격증명 API 와 브리지 소켓을 **마운트하지 않고**, 도구 목록·프롬프트·
-    이벤트 어휘가 오늘과 바이트가 같다. 받는 등급은 READ_ONLY 와(Q16b) 자격증명이 허락한 WORKSPACE_WRITE 다.
+    이벤트 어휘가 오늘과 바이트가 같다. 받는 등급은 READ_ONLY 와(Q16b) 자격증명이 허락한 WORKSPACE_WRITE,
+    (Q16c) 자격증명이 허락하고 실행 파일이 `command_allowlist` 안인 COMMAND 다.
     소켓을 받는 API 프로세스와 루프를 도는 워커는 Redis 로 잇는다(B6).
     """
 
@@ -2269,6 +2270,13 @@ class DeviceBridgeConfig(StrictConfigModel):
     max_list_entries: int = Field(default=500, ge=1, le=5000)
     #: `device_write_file.v1` 한 번이 쓰는 본문 상한(UTF-8 바이트, Q16b). 브리지도 같은 값을 본다.
     max_write_bytes: int = Field(default=262_144, ge=1024, le=4_194_304)
+    #: 기기 명령(Q16c)의 서버 상한 -- 브리지가 선언할 수 있는 실행 파일. 기본은 **비어 있다**: 운영자가
+    #: 이름을 적기 전에는 어떤 브리지도 명령을 선언할 수 없다. 셸·래퍼·권한 상승·런처는 적을 수 없다.
+    command_allowlist: list[str] = Field(default_factory=list, max_length=32)
+    #: `device_run_command.v1` 한 번의 시간 상한(초). 모델이 더 짧게 달라고 할 수는 있다.
+    command_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    #: 명령의 stdout · stderr 각각의 상한(UTF-8 바이트). 브리지도 같은 값을 본다.
+    max_command_output_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
     #: 브리지가 보내는 메시지 하나의 상한. 넘으면 소켓을 닫는다.
     max_message_bytes: int = Field(default=2_097_152, ge=4096, le=16_777_216)
     #: 연결 표시(presence)의 수명. 소켓이 이 1/3 마다 갱신하고 자격증명을 다시 읽는다.
@@ -2280,6 +2288,19 @@ class DeviceBridgeConfig(StrictConfigModel):
     def _message_fits_a_read(self) -> "DeviceBridgeConfig":
         if self.max_message_bytes <= self.max_read_bytes:
             raise ValueError("device_bridge.max_message_bytes must exceed max_read_bytes")
+        if self.command_allowlist and self.max_message_bytes <= 2 * self.max_command_output_bytes:
+            raise ValueError(
+                "device_bridge.max_message_bytes must exceed twice max_command_output_bytes"
+            )
+        from neos.coding.bridge.command_policy import executable_name_refusal
+
+        refused = [name for name in self.command_allowlist if executable_name_refusal(name)]
+        if refused:
+            raise ValueError(
+                f"device_bridge.command_allowlist cannot name shells, wrappers or launchers: {refused}"
+            )
+        if len(set(self.command_allowlist)) != len(self.command_allowlist):
+            raise ValueError("device_bridge.command_allowlist names must be unique")
         return self
 
 

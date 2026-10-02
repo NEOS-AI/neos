@@ -2,7 +2,8 @@
 
 사용자가 **자기 기기에서** 돌린다. 명시한 루트 폴더 하나 안에서 READ_ONLY 도구
 (`list_dir` · `stat` · `read_file`)로 답하고, `--allow-writes` 를 주면 `write_file` 하나를
-더한다(Q16b). 아무것도 실행하지 않는다.
+더한다(Q16b). `--allow-commands EXE,...` 를 주면 그 실행 파일만 `run_command` 로 돌린다(Q16c) --
+프로세스를 띄우는 것은 `commands.py` 하나뿐이고 나머지 모듈은 아무것도 실행하지 않는다.
 
     NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge --url wss://host/api/v1/coding/device-bridge/ws --root ~/notes
 

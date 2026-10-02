@@ -232,3 +232,51 @@ async def test_the_socket_session_and_the_service_over_real_redis(redis_pair) ->
     answering.cancel()
     newer_task.cancel()
     await asyncio.gather(newer_task, return_exceptions=True)
+
+
+async def test_a_command_crosses_real_redis_with_its_executables_and_limits(redis_pair) -> None:
+    """Q16c over Redis: the presence carries the declared executables to the worker (the service
+    refuses one the bridge did not declare), and a command's wait covers its own time limit."""
+    from neos.coding.bridge.service import DeviceBridgeService
+    from neos.config.schema import DeviceBridgeConfig
+    from tests.coding.test_device_bridge import _answer_calls, _open
+    from tests.coding.test_device_bridge_commands import _run
+
+    _shared, api, worker, _prefix, _ = redis_pair
+    view = BridgeView(
+        "alice", "dbr_1", "c8", frozenset({"read_file", "run_command"}), False, frozenset({"pytest"})
+    )
+
+    class Live:
+        allow_unattended = False
+        allow_commands = True
+        revoked = False
+
+        async def get(self):
+            return self
+
+    socket, _session, task, _ = await _open(api, view, credential=Live(), presence_ttl_seconds=5)
+    seen = await worker.view("alice")
+    assert seen is not None and seen.executables == {"pytest"}
+    answering = asyncio.create_task(
+        _answer_calls(socket, {"exit_code": 0, "timed_out": False, "stdout": "ok", "stderr": ""})
+    )
+    config = DeviceBridgeConfig(
+        call_timeout_seconds=0.5, command_allowlist=["pytest", "ruff"], command_timeout_seconds=2
+    )
+    service = DeviceBridgeService(worker, config)
+
+    ran = await service.execute("alice", _run(["pytest", "-q"]), unattended=False)
+    other = await service.execute("alice", _run(["ruff"]), unattended=False)
+
+    assert ran.status == "ok" and ran.exit_code == 0
+    assert other.reason_code == "device_command_not_offered"
+    assert json.loads(json.dumps(socket.calls()[0]["args"])) == {
+        "argv": ["pytest", "-q"],
+        "cwd": ".",
+        "timeout_sec": 2.0,
+        "max_output_bytes": 65_536,
+    }
+    answering.cancel()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)

@@ -2,7 +2,7 @@
 
 > **지위:** 살아 있는 문서다. dots 분석 §4 결정 7(2026-09-30): 위협 모델은 **착수 조건이 아니라 지속적 개선**이다.
 > 브리지는 READ_ONLY 로 시작했고, **도구 위험 등급을 한 단계 넓히는 커밋은 §3 표에 한 줄을 먼저 더한다.**
-> 설계: [Q16_DEVICE_BRIDGE_DESIGN_261001.md](Q16_DEVICE_BRIDGE_DESIGN_261001.md)(결정 B1~B13).
+> 설계: [Q16_DEVICE_BRIDGE_DESIGN_261001.md](Q16_DEVICE_BRIDGE_DESIGN_261001.md)(결정 B1~B13 · Q16b BW1~BW11 · Q16c BC1~BC12).
 
 ## 1. 지키는 것과 상대
 
@@ -54,6 +54,7 @@
 |---|---|---|---|---|---|
 | Q16a | 2026-10-01 | `READ_ONLY` — `list_dir` · `stat` · `read_file`, 명시한 폴더 하나 | 에이전트가 사용자 기기의 그 폴더 안 텍스트를 읽는다(사람이 있을 때 · 브리지가 허락하면 사람 없이도) | §2 의 표 전부 — 요약: 루트 감금 · 비밀 경로 · untrusted 감싸기 · 소유자 격리 3겹 · 무인 허락 · 비밀 참조 거절 · 자식 거절 | §2 의 표 |
 | Q16b | 2026-10-02 | `WORKSPACE_WRITE` — `write_file` 하나(파일 전체 쓰기), 명시한 폴더 안. 자격증명의 `allow_writes`(기본 off)와 클라이언트의 `--allow-writes` **두 열쇠**가 다 있어야 선언이 받아진다 | 주입에 넘어간 모델이 사용자의 파일을 **덮어쓴다**(되돌릴 수 없다) · 실행되는 파일(스크립트·자동 실행 위치·셸 설정 dotfile·`.git/hooks`)을 심는다 · 링크·경쟁으로 루트 밖이나 비밀 파일에 쓴다 · 반쯤 쓴 파일을 남긴다 · 디스크를 채운다 · 사람 없는 런이 기기를 바꾼다 · 같은 쓰기가 두 번 돈다 | §4 의 표 — 요약: 매 쓰기 사람 승인(소유자의 allow 규칙만 넘는다; 운영자 allow·auto·"항상 허용"은 못 넘는다) · 무인·background·자식은 **어떤 허락으로도** 거절 · read-before-write 다이제스트(`base_sha256`, 다르면 stale) · 링크 없는 경로만(성분마다 `O_NOFOLLOW` 디렉터리 fd) · dot 성분·자동 실행 확장자·비밀 경로 거절 · 실행 비트를 세우지 않고 실행 파일은 덮지 않는다 · 같은 폴더 임시 파일 + rename(덮기)/link(새로 만들기) · 크기 상한 | §4 의 표 |
+| Q16c | 2026-10-02 | `COMMAND` — `run_command` 하나(argv 하나를 기기에서 실행), 명시한 폴더 안을 cwd 로. 자격증명의 `allow_commands`(090, 기본 off)와 클라이언트의 `--allow-commands EXE,…` **두 열쇠**, 그리고 운영자의 서버 상한 `device_bridge.command_allowlist`(기본 **비어 있음**)가 다 있어야 선언이 받아진다 | 주입에 넘어간 모델이 사용자의 기기에서 **임의 코드**를 사용자 권한으로 돌린다(허용한 실행 파일이 저장소 코드를 돌리면 — `pytest`·`make` — 그 코드가 무엇이든 돈다) · 쓰기(Q16b)로 심은 파일을 명령으로 실행한다 · 셸 문자열·래퍼(`env`·`xargs`·`timeout`)·인라인 인터프리터로 허용 목록을 넘는다 · 로그인·토큰 명령(`gh auth`·`npm token`)을 돌린다 · 브리지 토큰·셸 환경의 비밀이 자식 프로세스로 샌다 · 루트 밖을 cwd·피연산자로 삼는다 · 끝나지 않는 프로세스·백그라운드 자식이 남는다 · 거대한 출력·출력에 실린 지시 · 사람 없는 런이 명령을 돌린다 · 같은 명령이 두 번 돈다 | §5 의 표 — 요약: 매 호출 사람 승인(소유자의 **argv 접두가 있는** allow 규칙만 넘는다; 도구 전체 allow·운영자 allow·auto·"항상 허용"은 못 넘는다) · 무인·background·자식은 **어떤 허락으로도** 거절 · argv 만(셸 문자열 없음), 실행 파일은 클라이언트 선언 ∩ 서버 상한, 셸·래퍼·권한 상승·런처는 늘 거절 · 샌드박스 `execute.v1` 의 argv 규칙을 **같은 함수**로 · USER_ONLY 그대로 · `secret://` 거절 · cwd·피연산자는 루트 안 · 실행 파일 경로는 시작할 때 고정(루트 안의 실행 파일은 거절) · 환경은 허용한 몇 개만(토큰 없음) · stdin 없음 · 시간 제한 후 프로세스 그룹째 종료 · 출력 상한·제어 문자 제거·untrusted 감싸기, 종료 코드는 서버가 만든 줄 · 다시 돌지 않는다(claim 재획득은 `tool_outcome_unknown`) | §5 의 표 |
 
 ## 4. Q16b — `WORKSPACE_WRITE` (2026-10-02)
 
@@ -80,3 +81,32 @@
 - 다이제스트 검사와 rename 사이(마이크로초)에 같은 기기의 다른 프로세스가 파일을 바꾸면 그 변경을 덮는다. 같은 기기의 프로세스는 이미 그 파일을 마음대로 바꿀 수 있다
 - 루트 **안**의 dot 이 아닌 스크립트(`build.sh`·`Makefile`·`package.json` 의 scripts)는 쓸 수 있고, 사람이 나중에 그것을 실행할 수 있다. 실행 비트를 세우지 않고 실행 파일을 덮지 않는 것까지가 브리지의 몫이고, 그 내용은 승인 화면에서 사람이 본다
 - 루트 폴더 자체가 자동 실행 위치(예: `~/Library/LaunchAgents`)면 확장자 목록이 일부만 막는다. 루트를 고르는 것은 사람이다(홈·`/` 는 거절)
+
+## 5. Q16c — `COMMAND` (2026-10-02)
+
+**열린 것:** `run_command` 하나 — 사용자가 클라이언트에서 이름을 댄 실행 파일 중 하나를 argv 로, 명시한 폴더 안을 cwd 로 돌린다.
+셸은 없다. 출력과 종료 코드가 돌아온다. 쓰기(Q16b)와는 따로 열고 닫는다.
+설계: [Q16c 결정 BC1~BC12](Q16_DEVICE_BRIDGE_DESIGN_261001.md#7-q16c--명령-등급-2026-10-02).
+
+| 위협(새로 가능해진 것) | 막는 것 | 고정한 테스트 |
+|---|---|---|
+| 사용자·운영자가 모르게 실행이 열린다 | 세 자리가 다 열어야 한다: 자격증명 `allow_commands`(기본 false, 090) · 클라이언트 `--allow-commands EXE,…` · 서버 상한 `command_allowlist`(기본 비어 있음). 명령을 선언했는데 자격증명이 꺼져 있으면 `device_commands_not_enabled`, 선언한 실행 파일이 상한 밖이면 `device_command_not_allowed` — 둘 다 등록 **전체** 거절(4403). 켜고 끄면 붙은 연결을 끊는다 · 소켓은 명령마다 **지금의** 자격증명을 다시 읽는다 | `test_a_command_declaration_needs_the_credential_to_allow_commands` · `test_declared_executables_must_sit_inside_the_server_bound` · `test_the_socket_rechecks_commands_with_the_live_credential` · `test_flipping_commands_kicks_the_live_connection` |
+| 주입에 넘어간 모델이 명령을 돌린다 | 매 호출 사람 승인. 운영자 allow 목록·auto 모드·"항상 허용" 기억·**도구 전체에 건** 소유자 allow 는 넘지 못하고, 소유자의 **argv 접두가 맞는** allow 규칙만 넘는다(`device_run_command.v1 pytest`). 지시 파일을 피연산자로 삼으면 그 규칙도 넘지 못한다. 승인 화면에 argv 전체와 cwd 가 실린다(이벤트에는 실행 파일·cwd 만) | `test_device_commands_ask_a_person_and_only_an_owner_argv_rule_waives_it` · `test_the_approver_sees_the_whole_argv` |
+| 사람 없는 런이 기기에서 명령을 돌린다 | 무인(autonomous·background·운영자 unattended) 명령은 브리지의 `allow_unattended` 와 **어떤 allow 로도** 거절(`policy_device_command_unattended`) — 노출·게이트·소켓·서비스가 한 함수(`device_unattended_refusal`). background 는 Q1 천장이 먼저 막는다. 무인 런에는 보이지도 않는다 | `test_unattended_device_commands_are_refused_whatever_allows_them` · `test_an_unattended_run_never_sees_the_command_tool` · `test_unattended_commands_are_refused_at_the_socket` |
+| 자식이 기기에서 명령을 돌린다 | B11 그대로(`policy_device_child`) | `test_a_child_cannot_run_a_command_on_the_device` |
+| 허용 목록을 셸·래퍼·인라인 코드로 넘는다 | argv 만(문자열 명령 없음) · `argv[0]` 은 맨 이름이고 클라이언트 선언 ∩ 서버 상한 안 · 셸·래퍼·권한 상승·런처·네트워크 클라이언트는 상한에도 들 수 없다(설정 검증·클라이언트 시작·검증기가 같은 목록) · 샌드박스 `execute.v1` 의 argv 규칙(인라인 `-c`/`-e`, 패키지 설치, `git` 은 status/diff/log, 위험한 `rm`, 전용 도구가 있는 명령)을 **같은 함수**(`validate_argv`)로 · 기기 규칙은 서버 검증기와 클라이언트가 **같은 함수**(`device_command_refusal`) | `test_a_shell_string_or_a_wrapper_is_never_a_device_command` · `test_sandbox_argv_rules_apply_to_device_commands` · `test_command_policy_is_one_function_on_both_sides` · `test_the_client_runs_only_its_pinned_executables` |
+| 로그인·토큰·권한 명령 | USER_ONLY 바닥(`gh auth`·`npm token`·`passwd` …, 운영자 `approval_user_only_extra` 포함)이 기기 명령에도 그대로 — 승인으로도 위임할 수 없다 | `test_user_only_commands_stay_with_the_user_on_the_device` |
+| 비밀이 명령으로·명령에서 샌다 | `secret://` 가 argv·cwd 어디에든 있으면 거절(B8) · 비밀 경로 피연산자 거절 · 자식 프로세스의 환경은 허용한 몇 개(`PATH`·`HOME`·`LANG`·`TMPDIR` …)뿐 — 브리지 토큰도 셸의 다른 비밀도 넘어가지 않는다 · stdin 은 비어 있다 | `test_a_secret_reference_in_argv_never_leaves` · `test_the_child_process_gets_a_scrubbed_environment` |
+| 루트 밖에서·루트 밖을 대상으로 돈다 | cwd 는 상대 경로(정규화 · `..` 거절)이고 클라이언트가 실경로로 다시 봐서 루트 안의 디렉터리여야 한다 · 절대·`~`·`..` 피연산자 거절(`--opt=값` 의 값도) · 실행 파일 경로는 시작할 때 `PATH` 에서 찾아 고정하고, 루트 안에 있으면 거절(쓰기로 바꿔치기할 수 없게) | `test_cwd_and_operands_stay_inside_the_shared_folder` · `test_the_client_confines_cwd_to_the_root` |
+| 끝나지 않는 프로세스 · 남는 백그라운드 자식 · 거대한 출력 | 시간 제한(서버 상한 · 클라이언트 상한 중 작은 쪽) 뒤 **프로세스 그룹째** SIGKILL, 끝난 뒤에도 그룹을 한 번 더 정리 · stdout·stderr 각각 상한(넘는 것은 읽어 버린다 — 파이프가 막히지 않게) · 브리지당 동시 호출 상한 | `test_a_command_that_overruns_is_killed_with_its_process_group` · `test_command_output_is_capped_scrubbed_and_wrapped` |
+| 출력으로 주입 · 결과 위조 | 출력은 자른 뒤 제어 문자(ANSI 이스케이프 포함)를 지우고 untrusted 경계로 감싼다 · 종료 코드·시간 초과 줄은 서버가 검사한 정수·불리언으로 경계 **밖**에 만든다 · 상태와 이유 코드는 서버 목록에서만 | `test_command_output_is_capped_scrubbed_and_wrapped` · `test_a_command_result_never_names_its_own_status` |
+| 같은 명령이 두 번 돈다 | 기기 호출은 투기적으로 돌지 않는다(B13) · READ_ONLY 아닌 재획득 claim 은 `tool_outcome_unknown` 으로 끝난다(다시 보내지 않는다) · 명령의 claim 은 명령 시간 상한 + 호출 대기 + 30초만큼 쥔다(일반 도구 TTL 이 먼저 끝나지 않게) | `test_device_commands_are_never_speculative` · `test_a_device_command_holds_its_claim_for_its_whole_time_limit` |
+| 플래그를 켜지 않은 배포가 바뀐다 | 명령을 내놓지 않은 브리지(그리고 플래그 off)는 도구 목록·시스템 프롬프트·이벤트 어휘가 Q16b 와 바이트가 같다 | `test_flag_off_and_a_bridge_without_commands_stay_byte_identical` |
+
+**남는 위험(알고 받아들인 것):**
+
+- **허용한 실행 파일은 무엇이든 돌릴 수 있다.** `pytest`·`make`·`npm` 은 루트 안의 코드를 실행한다 — 그 코드를 모델이 Q16b 쓰기로 바꿨거나 원래 악성이면 사용자 권한으로 돈다. 기기 쪽 OS 샌드박스(seatbelt·bubblewrap)는 이 슬라이스에 없다(이식성). 막는 것은 매 호출 사람 승인(같은 런의 쓰기도 각각 승인 화면에 보인다)과, 무엇을 허용할지 사람(클라이언트)·운영자(상한)가 이름으로 고르는 것이다
+- 승인 화면을 읽지 않고 누르면 막지 못한다. 소유자가 argv 접두 규칙을 두면 사람이 있는 런에서 그 접두는 묻지 않는다 — 소유자의 선택이다(무인에는 여전히 닫혀 있다)
+- 명령이 스스로 네트워크·루트 밖 파일에 닿는 것은 막지 않는다(피연산자 검사는 argv 만 본다). 시간 제한과 프로세스 그룹 종료가 수명을 묶을 뿐이다
+- cwd 검사와 프로세스 시작 사이에 중간 디렉터리를 링크로 바꾸는 경쟁은 막지 않는다(B10 의 읽기와 같은 위험 — 같은 기기의 악의적 프로세스는 이미 그 디렉터리를 마음대로 쓴다)
+- 새 세션으로 그룹을 벗어난 손자 프로세스는 그룹 종료로 잡히지 않는다
