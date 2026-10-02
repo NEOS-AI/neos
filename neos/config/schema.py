@@ -1943,6 +1943,25 @@ class ManagedSandboxConfig(StrictConfigModel):
             "열지 않는다."
         ),
     )
+    secret_env_providers: tuple[Literal["e2b", "modal"], ...] = Field(
+        default=(),
+        description=(
+            "트랙 Q6c: 비밀 env(`secret://`)를 벤더 stdio 중계로 실어도 되는 관리형 "
+            "provider 의 명시 목록. 기본 비어 있음 -- 모든 관리형 provider 가 "
+            "`secret_env_unsupported` 로 거절한다. 여기 이름을 적어도 그 provider 의 SDK "
+            "바인딩이 증거(`StdioRelayEvidence`)를 달지 않았으면 provider 가 시작하지 "
+            "않는다(`managed_secret_channel_unproven:<name>`). 실계정 smoke 체크리스트: "
+            "docs/Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md §5."
+        ),
+    )
+
+    @field_validator("secret_env_providers")
+    @classmethod
+    def validate_secret_env_providers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """중복을 거부한다 -- 같은 이름 두 번은 오타(다른 provider 를 뜻했다)일 가능성이 높다."""
+        if len(set(value)) != len(value):
+            raise ValueError("secret_env_providers must not repeat a provider")
+        return value
 
     @field_validator("cleanup_retry_backoff_seconds")
     @classmethod
@@ -2726,6 +2745,20 @@ class AppConfig(StrictConfigModel):
                 "coding_model.secret_broker requires "
                 f"secrets.secret_broker_key of at least "
                 f"{SECRET_BROKER_KEY_MIN_CHARS} characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_managed_secret_channel(self) -> "AppConfig":
+        """트랙 Q6c MS3. provider 별 비밀 채널 opt-in 은 브로커가 켜져 있을 때만 뜻이 있다.
+
+        브로커가 꺼져 있으면 실행기가 `secret_env` 를 채우지 않으므로 opt-in 은 아무것도
+        하지 않는다 -- "켜져 있다"고 적힌 채 아무 일도 하지 않는 플래그를 남기지 않는다.
+        증거(SDK 바인딩)는 설정이 볼 수 없으므로 provider 생성자가 본다.
+        """
+        if self.sandbox.managed.secret_env_providers and not self.coding_model.secret_broker:
+            raise ValueError(
+                "sandbox.managed.secret_env_providers requires coding_model.secret_broker"
             )
         return self
 
