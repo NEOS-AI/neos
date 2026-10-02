@@ -28,7 +28,6 @@ from tests.coding.loop.test_anthropic_loop import (
 from tests.coding.loop.test_child_gate import (
     _child_calls,
     _denials,
-    _run_until_folded,
     _spawn,
 )
 from tests.coding.loop.test_spawn_subagent import _flag_on, _init_repo, _text
