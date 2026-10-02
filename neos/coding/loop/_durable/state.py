@@ -211,6 +211,9 @@ class AgentLoopState:
     #: 단계 새로 읽어 채운다(`codec._dump_loop_state` 에 없는 것이 의도다). 실행 중에
     #: 더한 block 이 다음 단계부터 걸리게.
     user_rules: tuple = ()
+    #: 소유자의 지금 연결된 기기 브리지(트랙 Q16a, `BridgeView`). `user_rules` 와 같이
+    #: **체크포인트에 싣지 않고** 매 단계 새로 읽는다. `None` 이면 브리지 도구가 없다.
+    device_bridge: object | None = None
 
     @property
     def has_pending_tool(self) -> bool:

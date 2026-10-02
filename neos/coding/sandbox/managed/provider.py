@@ -156,6 +156,13 @@ class _Attachment:
     def max_pty_sessions(self) -> int:
         return self._provider._max_pty_sessions
 
+    @property
+    def confidential_channel(self) -> bool:
+        # 트랙 Q6b C1: 관리형 채널은 벤더 exec 의 stdio 중계다(`open_stdio`). 그 바인딩이
+        # 저장소에 없어서 TLS 와 벤더의 stdin 비보존을 보일 수 없다 -- 비밀을 싣지 않는다.
+        # 여는 것은 설정이 아니라 증거를 단 코드 변경이다(docs/Q6B_..._261002.md §3).
+        return False
+
     async def attach(self) -> SandboxdLease:
         runtime = await self._provider._running_record(self._sandbox_id)
         client = await self._provider._client_for(runtime)

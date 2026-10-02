@@ -22,6 +22,11 @@ from neos.coding.loop.base import CodingLoop
 from neos.jev.assembly import build_tool_risk_gate, build_trajectory_monitor
 from neos.standing.budget import build_agent_envelope
 from neos.coding.application.user_rules import build_user_rule_source
+from neos.coding.secrets import build_secret_source
+from neos.coding.browser.session import build_browser_sessions
+from neos.coding.connectors.catalog import build_connector_catalog
+from neos.coding.connectors.runner import build_connector_runner
+from neos.coding.bridge.service import build_device_bridge_service
 from neos.coding.loop.fake import FakeDurableCodingLoop
 from neos.coding.loop.durable import (
     DEFAULT_MAX_TRANSCRIPT_TOKENS,
@@ -654,12 +659,20 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     factory = _resolve_coding_session_factory(session_factory)
     repository = PostgresSandboxBindingRepository(factory)
     allowlist = coding.command_allowlist if coding.command_enabled else []
+    # 트랙 Q11a. `None` 이 off 다 -- 켜져 있으면 여기서 한 번 발견하고 프로세스 수명 동안 고정한다(M6).
+    connectors = build_connector_catalog(coding)
     tools = CodingToolRegistry.default(
         command_allowlist=frozenset(allowlist),
         max_command_timeout_sec=coding.tool_timeout_sec,
         max_command_output_bytes=execution.max_output_bytes,
         max_command_stdin_bytes=execution.max_stdin_bytes,
         allowed_env_names=frozenset(execution.allowed_env_names),
+        # 트랙 Q6. 루프의 금고와 같은 플래그 하나에서 나온다.
+        secret_env_refs=coding.secret_broker,
+        connectors=connectors,
+        # 트랙 Q16a. 루프의 브리지 서비스와 같은 플래그 하나에서 나온다. 자식 포트도 이
+        # 레지스트리를 쓰지만 `definitions()` 에 브리지 도구가 없고 자식 게이트가 닫는다.
+        device_tools=coding.device_bridge.enabled,
     )
     # 계측은 전송 계층 **밖에서** 감싼다 (D1c). 프로바이더 구현을 건드리지
     # 않으므로 D4(네이티브 SDK 전환)가 그 아래를 바꿔도 함께 무너지지 않는다.
@@ -676,6 +689,7 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
     executor = SandboxToolExecutor(
         max_preview_bytes=execution.max_output_bytes,
         max_entries=1000,
+        connectors=build_connector_runner(connectors),
     )
     window = catalog_window_for(
         coding_model,
@@ -774,6 +788,12 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             envelope=build_agent_envelope(config.standing_agents, db_manager.get_session),
             # 사용자 승인 규칙(트랙 Q2). `None` 이 off 다.
             user_rules=build_user_rule_source(coding, db_manager.get_session),
+            # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다.
+            secrets=build_secret_source(coding, config.secrets, db_manager.get_session),
+            # 에이전트 브라우저(트랙 Q14a). `None` 이 off 다.
+            browser=build_browser_sessions(config),
+            # 사용자 기기 브리지(트랙 Q16a). `None` 이 off 다.
+            device_bridge=build_device_bridge_service(coding),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라

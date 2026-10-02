@@ -85,6 +85,7 @@ SECRET_ENV_KEYS = {
     "MANAGED_PROVIDER_REFERENCE_KEY",
     "MANAGED_CODING_OWNERSHIP_KEY",
     "NEOS_TRIGGER_SIGNING_KEY",
+    "NEOS_SECRET_BROKER_KEY",
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "AUTH_SECRET",
@@ -134,6 +135,7 @@ SECRET_ENV_MAPPING = {
     "MANAGED_PROVIDER_REFERENCE_KEY": "secrets.managed_provider_reference_key",
     "MANAGED_CODING_OWNERSHIP_KEY": "secrets.managed_coding_ownership_key",
     "NEOS_TRIGGER_SIGNING_KEY": "secrets.standing_trigger_signing_key",
+    "NEOS_SECRET_BROKER_KEY": "secrets.secret_broker_key",
     "GOOGLE_OAUTH_CLIENT_ID": "auth.google_oauth_client_id",
     "GOOGLE_OAUTH_CLIENT_SECRET": "auth.google_oauth_client_secret",
 }

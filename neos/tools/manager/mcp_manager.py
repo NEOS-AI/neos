@@ -1,4 +1,8 @@
-"""MCP Manager - Central coordinator for MCP tools"""
+"""MCP Manager - Central coordinator for MCP tools
+
+⚠️ 이름만 MCP 다 -- Model Context Protocol(JSON-RPC)을 말하지 않는다. 실제 MCP
+클라이언트는 `neos/coding/connectors/` 다(트랙 Q11a, docs/Q11_MCP_CLIENT_DESIGN_261001.md M1).
+"""
 
 import asyncio
 from typing import Any, Dict, List, Optional

@@ -871,6 +871,349 @@ never stores them in a checkpoint, so a rule added while a task runs applies
 from its next step; if the rules cannot be read, the step fails retryably
 (`user_rules_unavailable`) rather than deciding without them.
 
+### Coding credential broker (track Q6)
+
+```yaml
+coding_model:
+  secret_broker: false     # off: secret:// is a literal string, the vault API is not mounted
+  secret_broker_max: 50    # secrets per user
+```
+
+```bash
+NEOS_SECRET_BROKER_KEY=...   # required when the broker is on, >= 32 chars (openssl rand -hex 32)
+```
+
+Each user keeps a vault of named secrets. A secret is bound to **one**
+environment variable name, chosen by its owner:
+
+```
+GET    /api/v1/coding/secrets             # names, env names, browser origins and times -- never values
+PUT    /api/v1/coding/secrets/{name}      {"env_name": "GH_TOKEN", "value": "...", "browser_origins": []}
+DELETE /api/v1/coding/secrets/{name}
+```
+
+`browser_origins` (track Q14b, migration 081) lists the https origins the agent
+browser may type this secret into (at most 8, e.g. `["https://github.com"]`).
+It is empty by default -- an unbound secret is typed nowhere -- and `env_name`
+keeps working for `execute.v1` and MCP connectors either way. A `PUT` replaces
+the whole row: leaving `browser_origins` out clears the binding.
+
+The model writes only a reference, as the whole value of an `execute.v1`
+environment variable: `{"argv": ["gh", "api", "user"], "env": {"GH_TOKEN": "secret://github"}}`.
+The executor resolves it right before running and replaces the value (and a
+truncated tail of it) in stdout/stderr with `<redacted:secret://github>`. The
+transcript, ledger and checkpoints only ever hold the reference. References in
+argv, stdin or file contents are not resolved.
+
+A call that carries a reference needs a human approval or an owner `allow` rule
+(track Q2) -- operator allow lists, remembered approvals and auto mode do not
+lift it. Unattended runs without such a rule are refused with
+`policy_secret_ref_unapproved`; subagents are always refused
+(`policy_secret_ref_child`). Other refusals: `secret_not_found`,
+`secret_env_name_mismatch`, `secret_env_unsupported` (memory and Docker carry
+secrets -- Docker gets the value through the CLI's environment, never its argv.
+sandboxd carries them in a separate `secret_env` field of the `exec` RPC (track
+Q6b), but only when the guest advertises `exec.secret_env.v1` and the transport
+is shown to be private; managed E2B/Modal sandboxes still refuse because their
+vendor exec channel cannot be shown to be private --
+`docs/Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md`). Values are sealed with
+AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
+makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
+
+### Coding agent browser (track Q14a)
+
+```yaml
+coding_model:
+  web_fetch_hosts: [docs.example.com]   # the browser uses this same allowlist; empty -> refuses to start
+  browser:
+    enabled: false                      # off: tool list, prompts and events are unchanged
+    allow_outside_development: false    # required outside `environment: development` (B2 not met)
+    navigation_timeout_sec: 15
+    action_timeout_sec: 10
+    max_navigations: 30                 # per task
+    max_requests: 500                   # per browser context, subresources included
+    max_response_bytes: 5242880
+    max_request_body_bytes: 1048576
+    snapshot_max_chars: 20000
+    idle_timeout_sec: 300               # must not exceed max_lifetime_sec
+    max_lifetime_sec: 1800
+    max_contexts: 2                     # per worker process
+```
+
+Two coding tools, both `COMMAND` risk: `browser.v1` (`navigate` / `snapshot` /
+`click` / `type` / `close`, elements addressed by the snapshot's `[ref=eN]`) and
+`browser_fill_secret.v1` (`{ref, secret: "secret://name", origin}`). They are
+separate so a user rule (track Q2) can allow browsing while logins still need
+approval.
+
+The browser is a headless Chromium **on the backend host**, not in the sandbox:
+Docker sandboxes have no network and the managed sandbox (B2) gate is not met.
+Chromium itself has no network (every name fails to resolve and the proxy is
+dead); every request the page makes -- subresources, redirects and form posts
+included -- is intercepted and judged by the same functions as `web_fetch.v1`
+(allowlist, no userinfo, no secret-named query parameters, every resolved
+address public), then fetched by the host for one hop with the IP pinned. Only
+https and GET/HEAD/POST pass. Blocked requests are reported to the model as
+counts per reason code only.
+
+Startup is refused when `web_fetch_hosts` is empty or holds an IP literal, a
+wildcard or a one-label suffix, when `approval_allow_tools` /
+`approval_always_allow` name a browser tool, or outside development without
+`allow_outside_development`. Each task gets its own ephemeral context (no
+profile, no cookies shared across tasks); it is closed when the task ends, after
+`idle_timeout_sec`, or after `max_lifetime_sec`, and it is not checkpointed.
+
+Logins go only through the credential broker (track Q6, which must be on): the
+value is typed into a field whose page and document origin equal `origin`, is
+never returned, may not leave for another origin in any later request, and is
+scrubbed from every snapshot, title and URL along with password-field values.
+The gate is Q6's: a human approval or an owner `allow` rule on
+`browser_fill_secret.v1`. Background tasks are refused (`policy_mode_ceiling`),
+subagents and the deep-analysis research path never see the browser. Requires
+`playwright install chromium`; without it the tools answer `browser_unavailable`.
+
+Since track Q14b a secret is typed only into an origin its owner listed in the
+secret's `browser_origins` (see the credential broker section); otherwise the
+call is refused with `secret_origin_mismatch` before anything is typed. Secrets
+stored before Q14b have no origins and must be re-`PUT` with them to be used for
+logins. The origins are part of the sealed value's associated data, so editing
+them in the database without the key makes the secret unreadable. A failed or
+cancelled task's browser context is closed on that path by the worker process
+that holds it (the idle/lifetime sweep remains the backstop for other
+processes), and password-field values are masked in every frame, not only the
+main one. There is no new setting.
+Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
+
+### Coding MCP connectors (tracks Q11a, Q11b)
+
+```yaml
+coding_model:
+  mcp:
+    enabled: false              # off: tool list, prompt and events are byte-identical to before
+    discovery_timeout_sec: 15   # per server, at process start
+    call_timeout_sec: 30        # one tools/call, connect + initialize included
+    max_message_bytes: 1048576  # one protocol message; larger -> connector_message_too_large
+    max_output_bytes: 65536     # text returned to the model; larger -> truncated
+    max_tools_per_server: 64    # counted after the declaration filter
+    servers:
+      - name: docs              # [a-z0-9-], no underscores
+        transport: stdio
+        command: ["npx", "-y", "@example/docs-mcp"]
+        env: {DOCS_TOKEN: "secret://docs"}   # literal, or the whole value a secret:// reference
+        risk: read_only         # every tool of this server ...
+        tool_risks:             # ... unless overridden here
+          delete_page: command
+      - name: tracker
+        transport: http         # streamable HTTP; https, or http on loopback only
+        url: https://mcp.example.com/mcp
+        bearer_token: "secret://tracker"     # sent as `Authorization: Bearer ...`
+        headers: {X-Org: "acme"}
+        tool_risks: {search_issues: read_only, create_issue: command}
+```
+
+Only servers the operator lists here exist; the model never chooses a command or
+a URL. NEOS speaks MCP itself (JSON-RPC 2.0 over stdio or streamable HTTP --
+`initialize`, `tools/list`, `tools/call`); no SDK is installed. The modules under
+`neos/tools/*mcp*` and `neos/fsi/mcp_attach.py` are MCP in name only.
+
+**A tool needs a declared risk to exist.** `tool_risks[tool]` wins, then the
+server's `risk`; with neither, the tool is **not registered** -- it does not fall
+back to `read_only`. The server's own `annotations.readOnlyHint` is ignored.
+Registered tools are exposed as `mcp__<server>__<tool>` (a name an owner can use in
+an approval rule) and go through the same gate as built-in tools: `read_only` runs,
+`workspace_write`/`command` need approval, background tasks see only `read_only`,
+user rules and Jev apply unchanged. Subagents never call connector tools
+(`policy_connector_child`).
+
+Discovery runs once when the coding loop is built (API process and worker) and is
+fixed for the process lifetime, so the tool array and prompt do not change between
+turns. A server that fails discovery simply contributes no tools (logged). Server
+descriptions are untrusted: they are folded to one line, capped at 300 characters
+and labelled with the server and risk.
+
+**Credentials.** `env`, `headers` and `bearer_token` values may be `secret://<name>`
+(the whole value). They are resolved from the **task owner's** vault (track Q6) at
+call time, so `coding_model.secret_broker` must be on -- the app refuses to start
+otherwise. A stdio env entry must use the env name the owner bound the secret to
+(`secret_env_name_mismatch`). A call whose server uses a secret follows the Q6 rule:
+human approval or an owner `allow` rule, even for a `read_only` tool; unattended
+runs without such a rule get `policy_secret_ref_unapproved`. At discovery there is
+no owner, so references are left out -- a server that needs a user's credential to
+list its tools cannot be discovered; pin its tools instead (below). A stdio server does **not** inherit
+the worker environment (only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SYSTEMROOT`) and its
+stderr is discarded. HTTP never follows redirects and ignores proxy/`.netrc`
+environment settings. Connections are opened per call; nothing is pooled across
+owners.
+
+**Results are untrusted.** Text content is kept (images and other content become a
+placeholder), resolved secret values are replaced with `<redacted:secret://name>`
+before the output is cut, the usual redaction rules run, and the result is wrapped
+in `<untrusted_document source="mcp:<server>/<tool>">`. Failure codes:
+`connector_unavailable`, `connector_timeout`, `connector_message_too_large`,
+`connector_protocol_error`, `connector_call_failed`, `connector_tool_error`, plus
+the Q6 codes `secret_not_found`, `secret_env_name_mismatch`,
+`secret_store_unavailable`. Stdio servers run on the host with the worker's OS
+user -- list only commands you would run there yourself. Design:
+`docs/Q11_MCP_CLIENT_DESIGN_261001.md`.
+
+**Pinned tools (track Q11b).** For a server that answers `tools/list` only with the
+owner's credential (most SaaS servers), declare its tools in the config instead of
+discovering them:
+
+```yaml
+      - name: tracker
+        transport: http
+        url: https://mcp.example.com/mcp
+        bearer_token: "secret://tracker"
+        risk: read_only                    # fallback risk for pinned tools ...
+        tool_risks: {create_issue: command} # ... per-tool override (pinned names only)
+        pinned_tools:
+          - name: search_issues
+            description: Search issues in the team tracker.
+            input_schema:                  # copy the server's inputSchema verbatim
+              type: object
+              properties: {q: {type: string}}
+              required: [q]
+          - name: create_issue
+            input_schema: {type: object, properties: {title: {type: string}}}
+            risk: command                  # optional; beats tool_risks and risk
+```
+
+With `pinned_tools` set, the server is never contacted at startup and its tools are
+exactly the pinned list -- anything else the server offers does not exist. Each
+tool's risk is `risk` on the entry, then `tool_risks`, then the server's `risk`; with
+none of them the app refuses to start (a pinned tool never silently disappears). An
+empty list, duplicate names, `tool_risks` naming an unpinned tool, a schema that is
+not `type: object` or not a valid JSON Schema, an exposed name over 64 characters, or
+more tools than `max_tools_per_server` also stop startup. Descriptions are folded and
+labelled like discovered ones.
+
+Every call of a pinned tool first checks the server inside the same connection, with
+the same (already approved) credential: `tools/list` is paged until the tool is found.
+If it is missing the call fails with `connector_tool_missing`; if its `inputSchema`
+differs from `input_schema` (key order ignored, every other difference counts) it
+fails with `connector_schema_drift`. Neither sends `tools/call` -- re-pin the tool.
+The tool list stays fixed for the process and is the same for every owner; nothing is
+cached and no migration is involved. Without `pinned_tools` (the default) a server
+behaves exactly as in Q11a.
+
+### Coding device bridge (track Q16a)
+
+```yaml
+coding_model:
+  device_bridge:
+    enabled: false               # off: no pairing API, no socket, tool list unchanged
+    max_bridges_per_user: 5      # paired credentials; only one is connected at a time
+    call_timeout_seconds: 20
+    max_inflight_per_bridge: 4
+    max_read_bytes: 262144       # device_read_file.v1 body cap (UTF-8 bytes)
+    max_list_entries: 500
+    max_message_bytes: 2097152   # one bridge message; larger closes the socket (1009)
+    presence_ttl_seconds: 30     # the socket refreshes every third and rereads its credential
+    hello_timeout_seconds: 10
+```
+
+No new environment keys: the relay uses `REDIS_URL`.
+
+A user pairs a device, runs the reference client there, and the coding loop of
+**that user's** tasks gains three read-only tools while the bridge is connected:
+`device_list_dir.v1`, `device_stat.v1`, `device_read_file.v1` (paths relative to
+the one folder the user shared).
+
+```
+GET    /api/v1/coding/device-bridges                 # bridges + whether one is connected
+POST   /api/v1/coding/device-bridges                 {"name": "laptop", "allow_unattended": false}
+PATCH  /api/v1/coding/device-bridges/{bridge_id}     {"allow_unattended": true}
+DELETE /api/v1/coding/device-bridges/{bridge_id}     # revoke
+WS     /api/v1/coding/device-bridge/ws               subprotocol neos.device-bridge.v1
+```
+
+`POST` returns the token **once** (`ndb_...`); only its SHA-256 is stored. On the
+device:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/notes
+```
+
+The bridge dials out (no inbound port on the device), sends the token in the
+`Authorization` header, and declares its tools with a risk. A risk other than
+the tool's own -- including a missing one -- refuses the whole registration
+(`device_tool_risk_refused`); writes are below. Tool names, descriptions and schemas are the
+server's; the bridge only says which it offers.
+
+The existing approval gate applies unchanged (user `block`/`require`/`allow`
+rules accept the device tool names). Unattended runs (`autonomous`,
+`background`) neither see nor may call device tools unless that bridge has
+`allow_unattended: true` (`policy_device_unattended`); subagents never may
+(`policy_device_child`). Arguments carrying `secret://` anywhere are refused
+(`policy_device_secret_ref`) -- a bridge never receives a secret. Results are
+capped, wrapped as untrusted device content, redacted and recorded like any
+tool result. Failures are named: `device_bridge_unavailable`,
+`device_bridge_timeout`, `device_bridge_busy`, `device_bridge_disconnected`,
+`device_result_too_large`, `device_result_invalid`, `device_path_escape`,
+`device_not_found`.
+
+The socket lands on an API worker and the loop runs on a Celery worker, so the
+two meet through Redis: a per-user presence key (compare-and-refresh) and a
+per-connection channel with a per-request reply list. One connection per user;
+the newest wins and the displaced client stops (close 4409). `PATCH` and
+`DELETE` drop the live connection; the socket also rereads its credential on
+every refresh. nginx routes the socket through its own upgrade location.
+Design: `docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md`; threat model:
+`docs/Q16_DEVICE_BRIDGE_THREAT_MODEL.md`.
+
+#### Device writes (track Q16b)
+
+```yaml
+coding_model:
+  device_bridge:
+    max_write_bytes: 262144      # one device_write_file.v1 body (UTF-8 bytes); the client caps too
+```
+
+One write tool, `device_write_file.v1` (risk `workspace_write`): it writes a
+whole text file inside the shared folder. It needs **two keys**, both off by
+default: the credential's `allow_writes` (migration 083; set it on `POST` or
+`PATCH {"allow_writes": true}`) and the client's `--allow-writes` flag:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/notes --allow-writes
+```
+
+A client that declares `write_file` against a credential without
+`allow_writes` is refused whole (`device_writes_not_enabled`, close 4403).
+Turning writes off drops the live connection, and the socket rereads the
+credential before every write (`device_writes_off`).
+
+- **Every write asks a person.** Only the owner's own `allow` rule for
+  `device_write_file.v1` skips the question; the operator's
+  `approval_allow_tools`, auto mode and a remembered "always allow" do not.
+  Agent instruction files (`AGENTS.md`, ...) always ask.
+- **Never unattended.** `autonomous` / `background` runs neither see nor may
+  call it, whatever `allow_unattended` or any allow rule says
+  (`policy_device_write_unattended`); background mode's read-only ceiling
+  refuses it first. Subagents never may (`policy_device_child`). Phases that
+  block writes hide it.
+- **Read before write.** To replace a file, pass `base_sha256` -- the digest a
+  complete `device_read_file.v1` of that file printed (only shown while the
+  bridge offers writes; truncated reads have none). Omit it to create a file
+  that must not exist. A mismatch is `precondition_stale_read`; overwriting
+  without one is `precondition_read_required`.
+- **On the device:** no symlink anywhere in the path (each directory opened
+  with `O_NOFOLLOW`), no dot paths (`.git/`, `.github/`, shell rc files ...),
+  no launchable types (`.command`, `.desktop`, `.lnk`, `.bat`, `.ps1`,
+  `.plist` ...), no secret paths, parent folders must exist, text only; new
+  files are `0644 & ~umask` and executable files are never overwritten. The
+  write goes to a temp file in the same folder, is fsynced, then renamed
+  (replace) or hard-linked (create, no clobber).
+- Failures: `policy_device_write_path`, `policy_device_write_binary`,
+  `policy_device_write_executable`, `device_write_too_large`,
+  `device_no_space`.
+
+The Redis relay has a real-Redis integration test that runs only when
+`NEOS_TEST_REDIS_URL` is set (`tests/coding/test_device_bridge_relay_redis.py`).
+
 ### Standing agents
 
 ```yaml

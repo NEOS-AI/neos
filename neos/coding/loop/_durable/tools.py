@@ -27,6 +27,7 @@ from neos.coding.domain.approvals import (
     denial_envelope,
     policy_denial_reason,
 )
+from neos.coding.bridge.catalog import is_device_tool
 from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.model.base import (
     ToolCallCompleted,
@@ -39,7 +40,7 @@ from neos.coding.phases import (
 )
 from neos.coding.sandbox.observability import CodingToolAuditEvent
 from neos.coding.tools.executor import ToolResult
-from neos.coding.tools.orchestrator import partition_leading_readonly
+from neos.coding.tools.orchestrator import partition_leading_readonly, speculation_safe
 from neos.coding.tools.registry import (
     _CONTROL_PLANE_TOOLS,
     ToolRisk,
@@ -418,6 +419,9 @@ class ToolExecutionMixin:
                 known_reads=state.read_paths,
                 known_stamps=state.read_stamps,
                 prefetched=prefetch.get(call.tool_call_id),
+                owner_id=getattr(input, "owner_id", None),
+                task_id=getattr(input, "task_id", None),
+                unattended=self._config.approval_unattended or _unattended(input),
             )
             return result, state
         if call.name == "spawn_agent.v1":
@@ -640,6 +644,10 @@ class ToolExecutionMixin:
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
             if call.name in {"spawn_agent.v1", "set_phase.v1"} | _CONTROL_PLANE_TOOLS:
+                break
+            if is_device_tool(call.name):
+                # 트랙 Q16a: 기기 호출은 투기적으로 돌지 않는다 -- 본 경로가 소유자·무인
+                # 여부를 싣고 한 번에 하나씩 부른다.
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
@@ -923,6 +931,9 @@ class ToolExecutionMixin:
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
         if call.name == "spawn_agent.v1":
             return None
+        if is_device_tool(call.name):
+            # 트랙 Q16a: 사람의 기기를 게이트 판정 전에 미리 읽지 않는다.
+            return None
         if _is_stall_denied(state, call.name, call.input):
             return None
         if not tool_allowed_in_phase(call.name, state.phase):
@@ -933,7 +944,7 @@ class ToolExecutionMixin:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError:
             return None
-        if validated.risk is not ToolRisk.READ_ONLY:
+        if not speculation_safe(validated):
             return None
         if self._jev_blocks_speculation():
             # 차단 중인 게이트를 앞지르지 않는다. 본 판정 경로가 대신 본다.

@@ -31,6 +31,7 @@ from neos.coding.domain.approvals import (
     ApprovalPolicyOutcome,
     evaluate_approval,
 )
+from neos.coding.bridge.catalog import is_device_tool
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.hooks import CodingHookPort, NullCodingHooks, post_tool_prevented
@@ -116,6 +117,9 @@ class DurableCodingLoop(
         monitor=None,
         envelope=None,
         user_rules=None,
+        secrets=None,
+        browser=None,
+        device_bridge=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -138,6 +142,12 @@ class DurableCodingLoop(
         self._envelope = envelope
         # 사용자 승인 규칙(트랙 Q2)의 원천. `None` 이 off 다.
         self._user_rules = user_rules
+        # 사용자 비밀 금고(트랙 Q6). `None` 이 off 다 -- 참조는 문자 그대로 간다.
+        self._secrets = secrets
+        # 에이전트 브라우저 세션들(트랙 Q14a). `None` 이 off 다.
+        self._browser = browser
+        # 사용자 기기 브리지(트랙 Q16a, `DeviceBridgeService`). `None` 이 off 다.
+        self._device_bridge = device_bridge
 
     async def run(
         self,
@@ -149,6 +159,12 @@ class DurableCodingLoop(
         if lease is None:
             raise RuntimeError("real coding loop requires an execution lease")
         state = await self._with_user_rules(input, self._restore(input, checkpoint))
+        if self._browser is not None:
+            # 트랙 Q14a: 쉬었거나 오래 산 세션을 닫고, 끝난 태스크의 세션은 지금 닫는다.
+            await self._browser.sweep()
+            if state.terminal_pending:
+                await self._browser.close(input.task_id)
+        state = await self._with_device_bridge(input, state)
         if state.terminal_pending:
             return
         if state.consecutive_tool_errors >= self._config.max_consecutive_tool_errors:
@@ -209,6 +225,10 @@ class DurableCodingLoop(
             unattended=self._config.approval_unattended or unattended,
             read_only_ceiling=read_only_ceiling,
             user_rules=state.user_rules,
+            secret_broker=self._secrets is not None,
+            device_unattended=bool(
+                getattr(state.device_bridge, "allow_unattended", False)
+            ),
         )
 
     async def _with_user_rules(self, input: LoopInput, state: AgentLoopState) -> AgentLoopState:
@@ -226,6 +246,45 @@ class DurableCodingLoop(
         except Exception as error:  # noqa: BLE001 -- 원인과 상관없이 닫는다
             raise CodingLoopFailure("user_rules_unavailable", retryable=True) from error
         return replace(state, user_rules=tuple(rules))
+
+    async def _with_device_bridge(
+        self, input: LoopInput, state: AgentLoopState
+    ) -> AgentLoopState:
+        """소유자의 연결된 브리지를 이 단계의 상태에 싣는다(트랙 Q16a). 저장은 하지 않는다.
+
+        아무도 보지 않는 런이고 브리지가 무인 읽기를 허락하지 않았으면 싣지 않는다 --
+        도구가 보이지 않는다(B7). 쓰기 도구는 아무도 보지 않는 런에 늘 보이지 않는다(Q16b BW4).
+        이름으로 불러도 게이트가 같은 함수로 거절한다.
+        읽지 못하면 브리지가 없는 것이다(서비스가 그렇게 돌려준다 -- 좁히는 쪽).
+        """
+        source = self._device_bridge
+        if source is None:
+            return state
+        from neos.coding.bridge.catalog import DEVICE_TOOLS, device_unattended_refused
+        from neos.coding.loop._durable.tools import _unattended
+
+        view = await source.view(getattr(input, "owner_id", None))
+        unattended = self._config.approval_unattended or _unattended(input)
+        if view is not None and device_unattended_refused(
+            DEVICE_TOOLS["read_file"].tool.name,
+            unattended=unattended,
+            allowed=view.allow_unattended,
+        ):
+            view = None
+        if view is not None:
+            refused = frozenset(
+                name
+                for name in view.tools
+                if name in DEVICE_TOOLS
+                and device_unattended_refused(
+                    DEVICE_TOOLS[name].tool.name,
+                    unattended=unattended,
+                    allowed=view.allow_unattended,
+                )
+            )
+            if refused:
+                view = replace(view, tools=view.tools - refused)
+        return replace(state, device_bridge=view)
 
     def _evaluate_static_call(
         self,
@@ -330,18 +389,70 @@ class DurableCodingLoop(
             return "deny", "hook_error", None
         return parse_pre_tool_decision(raw)
 
+    async def close_task_browser(self, task_id: str) -> None:
+        """실패·취소로 끝난 태스크의 브라우저 세션을 지금 닫는다 (트랙 Q14b X5).
+
+        run service 의 실패·취소 자리가 부른다. 이 프로세스의 세션만 닿는다 -- 다른
+        워커가 들고 있는 세션은 그 프로세스의 `sweep` 이 닫는다. 꺼져 있으면 아무 일도 없다.
+        """
+        if self._browser is not None:
+            await self._browser.close(task_id)
+
+    def _secret_lookup(self, owner_id):
+        """소유자의 금고를 이 호출에만 묶는다 (트랙 Q6). 소유자가 없으면 풀 금고도 없다."""
+        source = self._secrets
+        if source is None:
+            return None
+        if not owner_id:
+
+            async def nobody(names):
+                from neos.coding.secrets import SecretNotFound
+
+                raise SecretNotFound(sorted(names)[0] if names else "")
+
+            return nobody
+
+        async def lookup(names):
+            return await source.resolve(owner_id, names)
+
+        return lookup
+
     async def _execute_validated(
-        self, bound, deps, validated, *, known_reads, known_stamps, prefetched=None
+        self,
+        bound,
+        deps,
+        validated,
+        *,
+        known_reads,
+        known_stamps,
+        prefetched=None,
+        owner_id=None,
+        task_id=None,
+        unattended=False,
     ):
         try:
             if prefetched is not None:
                 executed = prefetched
+            elif self._device_bridge is not None and is_device_tool(validated.name):
+                # 트랙 Q16a: 샌드박스가 아니라 소유자의 기기다. 실행기를 거치지 않는다.
+                executed = await self._device_bridge.execute(
+                    owner_id,
+                    validated,
+                    unattended=unattended,
+                    revision=str(bound.binding.workspace_revision),
+                )
             else:
+                lookup = self._secret_lookup(owner_id)
+                extra = {"secrets": lookup} if lookup is not None else {}
+                if self._browser is not None and task_id:
+                    # 이 태스크의 세션에만 닿는 손잡이(트랙 Q14a). 부모의 이 자리만 넘긴다.
+                    extra["browser"] = self._browser.bind(task_id)
                 executed = await self._executor.execute(
                     bound.session,
                     validated,
                     known_reads=known_reads,
                     known_stamps=known_stamps,
+                    **extra,
                 )
         except asyncio.CancelledError:
             raise

@@ -58,6 +58,7 @@ class DockerCommandRunner:
         timeout_sec: float,
         allowed_exit_codes: tuple[int, ...] = (0,),
         input: bytes = b"",
+        env: Mapping[str, str] | None = None,
     ) -> DockerCommandResult:
         if timeout_sec <= 0:
             raise SandboxPolicyViolation("docker_timeout_must_be_positive")
@@ -65,15 +66,19 @@ class DockerCommandRunner:
             raise SandboxPolicyViolation("docker_argument_contains_nul")
         if len(input) > 16 * 1024 * 1024:
             raise SandboxPolicyViolation("docker_input_limit_exceeded")
+        # `env` 는 docker CLI 프로세스에 **더하는** 환경이다(트랙 Q6 -- `--env NAME`
+        # 이 여기서 값을 가져간다). 주입된 실행기는 받을 때만 받는다.
+        extra = {"env": dict(env)} if env else {}
         try:
             if input:
                 result = await self._exec(
                     *args,
                     timeout_sec=timeout_sec,
                     input=input,
+                    **extra,
                 )
             else:
-                result = await self._exec(*args, timeout_sec=timeout_sec)
+                result = await self._exec(*args, timeout_sec=timeout_sec, **extra)
         except (TimeoutError, asyncio.TimeoutError) as error:
             raise SandboxTimeout("docker_command_timeout") from error
         except FileNotFoundError as error:
@@ -532,10 +537,12 @@ async def _execute_docker(
     *args: str,
     timeout_sec: float,
     input: bytes = b"",
+    env: Mapping[str, str] | None = None,
 ) -> DockerCommandResult:
     process = await asyncio.create_subprocess_exec(
         "docker",
         *args,
+        env={**os.environ, **env} if env else None,
         stdin=(
             asyncio.subprocess.PIPE
             if input

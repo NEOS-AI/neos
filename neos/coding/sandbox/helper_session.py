@@ -85,10 +85,12 @@ class HelperScriptSandboxSession:
         workdir: str,
         env: Mapping[str, str],
         timeout_sec: float,
+        secret_env: Mapping[str, str] | None = None,
     ) -> Any:
         """Run `request.argv` in `workdir`; return exit_code/stdout/stderr.
 
-        A non-zero exit is a result, not an error.
+        A non-zero exit is a result, not an error. `secret_env` (track Q6)
+        must never reach an argv -- it would show in the host process table.
         """
         raise NotImplementedError
 
@@ -535,6 +537,11 @@ class HelperScriptSandboxSession:
             for key, value in request.env.items()
             if key not in _RESERVED_GUEST_ENV
         }
+        secret_env = {
+            key: value
+            for key, value in request.secret_env.items()
+            if key not in _RESERVED_GUEST_ENV
+        }
         async with self._record.lock:
             await self._ensure_running()
             before = await self._scan_workspace()
@@ -542,6 +549,7 @@ class HelperScriptSandboxSession:
                 request,
                 workdir=workdir,
                 env=env,
+                secret_env=secret_env,
                 timeout_sec=min(
                     request.timeout_sec,
                     self._record.sandbox.limits.command_timeout_sec,

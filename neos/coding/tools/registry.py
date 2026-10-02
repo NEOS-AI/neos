@@ -90,6 +90,11 @@ _POLICY_FIX_NOTES = {
     "policy_notebook_required": "use notebook_edit.v1 for .ipynb",
     "policy_use_read_image": "use read_image.v1 for images",
     "policy_use_read_pdf": "use read_pdf.v1 for PDFs",
+    "policy_browser_use_fill_secret": "use browser_fill_secret.v1 for secrets",
+    "policy_browser_secret_disabled": "stored secrets are not enabled",
+    "policy_device_secret_ref": "device tools never receive secrets",
+    "policy_device_write_path": "device writes refuse dot paths and launchable file types",
+    "policy_device_write_binary": "device writes take text only",
 }
 _EXECUTE_WRAPPERS = frozenset(
     {
@@ -313,11 +318,19 @@ def _search_query_terms(query: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return tuple(required), tuple(optional)
 
 
+#: 트랙 Q14a -- 에이전트 브라우저. 둘로 나눈 이유는 사용자 규칙(Q2)이 **도구 이름**으로
+#: 맞추기 때문이다: 소유자가 탐색은 allow 하고 비밀 입력은 계속 승인받게 할 수 있어야 한다.
+BROWSER_TOOL = "browser.v1"
+BROWSER_SECRET_TOOL = "browser_fill_secret.v1"
+BROWSER_TOOL_NAMES = frozenset({BROWSER_TOOL, BROWSER_SECRET_TOOL})
+
 _OPTIONAL_TOOL_FLAGS = {
     "notebook_edit.v1": "notebook_edit",
     "read_image.v1": "image_tool",
     "read_pdf.v1": "pdf_tool",
     "web_search.v1": "web_search",
+    BROWSER_TOOL: "browser.enabled",
+    BROWSER_SECRET_TOOL: "browser.enabled",
 }
 
 
@@ -337,7 +350,14 @@ def optional_tool_enabled(name: str) -> bool:
     try:
         from neos.config.settings import settings
 
-        return bool(getattr(settings.config.coding_model, field, False))
+        if "." not in field:
+            return bool(getattr(settings.config.coding_model, field, False))
+        # 중첩 섹션(트랙 Q14a `browser.enabled`)은 진짜 `True` 만 켠다 -- 가짜 설정
+        # 객체의 아무 속성이나 참으로 읽혀 도구가 열리지 않게.
+        value: object = settings.config.coding_model
+        for part in field.split("."):
+            value = getattr(value, part, False)
+        return value is True
     except Exception:
         return False
 
@@ -361,6 +381,9 @@ class ValidatedToolCall:
     name: str
     input: Mapping[str, object]
     risk: ToolRisk
+    #: 입력 밖에서 이 호출이 풀 비밀 -- 커넥터 서버 설정의 `secret://`(트랙 Q11a, M7).
+    #: 게이트는 `carries_secret_refs` 한 판정으로 본다. 내장 도구는 늘 비어 있다.
+    secret_refs: tuple[str, ...] = ()
 
 
 class ToolValidationError(ValueError):
@@ -412,6 +435,60 @@ class _WebFetchInput(_ToolInput):
 class _WebSearchInput(_ToolInput):
     query: str = Field(min_length=2, max_length=500)
     max_results: int | None = Field(default=None, ge=1, le=10)
+
+
+#: `aria_snapshot(mode="ai")` 가 붙이는 `[ref=e12]`(iframe 안이면 `f1e12`).
+_BROWSER_REF = r"^(?:f[0-9]{1,4})?e[0-9]{1,7}$"
+
+
+class _BrowserInput(_ToolInput):
+    action: Literal["navigate", "snapshot", "click", "type", "close"]
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    ref: str | None = Field(default=None, pattern=_BROWSER_REF)
+    text: str | None = Field(default=None, max_length=2000)
+    submit: bool = False
+
+
+class _BrowserFillSecretInput(_ToolInput):
+    ref: str = Field(pattern=_BROWSER_REF)
+    secret: str = Field(min_length=10, max_length=80)
+    origin: str = Field(min_length=9, max_length=300)
+    submit: bool = False
+
+
+#: 행동마다 받는 필드. 그 밖의 필드가 값을 가지면 스키마 거절이다.
+_BROWSER_ACTION_FIELDS = {
+    "navigate": frozenset({"url"}),
+    "snapshot": frozenset(),
+    "click": frozenset({"ref"}),
+    "type": frozenset({"ref", "text", "submit"}),
+    "close": frozenset(),
+}
+
+
+def browser_origin(value: object) -> str | None:
+    """`https://Example.com:443/` -> `https://example.com`. 경로·질의·사용자 정보가 있으면 None."""
+    if not isinstance(value, str):
+        return None
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").rstrip(".")
+    if (
+        parts.scheme != "https"
+        or not host
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
+        return None
+    return f"https://{host}" if port in {None, 443} else f"https://{host}:{port}"
 
 
 class _ReadImageInput(_PathInput):
@@ -673,6 +750,32 @@ class CodingToolRegistry:
             _WebSearchInput,
         ),
         _RegisteredTool(
+            BROWSER_TOOL,
+            (
+                "Drive a private headless browser on allowlisted https hosts "
+                "(one session per task, gone when the task ends). "
+                "action: navigate(url) | snapshot | click(ref) | "
+                "type(ref, text, submit) | close. Returns an untrusted page "
+                "snapshot; its [ref=eN] marks are the refs for click/type. "
+                "Never type passwords or tokens: use browser_fill_secret.v1. "
+                "Prefer web_fetch.v1 to read one page. "
+                "On policy_* denial, do not retry the same url."
+            ),
+            ToolRisk.COMMAND,
+            _BrowserInput,
+        ),
+        _RegisteredTool(
+            BROWSER_SECRET_TOOL,
+            (
+                "Type a stored secret (secret://<name>) into a field on the "
+                "current browser page without seeing it. origin must equal the "
+                "page's origin, e.g. https://github.com. Needs the user's "
+                "approval or their allow rule. On denial, do not retry."
+            ),
+            ToolRisk.COMMAND,
+            _BrowserFillSecretInput,
+        ),
+        _RegisteredTool(
             "read_image.v1",
             (
                 "Read a workspace jpeg/png/gif/webp image. "
@@ -907,6 +1010,9 @@ class CodingToolRegistry:
         max_command_output_bytes: int,
         max_command_stdin_bytes: int,
         allowed_env_names: frozenset[str],
+        secret_env_refs: bool = False,
+        connectors: Any = None,
+        device_tools: bool = False,
     ) -> None:
         if (
             max_command_timeout_sec <= 0
@@ -914,12 +1020,30 @@ class CodingToolRegistry:
             or max_command_stdin_bytes < 1
         ):
             raise ValueError("command policy limits must be positive")
-        self._tools = {tool.name: tool for tool in self._TOOL_SPECS}
+        # 브라우저(트랙 Q14a)가 꺼져 있으면 이름 자체를 모른다 -- 오늘과 같은 레지스트리다.
+        self._tools = {
+            tool.name: tool
+            for tool in self._TOOL_SPECS
+            if tool.name not in BROWSER_TOOL_NAMES or optional_tool_enabled(tool.name)
+        }
         self._command_allowlist = command_allowlist
         self._max_command_timeout_sec = max_command_timeout_sec
         self._max_command_output_bytes = max_command_output_bytes
         self._max_command_stdin_bytes = max_command_stdin_bytes
         self._allowed_env_names = allowed_env_names
+        # 트랙 Q6: 켜져 있으면 `secret://<name>` 값을 실은 변수는 허용 목록 밖이어도
+        # 받는다 -- 이름은 `secret_env_name_allowed` 가, 비밀과의 묶임은 실행기가 본다.
+        self._secret_env_refs = secret_env_refs
+        # 트랙 Q11a: 위험을 선언한 MCP 도구(`ConnectorCatalog`). `None` 이 off 다 --
+        # 그러면 도구 목록·검증이 오늘과 같다(M10).
+        self._connectors = connectors
+        # 트랙 Q16a: 켜져 있으면 브리지 도구를 **검증만** 한다. `definitions()` 에는 없다 --
+        # 소유자의 브리지가 붙어 있을 때 루프가 그 상태에서 덧붙인다(B4).
+        self._device_tools = device_tools
+        if device_tools:
+            from neos.coding.bridge.catalog import device_registered_tools
+
+            self._tools.update({tool.name: tool for tool in device_registered_tools()})
 
     @classmethod
     def default(
@@ -930,6 +1054,9 @@ class CodingToolRegistry:
         max_command_output_bytes: int = 1024 * 1024,
         max_command_stdin_bytes: int = 1024 * 1024,
         allowed_env_names: frozenset[str] = frozenset(),
+        secret_env_refs: bool = False,
+        connectors: Any = None,
+        device_tools: bool = False,
     ) -> CodingToolRegistry:
         return cls(
             command_allowlist=command_allowlist,
@@ -937,6 +1064,22 @@ class CodingToolRegistry:
             max_command_output_bytes=max_command_output_bytes,
             max_command_stdin_bytes=max_command_stdin_bytes,
             allowed_env_names=allowed_env_names,
+            secret_env_refs=secret_env_refs,
+            connectors=connectors,
+            device_tools=device_tools,
+        )
+
+    def _connector_definitions(self) -> tuple[ToolDefinition, ...]:
+        """커넥터 도구는 내장 도구 **뒤에** 붙는다. 단계로 숨기지 않는다(M12)."""
+        if self._connectors is None:
+            return ()
+        return tuple(
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+            )
+            for tool in self._connectors.tools
         )
 
     def definitions(
@@ -971,7 +1114,7 @@ class CodingToolRegistry:
                     or optional_tool_enabled(tool.name)
                     or tool.name in deferred
                 )
-            )
+            ) + self._connector_definitions()
         return tuple(
             tool.definition()
             for tool in self._TOOL_SPECS
@@ -991,7 +1134,7 @@ class CodingToolRegistry:
                 or tool.name in deferred
                 or tool.name in revealed_names
             )
-        )
+        ) + self._connector_definitions()
 
     @classmethod
     def deferred_tool_names(
@@ -1083,7 +1226,13 @@ class CodingToolRegistry:
         self, name: str, input: Mapping[str, object]
     ) -> ValidatedToolCall:
         tool = self._tools.get(name)
-        if tool is None:
+        if tool is None and self._connectors is not None:
+            connector = self._connectors.get(name)
+            if connector is not None:
+                return self._validate_connector(connector, input)
+        if tool is None or (
+            name in BROWSER_TOOL_NAMES and not optional_tool_enabled(name)
+        ):
             raise ToolValidationError("policy_unknown_tool")
         if name in _OPTIONAL_TOOL_FLAGS and not optional_tool_enabled(name):
             raise ToolValidationError("policy_media_tool_disabled")
@@ -1112,7 +1261,17 @@ class CodingToolRegistry:
             ):
                 if key not in provided:
                     data.pop(key, None)
+        device_call = self._device_tools and name.startswith("device_")
+        if device_call:
+            from neos.coding.bridge.catalog import check_device_input, is_device_tool
+
+            device_call = is_device_tool(name)
+        if device_call:
+            # 정규화 **전**에 본다 -- 경로 정규화가 `secret://x` 를 `secret:/x` 로 접는다.
+            check_device_input(data, stage="raw")
         self._normalize_paths(name, data)
+        if device_call:
+            check_device_input(data, stage="normalized")
         if name == "chmod.v1":
             data["mode"] = _parse_numeric_mode(data["mode"])
             self._deny_secret_world_writable(data)
@@ -1123,10 +1282,26 @@ class CodingToolRegistry:
                 raise ToolValidationError("policy_schema_invalid") from error
         if name == "execute.v1":
             self._validate_command(data)
+        if name in BROWSER_TOOL_NAMES:
+            self._validate_browser(name, candidate, data)
         risk = tool.risk
         if name == "spawn_agent.v1" and str(data.get("spec") or "explore") == "implement":
             risk = ToolRisk.WORKSPACE_WRITE
         return ValidatedToolCall(name=name, input=data, risk=risk)
+
+    @staticmethod
+    def _validate_connector(connector: Any, input: Mapping[str, object]) -> ValidatedToolCall:
+        """위험은 운영자가 선언한 것 그대로다(M4). 서버의 스키마로 인자를 검사한다."""
+        try:
+            data = connector.validate_arguments(input)
+        except ValueError as error:
+            raise ToolValidationError("policy_schema_invalid") from error
+        return ValidatedToolCall(
+            name=connector.name,
+            input=data,
+            risk=connector.risk,
+            secret_refs=tuple(connector.secret_refs),
+        )
 
     def _normalize_paths(self, name: str, data: dict[str, Any]) -> None:
         try:
@@ -1193,6 +1368,45 @@ class CodingToolRegistry:
             and mode & 0o002
         ):
             raise ToolValidationError("policy_secret_path_denied")
+
+    def _validate_browser(
+        self, name: str, provided: Mapping[str, object], data: dict[str, Any]
+    ) -> None:
+        """트랙 Q14a. 행동마다 받는 필드만 받는다 -- 남는 필드는 조용히 버리지 않는다."""
+        from neos.coding.secrets import secret_ref_name
+
+        if name == BROWSER_SECRET_TOOL:
+            # 비밀은 금고(Q6)에서만 온다. 브로커가 꺼져 있으면 풀 금고가 없다.
+            if not self._secret_env_refs:
+                raise ToolValidationError("policy_browser_secret_disabled")
+            if secret_ref_name(data["secret"]) is None:
+                raise ToolValidationError("policy_schema_invalid")
+            origin = browser_origin(data["origin"])
+            if origin is None:
+                raise ToolValidationError("policy_schema_invalid")
+            data["origin"] = origin
+            return
+        action = str(data["action"])
+        wanted = _BROWSER_ACTION_FIELDS[action]
+        given = {
+            key
+            for key in ("url", "ref", "text", "submit")
+            if key in provided and provided[key] not in (None, False)
+        }
+        required = wanted - {"submit"}
+        if given - wanted or required - given:
+            raise ToolValidationError("policy_schema_invalid")
+        if action == "type" and secret_ref_name(data["text"]) is not None:
+            raise ToolValidationError("policy_browser_use_fill_secret")
+
+    def _env_entry_allowed(self, key: str, value: str) -> bool:
+        if key in self._allowed_env_names:
+            return True
+        if not self._secret_env_refs:
+            return False
+        from neos.coding.secrets import secret_env_name_allowed, secret_ref_name
+
+        return secret_ref_name(value) is not None and secret_env_name_allowed(key)
 
     def _validate_command(self, data: dict[str, Any]) -> None:
         from neos.coding.domain.approvals import is_denied_secret_path
@@ -1283,7 +1497,9 @@ class CodingToolRegistry:
             raise ToolValidationError("policy_command_output_exceeded")
         if len(data["stdin"].encode("utf-8")) > self._max_command_stdin_bytes:
             raise ToolValidationError("policy_command_stdin_exceeded")
-        if not set(data["env"]).issubset(self._allowed_env_names):
+        if not all(
+            self._env_entry_allowed(key, value) for key, value in data["env"].items()
+        ):
             raise ToolValidationError("policy_environment_name_denied")
         if any("\0" in key or "\0" in value for key, value in data["env"].items()):
             raise ToolValidationError("policy_schema_invalid")
