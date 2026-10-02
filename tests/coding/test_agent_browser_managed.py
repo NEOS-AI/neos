@@ -260,6 +260,7 @@ async def test_a_guest_request_with_another_method_is_refused_by_the_host(monkey
     "request_frame",
     [
         {"url": "https://docs.example.com/", "method": "GET", "body": "not base64!"},
+        {"url": "https://docs.example.com/", "method": "GET", "body": "a!Gk="},  # lenient b64 = "hi"
         {"url": "https://docs.example.com/", "method": "G E T"},
         {"url": 7, "method": "GET"},
         {"url": "https://docs.example.com/", "method": "GET", "headers": {"x": 1}},
@@ -526,10 +527,12 @@ async def test_a_bad_or_silent_hello_is_browser_unavailable(monkeypatch, hello) 
     _enable(monkeypatch)
     _resolve(monkeypatch)
 
+    sent: list[bytes] = []
+
     class Silent:
         async def open(self, task_id):
             to_guest, to_host = _Pipe(), _Pipe()
-            host = _End(to_host, to_guest, [])
+            host = _End(to_host, to_guest, sent)
             guest = _End(to_guest, to_host, [])
             if hello is not None:
                 await guest.write(encode_frame(hello))
@@ -544,6 +547,64 @@ async def test_a_bad_or_silent_hello_is_browser_unavailable(monkeypatch, hello) 
     )
     result = await _run(sessions, _browse(_registry(), action="navigate", url="https://docs.example.com/"))
     assert (result.status, result.reason_code) == ("error", "browser_unavailable")
+    assert sent == []  # MB5: nothing is asked of a guest that has not proven itself
+
+
+@pytest.mark.asyncio
+async def test_a_guest_speaking_another_protocol_is_never_driven(monkeypatch) -> None:
+    """MB5. Mutation: drop the protocol comparison in `handshake` -> it is driven."""
+    _enable(monkeypatch)
+    _resolve(monkeypatch)
+    monkeypatch.setattr("neos.coding.browser.guest.PROTOCOL_VERSION", PROTOCOL_VERSION + 1)
+    opener = Opener()
+    sessions = _managed_sessions(opener)
+    try:
+        result = await _run(sessions, _browse(_registry(), action="navigate", url="https://docs.example.com/"))
+    finally:
+        await sessions.close_all()
+    assert (result.status, result.reason_code) == ("error", "browser_unavailable")
+    assert opener.sandboxes["ct_1"].driver.contexts == []
+
+
+@pytest.mark.asyncio
+async def test_a_context_has_an_owner_task() -> None:
+    """MB2: the sandbox is the task's -- a context without an owner is not opened."""
+    opener = Opener()
+
+    async def serve(request):
+        return None
+
+    with pytest.raises(BrowserActionError):
+        await ManagedBrowserDriver(opener).new_context(serve)
+    assert opener.opened == []
+
+
+@pytest.mark.asyncio
+async def test_a_channel_lost_mid_call_fails_now_not_at_the_timeout(monkeypatch) -> None:
+    """Mutation: drop failing the pending calls when the reader ends -> the call waits
+    out its timeout and comes back `browser_timeout`."""
+    _enable(monkeypatch)
+    _resolve(monkeypatch)
+    rig = _rig("managed", action_timeout_sec=1)
+    registry = _registry()
+    try:
+        await _run(rig.sessions, _browse(registry, action="navigate", url="https://docs.example.com/"))
+        sandbox = rig.opener.sandboxes["ct_1"]
+        original = sandbox.guest._op
+
+        async def die(op, args):
+            if op == "click":
+                await sandbox.host_end.close()
+                await asyncio.sleep(3600)
+            return await original(op, args)
+
+        sandbox.guest._op = die
+        result = await _run(rig.sessions, _browse(registry, action="click", ref="e1"))
+        # the guest does not wait on a call nobody can answer any more
+        await asyncio.wait_for(sandbox.task, 2)
+    finally:
+        await rig.sessions.close_all()
+    assert (result.status, result.reason_code) == ("error", "browser_action_failed")
 
 
 @pytest.mark.asyncio

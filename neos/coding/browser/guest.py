@@ -167,6 +167,11 @@ class BrowserGuest:
         finally:
             for task in (reader, done):
                 task.cancel()
+            if not self._done.is_set():
+                # 채널이 끊겼다 -- 답을 받을 쪽이 없으니 진행 중인 호출을 기다리지 않는다.
+                # (`close` 로 끝날 때는 그 답을 마저 쓰도록 기다린다.)
+                for call in self._calls:
+                    call.cancel()
             if self._calls:
                 await asyncio.gather(*self._calls, return_exceptions=True)
             for future in self._routes.values():
