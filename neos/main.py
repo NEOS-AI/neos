@@ -675,6 +675,17 @@ if settings.config.standing_agents.enabled:
         _include_router_for_runtime(
             standing_notify_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
         )
+    # 상시 질문(트랙 Q3). 폴러는 Celery beat 이 같은 플래그로 등록한다.
+    if settings.config.standing_agents.questions.enabled:
+        from neos.api.handlers.standing_question_handlers import (
+            router as standing_question_router,
+        )
+
+        _include_router_for_runtime(
+            standing_question_router,
+            prefix=settings.API_V1_PREFIX,
+            tags=["Standing Agent Questions"],
+        )
     # 이벤트 트리거(트랙 Q4a). 배달 라우트는 인증 의존성이 없다 -- 서명이 인증이다.
     if settings.config.standing_agents.triggers.enabled:
         from neos.api.handlers.standing_trigger_handlers import (

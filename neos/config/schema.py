@@ -761,6 +761,29 @@ class StandingNotificationsConfig(StrictConfigModel):
     max_body_chars: int = Field(default=3_500, ge=200)
 
 
+class StandingQuestionsConfig(StrictConfigModel):
+    """상시 질문 -- 트랙 Q3 (docs/Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md).
+
+    에이전트가 정해진 주기로 같은 질문을 심층분석(DA)으로 다시 묻고, 직전 런과
+    **verified 클레임 집합이 달라졌을 때만** 소유자에게 알린다. 꺼져 있으면 라우트도
+    폴러도 없다.
+    """
+
+    enabled: bool = False
+    #: 에이전트 하나가 가질 수 있는 상시 질문 수.
+    max_per_agent: int = Field(default=5, ge=1)
+    #: 두 실행 사이의 최소 간격(분). cron 이 이보다 촘촘하면 만들 때 거절한다 --
+    #: DA 런은 비싸고 무인이다.
+    min_interval_minutes: int = Field(default=360, ge=1)
+    #: 상시 질문이 쓰는 DA 프로파일.
+    profile: Literal["dev", "default"] = "default"
+    #: 알림 본문에 싣는 클레임 수(분류마다).
+    max_claims_per_section: int = Field(default=5, ge=1)
+    #: 제출한 DA 런이 이만큼(분) 지나도 끝나지 않으면 실패로 정산한다 -- 죽은 잡이 그
+    #: 질문의 다음 회차를 영원히 막지 않게. DA 잡의 재시도까지 기다릴 만큼 넉넉하게.
+    settle_timeout_minutes: int = Field(default=720, ge=1)
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -774,6 +797,7 @@ class StandingAgentsConfig(StrictConfigModel):
     notifications: StandingNotificationsConfig = Field(
         default_factory=StandingNotificationsConfig
     )
+    questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
 
 
 class LearnConfig(StrictConfigModel):

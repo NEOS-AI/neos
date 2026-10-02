@@ -1,7 +1,7 @@
 # Q10b 봉투 집행(`PAUSED`) · Q3 상시 질문 — 설계와 착지
 
 > **작성:** 2026-10-02 · **트랙:** Q10b · Q3 (정본 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) §4.2)
-> **지위:** Q10b 착지(플래그 off). Q3 은 §5 의 설계대로 이어서 착지한다. 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** Q10b · Q3 착지(둘 다 플래그 off, 2026-10-02). 설계와 코드가 어긋나면 코드가 이긴다.
 > **선행:** [Q4·Q10 설계](Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md) Q10a · [Q13 설계](Q13_STANDING_AGENT_DESIGN_260930.md) a~f · Q5 감시자 섀도
 > 결정 P1~P9 · O1~O6 · SQ1~SQ10 은 **위임받아 Claude 가 골랐다**(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
 
@@ -76,7 +76,7 @@
 - 봉투 경고(D7)는 봉투 **전체**의 `warn_ratio` 다. background 몫을 먼저 넘으면 경고 없이 멈춤 알림이 간다(테스트가 그 경우를 적는다)
 - 📌 **변이가 찾은 위험 하나:** Postgres `enqueue` 에서 `target.agent_id = :agent_id` 가 빠지면 대상 없는 에이전트의 알림이 **다른 에이전트의 채널로** 간다. 처음 쓴 테스트는 그 변이를 살려 뒀다 — 대상 있는 에이전트와 없는 에이전트를 같이 두는 테스트를 더했다(`test_a_notice_never_borrows_another_agents_target`)
 
-## 5. Q3 — 상시 질문 (설계)
+## 5. Q3 — 상시 질문
 
 | # | 결정 | 이유 |
 |---|---|---|
@@ -91,12 +91,48 @@
 | **SQ9** | 만들 때 cron 의 **가장 짧은 간격**이 `min_interval_minutes`(기본 360) 이상이어야 한다. 에이전트당 `max_per_agent`(기본 5) | DA 런은 비싸고 무인이다 |
 | **SQ10** | 알림 본문은 사람에게 가는 평문이다. 클레임 문장은 분류마다 `max_claims_per_section`(기본 5)까지, 전체는 `max_body_chars` 로 자른다 | 클레임 문장은 웹 출처에서 온 모델 출력이다 — 채널로 가는 길에 상한을 둔다 |
 
+### 5.1 표면
+
+- 설정: `standing_agents.questions.{enabled=false, max_per_agent=5, min_interval_minutes=360, profile="default",
+  max_claims_per_section=5, settle_timeout_minutes=720}`
+- API(`standing_agents.enabled` 와 `questions.enabled` 둘 다일 때만 **라우트가 있다**):
+
+  ```
+  POST   /api/v1/standing-agents/{agent_id}/questions                 {question, cron_expression} → 201
+  GET    /api/v1/standing-agents/{agent_id}/questions
+  PATCH  /api/v1/standing-agents/{agent_id}/questions/{question_id}   {enabled}
+  DELETE /api/v1/standing-agents/{agent_id}/questions/{question_id}
+  GET    /api/v1/standing-agents/{agent_id}/questions/{question_id}/runs   # 정산 이력(차이는 해시와 수)
+  ```
+
+  거절: 빈 질문·`invalid_cron`·`cron_too_frequent` 422, 개수 초과 `too_many_questions` 409, 남의 것 404
+- 폴러: Celery beat `poll-standing-questions`(60초, 같은 두 플래그) → `neos.tasks.poll_standing_questions`.
+  태스크마다 새 `DatabaseManager`(새 이벤트 루프). ⚠️ **Celery beat 없이는 돌지 않는다** — 기존 스케줄 태스크와 같다
+- 마이그레이션 086: `standing_questions` · `standing_question_runs`(질문마다 진행 중 하나 = 부분 unique 인덱스) — 둘 다 CASCADE
+- 정산이 시한(`settle_timeout_minutes`)을 넘기면 `{"reason": "timeout"}` 으로 실패 처리 — 죽은 잡이 다음 회차를 막지 않는다.
+  지운 질문의 진행 중 런은 정산하되 알리지 않는다
+- 📌 **보조 키의 한계(관찰):** blob 해시는 **내용**의 해시라(`fetch._blob_hash`) 같은 URL 이라도 페이지가 바뀌면 해시가 바뀐다.
+  자주 갱신되는 출처를 인용한 재표현은 보조 키로 짝이 나지 않고 "새로 검증 + 사라짐"으로 나온다. 결정 8 을 그대로 따랐고,
+  넓히려면(예: `source_url` 을 보조 키에 더하기) 사람의 결정이다
+
+### 5.2 테스트가 확인하는 것
+
+| 무엇 | 테스트 |
+|---|---|
+| 정규화 해시가 짝 · 새로 검증/반증/사라짐/재표현 후보 · 증거 없는 클레임은 증거로 짝나지 않음 · 반증은 재표현에 가려지지 않음 · 요약은 해시만 · 본문 상한·한 줄 · cron 하한 | `tests/standing/test_question_diff.py` |
+| 메모리·Postgres **같은 계약**: 소유 · 개수 상한 · 때가 된 것만(꺼짐·지움·진행 중 제외) · 실패는 기준선 아님 · 진행 중 하나(실 DB 인덱스) · 두 폴러가 같은 질문을 못 집음 · 사용자 삭제가 안 막힘 | `tests/standing/test_standing_questions.py` |
+| 실 DA 원장에서 클레임과 증거 blob 집합 읽기 | 같은 파일 |
+| 폴: 기준선은 침묵 · 바뀌면 한 번(새로 검증+반증) · 안 바뀌면 침묵 · 실패 런 뒤 기준선은 그 전 정산 · 시한 · 멈춘 에이전트·봉투 초과는 건너뜀 · 제출 실패 사유와 해제 · 지운 질문은 침묵 | 같은 파일 |
+| API 201/422/409/404 · 남의 에이전트 경로로 못 닿음 · 기본 앱에 라우트·beat 없음 · 태스크 이름 | `tests/api/test_standing_questions_api.py` |
+
+변이 24/24.
+
 ## 6. 단계
 
 | 단계 | 무엇 | 상태 |
 |---|---|---|
 | **Q10b** | 봉투 집행 → `PAUSED` · 사람만 재개 · FE · 소유자 알림 큐·대상·경고(D7) | ✅ 2026-10-02 (플래그 off) |
-| **Q3** | 상시 질문 — §5 | 📐 이어서 |
+| **Q3** | 상시 질문 — §5 | ✅ 2026-10-02 (플래그 off) |
 
 ## 7. 남은 것
 
@@ -112,6 +148,11 @@ Q10b 20/20 — 멈춤 자리를 자식 뒤로 · `enforce` 무시 · 멈춘 태�
 **대상 없는 알림이 남의 대상을 빌림**(처음엔 살았다 — §4 📌) · 남의 에이전트에 대상 · 어댑터 없는 전송 성공 · 포기 없음 ·
 꺼낸 알림 재꺼냄 · 경고 임계 빠짐 · 경고가 달마다가 아님 · 409 대신 202 · 사람 태스크 멈춤 · 읽기 실패에 멈춤.
 
+Q3 24/24 — 재표현이 증거를 안 봄 · 반증 없음 · 사라짐을 알림 · 반증이 재표현 짝 · 정확한 문장으로 짝 · 첫 런을 빈 기준선과 비교 ·
+실패 런이 기준선(Postgres·메모리 각각) · 멈춘 에이전트 제출 · 봉투 무시 · 봉투를 autonomous 로 판정 · 진행 중 무시 ·
+두 폴러가 같은 질문 · 개수 상한 하나 넘김 · 생성 소유 검사 빠짐 · cron 하한 없음 · 시한 없음 · 지운 질문 알림 ·
+중복 키가 질문 단위 · API 경로의 에이전트 불일치 · 본문 여러 줄 · 다른 클레임의 증거 · 남의 정산 이력 · 바뀌어도 침묵.
+
 ## 9. 되돌리지 말 것
 
 - 멈춤에서 런을 닫기 → 재개가 재시도가 되고 attempt 가 는다
@@ -120,3 +161,6 @@ Q10b 20/20 — 멈춤 자리를 자식 뒤로 · `enforce` 무시 · 멈춘 태�
 - 멈춤을 `None` 으로 돌려주기 → 러너가 완료로 읽는다
 - 워커에서 게이트웨이로 직접 보내기 → 워커에는 게이트웨이가 없다(조용히 사라진다)
 - `enqueue` 에서 대상의 `agent_id` 조건 빼기 → 남의 채널로 간다
+- 상시 질문의 기준선에 실패 런을 쓰기 → 다음 런의 전부가 "새로 검증"이 된다
+- 재표현 후보·사라짐을 알림 사유로 → 검색 운이 알림 폭주가 된다(결정 8)
+- 상시 질문의 제출을 봉투 판정 밖에 두기 → 새 입구가 우회로가 된다(Q4·Q10 §6)

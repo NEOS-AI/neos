@@ -1401,6 +1401,45 @@ Failed sends are retried with backoff. A missing adapter for the channel type
 counts as a failed send. The notice-target routes exist only when notifications
 are on.
 
+#### Standing questions (track Q3)
+
+```yaml
+standing_agents:
+  questions:
+    enabled: false
+    max_per_agent: 5
+    min_interval_minutes: 360     # the cron's shortest gap must be at least this
+    profile: default              # deep-analysis profile for the runs
+    max_claims_per_section: 5     # claim lines per section in a notice
+    settle_timeout_minutes: 720   # a run still running after this is settled as failed
+```
+
+An agent asks the same question on a UTC cron schedule. Each occurrence opens an
+ordinary deep-analysis run (owner as `user_id`, no conversation) through the
+usual executor; a once-a-minute Celery beat poller (`poll-standing-questions`,
+registered only when both `standing_agents.enabled` and `questions.enabled` are
+on -- **nothing runs without Celery beat**) settles finished runs and dispatches
+due questions. A question has at most one run in flight.
+
+Settling compares the run's **verified claims** with the last settled run's:
+claims pair by the normalized claim hash, then by shared evidence blobs. The
+owner is notified (through the notice queue above) only when something was
+**newly verified** or **refuted** (a verified claim now rejected). Dropped
+claims and rephrase candidates are counted in the notice but never trigger one.
+The first settled run is a silent baseline; failed runs never become baselines.
+An occurrence is skipped (and `last_skip_reason` set) when the agent is not
+active or its envelope is out of background budget. Deep-analysis spend is not
+counted in the envelope, so the interval floor and the per-agent cap are what
+bound cost.
+
+```
+POST   /api/v1/standing-agents/{agent_id}/questions                {question, cron_expression}
+GET    /api/v1/standing-agents/{agent_id}/questions
+PATCH  /api/v1/standing-agents/{agent_id}/questions/{question_id}  {enabled}
+DELETE /api/v1/standing-agents/{agent_id}/questions/{question_id}
+GET    /api/v1/standing-agents/{agent_id}/questions/{question_id}/runs
+```
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

@@ -224,6 +224,17 @@ def configure_managed_sandbox_beat_schedule(
             schedule.pop(entry, None)
 
 
+def configure_standing_question_beat_schedule(schedule: dict, *, enabled: bool) -> None:
+    """상시 질문 폴러(트랙 Q3). `standing_agents.enabled` 와 `.questions.enabled` 둘 다."""
+    if enabled:
+        schedule["poll-standing-questions"] = {
+            "task": "neos.tasks.poll_standing_questions",
+            "schedule": 60.0,
+        }
+    else:
+        schedule.pop("poll-standing-questions", None)
+
+
 # Celery Beat 스케줄 (주기적 태스크)
 app.conf.beat_schedule = {
     # 예: 매일 자정에 오래된 체크포인트 정리
@@ -267,6 +278,12 @@ configure_coding_beat_schedule(
     app.conf.beat_schedule,
     enabled=settings.CODING_CELERY_ENABLED,
     interval=settings.CODING_CELERY_RECONCILIATION_SECONDS,
+)
+
+_standing_config = settings.config.standing_agents
+configure_standing_question_beat_schedule(
+    app.conf.beat_schedule,
+    enabled=_standing_config.enabled and _standing_config.questions.enabled,
 )
 
 _managed_sandbox_config = settings.config.sandbox.managed
