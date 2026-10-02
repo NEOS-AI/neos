@@ -920,6 +920,31 @@ vendor exec channel cannot be shown to be private --
 AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
 makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
 
+**Managed sandboxes (track Q6c).** A managed provider carries secrets only when
+**both** of these hold; with the defaults neither does, and every managed
+provider refuses with `secret_env_unsupported` exactly as before:
+
+```yaml
+sandbox:
+  managed:
+    secret_env_providers: []   # explicit per-provider opt-in: e2b | modal; no duplicates;
+                               # requires coding_model.secret_broker
+```
+
+1. the provider is named in `sandbox.managed.secret_env_providers`, and
+2. that provider's vendor SDK binding declares `StdioRelayEvidence` (TLS
+   verification pinned by its tests, an https source for the vendor not
+   retaining exec stdin, and a real-account smoke record).
+
+No vendor SDK binding exists in this repository today, so (2) cannot hold and
+no managed provider can be opened by configuration alone. Naming a provider
+whose binding carries no evidence stops the provider from starting
+(`managed_secret_channel_unproven:<name>`) rather than leaving an opt-in that
+does nothing. When opened, the value travels only in the `secret_env` field of
+the sandboxd `exec` frame over the vendor stdio relay -- never in a vendor API
+argument, vendor env field or vendor secret object. The smoke checklist a human
+must run first is in `docs/Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md` §5.
+
 ### Coding agent browser (track Q14a)
 
 ```yaml

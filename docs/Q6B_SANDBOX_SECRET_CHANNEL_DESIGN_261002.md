@@ -58,6 +58,13 @@ Q6b 는 **sandboxd RPC 에 비밀 채널**을 더한다 — 평문이 RPC 추적
 
 ## 4. 관리형을 열려면 (증거 목록)
 
+> 📌 **상태 (2026-10-02, [Q6c](Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md) MS2·MS3):** 이 목록을 **코드로 옮겼다.**
+> 1~3 은 바인딩이 다는 `StdioRelayEvidence(tls_verified, stdin_retention_source, smoke_record)` 가 되었고, 4 는
+> `_Attachment.confidential_channel = (provider 별 opt-in sandbox.managed.secret_env_providers) AND (증거)` 가 되었다.
+> 설정만으로는 열리지 않는다는 C1 의 뜻은 그대로다 — 증거 없는 opt-in 은 provider 가 시작하지 않는다.
+> **1~3 은 여전히 하나도 충족되지 않았다**(벤더 SDK 가 venv 에도 저장소에도 없다). 실계정 smoke 체크리스트는 Q6c §5,
+> 아무도 돌리지 않았다. 그래서 E2B·Modal 은 오늘도 `secret_env_unsupported` 다.
+
 C1 을 provider 하나에 대해 뒤집는 커밋은 아래를 **같이** 단다. 설정 키로 대신하지 않는다.
 
 1. 그 벤더의 **SDK 바인딩이 저장소에 있다** — `open_stdio` 가 쓰는 전송이 TLS 이고 인증서 검증을 끄는 경로가 없음을 테스트가 고정
@@ -90,6 +97,6 @@ C1 을 provider 하나에 대해 뒤집는 커밋은 아래를 **같이** 단다
 
 ## 7. 남은 것
 
-- 관리형 열기(§4) — 벤더 바인딩과 근거가 생길 때
+- 관리형 열기(§4) — 판정 자리는 Q6c 가 놓았다. 남은 것은 벤더 바인딩·근거·실계정 smoke([Q6c §5·§7](Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md))
 - Q11 장기 프로세스 op(§5)
 - 에이전트별 부여(Q17) · 프롬프트에 이름 목록 — Q6 §5 그대로
