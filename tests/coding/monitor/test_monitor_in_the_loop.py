@@ -7,6 +7,8 @@ changes nothing else: a crashing monitor must not change the run.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage
@@ -24,16 +26,45 @@ from tests.coding.loop.test_anthropic_loop import (
 pytestmark = pytest.mark.no_db
 
 
+class _Arrivals(list):
+    """`yielded.append(event)` lands the event in the ledger in arrival order."""
+
+    def __init__(self, ledger):
+        super().__init__()
+        self._ledger = ledger
+
+    def append(self, event):
+        super().append(event)
+        self._ledger.arrive(event)
+
+
 class LedgerEvents(Events):
-    """The sink the loop appends to, plus a reader over the whole ledger."""
+    """The sink the loop appends to, plus a reader over the whole ledger.
+
+    Like the production ledger, one task has one `seq` and seq order is commit
+    order (Q5b MP6: the monitor reads with a cursor). The fake repository and the
+    fake sink number their events independently (1.. and 100..), so the ledger
+    renumbers each event as it arrives -- appended by the loop, or yielded to
+    the driver (which records it in `yielded`).
+    """
 
     def __init__(self):
         super().__init__()
-        self.yielded = []
+        self.ledger = []
+        self.yielded = _Arrivals(self)
+
+    async def append(self, *, task_id, event_type, payload, **ids):
+        event = await super().append(
+            task_id=task_id, event_type=event_type, payload=payload, **ids
+        )
+        self.arrive(event)
+        return event
+
+    def arrive(self, event):
+        self.ledger.append(replace(event, seq=len(self.ledger) + 1))
 
     async def list_after(self, task_id, *, after_seq=0, limit=500):
-        ledger = sorted(self.yielded + self.items, key=lambda event: event.seq)
-        return [e for e in ledger if e.seq > after_seq][:limit]
+        return [e for e in self.ledger if e.seq > after_seq][:limit]
 
 
 class Scorer:

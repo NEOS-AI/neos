@@ -70,7 +70,7 @@
      "reason": "도구 인자가 스트리밍되는 바이트 수만 싣는다. 호출 자체는 tool.started 가 보여 주고, 델타마다 그리면 도구 줄이 깜빡이기만 한다.",
      "sample": {"tool_call_id": "t1", "bytes": 42}},
     {"kind": "monitor.judged", "projected": false,
-     "reason": "궤적 감시자(트랙 Q5)의 섀도 판정이다. 읽는 사람은 원장 판독기이고 화면이 아니다 -- enforced 는 언제나 false 라 태스크 상태가 바뀌지 않는다. 감시자가 실제로 멈추게 되면 그 변화는 task.status.changed 로 투영된다.",
+     "reason": "궤적 감시자(트랙 Q5)의 판정이다. 읽는 사람은 원장 판독기이고 화면이 아니다. 기본(섀도)은 enforced 가 false 라 태스크 상태가 바뀌지 않는다. jev.monitor.enforce(트랙 Q5b)가 켜지면 모든 판정이 enforced: true 를 싣고, would_pause 인 판정은 pause_task 한 트랜잭션으로 태스크를 멈춘다 -- 화면은 그 변화를 이 kind 가 아니라 같은 트랜잭션의 task.status.changed {status: paused, reason_code: monitor_*} 로 본다.",
      "sample": {"judge": "jev", "probability": 0.12, "pause_at_or_above": 0.8, "would_pause": false, "rubric_digest": "abc123", "model": "jev-1.13.0", "tool_results": 5, "mode": "background", "enforced": false}},
     {"kind": "phase.completed", "projected": true,
      "setup": [{"type": "phase.started", "payload": {"phase": "implement", "attempt": 1}}],

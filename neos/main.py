@@ -34,6 +34,10 @@ from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.handlers.coding_admin_handlers import router as coding_admin_router
 from neos.api.handlers.coding_handlers import router as coding_router
+from neos.api.handlers.standing_pause_handlers import (
+    resume_route_mounted,
+    resume_router as standing_resume_router,
+)
 from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
 from neos.api.handlers.coding_workspace_ws_handlers import (
     router as coding_workspace_ws_router,
@@ -661,16 +665,11 @@ if settings.config.standing_agents.enabled:
     _include_router_for_runtime(
         standing_agent_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
     )
-    # 멈춘 태스크의 재개(트랙 Q10b) -- 사람만 쓰는 소유자 라우트. 알림 대상은 알림이
-    # 켜졌을 때만 있다.
+    # 알림 대상은 알림이 켜졌을 때만 있다. 재개 라우트는 아래(블록 밖)에서 붙인다.
     from neos.api.handlers.standing_pause_handlers import (
         notify_router as standing_notify_router,
-        resume_router as standing_resume_router,
     )
 
-    _include_router_for_runtime(
-        standing_resume_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"]
-    )
     if settings.config.standing_agents.notifications.enabled:
         _include_router_for_runtime(
             standing_notify_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
@@ -697,6 +696,13 @@ if settings.config.standing_agents.enabled:
             _include_router_for_runtime(
                 _router, prefix=settings.API_V1_PREFIX, tags=["Standing Agent Triggers"]
             )
+# 멈춘 태스크의 재개(트랙 Q10b·Q5b) -- 사람만 쓰는 소유자 라우트. 태스크를 멈출 수 있는
+# 쪽(봉투 · 감시자 집행)이 하나라도 켜져 있으면 있다. 감시자는 상시 에이전트와 무관하게
+# 모든 태스크를 멈추므로 위의 `standing_agents` 블록 안에 둘 수 없다.
+if resume_route_mounted(settings.config):
+    _include_router_for_runtime(
+        standing_resume_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"]
+    )
 # 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
 # (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
 _include_router_for_runtime(

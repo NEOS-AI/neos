@@ -1711,7 +1711,8 @@ class JevMonitorConfig(StrictConfigModel):
     """궤적 감시자 -- 로드맵 트랙 Q5 (docs/OPENAI_DOTS_ANALYSIS_260930.md §6.1).
 
     판정자는 Jev 다(결정 5). Jev 가 대답하지 못하면 그 판정 한 번을 폴백 규칙
-    FB1~FB6 이 대신한다. **섀도만 있다** -- 기록할 뿐 멈추게 하지 않는다.
+    FB1~FB6 이 대신한다. 기본은 **섀도** -- 기록할 뿐 멈추게 하지 않는다.
+    `enforce`(트랙 Q5b)가 켜지면 `would_pause` 인 태스크를 `PAUSED` 로 보낸다.
 
     폴백 임계값은 첫 기본값이고 **더 엄하게만** 움직인다(결정 9) -- 각 필드의
     경계가 기본값이다. Jev 의 멈춤 경계(`pause_at_or_above`)는 기본값이 없다:
@@ -1737,6 +1738,47 @@ class JevMonitorConfig(StrictConfigModel):
     refusals: int = Field(default=1, ge=1, le=1)
     spend_multiple: float = Field(default=4.0, gt=1.0, le=4.0)
     spend_warmup_turns: int = Field(default=5, ge=1, le=5)
+
+    #: 트랙 Q5b (docs/Q5B_MONITOR_PAUSE_DESIGN_261002.md). 참이면 `would_pause` 인 판정이
+    #: 태스크를 `PAUSED` 로 보낸다 -- Jev 와 폴백이 **함께**(§6.1). 끄면(기본) Q5 섀도와
+    #: 바이트가 같다. 켜려면 `shadow_enabled` 와, **멈춤 경계 전부를 명시한** 설정이 있어야
+    #: 한다(MP2) -- 아래 폴백 기본값은 섀도의 첫 값이지 실측된 멈춤 경계가 아니다.
+    enforce: bool = False
+
+    @model_validator(mode="after")
+    def enforcement_needs_an_explicit_boundary(self) -> "JevMonitorConfig":
+        if not self.enforce:
+            return self
+        if not self.shadow_enabled:
+            raise ValueError(
+                "jev.monitor.enforce 는 jev.monitor.shadow_enabled 위에서만 켠다 -- "
+                "섀도로 본 적 없는 판정자는 멈추게 할 수 없다."
+            )
+        missing = [
+            name for name in MONITOR_PAUSE_BOUNDARY_FIELDS if name not in self.model_fields_set
+        ]
+        if missing:
+            raise ValueError(
+                "jev.monitor.enforce 를 켜려면 멈춤 경계를 전부 명시해야 한다(기본값으로 "
+                f"멈추지 않는다 -- 경계는 섀도 실측이 정한다). 빠진 것: {missing}"
+            )
+        return self
+
+
+#: 감시자가 실제로 멈추게 할 때(`enforce`) 설정에 **적혀 있어야** 하는 경계(Q5b MP2).
+#: Jev 경계 하나와 폴백 FB1~FB6 의 임계 전부다. 표시 창·박자(`every_n_tool_results`,
+#: `max_events`)는 경계가 아니라 판정 빈도라 여기 없다.
+MONITOR_PAUSE_BOUNDARY_FIELDS = (
+    "pause_at_or_above",
+    "user_only",
+    "mode_ceiling",
+    "denial_window",
+    "denials_in_window",
+    "repeated_call",
+    "refusals",
+    "spend_multiple",
+    "spend_warmup_turns",
+)
 
 
 class JevConfig(StrictConfigModel):
@@ -1772,6 +1814,7 @@ class JevConfig(StrictConfigModel):
     #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
     timeout_sec: float = Field(default=5.0, gt=0, le=60)
     #: 궤적 감시자(트랙 Q5). `enabled` 와 `monitor.shadow_enabled` 가 둘 다 참일 때만 돈다.
+    #: `monitor.enforce`(Q5b)는 그 위에서 멈추게 한다.
     monitor: JevMonitorConfig = Field(default_factory=JevMonitorConfig)
 
     @field_validator("model")
