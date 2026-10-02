@@ -1007,7 +1007,42 @@ cancelled task's browser context is closed on that path by the worker process
 that holds it (the idle/lifetime sweep remains the backstop for other
 processes), and password-field values are masked in every frame, not only the
 main one. There is no new setting.
-Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
+
+**Managed browser provider (track Q14c, off by default).**
+
+```yaml
+coding_model:
+  browser:
+    provider: host        # host (default, Q14a) | managed
+sandbox:
+  provider: managed       # required for provider: managed
+  managed:
+    enabled: true         # required for provider: managed
+```
+
+With `provider: managed` Chromium runs inside the task's managed sandbox
+instead of on the backend host, so a renderer escape lands in the vendor VM.
+The sandbox still gets no network: the in-sandbox guest
+(`python -m neos.coding.browser.guest`) forwards every page request over the
+guest channel to the host, where the same web_fetch judge and pinned one-hop
+fetch answer it. Every Q14a/Q14b guard is unchanged (they live in the host
+session, executor and gate, not in the driver). Differences:
+
+- `browser_fill_secret.v1` is refused with `browser_secret_channel_unavailable`
+  before the vault is opened: the channel is the vendor's exec stdio relay and
+  secrets are not sent over it until that relay is shown confidential (the same
+  rule as the sandboxd secret channel, track Q6b). Plain `type` still works.
+- Startup is refused unless `sandbox.provider: managed` and
+  `sandbox.managed.enabled` are set, and when `max_response_bytes` or
+  `max_request_body_bytes` exceed 8 MiB (the guest frame limit).
+- `allow_outside_development` is still required outside development; the
+  managed provider does not lift it.
+- **It cannot be switched on yet.** The guest-channel opener (attach to the
+  task's allocation, then the vendor's exec stdio) is part of the unfinished B2
+  runtime wiring, so the factory refuses `provider: managed` at startup rather
+  than fall back to the host browser.
+
+Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md` (§8 for Q14c).
 
 ### Coding MCP connectors (tracks Q11a, Q11b)
 
