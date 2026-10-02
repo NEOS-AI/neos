@@ -237,6 +237,11 @@ class ChannelGateway:
         if channel_type:
             self._adapters[channel_type] = adapter
 
+    def has_adapter(self, channel_type: str) -> bool:
+        """`send_to_channel` 은 어댑터가 없으면 경고만 남기고 돌아온다. 보낸 것으로
+        세려는 쪽(상시 에이전트 알림, 트랙 Q10b)은 이것을 먼저 본다."""
+        return channel_type in self._adapters
+
     async def send_to_channel(
         self,
         channel_type: str,

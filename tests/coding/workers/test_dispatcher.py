@@ -59,6 +59,7 @@ def test_dispatch_source_is_a_bounded_enum() -> None:
         "approval",
         "reconciliation",
         "continuation",
+        "resume",  # Q10b -- a person resumed a paused task
     }
 
 

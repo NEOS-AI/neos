@@ -7,6 +7,8 @@ from typing import Any
 from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
+    TaskPaused,
+    is_pause_event,
 )
 from neos.coding.domain.phases import CodingRunStatus
 from neos.coding.loop.anthropic import CodingLoopFailure, CodingLoopWaitingApproval
@@ -19,6 +21,8 @@ class CodingTaskOutcome(StrEnum):
     COMPLETED = "completed"
     CONTINUING = "continuing"
     WAITING_APPROVAL = "waiting_approval"
+    #: Q10b -- the task is paused; only a person resumes it.
+    PAUSED = "paused"
     FAILED = "failed"
     CANCELLED = "cancelled"
     LEASE_BUSY = "lease_busy"
@@ -87,6 +91,8 @@ class CodingTaskRunner:
                 return CodingTaskOutcome.STALE
             except CodingLoopWaitingApproval:
                 return CodingTaskOutcome.WAITING_APPROVAL
+            except TaskPaused:
+                return CodingTaskOutcome.PAUSED
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
@@ -130,6 +136,9 @@ class CodingTaskRunner:
             if event.type == "approval.requested":
                 await self._emit_lifecycle(task_id, "waiting_approval", event)
                 return CodingTaskOutcome.WAITING_APPROVAL
+            if is_pause_event(event):
+                await self._emit_lifecycle(task_id, "paused", event)
+                return CodingTaskOutcome.PAUSED
             if not self._advance_until_complete:
                 return CodingTaskOutcome.CONTINUING
         raise asyncio.CancelledError
