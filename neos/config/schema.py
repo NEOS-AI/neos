@@ -2008,6 +2008,9 @@ class SandboxConfig(StrictConfigModel):
 #: 트랙 Q14a 브라우저 도구 이름 -- `neos.coding.tools.registry.BROWSER_TOOL_NAMES` 와 같다.
 #: 이 계층은 `neos.coding.*` 에 의존하지 않으므로 따로 둔다(테스트가 둘이 같음을 고정한다).
 CODING_BROWSER_TOOL_NAMES = frozenset({"browser.v1", "browser_fill_secret.v1"})
+#: 트랙 Q14c -- 관리형 브라우저의 요청·응답 본문 상한. 본문은 base64 로 sandboxd 프레임(16 MiB)에
+#: 실린다. `neos.coding.browser.wire.BODY_LIMIT_BYTES` 와 같다(테스트가 고정한다).
+MANAGED_BROWSER_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 class CodingBrowserConfig(StrictConfigModel):
@@ -2020,6 +2023,10 @@ class CodingBrowserConfig(StrictConfigModel):
 
     enabled: bool = False
     allow_outside_development: bool = False
+    #: 트랙 Q14c. `host` 는 Q14a 그대로(백엔드 호스트의 Chromium). `managed` 는 Chromium 을
+    #: 태스크의 관리형 샌드박스 안에서 띄운다 -- 관리형 평면이 켜져 있어야 하고, 오늘은 guest
+    #: 채널 배선(B2)이 없어 팩토리가 거절한다. 관리형에서는 `browser_fill_secret.v1` 이 거절된다(MB4).
+    provider: Literal["host", "managed"] = "host"
     navigation_timeout_sec: float = Field(default=15, gt=0, le=60)
     action_timeout_sec: float = Field(default=10, gt=0, le=60)
     max_navigations: int = Field(default=30, ge=1, le=500)
@@ -2769,6 +2776,9 @@ class AppConfig(StrictConfigModel):
         development 밖에서는 운영자의 명시적 동의(`allow_outside_development`)가 있어야
         켜진다(S10·I7 과 같은 fail-closed 모양). 어디서 켜든 허용 호스트가 이름이어야 하고,
         운영자 allow 목록은 브라우저 도구를 담지 못한다 -- 사람 승인 또는 소유자 규칙만 넘는다.
+
+        트랙 Q14c: `provider: managed` 는 관리형 샌드박스 평면을 요구하고 본문 상한을 프레임에
+        맞춘다. 위 조건(W3 포함)은 하나도 풀지 않는다 -- 좁히기만.
         """
         browser = self.coding_model.browser
         if not browser.enabled:
@@ -2805,6 +2815,20 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "browser tools cannot be in approval_allow_tools or approval_always_allow"
             )
+        if browser.provider == "managed":
+            # 트랙 Q14c. 좁히기만: 관리형은 W3 를 풀지 않는다(B2 게이트 전) -- 위 조건은 그대로다.
+            if self.sandbox.provider != "managed" or not self.sandbox.managed.enabled:
+                raise ValueError(
+                    "coding_model.browser.provider=managed requires the managed sandbox "
+                    "plane (sandbox.provider=managed and sandbox.managed.enabled)"
+                )
+            if max(browser.max_response_bytes, browser.max_request_body_bytes) > (
+                MANAGED_BROWSER_MAX_BODY_BYTES
+            ):
+                raise ValueError(
+                    "coding_model.browser.provider=managed caps max_response_bytes and "
+                    f"max_request_body_bytes at {MANAGED_BROWSER_MAX_BODY_BYTES} (frame limit)"
+                )
         return self
 
     @model_validator(mode="after")

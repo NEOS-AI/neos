@@ -128,6 +128,9 @@ class _Context:
 class PlaywrightDriver:
     """브라우저 프로세스 하나를 게으르게 띄우고, 태스크마다 새 컨텍스트를 연다."""
 
+    #: 값은 이 프로세스에서 같은 기계의 Playwright 드라이버 파이프로만 간다(트랙 Q14c MB4).
+    confidential_channel = True
+
     def __init__(
         self, *, chromium_sandbox: bool = True, executable_path: str | None = None
     ) -> None:
@@ -154,7 +157,7 @@ class PlaywrightDriver:
             )
             return self._browser
 
-    async def new_context(self, serve: RequestServer) -> _Context:
+    async def new_context(self, serve: RequestServer, *, task_id: str = "") -> _Context:
         browser = await self._ensure_browser()
         context = await browser.new_context(
             service_workers="block",

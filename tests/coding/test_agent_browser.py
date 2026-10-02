@@ -139,12 +139,14 @@ class FakeContext:
 
 
 class FakeDriver:
+    confidential_channel = True  # the host driver's value (Q14c MB4)
+
     def __init__(self, world: World | None = None, *, fail: bool = False) -> None:
         self.world = world or World()
         self.contexts: list[FakeContext] = []
         self.fail = fail
 
-    async def new_context(self, serve):
+    async def new_context(self, serve, *, task_id: str = ""):
         if self.fail:
             raise RuntimeError("no chromium")
         context = FakeContext(self.world, serve)

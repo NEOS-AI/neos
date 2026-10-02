@@ -221,7 +221,7 @@ class BrowserSessions:
                 return "browser_capacity"
             holder: dict[str, _Session] = {}
             try:
-                context = await self._driver.new_context(self._server(holder))
+                context = await self._driver.new_context(self._server(holder), task_id=task_id)
                 page = await context.open_page()
             except Exception:  # noqa: BLE001 -- 브라우저가 없으면 다른 길로 돌지 않는다
                 return "browser_unavailable"
@@ -321,6 +321,10 @@ class BrowserSessions:
         origin = str(data.get("origin") or "")
         if name is None or not origin:
             return BrowserOutcome("denied", "policy_schema_invalid")
+        # 값이 지날 길이 사적이라고 선언한 드라이버에만 넣는다(트랙 Q14c MB4). 관리형은 벤더
+        # exec 중계라 거짓 고정이다 -- 금고를 열기 **전에** 거절한다. 선언이 없으면 거짓(fail closed).
+        if not getattr(self._driver, "confidential_channel", False):
+            return BrowserOutcome("denied", "browser_secret_channel_unavailable")
         action_ms = self._limits.action_timeout_sec * 1000
         # 비밀은 이 출처의 칸에만 들어간다: 지금 페이지 · 그 칸이 사는 문서 · 허용 호스트 셋 다.
         if request_origin(session.page.url()) != origin:
@@ -397,17 +401,37 @@ class BoundBrowser:
         return await self.sessions.run(self.task_id, call, secrets=secrets)
 
 
-def build_browser_sessions(config: Any) -> BrowserSessions | None:
+def build_browser_sessions(
+    config: Any, *, managed_channels: Any | None = None
+) -> BrowserSessions | None:
     """`None` 이 off 다. 켜졌는지 판단하는 자리는 이 팩토리 하나다.
 
     설정 검증(`validate_coding_browser`)을 거치지 않고 만든 설정이어도 development
     밖에서 운영자 동의 없이 열리지 않는다 -- 같은 조건을 여기서 다시 본다.
+
+    `provider: managed`(트랙 Q14c)는 관리형 샌드박스 평면이 켜져 있어야 하고, 태스크의
+    샌드박스에 guest 채널을 여는 `managed_channels`(`BrowserChannelOpener`)가 주입돼야 한다.
+    그 배선(B2 의 할당 평면 + 벤더 `open_stdio`)이 아직 없으므로 오늘 runtime 은 주입하지
+    않고, 켜라고 하면 여기서 시끄럽게 실패한다 -- 호스트 브라우저로 대신 돌지 않는다(MB2).
     """
     browser = config.coding_model.browser
     if not browser.enabled:
         return None
     if config.environment != "development" and not browser.allow_outside_development:
         raise ValueError("coding_model.browser outside development needs allow_outside_development")
+    limits = BrowserLimits.from_config(browser)
+    if getattr(browser, "provider", "host") == "managed":
+        sandbox = config.sandbox
+        if sandbox.provider != "managed" or not sandbox.managed.enabled:
+            raise ValueError("coding_model.browser.provider=managed needs the managed sandbox plane")
+        if managed_channels is None:
+            raise ValueError(
+                "coding_model.browser.provider=managed has no guest channel opener "
+                "(B2 runtime wiring is not landed)"
+            )
+        from neos.coding.browser.managed_driver import ManagedBrowserDriver
+
+        return BrowserSessions(ManagedBrowserDriver(managed_channels), limits)
     from neos.coding.browser.playwright_driver import PlaywrightDriver
 
-    return BrowserSessions(PlaywrightDriver(), BrowserLimits.from_config(browser))
+    return BrowserSessions(PlaywrightDriver(), limits)
