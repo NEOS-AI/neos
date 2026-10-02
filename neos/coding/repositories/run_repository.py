@@ -25,11 +25,15 @@ from neos.coding.domain.durability import (
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
+    PAUSED_STATUS,
     StaleExecutionLease,
     SteeringApplication,
+    TaskPauseCommit,
+    TaskResumeCommit,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
+from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.text_parts import (
     CodingTextPart,
@@ -243,6 +247,158 @@ class PostgresCodingRunRepository:
                     ),
                     {"task_id": task_id, "now": now},
                 )
+
+    async def pause_task(
+        self,
+        *,
+        lease: ExecutionLease,
+        judgement_type: str,
+        judgement: Mapping[str, Any],
+        reason_code: str,
+        now: datetime,
+    ) -> TaskPauseCommit:
+        """Track Q10b: the loop judged at a safe point that the task must stop.
+
+        One transaction writes the judgement, flips the task `running -> paused`
+        and records `task.status.changed`. The run stays `running` (like
+        `waiting_approval`) so a resume continues it from its latest checkpoint.
+        A task that is no longer the lease holder's running task is stale.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=now)
+                await self._lock_canonical_running_run(session, lease)
+                checkpoint_id = await self._latest_checkpoint_id_in_session(
+                    session, lease
+                )
+                judged = await self._append_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    event_type=judgement_type,
+                    payload=judgement,
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint_id,
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'paused', updated_at = :now,
+                            last_activity_at = :now
+                        WHERE task_id = :task_id AND status = 'running'
+                        RETURNING task_id
+                        """
+                    ),
+                    {"task_id": lease.task_id, "now": now},
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                status_event = await self._append_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    event_type="task.status.changed",
+                    payload={"status": PAUSED_STATUS, "reason_code": reason_code},
+                    now=now,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return TaskPauseCommit(events=(judged, status_event))
+
+    async def resume_paused_task(
+        self, *, task_id: str, owner_id: str, now: datetime
+    ) -> TaskResumeCommit | None:
+        """A person resumes a paused task (track Q10b). `None` when it is not paused.
+
+        Ownership is the only check -- the same `owner_id` rule as every other
+        coding route. `paused -> running`; the run was never closed.
+        """
+        async with await self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT status
+                            FROM coding_tasks
+                            WHERE task_id = :task_id AND owner_id = :owner_id
+                              AND deleted_at IS NULL
+                            FOR UPDATE
+                            """
+                        ),
+                        {"task_id": task_id, "owner_id": owner_id},
+                    )
+                ).first()
+                if row is None:
+                    raise CodingTaskNotFound(task_id)
+                if row[0] != PAUSED_STATUS:
+                    return None
+                run_row = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT run.run_id,
+                                   (SELECT checkpoint.checkpoint_id
+                                      FROM coding_checkpoints checkpoint
+                                     WHERE checkpoint.task_id = run.task_id
+                                       AND checkpoint.run_id = run.run_id
+                                     ORDER BY checkpoint.seq DESC
+                                     LIMIT 1)
+                            FROM coding_runs run
+                            WHERE run.task_id = :task_id
+                            ORDER BY run.attempt DESC
+                            LIMIT 1
+                            """
+                        ),
+                        {"task_id": task_id},
+                    )
+                ).first()
+                await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'running', updated_at = :now,
+                            last_activity_at = :now
+                        WHERE task_id = :task_id AND status = 'paused'
+                        """
+                    ),
+                    {"task_id": task_id, "now": now},
+                )
+                run_id = run_row[0] if run_row is not None else None
+                checkpoint_id = run_row[1] if run_row is not None else None
+                event = await self._append_event_in_session(
+                    session,
+                    task_id=task_id,
+                    event_type="task.status.changed",
+                    payload={"status": "running", "resumed_by": "owner"},
+                    now=now,
+                    run_id=run_id,
+                    checkpoint_id=checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return TaskResumeCommit(event=event, checkpoint_id=checkpoint_id)
+
+    @staticmethod
+    async def _latest_checkpoint_id_in_session(
+        session, lease: ExecutionLease
+    ) -> str | None:
+        result = await session.execute(
+            text(
+                """
+                SELECT checkpoint_id
+                FROM coding_checkpoints
+                WHERE task_id = :task_id AND run_id = :run_id
+                ORDER BY seq DESC
+                LIMIT 1
+                """
+            ),
+            {"task_id": lease.task_id, "run_id": lease.run_id},
+        )
+        row = result.first()
+        return row[0] if row is not None else None
 
     async def _commit_terminal_run(
         self,

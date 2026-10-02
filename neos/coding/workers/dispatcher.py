@@ -10,6 +10,8 @@ class CodingDispatchSource(StrEnum):
     RECONCILIATION = "reconciliation"
     CONTINUATION = "continuation"
     APPROVAL = "approval"
+    #: Q10b -- a person resumed a paused task.
+    RESUME = "resume"
 
 
 class CodingTaskDispatcher(Protocol):

@@ -43,6 +43,9 @@ _ALLOWED_TRANSITIONS: dict[CodingTaskStatus, frozenset[CodingTaskStatus]] = {
             CodingTaskStatus.WAITING_APPROVAL,
             CodingTaskStatus.WAITING_USER,
             CodingTaskStatus.PAUSING,
+            # 트랙 Q10b -- safe point 에서 스스로 판정한 멈춤은 그 자리에서 커밋된다.
+            # PAUSING 은 루프 **밖에서** 멈춤을 요청한 경우(Q5 의 바깥 감시자 등)의 대기 상태다.
+            CodingTaskStatus.PAUSED,
             CodingTaskStatus.COMPLETED,
             CodingTaskStatus.FAILED,
             CodingTaskStatus.CANCELLING,
@@ -57,8 +60,15 @@ _ALLOWED_TRANSITIONS: dict[CodingTaskStatus, frozenset[CodingTaskStatus]] = {
     CodingTaskStatus.PAUSING: frozenset(
         {CodingTaskStatus.PAUSED, CodingTaskStatus.FAILED}
     ),
+    # 트랙 Q10b -- 멈춘 동안 런은 `running` 으로 남는다(승인 대기와 같은 모양). 재개는
+    # 사람만 하고 같은 런의 최신 체크포인트에서 이어 간다 -- 그래서 RUNNING 으로 돌아간다.
     CodingTaskStatus.PAUSED: frozenset(
-        {CodingTaskStatus.QUEUED, CodingTaskStatus.CANCELLING, CodingTaskStatus.EXPIRED}
+        {
+            CodingTaskStatus.RUNNING,
+            CodingTaskStatus.QUEUED,
+            CodingTaskStatus.CANCELLING,
+            CodingTaskStatus.EXPIRED,
+        }
     ),
     CodingTaskStatus.CANCELLING: frozenset(
         {CodingTaskStatus.CANCELLED, CodingTaskStatus.FAILED}

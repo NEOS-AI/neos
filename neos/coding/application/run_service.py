@@ -11,7 +11,10 @@ from neos.coding.domain.durability import (
     RunAlreadyLeased,
     StaleExecutionLease,
     SteeringApplication,
+    TaskPaused,
+    TaskResumeCommit,
     ToolExecutionDisposition,
+    is_pause_event,
 )
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.models import (
@@ -125,6 +128,11 @@ class CodingRunService:
         self._execution_lease = execution_lease
         self._workspace_edit_batch_size = workspace_edit_batch_size
         self._on_completed = on_completed
+        self._wake: Callable[[str, str | None], Awaitable[None]] | None = None
+
+    def set_wake(self, wake: Callable[[str, str | None], Awaitable[None]] | None) -> None:
+        """Q10b -- how a resumed task reaches a worker (the runtime's dispatcher)."""
+        self._wake = wake
 
     async def ensure_started(self, *, task_id: str) -> CodingRun:
         task = await self._tasks.get(task_id)
@@ -246,6 +254,12 @@ class CodingRunService:
         if self._metrics is not None:
             self._metrics.coding_lease_contention_total.labels(outcome="acquired").inc()
         task = await self._tasks.get(task_id)
+        if task is not None and task.status is CodingTaskStatus.PAUSED:
+            # Q10b -- the run is still `running` (like `waiting_approval`), so a
+            # lease can be had; a paused task must still not move until a person
+            # resumes it. Not `None`: that means "completed" to the runner.
+            await self._release_lease(lease)
+            raise TaskPaused(task_id)
         if task is not None and task.status is CodingTaskStatus.CANCELLED:
             committed = await self._cancel_active_run(lease, now)
             await self._release_lease(lease)
@@ -336,6 +350,9 @@ class CodingRunService:
                             self._metrics.coding_resume_total.labels(
                                 outcome="success"
                             ).inc()
+                    await self._release_lease(lease)
+                    return event
+                if is_pause_event(event):
                     await self._release_lease(lease)
                     return event
                 if event.type == "run.completed":
@@ -639,6 +656,26 @@ class CodingRunService:
             await self._apply_queued_cancel(request)
         finally:
             await self._release_lease(lease)
+
+    async def resume(self, *, task_id: str, owner_id: str) -> TaskResumeCommit | None:
+        """A person resumes a paused task (track Q10b). `None` when it is not paused.
+
+        Only a person: this is an owner route and no tool reaches it. Whatever
+        paused the task (the envelope, later the monitor) judges again at the
+        next safe point -- resuming an agent that is still over its envelope
+        pauses it again before the next model call.
+        """
+        resume = getattr(self._runs, "resume_paused_task", None)
+        if resume is None:
+            return None
+        commit = await resume(task_id=task_id, owner_id=owner_id, now=self._clock())
+        if commit is not None and self._wake is not None:
+            try:
+                await self._wake(task_id, commit.checkpoint_id)
+            except Exception:
+                # The task is `running` again; the reconciliation sweep finds it.
+                logger.exception("coding resume wake failed task_id=%s", task_id)
+        return commit
 
     async def _mark_task_cancelled(self, task_id: str, now: datetime) -> None:
         marker = getattr(self._runs, "mark_task_cancelled", None)

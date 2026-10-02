@@ -13,8 +13,11 @@
   사용자가 맡긴 autonomous 일은 나머지만 쓴다(`reserve_background_share`, 끄면 봉투 전부).
   background 지출도 전체에 들어간다.
 - 두 자리에서 읽는다: 새 태스크를 열 때(`open_agent_task` -- **막는다**), 진행 중
-  태스크의 모델 턴 safe point(**섀도** -- `budget.judged` 만 남기고 멈추지 않는다).
-  `PAUSED` 로 보내는 길은 Q5 와 함께 쓰는 별도 단계다(분석 §6 결정 3).
+  태스크의 모델 턴 safe point(기본 **섀도** -- `budget.judged` 만 남기고 멈추지 않는다).
+- 트랙 Q10b: `enforce` 가 켜져 있으면 safe point 가 넘은 태스크를 `PAUSED` 로 보낸다
+  (`budget.judged` 의 `enforced: true` + `task.status.changed`). 재개는 사람만 한다.
+  알림기(`notifier`)가 있으면 봉투의 `warn_ratio` 에 닿을 때 달마다 한 번, 멈출 때마다
+  한 번 소유자에게 알린다(결정 D7). 알림 실패는 판정을 바꾸지 않는다.
 """
 
 from __future__ import annotations
@@ -27,6 +30,12 @@ from typing import Any, Protocol
 from sqlalchemy import text
 
 from neos.coding.domain.models import CodingTaskMode
+from neos.standing.notifications import (
+    KIND_BUDGET_WARNING,
+    KIND_TASK_PAUSED,
+    StandingNotice,
+    StandingNotifier,
+)
 
 #: 봉투를 넘었다는 사유 코드. `AgentTaskRefused.reason` 과 `budget.judged` 가 같은 값을 쓴다.
 OVER_ENVELOPE = "budget_envelope_exhausted"
@@ -54,7 +63,7 @@ class EnvelopeVerdict:
     period_start: datetime
     reserve_background_share: bool = True
 
-    def payload(self, *, mode: str) -> dict[str, Any]:
+    def payload(self, *, mode: str, enforced: bool = False) -> dict[str, Any]:
         """`budget.judged` 의 payload. 판정을 다시 계산할 수 있는 값을 전부 싣는다."""
         return {
             "would_pause": self.over,
@@ -66,7 +75,7 @@ class EnvelopeVerdict:
             "period_start": self.period_start.isoformat(),
             "reserve_background_share": self.reserve_background_share,
             "mode": mode,
-            "enforced": False,
+            "enforced": enforced,
         }
 
 
@@ -138,13 +147,74 @@ class AgentBudgetEnvelope:
         limit_micros: int,
         background_share: float,
         reserve_background_share: bool = True,
+        enforce: bool = False,
+        warn_ratio: float | None = None,
+        notifier: StandingNotifier | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._source = source
         self._limit = limit_micros
         self._share = background_share
         self._reserve = reserve_background_share
+        self._enforce = enforce
+        self._warn_ratio = warn_ratio
+        self._notifier = notifier
         self._clock = clock
+
+    @property
+    def enforce(self) -> bool:
+        """Q10b -- 넘은 진행 중 태스크를 멈추게 하는가. 꺼져 있으면 섀도다."""
+        return self._enforce
+
+    @property
+    def notifies(self) -> bool:
+        return self._notifier is not None
+
+    async def warn_if_due(self, agent_id: str, verdict: EnvelopeVerdict) -> bool:
+        """봉투의 `warn_ratio` 에 닿았으면 그 달에 한 번 알린다(결정 D7).
+
+        넘은 뒤에도 같은 알림이다 -- 한 턴에 80% 를 건너뛴 달에도 한 번은 간다.
+        한 번은 중복 키(`budget_warning:YYYY-MM`)가 보장한다.
+        """
+        if self._notifier is None or self._warn_ratio is None:
+            return False
+        threshold = int(verdict.limit_micros * self._warn_ratio)
+        if verdict.spent_micros < threshold:
+            return False
+        month = verdict.period_start.strftime("%Y-%m")
+        return await self._notifier.notify(
+            StandingNotice(
+                agent_id=agent_id,
+                kind=KIND_BUDGET_WARNING,
+                dedupe_key=f"{KIND_BUDGET_WARNING}:{month}",
+                body=(
+                    f"[NEOS] 상시 에이전트 예산 경고 ({month} UTC)\n"
+                    f"이번 달 봉투의 {_percent(verdict.spent_micros, verdict.limit_micros)} 를 "
+                    f"썼습니다: {_dollars(verdict.spent_micros)} / {_dollars(verdict.limit_micros)}."
+                ),
+            )
+        )
+
+    async def notify_paused(
+        self, agent_id: str, verdict: EnvelopeVerdict, *, task_id: str, seq: int
+    ) -> bool:
+        """멈춤마다 한 번(`task_paused:{task_id}:{seq}`). 재개 뒤 다시 멈추면 또 간다."""
+        if self._notifier is None:
+            return False
+        return await self._notifier.notify(
+            StandingNotice(
+                agent_id=agent_id,
+                kind=KIND_TASK_PAUSED,
+                dedupe_key=f"{KIND_TASK_PAUSED}:{task_id}:{seq}",
+                body=(
+                    f"[NEOS] 상시 에이전트 태스크를 멈췄습니다: {task_id}\n"
+                    f"사유: {verdict.reason} -- 이번 달 지출 {_dollars(verdict.spent_micros)} / "
+                    f"한도 {_dollars(verdict.limit_micros)}.\n"
+                    "재개는 사람만 합니다 -- 코딩 화면의 Resume 또는 "
+                    f"POST /api/v1/coding/tasks/{task_id}/resume."
+                ),
+            )
+        )
 
     async def judge(self, agent_id: str, mode: CodingTaskMode | str) -> EnvelopeVerdict:
         start, end = month_bounds(self._clock())
@@ -157,6 +227,16 @@ class AgentBudgetEnvelope:
             period_start=start,
             reserve_background_share=self._reserve,
         )
+
+
+def _dollars(micros: int) -> str:
+    return f"${micros / 1_000_000:,.2f}"
+
+
+def _percent(part: int, whole: int) -> str:
+    if whole <= 0:
+        return "100%"
+    return f"{int(part * 100 / whole)}%"
 
 
 class InMemoryAgentSpendSource:
@@ -235,10 +315,15 @@ def build_agent_envelope(
     budget = getattr(standing, "budget", None)
     if budget is None or not budget.enabled:
         return None
+    from neos.standing.notifications import build_standing_notifier
+
     return AgentBudgetEnvelope(
         PostgresAgentSpendSource(session_factory),
         limit_micros=budget.monthly_limit_micros,
         background_share=budget.background_share,
         reserve_background_share=budget.reserve_background_share,
+        enforce=bool(getattr(budget, "enforce", False)),
+        warn_ratio=getattr(budget, "warn_ratio", None),
+        notifier=build_standing_notifier(standing, session_factory),
     )
 

@@ -733,6 +733,55 @@ class StandingBudgetConfig(StrictConfigModel):
     #: 하지 않게 하는 쪽이 기본이다. 끄면 autonomous 는 봉투 전부를 쓸 수 있다(그 몫도 먹는다).
     #: 켠 채 `background_share = 1.0` 이면 autonomous 몫은 0 이다.
     reserve_background_share: bool = True
+    #: 트랙 Q10b -- 진행 중 태스크가 봉투를 넘으면 다음 모델 턴 safe point 에서 `PAUSED` 로
+    #: 보낸다. 꺼져 있으면(기본) Q10a 의 섀도 그대로다(`budget.judged`, `enforced: false`).
+    #: 재개는 사람만 한다(`POST /coding/tasks/{id}/resume`).
+    enforce: bool = False
+    #: 트랙 Q10b(결정 D7) -- 봉투의 이 비율에 닿으면 소유자에게 **달마다 한 번** 알린다.
+    #: 알림은 `standing_agents.notifications` 가 켜져 있고 에이전트에 알림 채널이 있을 때만 간다.
+    warn_ratio: float = Field(default=0.8, gt=0.0, lt=1.0)
+
+
+class StandingNotificationsConfig(StrictConfigModel):
+    """소유자 알림 -- 트랙 Q10b · Q3 (docs/Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md).
+
+    워커는 알림을 **보내지 않고 적는다**(`standing_notifications`). 채널 어댑터는 API
+    프로세스에만 있으므로 그 프로세스가 적힌 것을 꺼내 보낸다. 꺼져 있으면 적지도
+    꺼내지도 않는다.
+    """
+
+    enabled: bool = False
+    #: API 프로세스가 큐를 꺼내는 주기(초).
+    poll_interval_seconds: float = Field(default=10.0, gt=0.0)
+    #: 한 번에 꺼내는 수.
+    batch_size: int = Field(default=20, ge=1)
+    #: 보내기를 이만큼 실패하면 포기한다(행은 남는다 -- `failed`).
+    max_attempts: int = Field(default=5, ge=1)
+    #: 한 알림 본문의 상한(문자). 넘으면 잘라 끝을 표시한다.
+    max_body_chars: int = Field(default=3_500, ge=200)
+
+
+class StandingQuestionsConfig(StrictConfigModel):
+    """상시 질문 -- 트랙 Q3 (docs/Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md).
+
+    에이전트가 정해진 주기로 같은 질문을 심층분석(DA)으로 다시 묻고, 직전 런과
+    **verified 클레임 집합이 달라졌을 때만** 소유자에게 알린다. 꺼져 있으면 라우트도
+    폴러도 없다.
+    """
+
+    enabled: bool = False
+    #: 에이전트 하나가 가질 수 있는 상시 질문 수.
+    max_per_agent: int = Field(default=5, ge=1)
+    #: 두 실행 사이의 최소 간격(분). cron 이 이보다 촘촘하면 만들 때 거절한다 --
+    #: DA 런은 비싸고 무인이다.
+    min_interval_minutes: int = Field(default=360, ge=1)
+    #: 상시 질문이 쓰는 DA 프로파일.
+    profile: Literal["dev", "default"] = "default"
+    #: 알림 본문에 싣는 클레임 수(분류마다).
+    max_claims_per_section: int = Field(default=5, ge=1)
+    #: 제출한 DA 런이 이만큼(분) 지나도 끝나지 않으면 실패로 정산한다 -- 죽은 잡이 그
+    #: 질문의 다음 회차를 영원히 막지 않게. DA 잡의 재시도까지 기다릴 만큼 넉넉하게.
+    settle_timeout_minutes: int = Field(default=720, ge=1)
 
 
 class StandingAgentsConfig(StrictConfigModel):
@@ -745,6 +794,10 @@ class StandingAgentsConfig(StrictConfigModel):
     enabled: bool = False
     triggers: StandingTriggersConfig = Field(default_factory=StandingTriggersConfig)
     budget: StandingBudgetConfig = Field(default_factory=StandingBudgetConfig)
+    notifications: StandingNotificationsConfig = Field(
+        default_factory=StandingNotificationsConfig
+    )
+    questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
 
 
 class LearnConfig(StrictConfigModel):

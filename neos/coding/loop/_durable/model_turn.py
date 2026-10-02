@@ -123,6 +123,17 @@ class _TurnStream:
 logger = logging.getLogger("neos.coding.loop.durable")
 
 
+async def _warn_if_due(envelope, agent_id, verdict) -> None:
+    """봉투 경고(결정 D7). 알림기가 없으면 아무것도 하지 않는다 -- off 면 바이트가 같다."""
+    warn = getattr(envelope, "warn_if_due", None)
+    if not callable(warn):
+        return
+    try:
+        await warn(agent_id, verdict)
+    except Exception:  # noqa: BLE001 -- 알림은 판정을 바꾸지 않는다
+        logger.warning("agent budget warning failed", exc_info=True)
+
+
 class ModelTurnMixin:
     async def _monitor_safe_point(self, input, deps) -> None:
         """궤적 감시자(트랙 Q5)의 자리. **섀도** -- 무엇이 일어나도 런은 그대로다.
@@ -155,16 +166,19 @@ class ModelTurnMixin:
 
         에이전트가 연 태스크만 본다. 넘었을 때만 원장을 읽고, 이 런에 아직 판정이
         없으면 `budget.judged` 하나를 남긴다 -- 넘은 동안 매 턴 쌓이지 않게. 멈추게
-        하는 길(`PAUSED`)은 감시자(Q5)와 함께 쓰는 별도 단계다.
+        하는 길(`PAUSED`)은 `enforce` 일 때의 `_envelope_pause_point` 다(Q10b).
         """
         envelope = getattr(self, "_envelope", None)
         agent_id = getattr(input, "agent_id", None)
         reader = getattr(deps.events, "list_after", None)
         if envelope is None or agent_id is None or not callable(reader):
             return
+        if getattr(envelope, "enforce", False):
+            return  # Q10b -- `_envelope_pause_point` 가 이미 이 턴을 판정했다
         mode = getattr(input, "mode", "background")
         try:
             verdict = await envelope.judge(agent_id, mode)
+            await _warn_if_due(envelope, agent_id, verdict)
             if not verdict.over:
                 return
             events = await _read_ledger(reader, input.task_id, limit=_ENVELOPE_LEDGER_WINDOW)
@@ -182,10 +196,54 @@ class ModelTurnMixin:
         except Exception:  # noqa: BLE001 -- 섀도는 런을 바꾸지 않는다
             logger.warning("agent budget envelope failed", exc_info=True)
 
+    async def _envelope_pause_point(self, input, deps):
+        """봉투 집행(트랙 Q10b). 넘은 에이전트 태스크를 **이 자리에서** `PAUSED` 로 보낸다.
+
+        턴의 맨 앞 -- 자식에게 한 걸음을 주기 **전**이다. 멈출 태스크의 자식이 한 번
+        더 쓰지 않게, 그리고 이 자리의 상태가 최신 체크포인트와 같아 멈춤이 새
+        체크포인트를 쓸 필요가 없게. 재개하면 같은 런이 그 체크포인트에서 이어 간다.
+
+        판정을 읽지 못하면 멈추지 않는다: 다음 턴이 다시 판정하므로 일시적 고장의
+        값은 많아야 한 턴이고, 계속되는 DB 고장이면 루프 자신의 커밋이 먼저 실패한다.
+        멈춤 커밋의 실패(`StaleExecutionLease`)는 그대로 올라간다 -- 리스를 잃은 쪽은
+        멈춰야 한다. 반환값은 멈춤의 `task.status.changed` 이벤트, 아니면 `None`.
+        """
+        envelope = getattr(self, "_envelope", None)
+        agent_id = getattr(input, "agent_id", None)
+        if envelope is None or agent_id is None or not getattr(envelope, "enforce", False):
+            return None
+        mode = getattr(input, "mode", "background")
+        try:
+            verdict = await envelope.judge(agent_id, mode)
+        except Exception:  # noqa: BLE001 -- 위 독스트링: 다음 턴이 다시 판정한다
+            logger.warning("agent budget envelope failed", exc_info=True)
+            return None
+        await _warn_if_due(envelope, agent_id, verdict)
+        if not verdict.over:
+            return None
+        commit = await deps.repository.pause_task(
+            lease=deps.lease,
+            judgement_type="budget.judged",
+            judgement=verdict.payload(mode=mode, enforced=True),
+            reason_code=str(verdict.reason),
+            now=self._clock(),
+        )
+        try:
+            await envelope.notify_paused(
+                agent_id, verdict, task_id=input.task_id, seq=commit.status_event.seq
+            )
+        except Exception:  # noqa: BLE001 -- 알림은 멈춤을 바꾸지 않는다
+            logger.warning("agent budget pause notice failed", exc_info=True)
+        return commit.status_event
+
     async def _advance_one_model_turn(self, input, state, bound, deps):
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
+        paused = await self._envelope_pause_point(input, deps)
+        if paused is not None:
+            yield paused
+            return
         # The safe point (K3). Before anything is built for this turn, every
         # detached child gets one step and every finished one hands its report
         # to the transcript -- so the report is in the request this turn sends,

@@ -8,10 +8,13 @@ from neos.coding.domain.durability import (
     ExecutionLease,
     ModelCheckpointCommit,
     PhaseCheckpointCommit,
+    PAUSED_STATUS,
     PhaseStart,
     RunLifecycleCommit,
     StaleExecutionLease,
     SteeringApplication,
+    TaskPauseCommit,
+    TaskResumeCommit,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -201,6 +204,10 @@ class InMemoryCodingRunRepository:
         self.model_commit_calls = 0
         self.task_prompts = dict(task_prompts or {})
         self.task_statuses = {task_id: "queued" for task_id in self.task_prompts}
+        #: Q10b -- who may resume. Unknown tasks accept any owner (most loop tests
+        #: never resume); the resume tests set it.
+        self.task_owners: dict[str, str] = {}
+        self.pause_events = []
 
     def _canonical_run(self, task_id):
         runs_by_id = {
@@ -288,6 +295,73 @@ class InMemoryCodingRunRepository:
             "cancelled",
         }:
             self.task_statuses[task_id] = "cancelled"
+
+    async def pause_task(self, *, lease, judgement_type, judgement, reason_code, now):
+        """Same contract as Postgres: judgement + `running -> paused`, run stays running."""
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=now)
+            self._require_canonical_running_run(lease)
+            if self.task_statuses.get(lease.task_id, "running") != "running":
+                raise StaleExecutionLease(lease.task_id)
+            checkpoint_id = self._latest_checkpoint_id(lease.task_id, lease.run_id)
+            events = []
+            for event_type, payload in (
+                (judgement_type, dict(judgement)),
+                ("task.status.changed", {"status": PAUSED_STATUS, "reason_code": reason_code}),
+            ):
+                self._durability_seq += 1
+                events.append(
+                    make_event(
+                        task_id=lease.task_id,
+                        seq=self._durability_seq,
+                        event_type=event_type,
+                        payload=payload,
+                        now=now,
+                        run_id=lease.run_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+                )
+            self.task_statuses[lease.task_id] = PAUSED_STATUS
+            self.pause_events.extend(events)
+            return TaskPauseCommit(events=tuple(events))
+
+    async def resume_paused_task(self, *, task_id, owner_id, now):
+        async with self._durability_lock:
+            owner = self.task_owners.get(task_id)
+            if task_id not in self.task_statuses or (owner is not None and owner != owner_id):
+                from neos.coding.domain.errors import CodingTaskNotFound
+
+                raise CodingTaskNotFound(task_id)
+            if self.task_statuses[task_id] != PAUSED_STATUS:
+                return None
+            run = self._canonical_run(task_id)
+            run_id = run.run_id if run is not None else None
+            checkpoint_id = self._latest_checkpoint_id(task_id, run_id)
+            self._durability_seq += 1
+            event = make_event(
+                task_id=task_id,
+                seq=self._durability_seq,
+                event_type="task.status.changed",
+                payload={"status": "running", "resumed_by": "owner"},
+                now=now,
+                run_id=run_id,
+                checkpoint_id=checkpoint_id,
+            )
+            self.task_statuses[task_id] = "running"
+            self.pause_events.append(event)
+            return TaskResumeCommit(event=event, checkpoint_id=checkpoint_id)
+
+    def _latest_checkpoint_id(self, task_id, run_id):
+        latest = max(
+            (
+                checkpoint
+                for checkpoint in self.checkpoints
+                if checkpoint.task_id == task_id and checkpoint.run_id == run_id
+            ),
+            key=lambda checkpoint: checkpoint.seq,
+            default=None,
+        )
+        return latest.checkpoint_id if latest is not None else None
 
     async def _commit_terminal_run(self, *, lease, status, payload, now):
         async with self._durability_lock:

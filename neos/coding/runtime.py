@@ -913,6 +913,17 @@ def create_development_coding_runtime(
                     source=CodingDispatchSource.APPROVAL,
                 )
 
+        async def wake_resumed(task_id: str, checkpoint_id: str | None) -> None:
+            if supervisor is not None:
+                supervisor.notify(task_id)
+            elif settings.CODING_CELERY_ENABLED:
+                create_celery_dispatcher().enqueue(
+                    task_id,
+                    expected_checkpoint_id=checkpoint_id,
+                    source=CodingDispatchSource.RESUME,
+                )
+
+        runtime.runs.set_wake(wake_resumed)
         runtime.approvals = CodingApprovalService(
             run_repository,
             wake=wake_approval,

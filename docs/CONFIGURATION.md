@@ -1333,6 +1333,8 @@ standing_agents:
     monthly_limit_micros: 20000000   # per agent per UTC calendar month ($20)
     background_share: 0.5            # background tasks may spend only this share
     reserve_background_share: true   # false: autonomous work may also spend that share
+    enforce: false                   # Q10b: pause running tasks that are over the envelope
+    warn_ratio: 0.8                  # Q10b: tell the owner once a month at this share
 ```
 
 Spend is not counted separately: it is the sum of the latest checkpoint's
@@ -1348,10 +1350,95 @@ work. With `reserve_background_share: false` autonomous work may spend the whole
 envelope, share included. With `background_share: 1.0` and the reservation on,
 autonomous work gets nothing. This applies to the self-introduction and to triggers alike.
 
-Running tasks are **not** stopped yet. When one is over the envelope at a model
-turn, the ledger gets one `budget.judged` event per run (`enforced: false`),
-visible in the activity feed. Pausing a running task is a later step shared with
-the trajectory monitor (Q5).
+With `enforce: false` (the default) running tasks are **not** stopped: when one
+is over the envelope at a model turn, the ledger gets one `budget.judged` event
+per run (`enforced: false`), visible in the activity feed.
+
+With `enforce: true` (track Q10b) an agent task that is over the envelope is
+**paused** at the start of its next model turn -- before its detached children
+take a step and before the model is called. One transaction writes
+`budget.judged` (`enforced: true`) and `task.status.changed` (`status: paused`,
+`reason_code`). The run itself stays `running`, like a task waiting for
+approval, so no worker picks the task up and resuming continues the same run
+from its latest checkpoint. Only a person resumes it:
+
+```
+POST /api/v1/coding/tasks/{task_id}/resume     # owner only; 409 task_not_paused otherwise
+```
+
+The Code UI shows a `paused` badge and a Resume button. Resuming an agent that
+is still over its envelope pauses it again before the next model call -- raise
+the limit or wait for the next month. Cancel works on a paused task. If the
+envelope cannot be read at a turn, the task is not paused (the next turn judges
+again). The route exists only when `standing_agents.enabled` is on.
+
+#### Owner notices (tracks Q10b, Q3)
+
+```yaml
+standing_agents:
+  notifications:
+    enabled: false
+    poll_interval_seconds: 10   # how often the API process sends queued notices
+    batch_size: 20
+    max_attempts: 5             # then the notice is marked failed (the row stays)
+    max_body_chars: 3500        # longer bodies are cut and marked
+```
+
+An agent's notices go to one channel the owner sets:
+
+```
+GET/PUT/DELETE /api/v1/standing-agents/{agent_id}/notify-target
+               {"channel_type": "slack" | "discord" | "telegram", "channel_id": "..."}
+```
+
+Workers do not send: they write to the `standing_notifications` queue
+(migration 085) and the API process -- the only process with channel adapters
+-- sends from it. A notice is written only when the agent has a target, and its
+destination is fixed when it is written. Notices are deduplicated per agent:
+the budget warning once per month when spend reaches `warn_ratio` of the
+envelope, one notice per pause, and (track Q3) one per standing-question run.
+Failed sends are retried with backoff. A missing adapter for the channel type
+counts as a failed send. The notice-target routes exist only when notifications
+are on.
+
+#### Standing questions (track Q3)
+
+```yaml
+standing_agents:
+  questions:
+    enabled: false
+    max_per_agent: 5
+    min_interval_minutes: 360     # the cron's shortest gap must be at least this
+    profile: default              # deep-analysis profile for the runs
+    max_claims_per_section: 5     # claim lines per section in a notice
+    settle_timeout_minutes: 720   # a run still running after this is settled as failed
+```
+
+An agent asks the same question on a UTC cron schedule. Each occurrence opens an
+ordinary deep-analysis run (owner as `user_id`, no conversation) through the
+usual executor; a once-a-minute Celery beat poller (`poll-standing-questions`,
+registered only when both `standing_agents.enabled` and `questions.enabled` are
+on -- **nothing runs without Celery beat**) settles finished runs and dispatches
+due questions. A question has at most one run in flight.
+
+Settling compares the run's **verified claims** with the last settled run's:
+claims pair by the normalized claim hash, then by shared evidence blobs. The
+owner is notified (through the notice queue above) only when something was
+**newly verified** or **refuted** (a verified claim now rejected). Dropped
+claims and rephrase candidates are counted in the notice but never trigger one.
+The first settled run is a silent baseline; failed runs never become baselines.
+An occurrence is skipped (and `last_skip_reason` set) when the agent is not
+active or its envelope is out of background budget. Deep-analysis spend is not
+counted in the envelope, so the interval floor and the per-agent cap are what
+bound cost.
+
+```
+POST   /api/v1/standing-agents/{agent_id}/questions                {question, cron_expression}
+GET    /api/v1/standing-agents/{agent_id}/questions
+PATCH  /api/v1/standing-agents/{agent_id}/questions/{question_id}  {enabled}
+DELETE /api/v1/standing-agents/{agent_id}/questions/{question_id}
+GET    /api/v1/standing-agents/{agent_id}/questions/{question_id}/runs
+```
 
 ## Staging and Production
 
