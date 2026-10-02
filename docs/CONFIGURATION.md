@@ -787,13 +787,13 @@ Three properties are enforced rather than documented:
 While enforcement is on, the loop stops speculatively prefetching read-only
 tools: that path executes a tool before the decision and would outrun the gate.
 
-#### Trajectory monitor (shadow)
+#### Trajectory monitor (shadow, optional pause)
 
 `jev.monitor` judges a coding task's *flow* rather than one call: recent tool
 calls, their outcomes, the denial reasons and the task mode. It is roadmap
-track Q5 (`docs/OPENAI_DOTS_ANALYSIS_260930.md`). It is shadow-only: every
-judgement is one `monitor.judged` ledger event with `enforced: false`, and no
-task is paused.
+track Q5 (`docs/OPENAI_DOTS_ANALYSIS_260930.md`). By default it is shadow-only:
+every judgement is one `monitor.judged` ledger event with `enforced: false`, and
+no task is paused. `enforce` (track Q5b, below) lets a verdict pause the task.
 
 ```yaml
 jev:
@@ -814,6 +814,7 @@ jev:
     refusals: 1                    # FB5 model.refused
     spend_multiple: 4.0            # FB6 turn tokens vs median of earlier turns
     spend_warmup_turns: 5          # FB6 turns before it judges
+    enforce: false                 # Q5b: a would_pause verdict pauses the task
 ```
 
 Jev is the judge. When it errors, times out, is blocked, or returns no
@@ -822,7 +823,34 @@ probability, the fallback rules judge that one time and the event says so
 only the ledger. **Config can only make them stricter**: each field's default is
 its bound, so validation rejects a looser value. The monitor reads the ledger
 through the event store's `list_after`; a sink without it is never judged, and a
-monitor error is logged and never changes the run.
+monitor error is logged and never changes the run. The read is a per-task
+cursor: each model turn reads only the events after the last seq it saw (the
+most recent `max_events` are kept per task, in the worker process).
+
+**Enforcement (track Q5b, `docs/Q5B_MONITOR_PAUSE_DESIGN_261002.md`).** With
+`enforce: true` every judgement carries `enforced: true`, and a `would_pause`
+verdict -- from Jev *or* from the fallback rules; one flag lifts both -- pauses
+the task through the same path as the budget envelope: at the start of the next
+due model turn (before detached children step and before the model call), one
+transaction writes `monitor.judged` and `task.status.changed`
+(`status: paused`, `reason_code: monitor_jev` or `monitor_fallback_fb1`..`fb6`).
+The run stays `running`; only a person resumes it through
+`POST /api/v1/coding/tasks/{task_id}/resume`, which is mounted whenever
+enforcement is on. Unlike the envelope, the monitor watches **every** task, not
+only standing-agent tasks. After a resume the monitor waits for
+`every_n_tool_results` more tool results before it judges again. If both the
+envelope and the monitor would pause on the same turn, the envelope pauses and
+the monitor does not judge that turn.
+
+There is **no default pause boundary**. Enforcement refuses to start unless
+`shadow_enabled` is on and every boundary field -- `pause_at_or_above` and all
+eight fallback thresholds (`user_only` .. `spend_warmup_turns`) -- is written
+explicitly in config, even when the value equals the default: the defaults are
+the shadow's first values, not a measured line to stop tasks at. The fallback
+fields still only move in the stricter direction. A monitor fault (not a Jev
+fault, which the fallback rules judge) never pauses. FB5 (`model.refused`) does
+not fire in the loop: a refusal already ends the run as a non-retryable
+failure, which is stronger than a pause.
 
 ### Coding approval: USER_ONLY and background mode
 
@@ -1430,7 +1458,9 @@ The Code UI shows a `paused` badge and a Resume button. Resuming an agent that
 is still over its envelope pauses it again before the next model call -- raise
 the limit or wait for the next month. Cancel works on a paused task. If the
 envelope cannot be read at a turn, the task is not paused (the next turn judges
-again). The route exists only when `standing_agents.enabled` is on.
+again). The route exists whenever something can pause a task:
+`standing_agents.enabled` (the envelope) or `jev.monitor.enforce` (the
+trajectory monitor, which pauses any task -- see below).
 
 #### Owner notices (tracks Q10b, Q3)
 
