@@ -712,10 +712,21 @@ def test_main_cleans_up_cassette_temp_dir_when_sample_raises(
     assert not captured["cassette"].path.parent.exists()
 
 
-def test_fingerprint_reports_ledger_manifests_without_credential_shaped_keys():
+def test_fingerprint_reports_ledger_manifests_without_credential_shaped_keys(monkeypatch):
     """`_fingerprint` no longer recomputes config -- it just wraps whatever
     the ledger already handed it, alongside git identity, and never invents
-    credential-shaped keys of its own."""
+    credential-shaped keys of its own.
+
+    The git identity is pinned: it carries the branch name and the dirty
+    paths of whatever checkout runs the test, and a branch such as
+    `feat/q6c-managed-secret-channel` or a dirty `neos/coding/secrets.py`
+    made this fail by environment, not by code -- it was long filed as flaky.
+    """
+    monkeypatch.setattr(
+        cli,
+        "_git_identity",
+        lambda: {"commit": "0" * 40, "branch": "main", "dirty": False, "dirty_paths": []},
+    )
     manifests = {
         "run0001": {
             "profile": "dev",
