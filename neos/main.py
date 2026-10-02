@@ -601,6 +601,55 @@ _include_router_for_runtime(model_preference_router, prefix=settings.API_V1_PREF
 _include_router_for_runtime(scheduled_tasks_router, prefix=settings.API_V1_PREFIX, tags=["Scheduled Tasks"])  # Phase 4: OpenClaw Cron
 _include_router_for_runtime(ui_submit_router, prefix=settings.API_V1_PREFIX, tags=["A2UI"])  # Phase 8: OpenClaw A2UI
 _include_router_for_runtime(coding_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"])
+# 사용자 승인 규칙(트랙 Q2). 꺼져 있으면 라우트가 없다.
+if settings.config.coding_model.approval_user_rules:
+    from neos.api.handlers.user_rule_handlers import router as user_rule_router
+
+    _include_router_for_runtime(
+        user_rule_router, prefix=settings.API_V1_PREFIX, tags=["Coding Approval Rules"]
+    )
+# 사용자 비밀 금고(트랙 Q6). 꺼져 있으면 라우트가 없다.
+if settings.config.coding_model.secret_broker:
+    from neos.api.handlers.secret_handlers import router as secret_router
+
+    _include_router_for_runtime(
+        secret_router, prefix=settings.API_V1_PREFIX, tags=["Coding Secrets"]
+    )
+# 사용자 기기 브리지(트랙 Q16a). 꺼져 있으면 페어링 API 도 소켓도 **없다**.
+# 소켓은 코딩 소켓처럼 자기 인증(페어링 토큰)을 가지므로 `_include_router_for_runtime` 이
+# 떼어 내지 않게 직접 붙인다.
+if settings.config.coding_model.device_bridge.enabled:
+    from neos.api.handlers.device_bridge_handlers import router as device_bridge_router
+    from neos.api.handlers.device_bridge_ws_handlers import (
+        router as device_bridge_ws_router,
+    )
+
+    _include_router_for_runtime(
+        device_bridge_router, prefix=settings.API_V1_PREFIX, tags=["Coding Device Bridges"]
+    )
+    app.include_router(
+        device_bridge_ws_router,
+        prefix=settings.API_V1_PREFIX,
+        tags=["Coding Device Bridge"],
+    )
+# 상시 에이전트(트랙 Q13b). 꺼져 있으면 라우트가 **없다** -- 거절하는 라우트가 아니다.
+if settings.config.standing_agents.enabled:
+    from neos.api.handlers.standing_agent_handlers import router as standing_agent_router
+
+    _include_router_for_runtime(
+        standing_agent_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
+    )
+    # 이벤트 트리거(트랙 Q4a). 배달 라우트는 인증 의존성이 없다 -- 서명이 인증이다.
+    if settings.config.standing_agents.triggers.enabled:
+        from neos.api.handlers.standing_trigger_handlers import (
+            delivery_router as standing_trigger_delivery_router,
+            router as standing_trigger_router,
+        )
+
+        for _router in (standing_trigger_router, standing_trigger_delivery_router):
+            _include_router_for_runtime(
+                _router, prefix=settings.API_V1_PREFIX, tags=["Standing Agent Triggers"]
+            )
 # 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
 # (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
 _include_router_for_runtime(

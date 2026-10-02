@@ -63,9 +63,14 @@ from pathlib import PurePosixPath
 
 PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 16 * 1024 * 1024
+#: Track Q6b: ``exec`` accepts ``secret_env``, a field separate from ``env``.
+#: A guest that does not advertise this silently ignores the field, so the host
+#: must refuse secrets to it instead of sending them (fail closed).
+SECRET_ENV_CAPABILITY = "exec.secret_env.v1"
 CAPABILITIES = (
     "checksum.v1",
     "exec.v1",
+    SECRET_ENV_CAPABILITY,
     "files.cas.v1",
     "files.v1",
     "pty.v1",
@@ -531,8 +536,18 @@ class _CappedReader(threading.Thread):
             self.data.extend(chunk)
 
 
-def guest_env(workspace: str, tmp_dir: str, overlay: dict | None = None) -> dict:
-    """Built from constants. The daemon's own environment is never inherited."""
+def guest_env(
+    workspace: str,
+    tmp_dir: str,
+    overlay: dict | None = None,
+    secrets: dict | None = None,
+) -> dict:
+    """Built from constants. The daemon's own environment is never inherited.
+
+    ``secrets`` (track Q6b) goes through the same reserved-name filter as
+    ``overlay`` and lands only in the child's environment -- never in argv,
+    a response, or an error code.
+    """
     environment = {
         "PATH": GUEST_PATH,
         "HOME": workspace,
@@ -540,9 +555,10 @@ def guest_env(workspace: str, tmp_dir: str, overlay: dict | None = None) -> dict
         "LANG": GUEST_LANG,
         "LC_ALL": GUEST_LANG,
     }
-    for key, value in (overlay or {}).items():
-        if key not in RESERVED_ENV:
-            environment[key] = value
+    for layer in (overlay or {}, secrets or {}):
+        for key, value in layer.items():
+            if key not in RESERVED_ENV:
+                environment[key] = value
     return environment
 
 
@@ -1321,6 +1337,8 @@ class Workspace:
     def op_exec(self, args: dict) -> dict:
         argv = _validate_argv(args.get("argv"))
         overlay = _validate_env(args.get("env"))
+        # Same validation as `env`; failures carry a constant code, never a value.
+        secrets = _validate_env(args.get("secret_env"))
         stdin = _unb64(args.get("stdin", ""))
         max_stdin = min(int(args["max_stdin_bytes"]), MAX_STDIN_BYTES)
         if len(stdin) > max_stdin:
@@ -1337,7 +1355,7 @@ class Workspace:
             cwd = self.real_dir(normalize(args.get("cwd", ".")))
         except (FileNotFoundError, GuestError) as error:
             raise _policy("command_cwd_is_not_directory") from error
-        env = guest_env(self.root, self.tmp_dir, overlay)
+        env = guest_env(self.root, self.tmp_dir, overlay, secrets)
         with self.lock:
             before = self._fingerprint()
             result = self._run_bounded(argv, cwd, env, stdin, timeout, cap)

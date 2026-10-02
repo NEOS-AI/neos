@@ -4,6 +4,15 @@ from typing import Protocol
 from neos.coding.domain.models import CodingTask, CodingTaskMode, CodingTaskStatus
 
 
+#: `CodingTask` 로 읽는 SELECT 는 전부 이 목록과 `task_from_row` 를 쓴다.
+#: 열을 더할 때 읽는 곳이 여럿이면 한쪽만 고쳐지고 나머지는 조용히 기본값을
+#: 돌려준다(Q13c 전에는 세 곳이 각자 `CodingTask(...)` 를 조립했다).
+TASK_COLUMNS = (
+    "task_id, owner_id, prompt, status, version, last_seq, "
+    "created_at, updated_at, mode, agent_id"
+)
+
+
 class Database(Protocol):
     async def fetch_one(self, query: str, *params): ...
     async def fetch_all(self, query: str, *params): ...
@@ -16,34 +25,31 @@ class CodingTaskRepository:
 
     async def get(self, task_id: str) -> CodingTask | None:
         row = await self._database.fetch_one(
-            """
-            SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at, mode
+            f"""
+            SELECT {TASK_COLUMNS}
             FROM coding_tasks
             WHERE task_id = $1 AND deleted_at IS NULL
             """,
             task_id,
         )
-        return _task_from_row(row)
+        return task_from_row(row)
 
     async def get_owned(self, task_id: str, owner_id: str) -> CodingTask | None:
         row = await self._database.fetch_one(
-            """
-            SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at, mode
+            f"""
+            SELECT {TASK_COLUMNS}
             FROM coding_tasks
             WHERE task_id = $1 AND owner_id = $2 AND deleted_at IS NULL
             """,
             task_id,
             owner_id,
         )
-        return _task_from_row(row)
+        return task_from_row(row)
 
     async def list_owned(self, owner_id: str, *, limit: int) -> list[CodingTask]:
         rows = await self._database.fetch_all(
-            """
-            SELECT task_id, owner_id, prompt, status, version, last_seq,
-                   created_at, updated_at, mode
+            f"""
+            SELECT {TASK_COLUMNS}
             FROM coding_tasks
             WHERE owner_id = $1 AND deleted_at IS NULL
             ORDER BY last_activity_at DESC, task_id DESC
@@ -55,7 +61,7 @@ class CodingTaskRepository:
         return [
             task
             for row in rows or ()
-            if (task := _task_from_row(row)) is not None
+            if (task := task_from_row(row)) is not None
         ]
 
     async def archive(self, task_id: str, owner_id: str) -> bool:
@@ -82,7 +88,7 @@ class CodingTaskRepository:
         return bool(getattr(result, "rowcount", 0))
 
 
-def _task_from_row(row) -> CodingTask | None:
+def task_from_row(row) -> CodingTask | None:
     if row is None:
         return None
     return CodingTask(
@@ -95,6 +101,7 @@ def _task_from_row(row) -> CodingTask | None:
         created_at=_as_datetime(row[6]),
         updated_at=_as_datetime(row[7]),
         mode=CodingTaskMode(row[8]),
+        agent_id=row[9],
     )
 
 

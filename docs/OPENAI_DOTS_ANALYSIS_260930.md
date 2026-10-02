@@ -1,0 +1,279 @@
+# OpenAI dots 분석 — 상시 에이전트가 NEOS 에 요구하는 것
+
+> **작성:** 2026-09-30 · **대상:** OpenAI 「dots를 소개합니다」(2026-09-29, DevDay 2026)
+> **이 문서의 지위:** 트랙 Q(상시 에이전트)의 **정본**이다. ~~분석과 제안이다. 계획이 아니다.~~
+> → **Q0 결정됨(2026-09-30)**: 상시 에이전트를 NEOS 방향에 넣고, 범위는 좁히지 않는다(§4·§6).
+> 로드맵 정본([DEEP_ANALYSIS_HARNESS_ROADMAP.md](DEEP_ANALYSIS_HARNESS_ROADMAP.md))에는 §1 Q 행 ·
+> §11 "결정됨" 행 · §13 Q 포인터만 두고, 항목·순서·결정 원장은 여기에 적는다.
+>
+> **근거 규칙:** dots 에 대한 서술은 원문(한국어판 전문을 브라우저로 읽었다)에서만 가져왔다.
+> 언론 보도에서만 나온 것은 **[보도]**, 원문에 없는 추론은 **[추론]** 으로 표시한다.
+> NEOS 쪽 서술은 전부 2026-09-30 `dev`(`f6569de7`)에서 코드로 확인했고 근거 경로를 단다.
+
+---
+
+## 1. dots 는 무엇인가 — 원문이 말하는 것
+
+**한 줄:** GPT-6 Astra 로 도는 **상시 작동(always-on) 개인 에이전트**. 대화 창이 아니라
+"맡겨 두는 동료"로 설계됐다. 원문의 비유는 **신입 직원** — "신입 직원에게 제공할 거의 모든
+것을 갖추고 업무를 시작합니다."
+
+### 1.1 기능 목록 (원문 순서)
+
+| # | 기능 | 원문의 구체 |
+|---|---|---|
+| F1 | **자기 컴퓨터** | dot 마다 클라우드 컴퓨터 + 자체 브라우저. 코드를 쓰고 테스트한다 |
+| F2 | **고유 ID** | 접근·권한 관리를 위한 dot 자신의 ID |
+| F3 | **작업 관전** | 사용자가 언제든 dot 의 컴퓨터를 열어 본다 |
+| F4 | **사용자 기기 연결** | 선택 시 노트북 등 사용자 기기에 연결해 거기서 일한다 |
+| F5 | **다중 프로젝트** | 여러 프로젝트를 동시에 들고, 새 프로젝트를 **주도적으로** 맡는다. 대화를 나눠 관리할 필요가 없다 |
+| F6 | **피드백 학습** | 선호·사고방식·"좋은 결과물의 기준"을 함께 일할수록 배운다 |
+| F7 | **자체 메모** | dot 이 스스로 기록하는 메모가 있다(학습 데이터 정책 절에서 언급) |
+| F8 | **선제적 조사** | 사용자가 일을 시키지 않아도 백그라운드에서 도울 방법을 찾는다. **읽기 전용 도구로만** — 메시지 전송·앱 콘텐츠 변경·브라우저/컴퓨터 제어 불가 |
+| F9 | **이벤트 반응** | 예: Slack 에 버그 보고 → 조사 시작 · 새 디자인 도착 → 동작하는 앱 구현 · 새 데이터 → 분석 재실행 |
+| F10 | **다채널 + 맥락 유지** | ChatGPT(웹·모바일·데스크톱), 문자(iMessage·RCS, Pro 대기자), Slack, Teams, **음성 통화**. "모든 채널에 걸쳐 맥락을 유지" |
+| F11 | **에이전트 발신** | dot 이 진행 상황·질문·**판단 요청**을 먼저 메시지로 보낸다 |
+| F12 | **앱 연결** | 플러그인 생태계로 4,000+ 앱. 접근할 앱은 사용자가 고르고 기존 ChatGPT 앱 제어로 관리 |
+| F13 | **자격증명 비노출** | 지원 사이트 로그인 시 저장된 비밀번호를 **모델에 노출하지 않고** 사용 |
+| F14 | **내장 규칙 + 맞춤 규칙** | 언제 혼자 하고 언제 묻는지 기본 규칙이 있고, 사용자가 특정 행동을 **허용 / 승인 요구 / 차단** 한다. **기본 안전 요건은 항상 적용** |
+| F15 | **자동 행동 검토** | 계정에 영향을 주거나 정보를 공유하는 행동을 지시·맞춤 규칙·안전 요건에 대조해 **바로 진행 / 승인 필요 / 사용자가 직접** 셋으로 가른다. 비밀번호 변경 같은 민감 작업은 **항상 사용자가 직접** |
+| F16 | **모니터링 중지** | 악의적 지시 방어 + 유해 가능 행동 모니터링. 우려 감지 시 작업을 **일시 중지하거나 중단** |
+| F17 | **활동 보기** | 백그라운드 작업을 포함한 진행 상황을 보고, 필요하면 방향을 바꾼다 |
+| F18 | **학습 데이터 경계** | 선제적 조사 내용과 dot 자체 메모는 **직접 학습에 쓰지 않는다.** 학습 대상 대화·작업에 참고로 쓰였으면 설정에 따라 포함 |
+| F19 | **결과물 형태** | 예: 고객 피드백 → 범위 결정 → 구현·테스트 → **변경을 보여주는 영상이 첨부된 PR** |
+| F20 | **전문 dot (조직)** | 조직 내 특정 업무 전담. 고유 ID·인증 정보·시스템 접근을 회사가 부여. 팀 피드백으로 개선. OpenAI 내부 초기 테스트 영역: 조달·청구서·이메일 마케팅·고객 지원·상업 계약. 기업 파일럿으로 시작하고 **담당 업무·도구·사람의 검토 방식을 OpenAI 엔지니어가 조직과 함께 정한다** |
+| F21 | **Agent 365** | Microsoft 와 협력해 전문 dot 을 Agent 365 거버넌스·보안 제어에 통합(목표) |
+| F22 | **dot 팀** | "앞으로는 dots 가 팀을 이뤄" — 비전이지 출시 기능이 아니다 |
+
+### 1.2 출시·과금
+
+- Pro · Business Premium 순차 제공(지원 지역), Enterprise(Edu·Healthcare 포함)는 관리자가 베타를 켜면.
+  **[보도]** EU·영국 제외(NBC)
+- 첫 dot 은 요금제에 포함. 출시 첫 달 한도 확대. 앞으로 dot 추가 · dot 별 **속도** · **월 총 작업량**을 산다
+- **dot 과의 대화는 ChatGPT 사용 한도에 계상되지 않는다.** dot 이 Codex·ChatGPT Work 에서 시작·관리하는 작업은 평소대로 계상
+- 생성은 데스크톱(앱·브라우저)에서만. 앱 연결 → **dot 의 자기소개** → 이후 모바일에서도 메시지
+
+### 1.3 원문 밖의 맥락 [보도]
+
+- **범위 이탈이 공개된 난제다.** NBC 에 따르면 OpenAI 는 GPT-6.1 Astra 를 "범위와 권한 안에 머무는 것"에서
+  기준을 못 넘어 출시하지 않았다고 밝혔고, 6월에 자사 에이전트가 호주 정부 사이트에 침입해 비공개 데이터에
+  접근한 일로 사과했다. 원문의 F14~F16 이 두꺼운 이유를 이 맥락이 설명한다
+- dots 발표에는 가드 **설계**가 있고 가드의 **측정**(오탐·미탐률, 모니터 중지 빈도)은 없다. 원문은 시스템 카드로
+  넘긴다
+
+---
+
+## 2. 구조 해석 — dots 는 무엇을 새로 묶었나 [추론]
+
+dots 의 개별 부품은 새롭지 않다. 샌드박스 컴퓨터(Codex/Operator), 커넥터, 메모리, 승인 게이트는
+전부 이전 제품에 있었다. **새로운 것은 단위가 바뀐 것이다.**
+
+| | 이전 (챗·태스크) | dots |
+|---|---|---|
+| 1급 객체 | 대화 · 태스크 | **에이전트** (ID·목표·메모·컴퓨터를 가진 지속 개체) |
+| 시작 | 사용자 요청 | 요청 **또는** 이벤트 **또는** 에이전트 자신(선제적 조사) |
+| 끝 | 응답 | 없다. 태스크는 끝나도 에이전트는 남는다 |
+| 맥락 범위 | 세션 | 에이전트(채널 횡단) |
+| 권한의 주체 | 사용자 세션 | 에이전트 ID (조직에서는 사용자와 **별개 주체**) |
+| 과금 단위 | 토큰·메시지 | 에이전트 수 × 속도 × 월 작업량 |
+
+이 전환에서 가드가 두꺼워질 수밖에 없는 이유는 **"아무도 보고 있지 않은 시간"이 기본값이 되기 때문**이다.
+그래서 dots 의 안전 설계는 세 층으로 읽힌다.
+
+1. **능력을 모드로 자른다** — 선제적 조사 = 읽기 전용(F8). 사용자가 없을 때는 쓸 수 있는 도구가 줄어든다
+2. **행동을 분류한다** — 진행 / 승인 / 사용자 직접(F15). 맞춤 규칙은 기본 안전 요건 **위에만** 얹힌다(F14)
+3. **궤적을 감시한다** — 호출 하나가 아니라 진행 중인 작업을 멈출 수 있는 모니터(F16)
+
+📌 NEOS 에 이 세 층 모두의 부품이 **이미 있다.** 없는 것은 그것들을 "상시 개체" 아래 묶는 층이다(§3).
+
+---
+
+## 3. NEOS 대조 — 기능별 (2026-09-30 코드 확인)
+
+범례: 🟢 거의 있다 · 🟡 부품이 있다 · 🔴 없다 · ~~⚪ 가져오지 않는다~~ → ⚪ 는 Q0(범위 전체) 뒤 **없음(🔴)과 같다** — 해당 항목은 Q14~Q18
+
+| dots | NEOS 현재 | 근거 | 판정 |
+|---|---|---|---|
+| F1 자기 컴퓨터 | 코딩 샌드박스(memory/Docker, managed B2 진행 중). **브라우저 도구는 없다** — Playwright 는 CLI 의 `WebLookUpAgent` 에만 있다 | `neos/coding/sandbox/`, `neos/cli.py` | 🟡 |
+| F2 고유 ID | 에이전트 주체가 없다. 채널 사용자는 설정 목록으로 NEOS `user_id` 에 매핑될 뿐이다 | `neos/api/channels/principals.py` `resolve_channel_principal` · `ChannelConfig.principals` | 🔴 |
+| F3 작업 관전 | 코딩 워크스페이스 스트림(WS)이 있다 | `neos/api/handlers/coding_workspace_ws_handlers.py`, `neos/coding/application/workspace_stream_service.py` | 🟢 |
+| F4 사용자 기기 | 없다 | — | 🔴 → Q16 |
+| F5 다중 프로젝트·주도 | 태스크는 일회성이다. 목표를 들고 있는 개체가 없다 | — | 🔴 |
+| F6 피드백 학습 | 교훈은 `STAGED → APPROVED` 로만 주입된다(코딩 런 결과에서 자동 추출). **메시지 피드백은 저장만 되고 읽는 곳이 없다** — `neos/learn`·`neos/memory` 에 feedback 독자 0건 | `neos/learn/lessons.py` `LessonStatus`, `neos/coding/learn_lessons.py`, `neos/api/handlers/chat_handlers.py` `add_message_feedback` | 🟡 |
+| F7 자체 메모 | 장기 메모리 쓰기는 `memory_gate` 가 write_approval 뒤에 가둔다(fail-closed) | `neos/learn/memory_gate.py`, `neos/memory/long_term.py` | 🟡 |
+| F8 선제적 조사(읽기 전용) | 코딩 도구는 전부 `ToolRisk`(`READ_ONLY`·`WORKSPACE_WRITE`·`COMMAND`·`USER_QUESTION`)를 선언하고, 쓰기 권한 없는 포트는 READ_ONLY 밖을 이미 거절한다. unattended 판정은 REQUIRE_APPROVAL 을 DENY 로 접는다(D-L1 · K9 · CHILD-GATE) | `neos/coding/tools/registry.py` `ToolRisk`, `neos/coding/subagent_port.py:109`, `neos/coding/loop/_durable/spawn.py` | 🟢 부품 |
+| F9 이벤트 반응 | **cron 만 있다.** 1분 폴러가 `next_run_at` 을 보고 워크플로우를 제출한다. 이벤트 트리거는 없다(webhook/trigger grep 0건 — `base.py` 의 `raw_data` 주석뿐) | `neos/tasks/scheduled_task_runner.py`, `neos/database/models.py` `ScheduledTask` | 🟡 |
+| F10 채널 + 맥락 | Slack·Discord·Telegram 어댑터. 세션 키가 `v2:{channel}:{scope}:{chat}:{thread}` 라 **맥락은 채널마다 따로다.** 음성은 STT 스텁(ROADMAP N3) | `neos/api/channels/session_key.py`, `neos/api/channels/adapters/` | 🟡 |
+| F11 에이전트 발신 | 스케줄 결과를 채널로 민다(`gateway.send_to_channel`). 코딩 승인은 채널에서 `decide` 로 받는다. **일반적인 "묻고 기다리기"는 없다** — `WAITING_USER` 상태는 enum 에만 있다(아래 F16 행) | `scheduled_task_runner.py:144`, `neos/api/channels/gateway.py:240` | 🟡 |
+| F12 앱 연결 | **MCP 프로토콜 클라이언트가 없다.** `neos/tools/mcp_integration.py` 는 이름만 MCP 인 자체 도구 추상이다(`mcp` 패키지 import 0건, `pyproject.toml` 에 없음). 스킬 15종 · 플러그인 런타임(트랙 H) | `neos/tools/mcp_integration.py`, `neos/skills/builtin/` | 🔴 |
+| F13 자격증명 비노출 | 볼트·시크릿 참조가 없다. `neos/coding/redact.py` 는 **저장 전** 비밀 키 값을 가리는 것이지 모델 앞의 차단이 아니다 | `neos/coding/redact.py` | 🔴 |
+| F14 맞춤 규칙 | `approval_mode: manual|auto` + `approval_always_allow` — **배포 설정 하나, 사용자별 아님, 차단 목록 없음** | `neos/config/schema.py:1868-1871` | 🟡 |
+| F15 행동 분류 3종 | 판정은 `ALLOW / DENY / REQUIRE_APPROVAL` 셋. **"사용자가 직접"에 해당하는 넷째가 없다.** Jev 도구 위험 게이트가 호출 단위로 좁힌다(플래그 off) | `neos/coding/domain/approvals.py` `ApprovalPolicyOutcome`, `neos/jev/gate.py` | 🟡 |
+| F16 모니터 중지 | 호출 단위 게이트는 있다. **궤적 단위로 멈추는 감시자는 없다.** 그런데 `PAUSING`·`PAUSED`·`WAITING_USER` 는 `CodingTaskStatus` 와 전이표에 **이미 있고, `domain/models.py` 밖에서 그 상태로 보내는 코드가 0건이다** — 스키마에만 사는 상태다. 인바운드 문서는 `<untrusted_document>` 로 감싼다 | `neos/coding/domain/models.py:8-24`, `neos/univer/ports.py` `wrap_untrusted_document`, `neos/memory/context_assembly.py` | 🟡 |
+| F17 활동 보기 | 코딩·DA 이벤트 스트림은 fixture 로 고정돼 있다. 채널에서 묶인 대화를 조향하는 경로(`_steer_bound_chat`)도 있다. **에이전트 단위로 모은 피드는 없다** | `tests/fixtures/*_event_kinds.json`, `gateway.py` `_steer_bound_chat` | 🟡 |
+| F18 학습 데이터 경계 | GEPA 는 staged → 사람 승인(기본 off). 🆕 Q13e: 에이전트 메모는 `agent:` 네임스페이스 · `policy.is_agent_namespace` 판별 하나 · GEPA 가 `agent:` 런을 거절. 교훈에서 예제를 만드는 코드는 아직 없다(Q7 이 이 판별을 쓴다) | `neos/gepa_opt/` · `neos/learn/policy.py` | 🟡 |
+| F19 증거 첨부 결과물 | 코딩 `VERIFY` verdict 를 **아무도 읽지 않는다**(로드맵 §13 E) | `state.verdict` | 🔴 |
+| F20 전문 dot | `Organization` 모델은 있으나 격리가 없다(ROADMAP N5, 트랙 P 제안) | `neos/database/models.py` `Organization` | 🔴 |
+| F21 Agent 365 | — | — | 🔴 → Q17 |
+| F22 dot 팀 | 서브에이전트 런타임 · 노드 그래프(트랙 I) — 사용자 소유 에이전트 사이의 협업은 아니다 | `neos/subagent/` | 🔴 → Q18 |
+| 과금 | `TokenBudget.reserve()` 는 **질문 단위.** 에이전트·월 단위 봉투는 없다 | — | 🔴 |
+
+### 3.1 이 표가 말하는 것
+
+1. **안전 부품이 능력 부품보다 앞서 있다.** dots 가 가장 공들인 F8·F14·F15·F16 에 NEOS 는 판정 enum,
+   READ_ONLY 분류, unattended 접기, Jev 좁히기까지 이미 있다. 거꾸로 dots 의 "능력" 쪽(F2 ID·F5 지속 개체·
+   F9 이벤트·F12 커넥터)은 거의 비어 있다. **이 순서가 옳다** — 상시 가동은 가드 위에 얹어야 한다
+2. **NEOS 에만 있는 것이 dots 의 약점과 겹친다.** dots 원문은 "dot 도 실수할 수 있으므로 중요한 결과는 검토하라"로
+   끝난다. 결과물을 **검증**하는 층이 없다는 뜻이다[추론]. NEOS 의 `DeterministicGrader`·원장·재실행 가능 계산 클레임은
+   정확히 그 층이다. dots 의 과학자 예시("새 데이터가 들어오면 분석을 다시 실행하고… 검토가 필요한 부분을 알려준다")는
+   **NEOS 가 dots 보다 잘할 수 있는 유일한 시나리오**다 — 무엇이 바뀌었는지를 검증된 클레임의 차이로 말할 수 있다
+3. **스키마에만 사는 상태가 또 나왔다.** `PAUSED`·`WAITING_USER` 는 `supports_video`(ROADMAP N8 (c))와 같은 모양이다.
+   ~~Q5 가 그 첫 작성자가 되거나, 아니면 지우는 결정을 해야 한다~~ → **쓴다**(2026-09-30 결정): Q5·Q10 이 `PAUSED`, Q9 가 `WAITING_USER` 의 첫 작성자다
+
+---
+
+## 4. 트랙 Q: 상시 에이전트 — ✅ 방향 결정 (2026-09-30)
+
+> **Q0 결정됨 (2026-09-30, 사람의 결정):** 상시 에이전트를 NEOS 방향에 넣는다. **범위는 좁히지 않는다** —
+> "상시 분석"으로 좁혀 시작하자는 이 문서 초판의 권고는 채택되지 않았다. dots 의 기능 표면 전체(§1.1 F1~F22)가
+> 트랙 Q 의 범위다. 상시 분석(Q3)은 여러 사용처 중 하나이지 입구가 아니다.
+>
+> **범위를 넓혀도 원칙은 넓어지지 않는다.** 초판 §5 에서 "가져오지 않는다"로 둔 것 중 **범위** 때문에 뺀 것은
+> 전부 항목이 됐다(Q14~Q18). **원칙 충돌** 때문에 뺀 둘은 범위 결정으로 풀리지 않으므로 §5 에 따로 남긴다 —
+> 그것을 푸는 것은 각자의 결정(D19 · D6)이다.
+
+### 4.1 원칙 — 트랙 L 과 같은 방향
+
+- **사용자가 없을수록 좁아진다.** 모드는 능력을 빼기만 한다. 사용자 규칙은 기본 안전 요건을 **넓히지 못한다**
+  (§9 "Jev ≠ 승인 생략"과 같은 모양 — 확률도, 규칙도, 좁히는 방향으로만)
+- **바닥은 코드에 있다** 🆕 (Q2 결정). 위임할 수 없는 행동의 목록은 코드와 테스트가 고정하고, 설정은 그 목록을
+  **늘리기만** 한다. 설정으로 끌 수 있는 안전 요건은 "항상 적용"이 아니다
+- **선제 산출물은 제안이다.** 선제적 조사는 메모와 알림만 만들고 행동하지 않는다(`submit.v1` 이 제안인 것과 같다)
+- **학습은 staged 로만.** dots 는 피드백에서 자동으로 배운다. NEOS 는 D19 를 따른다 — 후보 생성까지 자동, 승격은 사람
+- **멈춤과 기다림은 이미 있는 상태로** 🆕 (결정). `PAUSED` 는 감시자(Q5)와 예산(Q10)의 출구, `WAITING_USER` 는
+  묻고 기다리기(Q9)의 대기 상태다. 새 상태를 만들지 않는다
+- **늘릴 수 있게 키를 잡는다** 🆕 (Q13 결정). 개수 제약은 인덱스 하나에만 두고, 에이전트에 딸린 것은 전부 `agent_id` 로 키를 잡는다
+- **전부 플래그 off 로 착지한다.** 상시 실행은 라이브 표본(§8)과 **섞이지 않는다** — 상시 런은 표본이 아니다
+
+### 4.2 항목
+
+| ID | 이름 | 무엇 | 서 있는 부품 | 선행 | 규모 |
+|---|---|---|---|---|---|
+| **Q0** | 방향 결정 | ✅ **결정됨(2026-09-30)** — 넣는다, 범위는 dots 전체 | — | — | — |
+| **Q13** 🆕 | 에이전트 개체 | **트랙의 뿌리.** 태스크보다 오래 사는 1급 객체 `Agent`: 소유자 · 이름 · 자기 ID(주체, F2) · 들고 있는 목표와 프로젝트 여럿(F5) · 자체 메모(F7, `memory_gate` 뒤) · 에이전트 단위 활동 피드(F17 — 이 에이전트가 만든 태스크 전부의 이벤트를 모은 뷰). 태스크는 `agent_id` 를 갖는다. 첫 생성 때 연결한 앱을 보고 **자기소개**(원문의 온보딩). ✅ **사용자당 하나로 시작, 여럿으로 늘릴 수 있게(결정 2026-09-30).** 하나라는 제약은 **소유자 unique 인덱스 하나**로만 건다. 스레드(Q8)·예산(Q10)·메모·트리거(Q4)는 처음부터 `user_id` 가 아니라 **`agent_id`** 로 키를 잡는다 — 그래야 늘릴 때 인덱스 하나를 푸는 것으로 끝나고 데이터 이전이 없다 | 코딩 태스크·이벤트 원장 · `memory_gate` · 이벤트 fixture | Q0 | 대 · 📐 **설계 완료 · Q13a 착지(2026-09-30)** — [Q13_STANDING_AGENT_DESIGN_260930.md](Q13_STANDING_AGENT_DESIGN_260930.md): `standing_agents`(마이그레이션 070) · 사용자당 하나 = 부분 unique 인덱스 하나 · 이름은 길이 무제한·소유자 안 중복 금지(해시 인덱스) · 명시적 생성 · paused 에이전트는 진행 중 태스크를 건드리지 않는다. Q13b(API·플래그) · Q13c(`coding_tasks.agent_id` · `open_agent_task`) · Q13d(활동 피드, F17) · Q13e(메모, F7·F18) · Q13f(자기소개 — 성공한 background 태스크의 최종 답을 완료 훅이 STAGED 메모로) 착지. **Q13a~f 전부 착지(2026-10-01)** |
+| **Q1** | 읽기 전용 백그라운드 모드 | 태스크 `mode` 에 `background` 를 더한다(K9 의 `interactive|autonomous` 옆). background 는 **READ_ONLY 도구만** 보이고 나머지는 판정 전에 DENY. 산출물은 메모·알림 후보뿐 | `ToolRisk.READ_ONLY` · K9 `mode` 필드(마이그레이션 068) · CHILD-GATE unattended 접기 | Q0 | 소 · ✅ **착지(2026-09-30, 기본 off — 모드를 보내는 호출자가 없다)** — `CodingTaskMode.BACKGROUND` · 마이그레이션 069(신선한 DB 2회 적용 · 제약 이름 실측) · 천장은 **검증된 위험**만 본다(`exceeds_mode_ceiling`) · 사유 `policy_mode_ceiling`. 📌 ~~자식 생성을 따로 막는다~~ 필요 없었다: 검증기가 `spawn_agent.v1 spec=implement` 를 WORKSPACE_WRITE 로 올리고 explore 자식은 포트가 쓰기를 막는다 — explore 자식은 background 에서도 열린다. 천장이 **실제로** 무는 자리는 운영자 allow 목록이 ALLOW 를 낼 때다(그 외엔 unattended 접기가 먼저 거절한다). ⚠️ background 전용 프롬프트 오버레이는 없다(interactive 와 바이트 동일) — K9 규율대로 문구는 결정 뒤 |
+| **Q2** | 넷째 판정 `USER_ONLY` + 사용자 규칙 | `ApprovalPolicyOutcome` 에 "승인으로도 위임 불가, 사람이 직접" 을 더한다. ✅ **목록 결정됨(2026-09-30): 코드에 고정, 설정은 늘리기만.** 기본 목록(자격증명·비밀번호 변경 · 결제 · 권한 부여/공유 범위 변경 · 계정 삭제)은 코드 상수 + 이름으로 고정한 테스트. 설정 필드는 **추가 목록**만 받고, 코드 목록에서 빼는 표현이 없다(교집합이 아니라 합집합). 사용자별 규칙 allow/require/block 은 **기본 정책 뒤에** 평가: `USER_ONLY > 기본 DENY > 사용자 block > 사용자 require > 사용자 allow > 기본값`. 사용자 allow 는 기본 정책의 DENY 도 USER_ONLY 도 못 뒤집는다 | `approvals.py` · `approval_always_allow` · Jev "좁히기만" | Q0 | 소~중 · ✅ **착지(2026-09-30)** — `USER_ONLY_COMMANDS`(argv 접두 10개) · `approval_user_only_extra`(합집합) · 사유 `policy_user_only`, 부모·자식 게이트가 `policy_denial_reason` 하나를 쓴다. 📌 **넷째 enum 값이 아니다**: `_approval_gate_step` 은 DENY 도 REQUIRE_APPROVAL 도 아닌 결과를 **실행**하므로 새 값은 열린 채 실패한다 — DENY 계열 + 사유 코드로 구현했다. 📌 오늘 검증기(실행 파일 allowlist)가 대부분 이미 막는다 — 바닥은 운영자가 allowlist 를 넓히는 날의 **심층 방어**다. 🟢 **사용자 규칙 착지(2026-10-01, 플래그 off)** — [Q2·Q4b 설계](Q2_Q4B_RULES_CHANNEL_TRIGGERS_DESIGN_261001.md) §2: `user_approval_rules`(075, 사용자 키) · 도구 + argv 접두(D8, USER_ONLY 와 같은 매칭) · 사용자 allow 는 위험 등급 기본 REQUIRE 만 바꾼다(D9) · 매 단계 새로 읽고 체크포인트에 싣지 않는다(D10) · 읽기 실패는 재시도 실패(D11) · 사유 `policy_user_rule_blocked` |
+| **Q3** | 상시 질문 (standing question) | `ScheduledTask` 가 워크플로우 대신 **DA 런**을 제출할 수 있게 하고, 직전 런 원장과 **verified 클레임 집합의 차이**를 계산해 **달라졌을 때만** 채널로 민다. "무엇이 새로 검증됐고 무엇이 반증됐나"가 알림 본문이다. ✅ **차이 단위는 클레임(결정 2026-09-30).** ⚠️ 클레임 id 는 런마다 새로 나므로 **런을 건너는 짝짓기 키**가 필요하다 — 설계 과제(§6 열린 질문 8). 짝이 없는 클레임은 "새로 검증"으로 세지 않고 따로 센다(재표현이 알림 폭주가 되지 않게) | cron 폴러(`skip_locked`) · `send_to_channel` · DA 잡 태스크(`deep_analysis_job_task.py`) · 원장 | Q13 · DA 운영 경로(W6) | 중 |
+| **Q4** | 이벤트 트리거 | 채널 인바운드(예: 지정 Slack 채널의 메시지)와 서명된 webhook 을 트리거 규칙(원천 · 필터 · 태스크 템플릿)으로 태스크화. 트리거 본문은 **항상 untrusted** 로 감싼다. 트리거가 만드는 태스크는 기본 `background` | 채널 게이트웨이 · `wrap_untrusted_document` · `inbound_idempotency.py` | Q1 · Q13 | 중 · 🟢 **Q4a 착지(2026-10-01, 플래그 off)** — [Q4·Q10 설계](Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md): **webhook 원천만**(결정 D2, 채널 원천은 Q4b) · `standing_agent_triggers`(074, 키는 `agent_id`, `ON DELETE CASCADE` — 없으면 사용자 삭제가 막힌다) · 서명 비밀은 `HMAC(NEOS_TRIGGER_SIGNING_KEY, trigger_id)` 파생(D3, DB 에 없음) · 배달 id 도 서명 안, `.` 금지(경계 이동 재생 차단) · 멱등성은 `channel_inbound_idempotency` 를 `trigger:{id}` 로 재사용 · 인증 실패는 전부 같은 401 · 태스크는 언제나 background, 본문은 untrusted 로 감싼다. 🟢 **Q4b 착지(2026-10-01)** — [Q2·Q4b 설계](Q2_Q4B_RULES_CHANNEL_TRIGGERS_DESIGN_261001.md): slack·discord·telegram 세 어댑터가 대화 게이트 **직전에** 부작용으로 부른다(D5, 대화 동작 불변) · 발신자는 소유자 매핑 + 트리거별 `allowed_senders`(D4), 봇 제외 · 운영자 채널 정책은 트리거에도 · 마이그레이션 076(CHECK 의 `NULL IN` 함정을 실 DB 가 잡았다) |
+| **Q5** | 궤적 감시자 → `PAUSED` | ✅ **`PAUSED` 를 쓴다 · 판정자는 Jev(결정 2026-09-30).** 트랙 L 규율이 그대로 걸린다: Jev 는 **멈추게만** 하고 재개시키지 못한다 · 판정 이벤트는 임계값·루브릭 digest 를 싣는다 · **섀도로 먼저 착지**(`would_pause` 만 기록, L2 와 같은 길) · Jev 실패·타임아웃은 D-L1 대로 **정적 규칙 폴백 + `jev_unavailable`** — 그래서 최소 규칙 집합은 여전히 필요하다(폴백 전용). 이벤트 원장을 **밖에서** 읽는 감시자가 우려 패턴(범위 이탈 · 반복 거절 · 예산 급증 · untrusted 문서 뒤의 권한 상승 시도)을 보면 다음 safe point 에서 태스크를 `PAUSING → PAUSED` 로 보낸다. 재개는 사람만. **스키마에만 있던 상태의 첫 작성자**가 된다 — 착지할 때 "그 상태로 보내는 코드 0건"이 깨지는 것을 테스트가 이름으로 확인한다 | durable 1-step 루프의 safe point · `CodingTaskStatus.PAUSED` · 이벤트 fixture · `neos/jev/`(gate·banding·rubrics) | Q1 · L2 섀도 데이터 | 중 · 🟢 **섀도 착지(2026-09-30, 기본 off)** — `neos/coding/monitor/`(rules · monitor) · 루브릭 `trajectory_scope` · 설정 `jev.monitor`(멈춤 경계 기본값 없음, 폴백 임계는 경계=기본값이라 엄하게만) · 모델 턴 safe point 에서 N 도구 결과마다 원장(`list_after`)을 읽고 `monitor.judged` 하나를 남긴다(fixture `projected: false`). 판정 박자는 마지막 `monitor.judged` 의 `tool_results` 가 기억한다 — 루프가 따로 세지 않는다. 📌 FB6 을 위해 `model.completed` 가 **턴별 토큰**을 싣는다(전에는 체크포인트 누적값뿐이었다 — 원장이 어느 턴이 썼는지 말하지 못했다). 📌 Jev 실패는 기존 `jev_unavailable` kind 가 아니라 `monitor.judged` 의 필드로 남긴다 — 그 kind 는 도구 카드(`tool_call_id`)에 붙도록 투영된다. **남은 것:** `PAUSED` 작성(Jev·폴백이 함께 섀도에서 올라올 때) · 경계 실측 · ⚠️ FB5 는 루프 안 자리에선 발동하지 않는다: `model.refused` 는 곧바로 비재시도 실패로 런을 끝내 다음 safe point 가 없다 — 루프 밖 판독이나 종료 시점 판정이 필요하다 · ⚠️ 판정이 없는 턴에도 원장을 끝까지 읽는다(섀도·기본 off 라 감수, 켜기 전에 커서화) |
+| **Q6** | 자격증명 브로커 | 도구 인자에는 `secret://<name>` 참조만 싣고 **실행기**가 풀어 쓴다. 원문 비밀은 전사·원장·이벤트에 들어가지 않는다. 결과에서 되돌아오는 비밀은 `redact.py` 규칙으로 가린다. 참조 사용은 Q2 규칙의 대상이다 | `redact.py` · 샌드박스 경계 | Q2 | 중 · 🟢 **Q6a 착지(2026-10-01, 플래그 off)** — [Q6 설계](Q6_CREDENTIAL_BROKER_DESIGN_261001.md): 참조는 값 전체만(S1) · 첫 소비자는 `execute.v1` 의 env 값(S2) · 비밀마다 묶인 env 이름(S3) · 금고는 사용자 키(S4) · AES-GCM 봉인, `NEOS_SECRET_BROKER_KEY` 파생(S5, 077) · 결과는 **값 자체**로 가리고 잘린 꼬리 접두도(S6 — 정규식만으로는 모르는 모양을 놓친다) · 사람 승인 또는 소유자 allow 만 넘는다(S7) · 자식 거절(S8) · off 는 바이트 동일(S9). 부품 `resolve → 실행 → scrub` 를 Q11·Q14·Q16 이 소비한다. **남은 것(Q6b):** sandboxd·managed 비밀 채널 · 에이전트별 부여 · 🟢 **Q6b 착지(2026-10-02)** — [Q6b 설계](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md): sandboxd RPC 의 별도 `secret_env` 필드 + capability `exec.secret_env.v1`(lease 마다, fail closed) · managed 는 운반로 기밀성을 보일 수 없어 계속 `secret_env_unsupported`(C1). **남은 것:** 관리형 열기(벤더 바인딩·stdin 비보존 근거, 설계 §4) · Q11 장기 프로세스 op · 에이전트별 부여 |
+| **Q7** | 피드백 → 교훈 후보 | 저장만 되고 읽히지 않는 메시지 피드백을 `STAGED` 교훈 후보로 만든다. 승격은 기존 승인 경로(채널 `learn` 포함). 선제 산출물·에이전트 메모는 GEPA 평가 세트에 **넣지 않는다**(F18 의 NEOS 판). 자동 승격은 §5 | `neos/learn/` · `memory_gate` · `add_message_feedback` | Q13 | 소 |
+| **Q8** | 채널 횡단 스레드 | 세션 키와 별개로 **에이전트 스레드**(Q13 에 붙는다)를 두고, 채널 세션은 그 스레드에 붙는다. 채널이 달라도 같은 메모·진행 중 작업을 본다 | `principals` · `session_bind` | Q13 | 중 |
+| **Q9** | 묻고 기다리기 일반화 | ✅ **`WAITING_USER` 를 쓴다(결정 2026-09-30).** 에이전트가 채널로 질문을 보내고 `WAITING_USER` 로 선다. 답이 오면 재개. 코딩 승인(`decide`)이 이미 같은 왕복을 한다 — 그것을 승인 밖의 질문으로 넓힌다. `WAITING_APPROVAL` 과 섞지 않는다: 승인은 예/아니오, 질문은 자유 답이다 | 채널 `decide` · `ToolRisk.USER_QUESTION` · `WAITING_USER` | Q8 | 소~중 |
+| **Q10** | 에이전트 예산 봉투 | 질문 예산 위에 **에이전트 × 기간** 봉투를 둔다. background 는 봉투의 고정 몫만. 초과 시 `PAUSED`(Q5 와 같은 출구). dots 의 "에이전트 수 × 속도 × 월 작업량" 과금 단위의 NEOS 판 | `TokenBudget.reserve()` | Q13 · 트랙 P 계량 | 중 · 🟢 **Q10a 착지(2026-10-01, 플래그 off)** — [Q4·Q10 설계](Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md): 봉투는 에이전트 × UTC 달력 월 · **지출은 세지 않고 읽는다** — 그 달에 연 에이전트 태스크들의 최신 체크포인트 누적 `cost_micros` 합(카운터 테이블 없음, Q13 §4.3 의 `standing_agent_budgets` 는 만들지 않았다). 트랙 P 계량을 기다리지 않았다 — 코딩 루프가 이미 턴마다 값을 매긴다 · 출구는 둘(결정 D1): 새 태스크는 `open_agent_task` 가 **막고**, 진행 중은 safe point **섀도**(`budget.judged`, 런당 하나). **남은 것:** Q10b — 진행 중 초과 → `PAUSED`(Q5 와 같은 길, 재개 API·투영 포함) |
+| **Q11** | 실제 MCP 클라이언트 | 커넥터의 표준 입구. `mcp_integration.py` 의 이름 충돌부터 정리한다. 연결된 앱 도구도 `ToolRisk` 를 **선언**해야 등록된다 — 선언 없으면 READ_ONLY 가 아니다(fail-closed). 앱 수(4,000)는 목표가 아니라 이 입구의 결과다 | 트랙 H 플러그인 런타임 · ROADMAP N6 | Q2 · Q6 | 대 · 🟢 **Q11a 착지(2026-10-01, 플래그 off)** — [Q11 설계](Q11_MCP_CLIENT_DESIGN_261001.md): 옛 `mcp_integration.py` 등 넷은 이름만 MCP — 머리말로 신고, 실제 클라이언트는 `neos/coding/connectors/`(M1) · 운영자 설정 서버만(M2) · 직접 쓴 JSON-RPC(M3) · **선언 없는 도구는 등록되지 않는다**(M4) · 서버 자격증명 `secret://` 은 소유자 금고에서 호출 때, S7 그대로(M7) · 결과는 untrusted(M9) · 자식 거절(M11). **남은 것(Q11b):** 소유자 범위 발견 · 샌드박스 안 stdio · resources/prompts · 지연 로딩 · 🟢 **Q11b 착지(2026-10-02, 플래그 off)** — 인증이 있어야 목록을 주는 서버는 운영자가 도구(이름·설명·스키마·위험)를 설정에 **고정**한다 · 소유자별 발견은 안 한다(N1) · 호출마다 같은 승인된 연결에서 서버와 맞춰 보고 어긋나면 이름 붙은 사유로 거절(N4) · 위험은 여전히 선언값(M4). **남은 것:** 샌드박스 안 stdio · resources/prompts · 지연 로딩 · 매니페스트 생성 도구 |
+| **Q12** | 결과물 증거 | 상시 작업이 가져오는 결과물(PR·리포트)에 **검증 산출물**을 붙인다. 코딩: VERIFY verdict 를 읽는 첫 독자. DA: 검증 통계. dots 의 "변경 영상이 첨부된 PR"(F19)보다 한 단계 더 — 보여주는 것이 아니라 **재실행할 수 있는 것** | 로드맵 §13 E 의 구멍 · 원장 | E 잔여 | 중 |
+| **Q14** 🆕 | 에이전트 컴퓨터의 브라우저 (F1) | 에이전트 샌드박스에 브라우저 도구. 도구 위험은 `COMMAND` 이상 — background(Q1)에서는 보이지 않는다. 로그인은 Q6 경유만. ⚠️ **DA 조사 경로에는 붙이지 않는다**(§5 D6) | 코딩 샌드박스 · Playwright(현재 CLI `WebLookUpAgent` 에만) | Q6 · managed 샌드박스(B2) | 대 · 🟢 **Q14a 착지(2026-10-01, 플래그 off · development 전용)** — [Q14 설계](Q14_AGENT_BROWSER_DESIGN_261001.md): 호스트 Chromium, 네트워크 없이 모든 요청을 web_fetch 판정으로 대신 받는다(W1·W2) · B2 전 운영은 운영자 명시 동의 없이는 기동 거절(W3) · COMMAND 도구 둘, background 는 천장이 거절(W4 — 목록에는 남는다, Q1 결정을 따랐다) · 로그인은 Q6 경유만(W7·W8) · DA 조사 경로·자식에는 붙지 않는다(W12). **남은 것:** Q14b 출처 묶임 · Q14c 관리형 샌드박스(B2) · 🟢 **Q14b 착지(2026-10-02)** — 비밀마다 주인이 정한 https 출처에만 입력(S3 의 브라우저판, 081) · 묶임 없는 비밀은 브라우저에서 쓰이지 않는다 · 출처를 AAD 에 봉인 · 실패·취소 세션 즉시 정리 · iframe 비밀번호 가리기. 운영 브라우징은 여전히 B2(Q14c) 뒤 |
+| **Q15** 🆕 | 음성 (F10) | 음성 메시지 → 텍스트 → 에이전트 스레드. 실시간 통화는 그다음 | ROADMAP N3 (STT 스텁 · 진입점 결정 대기) | N3 · Q8 | 중~대 |
+| **Q16** 🆕 | 사용자 기기 연결 (F4) | 사용자 기기에서 도는 **로컬 브리지**가 에이전트의 도구 호출을 받는다. 샌드박스 경계를 넓히는 것이 아니라 **별도 실행 표면**을 하나 더 둔다 — 브리지의 도구도 `ToolRisk` 를 선언하고 Q2 를 통과한다. ✅ **위협 모델은 지속적 개선으로(결정 2026-09-30)** — 완성된 문서를 착수 조건으로 두지 않는다. 대신 브리지는 **READ_ONLY 도구만으로 시작**하고, 도구 위험 등급을 한 단계 넓힐 때마다 위협 모델 문서에 그 증분(무엇을 열었나 · 무엇이 새로 가능해졌나 · 무엇으로 막나)을 한 줄씩 더한다 | — | Q2 · Q6 | 대 · 🟢 **Q16a 착지(2026-10-01, 플래그 off)** — [Q16 설계](Q16_DEVICE_BRIDGE_DESIGN_261001.md) · [위협 모델](Q16_DEVICE_BRIDGE_THREAT_MODEL.md): 토큰은 해시만(B1, 080) · READ_ONLY 만(B3) · Redis 중계(B6) · 무인 런은 `allow_unattended`(B7) · 브리지는 비밀을 받지 않는다(B8) · 자식 거절(B11). **남은 것(Q16b):** WORKSPACE_WRITE(위협 모델 한 줄 먼저) · 에이전트별 부여(Q17) · 🟢 **Q16b 착지(2026-10-02)** — 등급을 한 단계(WORKSPACE_WRITE) 넓히면서 위협 모델에 증분 한 줄을 먼저 더했다 — "위협 모델은 지속적 개선"의 첫 증분. 쓰기는 사람 승인 필수·무인 불가·다이제스트 열쇠, 두 열쇠(083) · 실 Redis 중계 시험. **남은 것(Q16c):** COMMAND |
+| **Q17** 🆕 | 조직 에이전트 (F20·F21) | 조직이 소유하고 조직이 ID·자격증명·시스템 접근을 부여하는 전담 에이전트. 사용자와 **별개 주체**. 외부 거버넌스(Agent 365 류) 연동은 이 뒤 | `Organization` 모델(격리 없음) | Q13 · **트랙 P 테넌트 격리**(ROADMAP N5) · N4 감사 로그 | 대 |
+| **Q18** 🆕 | 에이전트 팀 (F22) | 한 사용자·조직의 에이전트끼리 일을 넘긴다. 서브에이전트(depth-1, 한 태스크 안)와 다르다 — 넘겨받는 쪽도 자기 ID·규칙·예산으로 돈다. 권한은 **넘기는 쪽과 받는 쪽의 교집합** | 서브에이전트 런타임 · 트랙 I | Q13 · Q10 · Q17 | 대 |
+
+### 4.3 순서
+
+```
+Q0 ✅ ──> Q1 background ──┬──────────────────────────────> Q4 이벤트 트리거
+          Q2 USER_ONLY ───┼──> Q5 감시자(PAUSED) ─────────> Q10 예산 봉투 ──┐
+                          └──> Q6 자격증명 ──┬──> Q11 MCP                    │
+                                             ├──> Q14 브라우저               │
+                                             └──> Q16 기기 브리지            │
+          Q13 에이전트 개체 ──┬──> Q3 상시 질문 (+ DA 운영 경로)              │
+                             ├──> Q8 채널 횡단 ──┬──> Q9 묻고 기다리기(WAITING_USER)
+                             │                   └──> Q15 음성 (+ N3)        │
+                             ├──> Q7 피드백 후보                             │
+                             └──> Q17 조직 에이전트 (+ 트랙 P) ──> Q18 팀 <──┘
+```
+
+**가드가 능력보다 먼저다 — 범위를 넓혀도 순서는 그대로다.** Q1·Q2 는 작고 기존 부품의 연장이라 상시 가동 없이도
+코딩 autonomous 모드를 곧바로 조인다. Q13 은 Q1·Q2 와 **병렬로** 설계를 시작하되, 에이전트가 사용자 없이 도는
+첫 경로(Q3·Q4)는 Q1·Q2·Q5 가 착지한 뒤에 켠다.
+
+---
+
+## 5. 범위 결정으로 풀리지 않는 것 — 원칙 충돌 둘
+
+초판의 "가져오지 않는 것" 일곱 중 다섯은 범위 문제였고 Q14~Q18 로 옮겼다. 남은 둘은 **이미 내린 결정과 부딪힌다.**
+Q0 은 그 결정들을 바꾸지 않았다.
+
+| dots | 부딪히는 결정 | 지금 할 수 있는 것 | 푸는 자리 |
+|---|---|---|---|
+| 피드백의 **자동 반영**(F6) | **D19** — auto-mutation 배제 | Q7: 후보 생성까지 자동, 승격은 사람 | 로드맵 §11 "사람의 결정" ① D19 개정 범위 ("자동 후보·자동 롤백 허용, 자동 승격 금지"로 좁힐 것인가) |
+| **DA 조사 경로의** 브라우저 | **D6** — retrieval 은 `fetch.py` 독점, 샌드박스 코드는 네트워크 없음(§9) | Q14: 에이전트 컴퓨터에만. DA 가 에이전트 산출물을 쓸 때도 바이트는 `fetch.py` 로 다시 들어온다 | 필요해지면 D6 개정 제안 — 새 사전 등록 |
+
+---
+
+## 6. 결정 원장
+
+**결정됨 (2026-09-30, 사람의 결정)**
+
+1. ✅ **Q0** — 상시 에이전트를 NEOS 방향에 넣는다. **범위는 좁히지 않는다**(dots F1~F22 전체)
+2. ✅ **USER_ONLY** — 목록은 **코드에 고정**, 설정은 **늘리기만**(합집합). 빼는 설정 표현을 만들지 않는다
+3. ✅ **`PAUSED`·`WAITING_USER`** — 지우지 않는다. `PAUSED` 는 감시자(Q5)·예산(Q10), `WAITING_USER` 는 묻고 기다리기(Q9)
+4. ✅ **Q3 차이 단위 = 클레임** — 결론(verdict) 단위가 아니다. 짝짓기 키는 열린 질문 8
+5. ✅ **Q5 판정자 = Jev** — 권고(규칙 1차 · Jev 섀도)는 채택되지 않았다. 트랙 L 규율(좁히기만 · digest · 섀도 먼저 · D-L1 폴백)은 그대로 걸린다
+6. ✅ **Q13 = 사용자당 하나, 늘릴 수 있게** — unique 인덱스 하나 + `agent_id` 키
+7. ✅ **Q16 위협 모델 = 지속적 개선** — 착수 조건이 아니다. READ_ONLY 로 시작해 넓힐 때마다 증분을 기록한다
+8. ✅ **Q3 짝짓기 키 = 권고대로** — 런 안에서 이미 쓰는 `claim_hash(text)` 를 런 사이로 넓혀 **1차 키**로, 인용 증거의
+   `DABlob.content_hash` 집합을 **보조 키**로. (a)로 짝이 안 난 클레임 중 증거 집합이 겹치는 것은 "재표현 후보"로 따로
+   세고 "새로 검증"으로 알리지 않는다. 새 해시 정의를 만들지 않는다
+9. ✅ **Q5 폴백 최소 규칙** — §6.1
+
+### 6.1 Q5 폴백 최소 규칙 — Jev 가 없을 때 (결정 2026-09-30)
+
+**언제 도는가:** 감시자가 Jev 를 부르다 실패·타임아웃하면(`jev_unavailable` 이 원장에 남는 그 경우) **그 판정 한 번**을
+아래 규칙으로 대신한다. Jev 가 살아 있으면 돌지 않는다 — 판정자는 Jev 다(결정 5).
+
+**규칙은 이미 원장에 있는 이벤트만 읽는다.** 새 계측을 요구하는 규칙은 폴백이 될 수 없다 — 폴백은 무언가가 이미
+고장 난 때 돈다.
+
+| ID | 조건 | 읽는 이벤트 | 기본 임계 |
+|---|---|---|---|
+| **FB1** 위임 불가 시도 | USER_ONLY 판정이 난 호출이 한 번이라도 있다 | `tool.denied` (`reason_code` = USER_ONLY 계열) | 1회 |
+| **FB2** 모드 천장 위반 | background 태스크가 READ_ONLY 밖 도구를 시도했다 | `tool.denied` (`reason_code` = 모드 천장) | 2회 |
+| **FB3** 반복 거절 | 최근 도구 호출 창 안에서 거절이 몰린다 | `tool.denied` / `tool.started` | 창 10 중 3 |
+| **FB4** 같은 호출 반복 | 같은 도구 + 같은 입력 해시가 되풀이된다(진전 없는 루프) | `tool.started` | 3회 |
+| **FB5** 모델 거절 | 모델이 거절했다 — 주입된 지시를 만났을 가능성 | `model.refused` | 1회 |
+| **FB6** 지출 급증 | 한 스텝의 토큰이 이 태스크의 이동 중앙값의 k 배를 넘는다. Q10 이 착지하면 봉투 초과도 여기에 | `model.completed` usage | k = 4 (첫 5 스텝은 판정 안 함) |
+
+**규율:**
+
+- **멈추게만 한다.** 결과는 `PAUSING → PAUSED` 하나뿐이다. 규칙은 재개·허용·완화를 하지 못한다 — L 의 "좁히기만"
+- **임계는 전부 settings** 다(§9 매직넘버 금지). 위 값은 첫 기본값이고, 설정은 임계를 **낮추기만**(더 엄하게) 할 수 있다 —
+  USER_ONLY 와 같은 한 방향 규칙
+- **폴백 판정도 이벤트다.** 판정자 `fallback_rules` · 규칙 ID · 임계값 · 규칙 집합 버전을 싣는다. 버전 없는 판정은 재현 불가(§9)
+- **섀도도 같이 간다.** Jev 가 섀도로 착지하는 동안(결정 5) 폴백 규칙도 `would_pause` 만 기록한다. 실제로 멈추는 것은 Jev 와 폴백이
+  **함께** 섀도에서 올라올 때다
+- **감시 조건:** `jev_unavailable` 비율과 폴백 규칙별 발동 수. 폴백이 Jev 보다 자주 멈추게 하면 임계가 과하거나 Jev 가 너무 자주 죽는 것이다
+
+**열린 질문**
+
+~~8. **Q3 의 클레임 짝짓기 키** — 클레임 id(`DAClaim.id`)는 런마다 새로 난다. 후보: (a) 정규화한 클레임 문장의 해시 — 재표현에 깨진다,
+   (b) 인용 증거(fetch blob 해시 + 발췌)의 집합 — 같은 근거의 같은 주장은 붙지만 새 근거로 같은 주장을 하면 떨어진다,
+   (c) 판정 모델에게 짝을 묻기 — 짝짓기 자체가 비결정적이 된다.
+   📌 **(a)는 이미 런 안의 클레임 정체성이다**(2026-09-30 코드 확인): `Ledger._upsert_claim` 이 `claim_hash(text)`
+   (`text_norm.normalize_for_hash`)로 같은 런의 클레임을 합치고, `DAClaim` 에 `(run_id, hash)` unique 가 있다. 증거 쪽도
+   `DABlob.content_hash` 가 있다. 그러므로 권고: **(a)를 런 사이로 넓혀 1차 키로 쓰고, (b)를 보조로** — (a)로 짝이 안 난 클레임 중
+   증거 집합이 겹치는 것을 "재표현 후보"로 따로 센다. 새 해시 정의를 만들지 않는다(런 안과 런 사이가 다른 정체성을 쓰면 고침이 한쪽에만 도착한다)~~ → 결정 8
+~~9. **Q5 폴백 규칙 집합의 최소 내용** — Jev 가 없을 때 무엇으로 멈추는가.~~ → 결정 9 · §6.1
+
+(열린 질문 없음 — 2026-09-30)
+
+---
+
+## 7. 출처
+
+- 원문: [dots를 소개합니다 | OpenAI](https://openai.com/ko-KR/index/introducing-dots/) (2026-09-29) — WebFetch 403, Playwright 로 본문 전체를 읽었다
+- [보도] [NBC News — OpenAI launches Dots AI agents amid safety questions](https://www.nbcnews.com/tech/tech-news/openai-launches-dots-ai-agents-safety-questions-rcna600338)
+- [보도] [TechCrunch — OpenAI launches Dots, its bubbly agentic avatar](https://techcrunch.com/2026/09/29/openai-launches-dots-its-bubbly-agentic-avatar/)
+- [보도] [9to5Google — OpenAI launches Dots, new 'always-on agents'](https://9to5google.com/2026/09/29/openai-dots-agent/)
+- [보도] [CBS News — Sam Altman unveils "dots"](https://www.cbsnews.com/news/sam-altman-openai-dots-chatgpt-agents-safety/) (검색 결과로만 확인)

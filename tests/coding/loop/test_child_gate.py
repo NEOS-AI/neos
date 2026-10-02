@@ -75,10 +75,10 @@ def _child_calls(name: str, input: dict):
     )
 
 
-def _runtime_with_real_port(child_script):
+def _runtime_with_real_port(child_script, *, command_allowlist=frozenset({"pytest"})):
     executor = _PortExecutor()
     port = CodingToolPort(
-        registry=CodingToolRegistry.default(command_allowlist=frozenset({"pytest"})),
+        registry=CodingToolRegistry.default(command_allowlist=frozenset(command_allowlist)),
         executor=executor,
     )
     runtime = SubagentRuntime(
@@ -319,6 +319,35 @@ async def test_explore_child_cannot_read_a_secret_even_in_auto_mode() -> None:
     [denied] = _denials(h)
     assert denied.payload["subagent_spec"] == "explore"
     assert denied.payload["reason_code"] == "policy_approval_denied"
+
+
+@pytest.mark.asyncio
+async def test_a_childs_user_only_call_is_recorded_as_user_only(tmp_path: Path) -> None:
+    """Track Q2 lands in both gates. The operator allowed `gh` and auto-allows
+    execute, and the child still may not log in. The parent's ledger names it
+    `policy_user_only` so FB1 counts it. Mutation: the child gate keeps the
+    generic reason code."""
+    runtime, _port, executor = _runtime_with_real_port(
+        [_child_calls("execute.v1", {"argv": ["gh", "auth", "login"]}), _text("done")],
+        command_allowlist={"gh"},
+    )
+    h = harness(
+        _spawn("implement"),
+        config=_flag_on(
+            approval_mode="auto",
+            approval_allow_tools=("spawn_agent.v1",),
+            approval_always_allow=("execute.v1",),
+        ),
+        subagents=runtime,
+        bindings=Bindings(workspace=_init_repo(tmp_path)),
+        approval_evaluator=evaluate_approval,
+    )
+
+    await _run_until_folded(h)
+
+    assert executor.calls == []
+    [denied] = _denials(h)
+    assert denied.payload["reason_code"] == "policy_user_only"
 
 
 @pytest.mark.asyncio

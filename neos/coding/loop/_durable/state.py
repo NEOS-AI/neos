@@ -62,6 +62,7 @@ class CodingLoopConfig:
     approval_deny_tools: frozenset[str] = frozenset()
     approval_allow_tools: frozenset[str] = frozenset()
     approval_always_allow: frozenset[str] = frozenset()
+    approval_user_only_extra: frozenset[tuple[str, ...]] = frozenset()
     approval_unattended: bool = False
     # P-05. 끄면 LLM 컴팩션 요청이 예전과 바이트가 같다.
     compaction_preserving_summary: bool = False
@@ -206,6 +207,13 @@ class AgentLoopState:
     # system + tools + those messages. See `_guard_thinking_prefix`.
     sent_prefix_count: int = 0
     sent_prefix_digest: str = ""
+    #: 태스크 소유자의 승인 규칙(트랙 Q2). **체크포인트에 싣지 않는다** -- `run()` 이 매
+    #: 단계 새로 읽어 채운다(`codec._dump_loop_state` 에 없는 것이 의도다). 실행 중에
+    #: 더한 block 이 다음 단계부터 걸리게.
+    user_rules: tuple = ()
+    #: 소유자의 지금 연결된 기기 브리지(트랙 Q16a, `BridgeView`). `user_rules` 와 같이
+    #: **체크포인트에 싣지 않고** 매 단계 새로 읽는다. `None` 이면 브리지 도구가 없다.
+    device_bridge: object | None = None
 
     @property
     def has_pending_tool(self) -> bool:

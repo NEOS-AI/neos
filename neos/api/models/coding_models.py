@@ -3,12 +3,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from neos.coding.domain.events import CodingEvent
+
 
 class CreateCodingTaskRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=100_000)
     # 누가 보고 있는가 (로드맵 K9). Code UI 는 보내지 않는다 -- 사람이 본다.
     # autonomous 면 승인 요구가 기다리지 않고 거절로 접힌다.
-    mode: Literal["interactive", "autonomous"] = "interactive"
+    # background 면 읽기 전용이다 -- 쓰기·명령·질문·자식은 거절된다(트랙 Q1).
+    mode: Literal["interactive", "autonomous", "background"] = "interactive"
 
 
 class CodingTaskResponse(BaseModel):
@@ -40,6 +43,24 @@ class CodingEventResponse(BaseModel):
     turn_id: str | None = None
     tool_call_id: str | None = None
     checkpoint_id: str | None = None
+
+
+def event_response(event: CodingEvent) -> dict:
+    """The wire shape of one ledger event -- the HTTP list, the WS stream and
+    the standing agent activity feed (Q13d) all send this."""
+    return {
+        "v": event.version,
+        "task_id": event.task_id,
+        "seq": event.seq,
+        "event_id": event.event_id,
+        "type": event.type,
+        "ts": event.created_at.isoformat(),
+        "payload": dict(event.payload),
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "tool_call_id": event.tool_call_id,
+        "checkpoint_id": event.checkpoint_id,
+    }
 
 
 class CodingEventListResponse(BaseModel):

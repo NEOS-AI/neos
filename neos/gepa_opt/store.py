@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from neos.learn.policy import is_agent_namespace
+
 SessionFactory = Callable[[], Awaitable[Any]]
 
 
@@ -82,7 +84,13 @@ class GepaOptStore:
         seed_components: Mapping[str, str],
         examples: Sequence[Mapping[str, Any]],
     ) -> str:
-        """Insert the run, the seed candidate, then point seed_candidate_id at it."""
+        """Insert the run, the seed candidate, then point seed_candidate_id at it.
+
+        F18 (track Q13e): an agent's own namespace never owns a run -- its memos
+        are not training data.
+        """
+        if is_agent_namespace(owner_namespace):
+            raise ValueError("an agent namespace cannot own a GEPA run (F18)")
         candidate_id = str(uuid.uuid4())
         async with await self._session_factory() as session:
             async with session.begin():

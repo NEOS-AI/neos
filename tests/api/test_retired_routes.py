@@ -75,6 +75,8 @@ RETIRED = {
 
 
 def _routes() -> set[tuple[str, str]]:
+    from starlette.routing import WebSocketRoute
+
     from neos.main import app
 
     found = set()
@@ -87,6 +89,13 @@ def _routes() -> set[tuple[str, str]]:
         for ctx in contexts:
             for method in getattr(ctx, "methods", None) or {"WS"}:
                 found.add((method, ctx.path))
+        # 포함된 라우터의 WebSocket 은 위 문맥에서 경로가 빈 문자열로 나온다(2026-10-01 실측) --
+        # 그대로 두면 소켓의 부재 검사가 공허하다. 원래 라우터에서 prefix 를 붙여 읽는다.
+        original = getattr(route, "original_router", None)
+        include = getattr(route, "include_context", None)
+        for inner in getattr(original, "routes", ()) or ():
+            if isinstance(inner, WebSocketRoute):
+                found.add(("WS", (getattr(include, "prefix", "") or "") + inner.path))
     return found
 
 
@@ -99,11 +108,19 @@ def test_health_stays_public():
     assert ("GET", "/api/v1/health") in _routes()
 
 
+def test_included_sockets_are_visible_to_the_route_reader():
+    """`_routes()` 로 소켓의 부재를 말하려면 있는 소켓이 먼저 보여야 한다."""
+    served = _routes()
+    assert ("WS", "/api/v1/coding/ws") in served
+    assert ("WS", "/api/v1/coding/workspace/ws") in served
+
+
 def test_only_ticketed_coding_sockets_declare_websocket_routes():
     """레거시 WebSocket(`/ws/{session_id}`, `/ws/query/*`, `/chat/ws/{id}`)은 인증 없이
     열려 있어서 비디버그에서는 `_include_router_for_runtime` 이 떼어 냈고, 프론트는
     SSE 를 쓴다. 그래서 앱 라우트로는 부재를 확인할 수 없다(테스트 앱은 비디버그다) --
-    선언 자체를 센다. 티켓 인증을 가진 코딩 소켓 둘만 남는다.
+    선언 자체를 센다. 티켓 인증을 가진 코딩 소켓 둘과, 페어링 토큰으로 인증하는 기기
+    브리지 소켓(트랙 Q16a, 플래그 off 면 마운트되지 않는다)만 남는다.
     """
     import pathlib
 
@@ -116,4 +133,5 @@ def test_only_ticketed_coding_sockets_declare_websocket_routes():
     assert declaring == [
         "handlers/coding_workspace_ws_handlers.py",
         "handlers/coding_ws_handlers.py",
+        "handlers/device_bridge_ws_handlers.py",
     ]

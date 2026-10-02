@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import logging
 import re
 from typing import Any, Literal
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 # 같은 이름 상수와 값이 반드시 같아야 한다 -- 이 파일은 `neos.coding.*` 기능
 # 모듈에 의존하지 않는 계층 경계를 지키려고 상수를 공유하지 않고 각자 둔다.
 _MANAGED_CIPHER_KEY_VALID_BYTE_LENGTHS = frozenset({16, 24, 32})
+# 트리거 서명 마스터 키의 최소 길이. HMAC-SHA256 키로 32자(예: `openssl rand -hex 32` 는 64자).
+STANDING_TRIGGER_KEY_MIN_CHARS = 32
+# 트랙 Q6 -- `neos.coding.secrets.SECRET_BROKER_KEY_MIN_CHARS` 와 같은 값이다. 이 계층은
+# `neos.coding.*` 에 의존하지 않으므로 이름 붙인 상수로 따로 둔다(managed 키와 같은 이유).
+SECRET_BROKER_KEY_MIN_CHARS = 32
 
 
 def _split_csv(value: Any) -> Any:
@@ -448,6 +454,12 @@ class SecretsConfig(StrictConfigModel):
     # 참조 봉인 키와 **다른** 키여야 한다 -- 한 키가 새면 봉인과 소유권 증명이
     # 함께 무너지지 않게 한다 (neos/coding/sandbox/managed/identity.py).
     managed_coding_ownership_key: str | None = Field(default=None, repr=False)
+    # 상시 에이전트 트리거(Q4a)의 서명 마스터 키. 트리거마다의 webhook 비밀은
+    # HMAC(이 키, trigger_id) 로 파생한다 -- DB 에는 비밀이 없다.
+    standing_trigger_signing_key: str | None = Field(default=None, repr=False)
+    # 자격증명 브로커(Q6)의 봉인 마스터 키. 사용자 비밀의 AES-GCM 키는
+    # HMAC(이 키, 고정 info) 로 파생한다 -- DB 에는 키가 없다.
+    secret_broker_key: str | None = Field(default=None, repr=False)
 
 
 class SourceIntegrationsConfig(StrictConfigModel):
@@ -687,6 +699,52 @@ class MemoryConfig(StrictConfigModel):
     long_term_enabled: bool = True
     episodic_enabled: bool = True
     max_context_items: int = 10
+
+
+class StandingTriggersConfig(StrictConfigModel):
+    """이벤트 트리거 -- 트랙 Q4a (docs/Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md).
+
+    꺼져 있으면 트리거 라우터를 마운트하지 않는다. 켜려면
+    `secrets.standing_trigger_signing_key`(`NEOS_TRIGGER_SIGNING_KEY`)가 있어야 한다 --
+    트리거마다의 서명 비밀은 이 키에서 파생하고 DB 에는 없다.
+    """
+
+    enabled: bool = False
+    #: 배달 본문 상한. 넘으면 서명을 보기 전에 413 이다.
+    max_body_bytes: int = Field(default=65_536, ge=1)
+    #: 서명 시각과 받은 시각의 허용 차이(초). 재전송 창이다.
+    timestamp_tolerance_seconds: int = Field(default=300, ge=1)
+
+
+class StandingBudgetConfig(StrictConfigModel):
+    """에이전트 예산 봉투 -- 트랙 Q10a (docs/Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md).
+
+    봉투는 **에이전트 × 달력 월(UTC)** 이다. 지출은 그 달에 연 에이전트 태스크들의
+    누적 `cost_micros` 합이다. 꺼져 있으면 아무것도 막지 않고 섀도 판정도 없다.
+    """
+
+    enabled: bool = False
+    #: 한 에이전트가 한 달에 쓸 수 있는 비용(마이크로달러). 기본 $20.
+    monthly_limit_micros: int = Field(default=20_000_000, ge=0)
+    #: background 태스크가 쓸 수 있는 봉투의 몫. 사용자가 맡긴 autonomous 일은 봉투 전부를 쓴다.
+    background_share: float = Field(default=0.5, gt=0.0, le=1.0)
+    #: 켜져 있으면(기본) background 몫은 **예약**이다 -- 사용자가 맡긴 autonomous 일은 봉투에서
+    #: 그 몫을 뺀 나머지만 쓴다. 상시 에이전트가 사람이 맡긴 일에 밀려 그달 내내 아무것도 못
+    #: 하지 않게 하는 쪽이 기본이다. 끄면 autonomous 는 봉투 전부를 쓸 수 있다(그 몫도 먹는다).
+    #: 켠 채 `background_share = 1.0` 이면 autonomous 몫은 0 이다.
+    reserve_background_share: bool = True
+
+
+class StandingAgentsConfig(StrictConfigModel):
+    """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
+
+    꺼져 있으면 API 라우터를 **마운트하지 않는다**(`main.py`). 거절하는 라우트가
+    아니라 라우트가 없다.
+    """
+
+    enabled: bool = False
+    triggers: StandingTriggersConfig = Field(default_factory=StandingTriggersConfig)
+    budget: StandingBudgetConfig = Field(default_factory=StandingBudgetConfig)
 
 
 class LearnConfig(StrictConfigModel):
@@ -1596,6 +1654,38 @@ class JevBandThresholds(StrictConfigModel):
         return self
 
 
+class JevMonitorConfig(StrictConfigModel):
+    """궤적 감시자 -- 로드맵 트랙 Q5 (docs/OPENAI_DOTS_ANALYSIS_260930.md §6.1).
+
+    판정자는 Jev 다(결정 5). Jev 가 대답하지 못하면 그 판정 한 번을 폴백 규칙
+    FB1~FB6 이 대신한다. **섀도만 있다** -- 기록할 뿐 멈추게 하지 않는다.
+
+    폴백 임계값은 첫 기본값이고 **더 엄하게만** 움직인다(결정 9) -- 각 필드의
+    경계가 기본값이다. Jev 의 멈춤 경계(`pause_at_or_above`)는 기본값이 없다:
+    L2 섀도처럼 실측이 정한다(§12.4).
+    """
+
+    shadow_enabled: bool = False
+    #: 궤적 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    rubric: str = "trajectory_scope"
+    #: `p >= pause_at_or_above` 면 would_pause. 기본값 없음 -- 켜려면 명시한다.
+    pause_at_or_above: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: 도구 결과(`tool.completed`·`tool.denied`) 몇 개마다 한 번 판정하는가.
+    every_n_tool_results: int = Field(default=5, ge=1)
+    #: 한 번에 읽는 원장 이벤트 상한. 넘으면 최근 것만 본다.
+    max_events: int = Field(default=2000, ge=100)
+
+    # -- 폴백 FB1~FB6. 경계가 기본값이다: 낮추기만(FB3 창·FB6 배수는 방향이 반대).
+    user_only: int = Field(default=1, ge=1, le=1)
+    mode_ceiling: int = Field(default=2, ge=1, le=2)
+    denial_window: int = Field(default=10, ge=10)
+    denials_in_window: int = Field(default=3, ge=1, le=3)
+    repeated_call: int = Field(default=3, ge=2, le=3)
+    refusals: int = Field(default=1, ge=1, le=1)
+    spend_multiple: float = Field(default=4.0, gt=1.0, le=4.0)
+    spend_warmup_turns: int = Field(default=5, ge=1, le=5)
+
+
 class JevConfig(StrictConfigModel):
     """Jev 확률 판정 층 -- 로드맵 §12(트랙 L).
 
@@ -1628,6 +1718,8 @@ class JevConfig(StrictConfigModel):
     tool_risk_rubric: str = "tool_risk_split"
     #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
     timeout_sec: float = Field(default=5.0, gt=0, le=60)
+    #: 궤적 감시자(트랙 Q5). `enabled` 와 `monitor.shadow_enabled` 가 둘 다 참일 때만 돈다.
+    monitor: JevMonitorConfig = Field(default_factory=JevMonitorConfig)
 
     @field_validator("model")
     @classmethod
@@ -1661,8 +1753,13 @@ class JevConfig(StrictConfigModel):
                     "jev.high_at_or_above 는 jev.low_below 보다 작을 수 없다: "
                     f"{self.low_below} > {self.high_at_or_above}"
                 )
+        if self.monitor.shadow_enabled and self.monitor.pause_at_or_above is None:
+            raise ValueError(
+                "궤적 감시자(jev.monitor)를 켜려면 jev.monitor.pause_at_or_above 를 "
+                "명시해야 한다. 기본값은 없다 -- 섀도 실측이 정한다."
+            )
         if not self.enabled and (
-            banding_on or self.judge_shadow_enabled
+            banding_on or self.judge_shadow_enabled or self.monitor.shadow_enabled
         ):
             raise ValueError(
                 "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "
@@ -1836,6 +1933,234 @@ class SandboxConfig(StrictConfigModel):
     managed: ManagedSandboxConfig = Field(default_factory=ManagedSandboxConfig)
 
 
+#: 트랙 Q14a 브라우저 도구 이름 -- `neos.coding.tools.registry.BROWSER_TOOL_NAMES` 와 같다.
+#: 이 계층은 `neos.coding.*` 에 의존하지 않으므로 따로 둔다(테스트가 둘이 같음을 고정한다).
+CODING_BROWSER_TOOL_NAMES = frozenset({"browser.v1", "browser_fill_secret.v1"})
+
+
+class CodingBrowserConfig(StrictConfigModel):
+    """트랙 Q14a -- 에이전트 브라우저 (docs/Q14_AGENT_BROWSER_DESIGN_261001.md).
+
+    브라우저는 **백엔드 호스트**에서 돈다(W1). 관리형 샌드박스(B2) 게이트가 닫혀 있으므로
+    development 밖에서는 `allow_outside_development` 를 운영자가 명시해야 켜진다.
+    허용 호스트는 `coding_model.web_fetch_hosts` 하나를 같이 쓴다(W3).
+    """
+
+    enabled: bool = False
+    allow_outside_development: bool = False
+    navigation_timeout_sec: float = Field(default=15, gt=0, le=60)
+    action_timeout_sec: float = Field(default=10, gt=0, le=60)
+    max_navigations: int = Field(default=30, ge=1, le=500)
+    max_requests: int = Field(default=500, ge=1, le=5000)
+    max_response_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
+    max_request_body_bytes: int = Field(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024)
+    snapshot_max_chars: int = Field(default=20_000, ge=1000, le=200_000)
+    idle_timeout_sec: int = Field(default=300, ge=10, le=3600)
+    max_lifetime_sec: int = Field(default=1800, ge=60, le=14_400)
+    max_contexts: int = Field(default=2, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def validate_lifetime(self) -> "CodingBrowserConfig":
+        if self.idle_timeout_sec > self.max_lifetime_sec:
+            raise ValueError("coding_model.browser idle_timeout_sec exceeds max_lifetime_sec")
+        return self
+
+# 트랙 Q11a -- 실제 MCP 클라이언트(docs/Q11_MCP_CLIENT_DESIGN_261001.md).
+# 커넥터 도구가 받을 수 있는 위험 등급. USER_QUESTION 은 사람에게 묻는 도구의 것이라 없다.
+McpToolRisk = Literal["read_only", "workspace_write", "command"]
+#: 우리가 정하는 헤더 -- 설정이 덮으면 프로토콜이 깨지거나 요청이 엉뚱한 곳으로 간다.
+_MCP_RESERVED_HEADERS = frozenset(
+    {
+        "accept",
+        "authorization",  # `bearer_token` 으로만
+        "connection",
+        "content-length",
+        "content-type",
+        "host",
+        "mcp-protocol-version",
+        "mcp-session-id",
+        "transfer-encoding",
+    }
+)
+_MCP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+_MCP_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_MCP_TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MCP_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+class CodingMcpPinnedTool(StrictConfigModel):
+    """운영자가 고정한 도구 하나(트랙 Q11b, N2). 발견하지 않고 이것이 도구 배열에 실린다.
+
+    `input_schema` 는 서버의 `tools/list` 가 돌려주는 `inputSchema` 를 그대로 옮긴 것이다 --
+    호출 때 서버의 것과 비교해 다르면 부르지 않는다(N4).
+    """
+
+    name: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    description: str = Field(default="", max_length=4000)
+    input_schema: dict[str, Any]
+    # 없으면 `tool_risks[name]` → 서버의 `risk`. 셋 다 없으면 시작하지 않는다(N3).
+    risk: McpToolRisk | None = None
+
+    @model_validator(mode="after")
+    def validate_schema_shape(self) -> "CodingMcpPinnedTool":
+        if self.input_schema.get("type") != "object":
+            raise ValueError(f"pinned mcp tool {self.name}: input_schema type must be object")
+        return self
+
+
+class CodingMcpServerConfig(StrictConfigModel):
+    """운영자가 정한 MCP 서버 하나. 모델은 명령도 URL 도 고르지 않는다(M2).
+
+    `env`·`headers`·`bearer_token` 값은 문자 그대로이거나 **값 전체가**
+    `secret://<name>` 이다 -- 참조는 태스크 소유자의 금고에서 호출 때 푼다(M7).
+    """
+
+    # 밑줄이 없다 -- 노출 이름 `mcp__<server>__<tool>` 이 모호해지지 않게(M5).
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    transport: Literal["stdio", "http"]
+    command: list[str] = Field(default_factory=list)
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict, repr=False)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict, repr=False)
+    bearer_token: str | None = Field(default=None, repr=False)
+    # 서버 전체의 위험 선언. 없고 `tool_risks` 에도 없으면 그 도구는 **등록되지 않는다**(M4).
+    risk: McpToolRisk | None = None
+    tool_risks: dict[str, McpToolRisk] = Field(default_factory=dict)
+    # 트랙 Q11b: 있으면 이 서버는 발견하지 않는다 -- 운영자가 적은 도구가 전부다(N1·N2).
+    # `None` 이 Q11a 그대로(시작할 때 발견)다.
+    pinned_tools: list[CodingMcpPinnedTool] | None = None
+
+    @model_validator(mode="after")
+    def validate_transport(self) -> "CodingMcpServerConfig":
+        if self.transport == "stdio":
+            if not self.command or any(not part for part in self.command):
+                raise ValueError(f"mcp server {self.name}: stdio needs a command argv")
+            if self.url or self.headers or self.bearer_token:
+                raise ValueError(f"mcp server {self.name}: stdio takes no url/headers")
+            bad = [key for key in self.env if not _MCP_ENV_NAME_RE.fullmatch(key)]
+            if bad:
+                raise ValueError(f"mcp server {self.name}: bad env names {bad}")
+        else:
+            if self.command or self.env or self.cwd:
+                raise ValueError(f"mcp server {self.name}: http takes no command/env")
+            from urllib.parse import urlparse
+
+            parsed = urlparse(self.url or "")
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError(f"mcp server {self.name}: url must be http(s)")
+            if parsed.username or parsed.password:
+                raise ValueError(f"mcp server {self.name}: no credentials in the url")
+            if parsed.scheme == "http" and parsed.hostname not in _MCP_LOOPBACK_HOSTS:
+                raise ValueError(f"mcp server {self.name}: plain http is loopback only")
+            for key in self.headers:
+                if not _MCP_HEADER_NAME_RE.fullmatch(key) or key.lower() in _MCP_RESERVED_HEADERS:
+                    raise ValueError(f"mcp server {self.name}: header {key!r} is not allowed")
+        bad_tools = [key for key in self.tool_risks if not _MCP_TOOL_NAME_RE.fullmatch(key)]
+        if bad_tools:
+            raise ValueError(f"mcp server {self.name}: bad tool names {bad_tools}")
+        if self.pinned_tools is not None:
+            self._validate_pinned_tools(self.pinned_tools)
+        return self
+
+    def _validate_pinned_tools(self, pinned: list[CodingMcpPinnedTool]) -> None:
+        """고정 매니페스트의 위험도 운영자의 선언이다(M4). 빠진 것은 조용히 버리지 않는다."""
+        if not pinned:
+            raise ValueError(f"mcp server {self.name}: pinned_tools is empty; omit it to discover")
+        names = [tool.name for tool in pinned]
+        if len(names) != len(set(names)):
+            raise ValueError(f"mcp server {self.name}: pinned tool names must be unique")
+        undeclared = [
+            tool.name
+            for tool in pinned
+            if (tool.risk or self.tool_risks.get(tool.name) or self.risk) is None
+        ]
+        if undeclared:
+            raise ValueError(f"mcp server {self.name}: pinned tools without a risk {undeclared}")
+        stray = sorted(set(self.tool_risks) - set(names))
+        if stray:
+            raise ValueError(f"mcp server {self.name}: tool_risks names unpinned tools {stray}")
+
+    def credential_values(self) -> list[str]:
+        values = [*self.env.values(), *self.headers.values()]
+        if self.bearer_token is not None:
+            values.append(self.bearer_token)
+        return values
+
+
+class CodingMcpConfig(StrictConfigModel):
+    """트랙 Q11a(+Q11b 고정 매니페스트). 꺼져 있으면 도구 목록·프롬프트·이벤트가
+    오늘과 바이트가 같다(M10)."""
+
+    enabled: bool = False
+    servers: list[CodingMcpServerConfig] = Field(default_factory=list)
+    # 시작할 때 `tools/list` 를 기다리는 시간(서버마다). 넘으면 그 서버의 도구는 없다.
+    discovery_timeout_sec: float = Field(default=15, gt=0, le=120)
+    # `tools/call` 한 번(연결·초기화 포함)의 상한.
+    call_timeout_sec: float = Field(default=30, gt=0, le=600)
+    # 프로토콜 메시지 하나의 상한. 넘으면 결과를 버린다(`connector_message_too_large`).
+    max_message_bytes: int = Field(default=1024 * 1024, ge=4096, le=16 * 1024 * 1024)
+    # 모델에게 돌려주는 본문의 상한. 넘으면 잘리고 `truncated` 가 선다.
+    max_output_bytes: int = Field(default=64 * 1024, ge=1024, le=1024 * 1024)
+    max_tools_per_server: int = Field(default=64, ge=1, le=256)
+
+    @model_validator(mode="after")
+    def validate_servers(self) -> "CodingMcpConfig":
+        names = [server.name for server in self.servers]
+        if len(names) != len(set(names)):
+            raise ValueError("coding_model.mcp.servers names must be unique")
+        if self.max_output_bytes > self.max_message_bytes:
+            raise ValueError("coding_model.mcp.max_output_bytes exceeds max_message_bytes")
+        for server in self.servers:
+            if server.pinned_tools and len(server.pinned_tools) > self.max_tools_per_server:
+                raise ValueError(
+                    f"mcp server {server.name}: pinned_tools exceeds max_tools_per_server"
+                )
+        return self
+
+    def uses_secret_refs(self) -> bool:
+        # 모양 검사는 `neos.coding.connectors` 가 한다 -- 이 계층은 접두만 본다.
+        return any(
+            value.startswith("secret://")
+            for server in self.servers
+            for value in server.credential_values()
+        )
+
+class DeviceBridgeConfig(StrictConfigModel):
+    """사용자 기기 브리지 -- 트랙 Q16a (docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md).
+
+    꺼져 있으면 자격증명 API 와 브리지 소켓을 **마운트하지 않고**, 도구 목록·프롬프트·
+    이벤트 어휘가 오늘과 바이트가 같다. 받는 등급은 READ_ONLY 와(Q16b) 자격증명이 허락한 WORKSPACE_WRITE 다.
+    소켓을 받는 API 프로세스와 루프를 도는 워커는 Redis 로 잇는다(B6).
+    """
+
+    enabled: bool = False
+    #: 사용자당 페어링한 브리지(자격증명) 상한. 동시에 붙는 것은 하나다(B5).
+    max_bridges_per_user: int = Field(default=5, ge=1, le=50)
+    #: 한 호출이 브리지의 답을 기다리는 시간.
+    call_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    #: 브리지 하나에 동시에 걸린 호출 수.
+    max_inflight_per_bridge: int = Field(default=4, ge=1, le=64)
+    #: `device_read_file.v1` 이 돌려받는 본문 상한(UTF-8 바이트).
+    max_read_bytes: int = Field(default=262_144, ge=1024, le=4_194_304)
+    #: `device_list_dir.v1` 이 싣는 항목 수 상한.
+    max_list_entries: int = Field(default=500, ge=1, le=5000)
+    #: `device_write_file.v1` 한 번이 쓰는 본문 상한(UTF-8 바이트, Q16b). 브리지도 같은 값을 본다.
+    max_write_bytes: int = Field(default=262_144, ge=1024, le=4_194_304)
+    #: 브리지가 보내는 메시지 하나의 상한. 넘으면 소켓을 닫는다.
+    max_message_bytes: int = Field(default=2_097_152, ge=4096, le=16_777_216)
+    #: 연결 표시(presence)의 수명. 소켓이 이 1/3 마다 갱신하고 자격증명을 다시 읽는다.
+    presence_ttl_seconds: int = Field(default=30, ge=5, le=300)
+    #: 접속 뒤 도구 선언(hello)을 기다리는 시간.
+    hello_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+    @model_validator(mode="after")
+    def _message_fits_a_read(self) -> "DeviceBridgeConfig":
+        if self.max_message_bytes <= self.max_read_bytes:
+            raise ValueError("device_bridge.max_message_bytes must exceed max_read_bytes")
+        return self
+
+
 class CodingModelConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["anthropic", "openai", "gemini", "ollama"] = "anthropic"
@@ -1869,7 +2194,29 @@ class CodingModelConfig(StrictConfigModel):
     approval_deny_tools: list[str] = Field(default_factory=list)
     approval_allow_tools: list[str] = Field(default_factory=list)
     approval_always_allow: list[str] = Field(default_factory=list)
+    # 트랙 Q2: 승인으로도 위임할 수 없는 명령을 **더한다**("gh workflow run" 처럼
+    # 공백으로 나눈 argv 접두). 코드의 USER_ONLY_COMMANDS 와 합집합으로만 쓰이고,
+    # 거기서 빼는 설정은 없다.
+    approval_user_only_extra: list[str] = Field(default_factory=list)
+    # 트랙 Q2: 사용자별 승인 규칙(allow/require/block). 끄면 루프가 규칙을 읽지 않고
+    # 규칙 API 도 마운트되지 않는다. 규칙은 기본 정책 **뒤에서** 평가된다 -- 사용자 allow 는
+    # 기본 DENY·USER_ONLY·보호 파일 승인을 넘지 못한다.
+    approval_user_rules: bool = False
+    approval_user_rules_max: int = Field(default=100, ge=1, le=1000)
+    # 트랙 Q6: 자격증명 브로커. 켜면 execute.v1 의 env 값 `secret://<name>` 을 실행기가
+    # 소유자의 금고에서 풀어 쓰고, 그 호출은 사람 승인 또는 소유자의 allow 규칙으로만
+    # 돈다. 끄면 참조는 문자 그대로이고 금고 API 도 마운트되지 않는다.
+    # 켜려면 `secrets.secret_broker_key`(`NEOS_SECRET_BROKER_KEY`)가 있어야 한다.
+    secret_broker: bool = False
+    secret_broker_max: int = Field(default=50, ge=1, le=1000)
+    # 트랙 Q11a: 운영자가 정한 MCP 서버의 도구를 `mcp__<server>__<tool>` 로 노출한다.
+    # 위험을 선언하지 않은 도구는 등록되지 않는다. 기본 off.
+    mcp: CodingMcpConfig = Field(default_factory=CodingMcpConfig)
+    # 트랙 Q16a: 사용자 기기 브리지. 끄면 라우트가 없고 도구 목록이 오늘과 같다.
+    device_bridge: DeviceBridgeConfig = Field(default_factory=DeviceBridgeConfig)
     web_fetch_hosts: list[str] = Field(default_factory=list)
+    # 트랙 Q14a: 에이전트 브라우저. 끄면 도구 목록·프롬프트·이벤트 어휘가 오늘과 같다.
+    browser: CodingBrowserConfig = Field(default_factory=CodingBrowserConfig)
     notebook_edit: bool = False
     image_tool: bool = False
     pdf_tool: bool = False
@@ -2134,6 +2481,7 @@ class AppConfig(StrictConfigModel):
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     learn: LearnConfig = Field(default_factory=LearnConfig)
+    standing_agents: StandingAgentsConfig = Field(default_factory=StandingAgentsConfig)
     query_classifier: QueryClassifierConfig = Field(default_factory=QueryClassifierConfig)
     executive_summary: ExecutiveSummaryConfig = Field(default_factory=ExecutiveSummaryConfig)
     query_expansion: QueryExpansionConfig = Field(default_factory=QueryExpansionConfig)
@@ -2296,6 +2644,93 @@ class AppConfig(StrictConfigModel):
                     "managed_coding_ownership_key must differ from "
                     "managed_provider_reference_key"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def validate_standing_trigger_signing_key(self) -> "AppConfig":
+        """트리거가 켜졌는데 서명 키가 없거나 짧으면 시작하지 않는다 -- 키 없이는
+        어떤 배달도 검증할 수 없으므로 라우트를 여는 것 자체가 잘못이다."""
+        if not self.standing_agents.triggers.enabled:
+            return self
+        key = self.secrets.standing_trigger_signing_key or ""
+        if len(key) < STANDING_TRIGGER_KEY_MIN_CHARS:
+            raise ValueError(
+                "standing_agents.triggers.enabled requires "
+                f"secrets.standing_trigger_signing_key of at least "
+                f"{STANDING_TRIGGER_KEY_MIN_CHARS} characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_secret_broker_key(self) -> "AppConfig":
+        """브로커가 켜졌는데 봉인 키가 없거나 짧으면 시작하지 않는다 -- 키 없이는
+        어떤 비밀도 봉인하거나 풀 수 없으므로 금고를 여는 것 자체가 잘못이다."""
+        if not self.coding_model.secret_broker:
+            return self
+        key = self.secrets.secret_broker_key or ""
+        if len(key) < SECRET_BROKER_KEY_MIN_CHARS:
+            raise ValueError(
+                "coding_model.secret_broker requires "
+                f"secrets.secret_broker_key of at least "
+                f"{SECRET_BROKER_KEY_MIN_CHARS} characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_coding_browser(self) -> "AppConfig":
+        """트랙 Q14a. 브라우저는 호스트에서 돈다 -- B2(관리형 샌드박스)가 아니다.
+
+        development 밖에서는 운영자의 명시적 동의(`allow_outside_development`)가 있어야
+        켜진다(S10·I7 과 같은 fail-closed 모양). 어디서 켜든 허용 호스트가 이름이어야 하고,
+        운영자 allow 목록은 브라우저 도구를 담지 못한다 -- 사람 승인 또는 소유자 규칙만 넘는다.
+        """
+        browser = self.coding_model.browser
+        if not browser.enabled:
+            return self
+        if self.environment != "development" and not browser.allow_outside_development:
+            raise ValueError(
+                "coding_model.browser outside development runs a browser on the "
+                "backend host, not in the managed sandbox (B2 gate not met); set "
+                "coding_model.browser.allow_outside_development to accept that"
+            )
+        hosts = self.coding_model.web_fetch_hosts
+        if not hosts:
+            raise ValueError("coding_model.browser requires coding_model.web_fetch_hosts")
+        for raw in hosts:
+            host = raw.strip().lower().lstrip(".")
+            try:
+                ipaddress.ip_address(host.strip("[]"))
+            except ValueError:
+                pass
+            else:
+                raise ValueError(f"coding_model.web_fetch_hosts entry is an IP literal: {raw!r}")
+            if (
+                "." not in host
+                or not re.fullmatch(r"[a-z0-9.-]+", host)
+                or host.startswith("-")
+            ):
+                raise ValueError(
+                    f"coding_model.browser needs host names in web_fetch_hosts, got {raw!r}"
+                )
+        operator = set(self.coding_model.approval_allow_tools) | set(
+            self.coding_model.approval_always_allow
+        )
+        if operator & CODING_BROWSER_TOOL_NAMES:
+            raise ValueError(
+                "browser tools cannot be in approval_allow_tools or approval_always_allow"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_mcp_secret_refs(self) -> "AppConfig":
+        """MCP 서버 설정이 `secret://` 를 쓰는데 브로커가 꺼져 있으면 시작하지 않는다 --
+        풀 금고가 없는 참조는 호출마다 실패하거나, 더 나쁘게는 문자 그대로 나간다(M7)."""
+        mcp = self.coding_model.mcp
+        if mcp.enabled and mcp.uses_secret_refs() and not self.coding_model.secret_broker:
+            raise ValueError(
+                "coding_model.mcp servers use secret:// references; "
+                "they need coding_model.secret_broker"
+            )
         return self
 
     @model_validator(mode="after")

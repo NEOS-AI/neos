@@ -25,7 +25,9 @@ from neos.coding.domain.approvals import (
     ApprovalStatus,
     approval_remember_key,
     denial_envelope,
+    policy_denial_reason,
 )
+from neos.coding.bridge.catalog import is_device_tool
 from neos.coding.domain.durability import ToolExecutionDisposition
 from neos.coding.model.base import (
     ToolCallCompleted,
@@ -38,7 +40,7 @@ from neos.coding.phases import (
 )
 from neos.coding.sandbox.observability import CodingToolAuditEvent
 from neos.coding.tools.executor import ToolResult
-from neos.coding.tools.orchestrator import partition_leading_readonly
+from neos.coding.tools.orchestrator import partition_leading_readonly, speculation_safe
 from neos.coding.tools.registry import (
     _CONTROL_PLANE_TOOLS,
     ToolRisk,
@@ -235,12 +237,25 @@ class ToolExecutionMixin:
             input.task_id,
             call.tool_call_id,
             unattended=_unattended(input),
+            read_only_ceiling=_background(input),
         )
         if outcome is ApprovalPolicyOutcome.DENY:
             return _Halt(
                 (
                     await self._commit_denied_tool(
-                        input, state, bound, deps, call, "policy_approval_denied"
+                        input,
+                        state,
+                        bound,
+                        deps,
+                        call,
+                        policy_denial_reason(
+                            validated,
+                            self._approval_gate(
+                                state,
+                                unattended=_unattended(input),
+                                read_only_ceiling=_background(input),
+                            ),
+                        ),
                     ),
                 )
             )
@@ -404,6 +419,9 @@ class ToolExecutionMixin:
                 known_reads=state.read_paths,
                 known_stamps=state.read_stamps,
                 prefetched=prefetch.get(call.tool_call_id),
+                owner_id=getattr(input, "owner_id", None),
+                task_id=getattr(input, "task_id", None),
+                unattended=self._config.approval_unattended or _unattended(input),
             )
             return result, state
         if call.name == "spawn_agent.v1":
@@ -612,6 +630,7 @@ class ToolExecutionMixin:
                 input.task_id,
                 call.tool_call_id,
                 unattended=_unattended(input),
+                read_only_ceiling=_background(input),
             )
             if outcome is not ApprovalPolicyOutcome.ALLOW:
                 return None
@@ -625,6 +644,10 @@ class ToolExecutionMixin:
         pairs: list[tuple[ToolCallCompleted, ValidatedToolCall]] = []
         for call in remaining:
             if call.name in {"spawn_agent.v1", "set_phase.v1"} | _CONTROL_PLANE_TOOLS:
+                break
+            if is_device_tool(call.name):
+                # 트랙 Q16a: 기기 호출은 투기적으로 돌지 않는다 -- 본 경로가 소유자·무인
+                # 여부를 싣고 한 번에 하나씩 부른다.
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
@@ -908,6 +931,9 @@ class ToolExecutionMixin:
     def _maybe_prefetch_readonly(self, call: ToolCallCompleted, bound, state):
         if call.name == "spawn_agent.v1":
             return None
+        if is_device_tool(call.name):
+            # 트랙 Q16a: 사람의 기기를 게이트 판정 전에 미리 읽지 않는다.
+            return None
         if _is_stall_denied(state, call.name, call.input):
             return None
         if not tool_allowed_in_phase(call.name, state.phase):
@@ -918,7 +944,7 @@ class ToolExecutionMixin:
             validated = self._tools.validate(call.name, call.input)
         except ToolValidationError:
             return None
-        if validated.risk is not ToolRisk.READ_ONLY:
+        if not speculation_safe(validated):
             return None
         if self._jev_blocks_speculation():
             # 차단 중인 게이트를 앞지르지 않는다. 본 판정 경로가 대신 본다.
@@ -958,4 +984,9 @@ def _unattended(input) -> bool:
     because a test could tell the difference; a mutation removing it there
     survives, and that is why.
     """
-    return getattr(input, "mode", "interactive") == "autonomous"
+    return getattr(input, "mode", "interactive") in {"autonomous", "background"}
+
+
+def _background(input) -> bool:
+    """트랙 Q1: 아무도 시키지 않은 일 -- 천장이 READ_ONLY 다."""
+    return getattr(input, "mode", "interactive") == "background"

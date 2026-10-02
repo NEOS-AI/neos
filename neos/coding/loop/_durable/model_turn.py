@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -74,6 +75,9 @@ _METRIC_STOP_REASONS = frozenset({"tool_use", "end_turn", "max_tokens", "refusal
 #: Past this many prompt-too-long retries the turn fails. The first retry
 #: compacts (with one LLM summary), the rest drop the oldest turn each.
 _PROMPT_TOO_LONG_RETRIES = 4
+#: 봉투 섀도가 "이 런에 이미 판정이 있나"를 볼 때 읽는 최근 원장 수. 판정 기준이
+#: 아니라 중복 방지 창이라 설정이 아니다 -- 창 밖으로 밀려나면 한 번 더 남을 뿐이다.
+_ENVELOPE_LEDGER_WINDOW = 2000
 
 
 def _request_fingerprint(system: str, tools: Sequence[ToolDefinition]) -> str:
@@ -116,7 +120,68 @@ class _TurnStream:
             task.cancel()
 
 
+logger = logging.getLogger("neos.coding.loop.durable")
+
+
 class ModelTurnMixin:
+    async def _monitor_safe_point(self, input, deps) -> None:
+        """궤적 감시자(트랙 Q5)의 자리. **섀도** -- 무엇이 일어나도 런은 그대로다.
+
+        감시자는 원장만 읽는다(`list_after`). 읽을 수 없는 싱크면 판정하지
+        않는다. 감시자의 고장이 태스크를 멈추게 하면 섀도가 아니다.
+        """
+        monitor = getattr(self, "_monitor", None)
+        reader = getattr(deps.events, "list_after", None)
+        if monitor is None or not callable(reader):
+            return
+        try:
+            events = await _read_ledger(
+                reader, input.task_id, limit=getattr(monitor, "max_events", 2000)
+            )
+            if not monitor.due(events):
+                return
+            payload = await monitor.judge(events, mode=getattr(input, "mode", "interactive"))
+            await deps.events.append(
+                task_id=input.task_id,
+                event_type="monitor.judged",
+                payload=payload,
+                run_id=input.run_id,
+            )
+        except Exception:  # noqa: BLE001 -- 섀도는 런을 바꾸지 않는다
+            logger.warning("trajectory monitor failed", exc_info=True)
+
+    async def _envelope_safe_point(self, input, deps) -> None:
+        """상시 에이전트 예산 봉투(트랙 Q10a)의 자리. **섀도** -- 넘어도 런은 그대로다.
+
+        에이전트가 연 태스크만 본다. 넘었을 때만 원장을 읽고, 이 런에 아직 판정이
+        없으면 `budget.judged` 하나를 남긴다 -- 넘은 동안 매 턴 쌓이지 않게. 멈추게
+        하는 길(`PAUSED`)은 감시자(Q5)와 함께 쓰는 별도 단계다.
+        """
+        envelope = getattr(self, "_envelope", None)
+        agent_id = getattr(input, "agent_id", None)
+        reader = getattr(deps.events, "list_after", None)
+        if envelope is None or agent_id is None or not callable(reader):
+            return
+        mode = getattr(input, "mode", "background")
+        try:
+            verdict = await envelope.judge(agent_id, mode)
+            if not verdict.over:
+                return
+            events = await _read_ledger(reader, input.task_id, limit=_ENVELOPE_LEDGER_WINDOW)
+            if any(
+                event.type == "budget.judged" and event.run_id == input.run_id
+                for event in events
+            ):
+                return
+            await deps.events.append(
+                task_id=input.task_id,
+                event_type="budget.judged",
+                payload=verdict.payload(mode=mode),
+                run_id=input.run_id,
+            )
+        except Exception:  # noqa: BLE001 -- 섀도는 런을 바꾸지 않는다
+            logger.warning("agent budget envelope failed", exc_info=True)
+
     async def _advance_one_model_turn(self, input, state, bound, deps):
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
@@ -126,6 +191,8 @@ class ModelTurnMixin:
         # to the transcript -- so the report is in the request this turn sends,
         # and it lands as an append, ahead of the thinking guard below.
         state = await self._advance_detached_children(state, bound, deps)
+        await self._monitor_safe_point(input, deps)
+        await self._envelope_safe_point(input, deps)
         state, system, tools = await self._prepare_turn(input, state, bound)
         request = ModelRequest(
             system=system,
@@ -430,7 +497,7 @@ class ModelTurnMixin:
             )
             self._check_usage_budgets(retry_state)
             committed = await self._commit_model(
-                input, bound, deps, retry_state, {"stop_reason": completion.stop_reason}
+                input, bound, deps, retry_state, _completion_payload(completion)
             )
             yield committed.event
             return
@@ -456,7 +523,7 @@ class ModelTurnMixin:
             raise CodingLoopFailure("model_refused", retryable=False)
         if turn.calls:
             committed = await self._commit_model(
-                input, bound, deps, next_state, {"stop_reason": completion.stop_reason}
+                input, bound, deps, next_state, _completion_payload(completion)
             )
             yield committed.event
             async for event in self._advance_one_tool(
@@ -584,3 +651,33 @@ def with_mode_overlay(system: str, mode: str) -> str:
         f"{AUTONOMOUS_EXECUTION}\n\n{DELIVERING_WORK}\n\n{SCOPE_OF_CHANGES}"
         f"\n\n{system}"
     )
+
+
+def _completion_payload(completion) -> dict[str, object]:
+    """`model.completed` 의 payload. 이 턴의 토큰을 싣는다(트랙 Q5 FB6).
+
+    체크포인트의 누적값으로는 원장이 "어느 턴이 얼마를 썼나"를 말하지 못한다.
+    usage 를 모르는 턴은 토큰 키를 **싣지 않는다** -- 0 을 적으면 없는 값이
+    측정값처럼 읽힌다.
+    """
+    payload: dict[str, object] = {"stop_reason": completion.stop_reason}
+    usage = getattr(completion, "usage", None)
+    if usage is not None:
+        payload["input_tokens"] = int(usage.input_tokens)
+        payload["output_tokens"] = int(usage.output_tokens)
+    return payload
+
+
+async def _read_ledger(reader, task_id: str, *, limit: int) -> list:
+    """태스크의 원장을 앞에서부터 읽고 최근 `limit` 개를 돌려준다."""
+    events: list = []
+    after = 0
+    while True:
+        page = await reader(task_id, after_seq=after, limit=500)
+        if not page:
+            break
+        events.extend(page)
+        after = page[-1].seq
+        if len(page) < 500:
+            break
+    return events[-limit:]

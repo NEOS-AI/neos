@@ -41,6 +41,63 @@ class ApprovalMode(StrEnum):
     AUTO = "auto"
 
 
+class UserRuleEffect(StrEnum):
+    """사용자 규칙의 효과 (트랙 Q2). 기본 정책 **뒤에서** 평가된다:
+
+    `USER_ONLY > 기본 DENY > 사용자 block > 기본 REQUIRE(보호 파일) > 사용자 require
+    > 운영자 allow > 사용자 allow > 기본값`. 사용자 allow 는 위험 등급이 정하는
+    기본 REQUIRE_APPROVAL 만 ALLOW 로 바꾼다 -- 기본 정책의 DENY 도, 보호 파일의
+    REQUIRE 도, 단계 전환 승인도 넘지 못한다.
+    """
+
+    ALLOW = "allow"
+    REQUIRE = "require"
+    BLOCK = "block"
+
+
+@dataclass(frozen=True, slots=True)
+class UserApprovalRule:
+    """사용자 한 명의 규칙 하나. 도구 이름 + (execute.v1 이면) argv 접두.
+
+    argv 접두는 USER_ONLY 와 **같은 규칙**으로 맞춘다(래퍼를 벗기고, 플래그 값
+    읽기 둘 다 시도) -- 사본을 만들면 한쪽만 고쳐진다.
+    """
+
+    rule_id: str
+    effect: UserRuleEffect
+    tool: str
+    argv_prefix: tuple[str, ...] = ()
+
+
+#: 승인으로도 위임할 수 없는 명령 -- 사람이 직접 한다 (로드맵 트랙 Q2, 결정 2).
+#:
+#: **코드에 고정한다.** 설정(`approval_user_only_extra`)은 여기에 **더하기만**
+#: 하고 빼는 표현은 없다 -- 설정으로 끌 수 있는 안전 요건은 "항상 적용"이
+#: 아니다. 항목은 argv 접두(실행 파일 + 하위 명령)다.
+#:
+#: 오늘 샌드박스의 검증은 이것들 대부분을 이미 막는다(실행 파일 allowlist
+#: 기본값이 pytest/ruff/mypy/pnpm/git). 이 바닥은 운영자가 allowlist 를
+#: 넓히는 날을 위한 것이다 -- `gh` 가 돌 수 있게 돼도 `gh auth login` 은
+#: 여전히 사람의 몫이어야 한다.
+USER_ONLY_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        # 자격증명 -- 로그인·토큰·비밀번호
+        ("gh", "auth"),
+        ("gh", "secret"),
+        ("docker", "login"),
+        ("npm", "login"),
+        ("npm", "adduser"),
+        ("npm", "token"),
+        ("git", "credential"),
+        ("passwd",),
+        # 공유 범위·권한 변경
+        ("gh", "repo", "edit"),
+        # 계정·저장소 삭제
+        ("gh", "repo", "delete"),
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovalGate:
     mode: ApprovalMode = ApprovalMode.MANUAL
@@ -51,6 +108,19 @@ class ApprovalGate:
     current_phase: str | None = None
     unattended: bool = False
     workspace_root: str | None = None
+    #: `USER_ONLY_COMMANDS` 에 **더하는** 항목. 합집합으로만 쓰인다.
+    user_only_extra: frozenset[tuple[str, ...]] = frozenset()
+    #: background 모드(트랙 Q1) -- 아무것도 바꿀 수 없는 호출만 통과한다.
+    read_only_ceiling: bool = False
+    #: 태스크 소유자의 규칙(트랙 Q2). 에이전트 태스크도 소유자의 규칙을 쓴다.
+    user_rules: tuple[UserApprovalRule, ...] = ()
+    #: 자격증명 브로커(트랙 Q6)가 켜져 있다 -- `secret://` 참조를 실은 호출은 사람
+    #: 승인 또는 소유자의 allow 규칙으로만 돈다. 꺼져 있으면 참조를 모른다(S9).
+    secret_broker: bool = False
+    #: 소유자의 연결된 브리지가 무인 읽기를 허락했다(트랙 Q16a, B7). 기본 False --
+    #: 모르면 허락하지 않은 것이다.
+    device_unattended: bool = False
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +351,8 @@ _INSTRUCTION_WRITE_TOOLS = frozenset(
         "rm.v1",
         "mv.v1",
         "chmod.v1",
+        # 트랙 Q16b: 기기 쓰기도 지시 파일·민감 설정이면 소유자 allow 가 있어도 묻는다.
+        "device_write_file.v1",
     }
 )
 _SENSITIVE_CONFIG_BASENAMES = frozenset(
@@ -390,17 +462,205 @@ def _approved_always_allows(
     return approval_remember_key(call) in approved_always
 
 
+def is_user_only(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """이 호출이 승인으로도 위임할 수 없는 행동인가 (트랙 Q2).
+
+    결과는 DENY 계열이다 -- 넷째 enum 값이 **아니다.** `_approval_gate_step`
+    은 DENY 도 REQUIRE_APPROVAL 도 아닌 결과를 실행하므로, 새 값은 열린 채로
+    실패한다(fail-open).
+    """
+    if call.name != "execute.v1":
+        return False
+    argv = call.input.get("argv")
+    if not isinstance(argv, (list, tuple)) or not argv:
+        return False
+    command = _innermost_command(tuple(str(part) for part in argv))
+    floor = USER_ONLY_COMMANDS | gate.user_only_extra
+    return any(_argv_has_prefix(command, prefix) for prefix in floor)
+
+
+def _innermost_command(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """`env X=1 timeout 30 gh auth login` -> `gh auth login`.
+
+    래퍼를 벗기는 규칙은 검증기(`registry`)의 것을 그대로 쓴다 -- 사본을
+    만들면 한쪽이 새 래퍼를 알게 될 때 다른 쪽이 모른다.
+    """
+    from neos.coding.tools.registry import (
+        _command_name,
+        _next_wrapped_command_index,
+    )
+
+    index = 0
+    while index < len(argv):
+        rest = argv[index + 1 :]
+        step = _next_wrapped_command_index(_command_name(argv[index]), rest)
+        if step is None:
+            break
+        index = index + 1 + step
+    return (_command_name(argv[index]),) + argv[index + 1 :] if index < len(argv) else ()
+
+
+def _argv_has_prefix(command: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
+    """`command`(래퍼를 벗긴 argv)가 `prefix` 로 시작하는가.
+
+    플래그 뒤의 토큰이 그 플래그의 **값인지 아닌지** argv 만으로는 모른다
+    (`gh --hostname example.com auth` 대 `gh --verbose auth`). 한쪽으로 정하면
+    다른 쪽에서 열린 채로 실패하므로 **두 읽기를 다 해 보고 하나라도 맞으면**
+    맞다고 한다. 하위 명령 토큰은 실행 파일 바로 뒤에 순서대로 붙어야 한다 --
+    아무 데서나 찾으면 `gh pr view auth` 같은 무해한 호출까지 막는다.
+    """
+    if not command or not prefix or command[0] != prefix[0]:
+        return False
+    wanted = list(prefix[1:])
+    for flag_takes_value in (False, True):
+        words: list[str] = []
+        skip_next = False
+        for token in command[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token.startswith("-"):
+                skip_next = flag_takes_value and "=" not in token
+                continue
+            words.append(token)
+        if words[: len(wanted)] == wanted:
+            return True
+    return False
+
+
+def user_rule_matches(rule: UserApprovalRule, call: ValidatedToolCall) -> bool:
+    if call.name != rule.tool:
+        return False
+    if not rule.argv_prefix:
+        return True
+    if call.name != "execute.v1":
+        return False
+    argv = call.input.get("argv")
+    if not isinstance(argv, (list, tuple)) or not argv:
+        return False
+    command = _innermost_command(tuple(str(part) for part in argv))
+    return _argv_has_prefix(command, rule.argv_prefix)
+
+
+def has_user_rule(call: ValidatedToolCall, gate: ApprovalGate, effect: UserRuleEffect) -> bool:
+    return any(
+        rule.effect is effect and user_rule_matches(rule, call) for rule in gate.user_rules
+    )
+
+
+def uses_secret_refs(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """이 호출이 금고의 비밀을 쓰는가 (트랙 Q6). 브로커가 꺼져 있으면 늘 아니다."""
+    if not gate.secret_broker:
+        return False
+    from neos.coding.secrets import carries_secret_refs
+
+    return carries_secret_refs(call)
+
+
+def device_unattended_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str | None:
+    """아무도 보지 않는 런의 기기 호출 (트랙 Q16a B7 · Q16b BW4). 판정은 카탈로그의 함수 하나다."""
+    from neos.coding.bridge.catalog import device_unattended_refusal
+
+    return device_unattended_refusal(
+        call.name, unattended=gate.unattended, allowed=gate.device_unattended
+    )
+
+
+def refuses_device_unattended(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    return device_unattended_reason(call, gate) is not None
+
+
+def is_device_write(call: ValidatedToolCall) -> bool:
+    from neos.coding.bridge.catalog import is_device_write_tool
+
+    return is_device_write_tool(call.name)
+
+
+def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """background 모드에서 이 호출이 천장을 넘는가 (트랙 Q1).
+
+    검증된 위험(`call.risk`)만 본다. 자식을 여는 호출도 따로 셀 필요가 없다 --
+    검증기가 `spawn_agent.v1 spec=implement` 를 WORKSPACE_WRITE 로 올리고,
+    explore 자식은 포트가 쓰기를 막는다.
+    """
+    if not gate.read_only_ceiling:
+        return False
+    from neos.coding.tools.registry import ToolRisk
+
+    return call.risk is not ToolRisk.READ_ONLY
+
+
+def policy_denial_reason(call: ValidatedToolCall, gate: ApprovalGate) -> str:
+    """정책 DENY 의 사유 코드. 두 호출부(부모 게이트 · 자식 게이트)가 같이 쓴다.
+
+    원장에서 Q5 폴백 규칙이 읽는 이름이다 -- `policy_user_only` 는 FB1,
+    `policy_mode_ceiling` 은 FB2. 둘 다 맞으면 더 엄한 FB1 의 이름을 단다.
+    """
+    try:
+        if is_user_only(call, gate):
+            return "policy_user_only"
+    except Exception:
+        pass
+    if exceeds_mode_ceiling(call, gate):
+        return "policy_mode_ceiling"
+    try:
+        device_reason = device_unattended_reason(call, gate)
+        if device_reason is not None:
+            return device_reason
+    except Exception:
+        pass
+    try:
+        if has_user_rule(call, gate, UserRuleEffect.BLOCK):
+            return "policy_user_rule_blocked"
+    except Exception:
+        pass
+    try:
+        if uses_secret_refs(call, gate):
+            return "policy_secret_ref_unapproved"
+    except Exception:
+        pass
+    return "policy_approval_denied"
+
+
 def _evaluate_approval(
     call: ValidatedToolCall, gate: ApprovalGate
 ) -> ApprovalPolicyOutcome:
+    # 맨 앞이다 -- auto 모드·allow 목록·"항상 허용" 기억 어느 것도 이것을 넘지 못한다.
+    if is_user_only(call, gate):
+        return ApprovalPolicyOutcome.DENY
+    # 모드의 천장도 운영자의 allow 목록보다 앞이다.
+    if exceeds_mode_ceiling(call, gate):
+        return ApprovalPolicyOutcome.DENY
+    # 무인 기기 읽기(트랙 Q16a, B7) -- 천장 바로 뒤. 사용자 allow 도 운영자 allow 도 넘지 못한다.
+    # 무인 기기 쓰기(Q16b, BW4)는 브리지의 무인 허락과도 상관없이 여기서 닫힌다.
+    if refuses_device_unattended(call, gate):
+        return ApprovalPolicyOutcome.DENY
     if any(is_denied_secret_path(path) for path in _call_paths(call)):
         return ApprovalPolicyOutcome.DENY
     if call.name in gate.deny_tools:
+        return ApprovalPolicyOutcome.DENY
+    # 사용자 block(트랙 Q2) -- 기본 DENY 뒤, 그 밖의 모든 것 앞.
+    if has_user_rule(call, gate, UserRuleEffect.BLOCK):
         return ApprovalPolicyOutcome.DENY
     # Instruction files persist agent behavior; never auto-approve writes.
     if _is_protected_instruction_write(call, gate.workspace_root):
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if _is_sensitive_config_write(call):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 사용자 require -- 운영자 allow 와 "항상 허용" 기억보다 앞이다(좁히기만).
+    if has_user_rule(call, gate, UserRuleEffect.REQUIRE):
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 비밀 참조(트랙 Q6, S7) -- 사용자 require 와 같은 자리다. 운영자 allow 목록·
+    # "항상 허용" 기억·auto 모드는 넘지 못하고, 소유자의 allow 규칙만 넘는다.
+    if uses_secret_refs(call, gate):
+        if has_user_rule(call, gate, UserRuleEffect.ALLOW):
+            return ApprovalPolicyOutcome.ALLOW
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 기기 쓰기(트랙 Q16b, BW3) -- 비밀 참조와 같은 자리. 운영자 allow 목록·"항상 허용"
+    # 기억·auto 모드는 넘지 못한다: 기기는 사람의 것이라 넘길 수 있는 것은 소유자뿐이다.
+    if is_device_write(call):
+        if has_user_rule(call, gate, UserRuleEffect.ALLOW):
+            return ApprovalPolicyOutcome.ALLOW
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
         return ApprovalPolicyOutcome.ALLOW
@@ -415,6 +675,9 @@ def _evaluate_approval(
     from neos.coding.tools.registry import ToolRisk
 
     if call.risk is ToolRisk.READ_ONLY:
+        return ApprovalPolicyOutcome.ALLOW
+    # 사용자 allow -- 위험 등급이 정하는 기본 REQUIRE 만 바꾼다. 위의 어떤 판정도 넘지 못한다.
+    if has_user_rule(call, gate, UserRuleEffect.ALLOW):
         return ApprovalPolicyOutcome.ALLOW
     if call.risk in {
         ToolRisk.WORKSPACE_WRITE,
@@ -502,6 +765,44 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
             summary["patch"] = preview
         summary["truncated"] = truncated
         return redact_sensitive(summary)
+    if call.name == "device_write_file.v1":
+        # 트랙 Q16b. 승인하는 사람이 **무엇을** 쓰는지와 덮는지 새로 만드는지 본다.
+        base = call.input.get("base_sha256")
+        preview, truncated = _truncated_text(str(call.input.get("content") or ""))
+        summary = {
+            "operation": call.name,
+            "path": call.input.get("path"),
+            "replaces": f"sha256:{str(base)[:12]}" if base else "new file",
+            "preview": preview,
+            "truncated": truncated,
+        }
+        return redact_sensitive(summary)
+    if call.name in {"browser.v1", "browser_fill_secret.v1"}:
+        # 트랙 Q14a. 승인하는 사람이 **어디로** 가는지·어느 출처에 비밀이 들어가는지 본다.
+        summary = {"operation": call.name}
+        for key in ("action", "url", "ref", "origin", "submit"):
+            value = call.input.get(key)
+            if value not in (None, False, ""):
+                summary[key] = value
+        # 참조는 값이 아니다 -- `secret` 키는 가려지므로 `secret_ref` 로 싣는다.
+        if isinstance(call.input.get("secret"), str):
+            summary["secret_ref"] = call.input["secret"]
+        text = call.input.get("text")
+        if isinstance(text, str) and text:
+            summary["text"], summary["truncated"] = _truncated_text(text)
+        return redact_sensitive(summary)
+    from neos.coding.connectors import is_connector_tool_name
+
+    if is_connector_tool_name(call.name):
+        # 트랙 Q11a: 승인하는 사람이 무엇을 보내는지 본다. 비밀은 이름만(M7).
+        preview, truncated = _truncated_text(
+            json.dumps(dict(call.input), ensure_ascii=False, sort_keys=True, default=str)
+        )
+        summary = {"operation": call.name, "arguments": preview, "truncated": truncated}
+        refs = tuple(getattr(call, "secret_refs", ()) or ())
+        if refs:
+            summary["secret_refs"] = list(refs)
+        return redact_sensitive(summary)
     path = call.input.get("path")
     if isinstance(path, str):
         return redact_sensitive({"path": path})
@@ -516,6 +817,7 @@ def approval_event_display_summary(
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
+    excerpt.pop("arguments", None)  # 커넥터 인자(Q11a) -- 승인 화면에만, 이벤트에는 싣지 않는다
     return excerpt
 
 
@@ -524,6 +826,65 @@ _DENIAL_REASONS = {
     "hook_prevented": "a hook stopped further tools; do not continue this batch",
     "approval_denied": "the user denied this action; do not retry the same call",
     "policy_approval_denied": "the user denied this action; do not retry the same call",
+    "policy_mode_ceiling": (
+        "this is a background task: read only, no writes, commands or "
+        "questions; do not retry -- note what should be done instead"
+    ),
+    "policy_user_rule_blocked": (
+        "the user has a rule blocking this action; do not retry -- "
+        "choose another way or tell the user why it is needed"
+    ),
+    "policy_secret_ref_unapproved": (
+        "this call uses a stored secret and nobody can approve it now; do not "
+        "retry -- ask the user to add an allow rule for this command"
+    ),
+    "policy_secret_ref_child": (
+        "subagents cannot use stored secrets; do not retry -- return the "
+        "command to the parent instead"
+    ),
+    "secret_not_found": (
+        "no stored secret has that name; do not retry -- ask the user to add it"
+    ),
+    "secret_env_name_mismatch": (
+        "that secret is bound to a different environment variable; use its own name"
+    ),
+    "secret_env_unsupported": "this sandbox cannot carry secrets; do not retry",
+    "browser_unavailable": "the browser is not available here; do not retry",
+    "browser_no_page": "no page is open; navigate first",
+    "browser_secret_origin_mismatch": (
+        "the page or field is not on that origin; do not retry -- navigate to "
+        "the login page of that origin first"
+    ),
+    "secret_origin_mismatch": (
+        "that secret is not allowed on this site; do not retry -- ask the user "
+        "to add this origin to the secret"
+    ),
+    "browser_secret_unavailable": "stored secrets are not enabled; do not retry",
+    "browser_navigation_cap": "this task used all its page loads; do not retry",
+    "browser_capacity": "too many browser sessions are open; try again later",
+    "policy_connector_child": (
+        "subagents cannot call connector tools; do not retry -- return the "
+        "call to the parent instead"
+    ),
+    "policy_device_unattended": (
+        "the user's device bridge does not allow reads while nobody is watching; "
+        "do not retry -- work without the device or leave a note for the user"
+    ),
+    "policy_device_write_unattended": (
+        "nobody is watching, and the user's device is never changed without a person; "
+        "do not retry -- leave the change as a note for the user"
+    ),
+    "device_writes_off": (
+        "this device bridge does not allow writes; do not retry -- tell the user what to change"
+    ),
+    "policy_device_child": (
+        "subagents cannot reach the user's device; do not retry -- "
+        "return the request to the parent instead"
+    ),
+    "policy_user_only": (
+        "only the user can do this, even with approval; do not retry -- "
+        "tell the user what to run and why"
+    ),
     "approval_expired": "approval expired; ask again only with a safer call",
     "approval_invalidated": "approval is no longer valid; ask again only with a safer call",
     "policy_phase_denied": "this tool is not allowed in the current phase",
