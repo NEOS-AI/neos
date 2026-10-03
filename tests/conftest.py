@@ -21,6 +21,13 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 # explicit `DEBUG=1 pytest ...` opt back in.
 os.environ.setdefault("DEBUG", "false")
 
+# development 프로파일이 켜는 트랙 Q·G/H(2026-10-03)를 세션의 앰비언트 앱에서는 끈다.
+# 이유는 오버레이 파일 머리말에 있다. setdefault 다 -- 명시적으로 준 경로가 이긴다.
+os.environ.setdefault(
+    "NEOS_CONFIG_PATH",
+    str(pathlib.Path(__file__).resolve().parent / "fixtures" / "config" / "test-session.yaml"),
+)
+
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 

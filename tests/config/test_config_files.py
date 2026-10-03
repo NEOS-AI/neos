@@ -46,6 +46,10 @@ def test_committed_config_profiles_exist_and_validate():
         # 요구하므로(fail-closed) 검증용 자리표시자를 준다 -- 프로파일 파일
         # 자체에는 시크릿을 두지 않는다(아래 테스트가 그것을 지킨다).
         data.setdefault("secrets", {})["anthropic_api_key"] = "sk-ant-test-placeholder"
+        # development 은 트랙 Q 도 켠다(2026-10-03) -- 트리거 서명 키·비밀 브로커 키도
+        # 기동 시 요구된다. 같은 이유로 자리표시자다.
+        data["secrets"]["standing_trigger_signing_key"] = "neos-test-trigger-signing-key-placeholder"
+        data["secrets"]["secret_broker_key"] = "neos-test-secret-broker-key-placeholder"
         config = AppConfig.model_validate(data)
         assert config.coding_model.enabled is (
             path.name == "neos.development.yaml"

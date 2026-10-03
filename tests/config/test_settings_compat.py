@@ -64,10 +64,14 @@ agent:
     web_lookup: 19
 coding_model:
   enabled: false
+  secret_broker: false
+standing_agents:
+  triggers:
+    enabled: false
 """,
     )
-    # development 프로파일은 실제 코딩 루프를 켜고, 켜진 루프는 크리덴셜을
-    # 요구한다. isolated_env 가 크리덴셜을 지우므로 이 재적재 테스트는 루프를 끈다.
+    # development 프로파일은 실제 코딩 루프와 트랙 Q(트리거·비밀 브로커)를 켜고, 둘 다
+    # 키를 요구한다. isolated_env 가 키를 지우므로 이 재적재 테스트는 셋을 끈다.
     secrets_path = write_dotenv(
         tmp_path / "secrets.env",
         "DATABASE_URL=postgresql+asyncpg://user:pass@example.com:5432/neos\n",
@@ -88,7 +92,8 @@ coding_model:
 def test_settings_reload_for_tests_method_delegates(tmp_path, isolated_env):
     config_path = write_yaml(
         tmp_path / "settings.yaml",
-        "llm:\n  model: method-model\ncoding_model:\n  enabled: false\n",
+        "llm:\n  model: method-model\ncoding_model:\n  enabled: false\n  secret_broker: false\n"
+        "standing_agents:\n  triggers:\n    enabled: false\n",
     )
 
     reloaded = settings.reload_for_tests(env="development", config_path=str(config_path))
