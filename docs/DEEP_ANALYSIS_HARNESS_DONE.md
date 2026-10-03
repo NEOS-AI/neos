@@ -259,6 +259,18 @@ D-L2 첫 초안 루브릭이 `/etc/passwd` 를 예로 적어 그 루브릭의 **
 
 ---
 
+### 3.8 L6 — 인용 클레임 판정자를 Jev 로 (2026-10-03, DECISIONS D99)
+
+사람의 결정으로 L4·L5·#23 판정을 앞질렀다. 결정·받아들인 위험·#23 개정은 D99 가 정본이다. 여기는 무엇이 섰는가만 적는다.
+
+- `AgenticGrader` 에 Jev 경로(`_grade_with_jev`). 티어링은 하나 그대로, 판정자만 바뀐다. 계산 클레임은 LLM 판정자에 남는다
+- 단조 축소를 판정에도: 애매함(`confidence < jev.judge_min_confidence`)·WAF 차단 = 반려, 실패·타임아웃 = LLM 폴백 + `judge_backend=llm_fallback`
+- 켜는 자리는 `neos/jev/assembly.py` `build_claim_judge` 하나(키 없음·모델 미핀은 기동 실패). 재생 카세트 런만 부르지 않는다
+- S13: 판정마다 모델·루브릭 digest·경계·확률·uid. 매니페스트 `config.claim_judge`
+- preflight 가 Jev 판정자를 실호출로 찌른다. 수동 프로브(2026-10-03): `SUPPORTS` · 0.93 · `jev-1.13.0`
+- 테스트 `tests/workflow/deep_analysis/test_jev_claim_judge_l6.py` 14건 + preflight 2건. **변이 둘로 무는 것을 확인했다** — 애매함 반려를 끄면 2건, WAF 차단을 폴백으로 열면 1건이 빨개진다
+- 같은 날 개발 오버레이 `config/samples/dev-jev-enforce.yaml`(`make dev-jev-enforce`)이 L3 게이트·Q5b 멈춤·L6 를 **잠정 경계**로 켠다
+
 ## 4. CHILD-GATE — 자식의 도구 호출을 게이트 안으로 (2026-09-28)
 
 **코딩 절반.** `CodingToolPort.execute` 가 executor 앞에서 부모가 바인드한 `authorize` 를 부른다 — `_authorize_child_call`
