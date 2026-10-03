@@ -207,6 +207,23 @@ async def test_memory_list_tree_includes_src_app(tmp_path: Path) -> None:
     await provider.close()
 
 
+async def test_memory_list_tree_works_under_a_relative_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D106: 설정의 기본 루트는 상대경로(`.neos/sandboxes`)다. 전에는 `list_tree` 가
+    `relative_to` 에서 ValueError 로 죽었다 -- 표본 #25 의 compose 자식이 맞은 자리다."""
+    monkeypatch.chdir(tmp_path)
+    provider = MemorySandboxProvider(root=Path(".neos/sandboxes"))
+    sandbox = await provider.create(owner_id="u1", limits=SandboxLimits.safe_defaults())
+    session = await provider.open_session(sandbox.sandbox_id)
+    await session.write_file("claims/q1.md", b"x\n")
+
+    paths = [entry.path for entry in await session.list_tree("claims")]
+
+    assert paths == ["claims/q1.md"]
+    await provider.close()
+
+
 async def test_memory_list_tree_skips_git_env_and_node_modules(
     tmp_path: Path,
 ) -> None:

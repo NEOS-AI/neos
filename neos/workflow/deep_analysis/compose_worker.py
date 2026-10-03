@@ -217,6 +217,7 @@ def build_compose_ticket(
     model: ModelPin,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
+    max_turns: int = 8,
 ) -> SubagentTicket:
     return SubagentTicket(
         parent_kind=ParentKind.DEEP_ANALYSIS,
@@ -234,7 +235,17 @@ def build_compose_ticket(
         sandbox_mode=SandboxMode.NONE,
         run_id=run_id,
         expected_checkpoint_id=expected_checkpoint_id,
+        max_turns=max_turns,
     )
+
+
+def compose_max_turns(max_steps: int) -> int:
+    """`code_research.max_steps` 는 계약의 `2·max_turns + 1` 법에서 나온 수다 -- 거꾸로 푼다.
+
+    티켓 기본값 4 로는 브리프 → 색인 → 파일 → 쓰기 → 검사 → 제출이 들어가지 않았다
+    (D106 진단 실행: `turns_exhausted`). 티켓의 상한은 8 이다.
+    """
+    return max(1, min(8, (max_steps - 1) // 2))
 
 
 async def run_compose_worker(
@@ -305,6 +316,7 @@ async def run_compose_worker(
                 model=model,
                 run_id=run_id,
                 expected_checkpoint_id=checkpoint_id,
+                max_turns=compose_max_turns(max_steps),
             )
             outcome = await runtime.advance(ticket)
             steps += 1
@@ -318,6 +330,11 @@ async def run_compose_worker(
 
         submission = port.submission
         if submission is None:
+            # 자식이 **실패한** 것과 제출을 잊은 것은 다른 사건이다. #25 는 모델 호출이 400 으로
+            # 죽은 것을 `submit_not_called` 로 적었다(D106) -- 실패면 자식의 오류 코드를 이름에 싣는다.
+            if outcome.kind is StepKind.FAILED:
+                code = str(getattr(outcome, "error_code", "") or "unknown")
+                raise ComposeFailed(f"child_failed:{code}")
             raise ComposeFailed("submit_not_called")
         path = (submission.report_path or REPORT_PATH).strip().lstrip("/")
         try:

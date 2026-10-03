@@ -23,6 +23,7 @@ from neos.coding.model.base import (
 )
 from neos.coding.model.buffers import ToolArgumentBuffer, complete_tool_buffer
 from neos.coding.model.errors import CodingModelError
+from neos.coding.model.names import ToolNameCodec
 from neos.coding.model.stop import normalize_stop_reason
 
 
@@ -49,12 +50,14 @@ class OllamaCodingModel:
         seen_text = ""
         finish_reason: str | None = None
         usage: ModelUsage | None = None
+        # D106: 와이어 이름은 이 요청의 코덱으로 만들고 같은 코덱으로 되돌린다.
+        codec = ToolNameCodec.for_request(request)
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
                 async with self._client.stream(
                     "POST",
                     f"{self._base_url}/api/chat",
-                    json=_to_ollama_request(request),
+                    json=_to_ollama_request(request, codec),
                 ) as response:
                     if response.status_code == 413:
                         raise CodingModelError("prompt_too_long", retryable=True)
@@ -85,7 +88,7 @@ class OllamaCodingModel:
                         if delta:
                             yield TextDelta(delta)
                         for call in message.get("tool_calls") or ():
-                            async for event in self._consume_call(buffers, call):
+                            async for event in self._consume_call(buffers, call, codec):
                                 yield event
                         if payload.get("done"):
                             finish_reason = str(
@@ -129,9 +132,10 @@ class OllamaCodingModel:
         self,
         buffers: dict[str, ToolArgumentBuffer],
         call: Mapping[str, object],
+        codec: ToolNameCodec,
     ) -> AsyncIterator[ModelEvent]:
         function = call.get("function") if isinstance(call.get("function"), Mapping) else {}
-        name = str(function.get("name") or call.get("name") or "")
+        name = codec.original(str(function.get("name") or call.get("name") or ""))
         call_id = str(call.get("id") or f"ollama_{uuid4().hex}")
         if not name:
             raise CodingModelError("tool_input_without_start", retryable=False)
@@ -151,12 +155,16 @@ class OllamaCodingModel:
         )
 
 
-def _to_ollama_request(request: ModelRequest) -> dict[str, object]:
+def _to_ollama_request(
+    request: ModelRequest, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
+    if codec is None:
+        codec = ToolNameCodec.for_request(request)
     messages: list[dict[str, object]] = [
         {"role": "system", "content": request.system}
     ]
     for message in request.messages:
-        messages.extend(_message_to_ollama(message))
+        messages.extend(_message_to_ollama(message, codec))
     payload: dict[str, object] = {
         "model": request.model,
         "messages": messages,
@@ -168,7 +176,7 @@ def _to_ollama_request(request: ModelRequest) -> dict[str, object]:
             {
                 "type": "function",
                 "function": {
-                    "name": tool.name,
+                    "name": codec.wire(tool.name),
                     "description": tool.description,
                     "parameters": dict(tool.input_schema),
                 },
@@ -178,7 +186,9 @@ def _to_ollama_request(request: ModelRequest) -> dict[str, object]:
     return payload
 
 
-def _message_to_ollama(message: CanonicalMessage) -> list[dict[str, object]]:
+def _message_to_ollama(
+    message: CanonicalMessage, codec: ToolNameCodec | None = None
+) -> list[dict[str, object]]:
     if message.role == "system":
         # See the OpenAI adapter: a reveal-only message has no text form
         # here, and an empty user turn is worse than no turn at all.
@@ -212,7 +222,7 @@ def _message_to_ollama(message: CanonicalMessage) -> list[dict[str, object]]:
             {
                 "id": item.tool_call_id,
                 "function": {
-                    "name": item.name,
+                    "name": codec.wire(item.name) if codec is not None else item.name,
                     "arguments": dict(item.input),
                 },
             }

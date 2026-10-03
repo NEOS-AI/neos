@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -22,6 +24,7 @@ from neos.coding.model.base import (
 from neos.coding.model.errors import CodingModelError
 from neos.subagent.catalog import SubagentSpec, may_spawn
 from neos.subagent.prompts import (
+    build_da_child_system_prompt,
     build_explore_system_prompt,
     build_fsi_system_prompt_for,
     build_implement_system_prompt,
@@ -59,9 +62,10 @@ CHILD_MAX_OUTPUT_TOKENS = 4096
 _CODING_PROMPTS = {
     "implement": build_implement_system_prompt,
     "explore": build_explore_system_prompt,
-    "research": build_explore_system_prompt,
-    "analyze": build_explore_system_prompt,
-    "compose": build_explore_system_prompt,
+    # D106: DA 자식은 자기 프롬프트를 받는다. explore 프롬프트는 "쓰지도 실행하지도 마라" 였다.
+    "research": partial(build_da_child_system_prompt, "research"),
+    "analyze": partial(build_da_child_system_prompt, "analyze"),
+    "compose": partial(build_da_child_system_prompt, "compose"),
 }
 _MAX_TOOL_BATCH = 10
 _MAX_TRANSCRIPT_BYTES = 1024 * 1024

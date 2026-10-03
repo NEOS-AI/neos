@@ -25,6 +25,7 @@ from neos.coding.model.base import (
 )
 from neos.coding.model.buffers import ToolArgumentBuffer, complete_tool_buffer
 from neos.coding.model.errors import CodingModelError
+from neos.coding.model.names import ToolNameCodec
 from neos.coding.model.stop import normalize_stop_reason
 from neos.coding.prompts import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
 
@@ -58,9 +59,11 @@ class AnthropicCodingModel:
         cache_read_tokens = 0
         cache_write_tokens = 0
         try:
+            # D106: 이름은 와이어에서만 바뀐다. 응답의 이름은 같은 코덱으로 되돌린다.
+            codec = ToolNameCodec.for_request(request)
             async with asyncio.timeout(request.limits.timeout_sec):
                 async with self._client.messages.stream(
-                    **_to_anthropic_request(request)
+                    **_to_anthropic_request(request, codec)
                 ) as stream:
                     async for raw in stream:
                         event_type = getattr(raw, "type", "")
@@ -82,7 +85,7 @@ class AnthropicCodingModel:
                             if getattr(block, "type", "") == "tool_use":
                                 buffers[int(raw.index)] = ToolArgumentBuffer(
                                     tool_call_id=str(block.id),
-                                    name=str(block.name),
+                                    name=codec.original(str(block.name)),
                                 )
                             elif getattr(block, "type", "") == "thinking":
                                 thinking_buffers[int(raw.index)] = [
@@ -201,9 +204,11 @@ def _thinking_tokens(usage: object) -> int:
     )
 
 
-def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
+def _tool_to_anthropic(
+    tool: ToolDefinition, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
     rendered: dict[str, object] = {
-        "name": tool.name,
+        "name": codec.wire(tool.name) if codec is not None else tool.name,
         "description": tool.description,
         "input_schema": dict(tool.input_schema),
     }
@@ -215,15 +220,19 @@ def _tool_to_anthropic(tool: ToolDefinition) -> dict[str, object]:
     return rendered
 
 
-def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
+def _to_anthropic_request(
+    request: ModelRequest, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
     from neos.config.model_config import thinking_display_for
 
-    messages, betas = _messages_to_anthropic(request.model, request.messages)
+    if codec is None:
+        codec = ToolNameCodec.for_request(request)
+    messages, betas = _messages_to_anthropic(request.model, request.messages, codec)
     payload: dict[str, object] = {
         "model": request.model,
         "system": _system_to_anthropic(request.system),
         "messages": messages,
-        "tools": [_tool_to_anthropic(tool) for tool in request.tools],
+        "tools": [_tool_to_anthropic(tool, codec) for tool in request.tools],
         "max_tokens": request.limits.max_output_tokens,
     }
     if request.limits.effort:
@@ -248,7 +257,9 @@ def _to_anthropic_request(request: ModelRequest) -> dict[str, object]:
 
 
 def _messages_to_anthropic(
-    model: str, messages: tuple[CanonicalMessage, ...]
+    model: str,
+    messages: tuple[CanonicalMessage, ...],
+    codec: ToolNameCodec | None = None,
 ) -> tuple[list[dict[str, object]], set[str]]:
     """Render system notes natively where the model and placement allow.
 
@@ -265,7 +276,7 @@ def _messages_to_anthropic(
     betas: set[str] = set()
     for index, message in enumerate(messages):
         if message.role != "system":
-            rendered.append(_message_to_anthropic(message))
+            rendered.append(_message_to_anthropic(message, codec))
             continue
         if all(isinstance(item, ToolAdditionContent) for item in message.content):
             # A reveal never degrades to prose. A tool announced as text is
@@ -277,7 +288,10 @@ def _messages_to_anthropic(
                     "content": [
                         {
                             "type": "tool_addition",
-                            "tool": {"type": "tool_reference", "name": item.name},
+                            "tool": {
+                                "type": "tool_reference",
+                                "name": codec.wire(item.name) if codec is not None else item.name,
+                            },
                         }
                         for item in message.content
                     ],
@@ -320,15 +334,19 @@ def _system_to_anthropic(system: str) -> str | list[dict[str, object]]:
     ]
 
 
-def _message_to_anthropic(message: CanonicalMessage) -> dict[str, object]:
+def _message_to_anthropic(
+    message: CanonicalMessage, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
     role = "user" if message.role == "tool" else message.role
     return {
         "role": role,
-        "content": [_content_to_anthropic(item) for item in message.content],
+        "content": [_content_to_anthropic(item, codec) for item in message.content],
     }
 
 
-def _content_to_anthropic(content: object) -> dict[str, object]:
+def _content_to_anthropic(
+    content: object, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
     if isinstance(content, ThinkingContent):
         return {
             "type": "thinking",
@@ -341,7 +359,7 @@ def _content_to_anthropic(content: object) -> dict[str, object]:
         return {
             "type": "tool_use",
             "id": content.tool_call_id,
-            "name": content.name,
+            "name": codec.wire(content.name) if codec is not None else content.name,
             "input": dict(content.input),
         }
     if isinstance(content, ToolResultContent):

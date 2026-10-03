@@ -289,3 +289,50 @@ async def test_a_missing_sandbox_is_reported_by_name(monkeypatch):
     await _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())._finalize("root0001")
     reasons = {p["reason"] for (k, _q, p) in ledger.events if k == "code_worker_unsubmitted"}
     assert reasons == {"sandbox_provider_missing"} and synth.assemble_calls == 0
+
+
+# -- D106: 라이브에서 드러난 셋 ----------------------------------------------------
+
+
+def test_compose_turns_come_from_the_step_law():
+    from neos.workflow.deep_analysis.compose_worker import compose_max_turns
+
+    assert compose_max_turns(17) == 8  # 2·8 + 1
+    assert compose_max_turns(1) == 1 and compose_max_turns(99) == 8  # 티켓 상한
+
+
+async def test_the_compose_ticket_carries_the_derived_turns():
+    provider, box = MemoryProvider(), []
+    await _run(ClaimLedger(), provider, box, report="[C:c1aaaaaa]")
+    assert box[0].tickets[0].max_turns == 1  # max_steps=3 → (3-1)//2
+
+
+async def test_a_failed_child_is_named_by_its_error_not_as_a_missing_submit():
+    class FailingRuntime:
+        def __init__(self, port):
+            self.port = port
+
+        async def advance(self, ticket):
+            return SimpleNamespace(kind=StepKind.FAILED, error_code="model_provider_failed", tokens_delta=0)
+
+    with pytest.raises(ComposeFailed) as info:
+        await run_compose_worker(
+            ledger=ClaimLedger(), provider=MemoryProvider(), root_id="root0001", root_text="q",
+            root_summary="", child_blocks=[], caveats=[], revision_hints=[],
+            runtime_factory=FailingRuntime, model=_PIN, parent_id="run00001", limits=None,
+            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_steps=17,
+        )
+    assert info.value.reason == "child_failed:model_provider_failed"
+
+
+def test_da_children_get_their_own_prompt_and_explore_keeps_its_own():
+    from neos.coding.prompts.official import AUTONOMOUS_EXECUTION, SCOPE_OF_CHANGES
+    from neos.subagent.prompts import build_explore_system_prompt
+    from neos.subagent.stepper import _CODING_PROMPTS
+
+    compose = _CODING_PROMPTS["compose"]()
+    assert "submit.v1" in compose and "report.md" in compose
+    assert AUTONOMOUS_EXECUTION in compose and SCOPE_OF_CHANGES in compose  # 공식 문구 그대로
+    assert "Do not edit, execute" not in compose
+    assert _CODING_PROMPTS["research"]() != compose
+    assert _CODING_PROMPTS["explore"]() == build_explore_system_prompt()
