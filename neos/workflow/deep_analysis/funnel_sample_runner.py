@@ -401,6 +401,18 @@ async def _probe_model(model: str) -> None:
     )
 
 
+async def _probe_jev_judge(jev_config) -> None:
+    """L6 판정자(D99)에 가장 작은 판정 하나를 보낸다 -- D94 를 Jev 에도.
+
+    `build_claim_judge` 를 그대로 쓴다. 런이 만들 판정자와 같은 것을 찔러야
+    "프로브는 통과했는데 런의 판정자는 다르다"가 생기지 않는다.
+    """
+    from neos.jev.assembly import build_claim_judge
+
+    judge = build_claim_judge(jev_config)
+    await judge.judge("preflight", [])
+
+
 async def preflight(
     settings_obj,
     session_factory,
@@ -408,6 +420,7 @@ async def preflight(
     probe: Callable[[str], Awaitable[None]] = _probe_model,
     models: Sequence[str] | None = None,
     credentials: Sequence[str] | None = None,
+    jev_probe: Callable[[Any], Awaitable[None]] = _probe_jev_judge,
 ) -> None:
     """LLM 토큰을 태우기 전에 의존성이 **실제로 작동하는지** 확인한다.
 
@@ -459,6 +472,15 @@ async def preflight(
         except Exception as exc:  # noqa: BLE001 - 사유를 가리지 않고 전부 보고
             detail = _redact(str(exc), secrets) or type(exc).__name__
             failures.append(f"{model} ({type(exc).__name__}: {detail})")
+
+    # L6 (D99): 판정자가 Jev 면 그것도 실제로 대답해야 한다. 꺼져 있으면 부르지 않는다.
+    jev_config = getattr(getattr(settings_obj, "config", None), "jev", None)
+    if jev_config is not None and jev_config.enabled and jev_config.judge_enabled:
+        try:
+            await jev_probe(jev_config)
+        except Exception as exc:  # noqa: BLE001 - 사유를 가리지 않고 전부 보고
+            detail = _redact(str(exc), secrets) or type(exc).__name__
+            failures.append(f"jev judge {jev_config.model} ({type(exc).__name__}: {detail})")
 
     if failures:
         raise PreflightError(

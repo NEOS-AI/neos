@@ -1797,6 +1797,16 @@ class JevConfig(StrictConfigModel):
     tool_risk_gate_enabled: bool = False
     #: L5. 판정자 섀도. 원장의 판정은 여전히 AgenticGrader 다.
     judge_shadow_enabled: bool = False
+    #: L6 (결정 2026-10-03, DECISIONS D99). 심층분석의 **인용 클레임** 의미 판정을 Jev
+    #: Choice 로 한다 -- 원장의 판정이 바뀐다(로드맵 §8 경계 17). 계산 클레임은 루브릭이
+    #: 다루지 않으므로 LLM 판정자에 남고, Jev 가 대답하지 않으면 LLM 판정자로 폴백하며
+    #: 그 사실을 `claim_graded` 에 싣는다. `DeterministicGrader` 는 대상이 아니다.
+    judge_enabled: bool = False
+    #: L6 판정 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    judge_rubric: str = "claim_judgement"
+    #: L6. Choice `confidence` 가 이 값보다 낮으면 "애매하다"로 읽고 **좁힌다**(반려).
+    #: 기본값 없음 -- 켜려면 명시한다(§12.4 와 같은 이유).
+    judge_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     #: 해소된 모델 id. 별칭(`jev-latest`)은 받지 않는다 -- §12.5 L0.
     model: str | None = None
@@ -1854,8 +1864,16 @@ class JevConfig(StrictConfigModel):
                 "궤적 감시자(jev.monitor)를 켜려면 jev.monitor.pause_at_or_above 를 "
                 "명시해야 한다. 기본값은 없다 -- 섀도 실측이 정한다."
             )
+        if self.judge_enabled and self.judge_min_confidence is None:
+            raise ValueError(
+                "Jev 판정자(jev.judge_enabled)를 켜려면 jev.judge_min_confidence 를 "
+                "명시해야 한다. 기본값은 없다 -- 애매함의 경계는 실측이 정한다."
+            )
         if not self.enabled and (
-            banding_on or self.judge_shadow_enabled or self.monitor.shadow_enabled
+            banding_on
+            or self.judge_shadow_enabled
+            or self.judge_enabled
+            or self.monitor.shadow_enabled
         ):
             raise ValueError(
                 "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "

@@ -46,7 +46,14 @@ def _premise_block(premises) -> str:
 
 class AgenticGrader:
     def __init__(self, *, judge_model, threshold, sample_rate, max_output_tokens,
-                 llm_client=None, cassette=None, sampler=None, judge_effort=None):
+                 llm_client=None, cassette=None, sampler=None, judge_effort=None,
+                 jev_judge=None, jev_min_confidence=None):
+        # L6 (DECISIONS D99). `jev_judge` 가 있으면 인용 클레임의 판정을 Jev Choice 로
+        # 한다. 티어링(필수·샘플)은 아래 하나 그대로다 -- 판정자만 바뀐다. 둘은 짝이다.
+        if (jev_judge is None) != (jev_min_confidence is None):
+            raise ValueError("jev_judge 와 jev_min_confidence 는 함께 준다")
+        self.jev_judge = jev_judge
+        self.jev_min_confidence = jev_min_confidence
         self.judge_model = judge_model
         # 모델과 짝으로 주입받는다 -- 이 판정자가 부르는 모델에 대해 해석된 값이다.
         self.judge_effort = judge_effort
@@ -164,12 +171,99 @@ class AgenticGrader:
                 premise_block=_premise_block(computed.premises),
             )
         else:
+            fallback_note = None
+            if self.jev_judge is not None:
+                jev_verdict, fallback_note = await self._grade_with_jev(claim, mandatory)
+                if jev_verdict is not None:
+                    return jev_verdict
             evidence_block = "\n".join(
                 f"<evidence>{e.excerpt}</evidence>" for e in claim.evidence
             ) or "(증거 없음)"
             prompt = render(
                 "judge", claim_text=claim.text, evidence_block=evidence_block
             )
+            if fallback_note is not None:
+                verdict = await self._grade_with_llm(prompt, mandatory)
+                verdict.diagnostics = {**verdict.diagnostics, **fallback_note}
+                return verdict
+        return await self._grade_with_llm(prompt, mandatory)
+
+    async def _grade_with_jev(self, claim, mandatory):
+        """L6. `(verdict, None)` 이면 Jev 가 판정했다. `(None, note)` 면 LLM 으로 폴백한다.
+
+        단조 축소(§12.4)를 판정에도 건다:
+        - 대답했고 확신한다 → 라벨대로
+        - 대답했는데 애매하다(`confidence < jev_min_confidence`) → **반려**. 애매함은 정보다
+        - 앞단(WAF)이 막았다 → **반려**. 막는 문자열은 증거에 공격자가 넣을 수 있다(D-L3)
+        - 대답하지 않았다(실패·타임아웃) → 좁힐 근거가 없다 → LLM 판정자로 폴백하고
+          `jev_unavailable` 을 싣는다. 이벤트 없는 폴백은 없다(§9)
+        """
+        from neos.jev.scorer import is_provider_block
+
+        excerpts = [e.excerpt for e in claim.evidence]
+        try:
+            judgement = await self.jev_judge.judge(claim.text, excerpts)
+        except Exception as exc:  # noqa: BLE001 -- 실패는 아래에서 이름으로 남긴다
+            if is_provider_block(exc):
+                return Verdict(
+                    ok=False,
+                    code="E_UNSUPPORTED",
+                    label=None,
+                    detail="jev_provider_blocked",
+                    diagnostics={
+                        **self._diagnostics("attempted_rejected", None, 0),
+                        "judge_backend": "jev",
+                        "jev_unavailable": "provider_blocked",
+                    },
+                    tokens_spent=0,
+                ), None
+            return None, {
+                "judge_backend": "llm_fallback",
+                "jev_unavailable": type(exc).__name__,
+            }
+        jev_fields = {
+            "judge_backend": "jev",
+            "jev_model": judgement.model,
+            "jev_rubric_digest": judgement.rubric_digest,
+            "jev_uid": judgement.uid,
+            "jev_choice": judgement.choice,
+            "jev_confidence": judgement.confidence,
+            "jev_probabilities": judgement.probabilities,
+            "jev_min_confidence": self.jev_min_confidence,
+        }
+        if judgement.confidence < self.jev_min_confidence:
+            return Verdict(
+                ok=False,
+                code="E_UNSUPPORTED",
+                label=None,
+                detail="jev_uncertain_mandatory" if mandatory else "jev_uncertain",
+                diagnostics={
+                    **self._diagnostics("attempted_rejected", None, 0),
+                    **jev_fields,
+                },
+                tokens_spent=0,
+            ), None
+        factory = _MAP.get(judgement.choice.upper())
+        if factory is None:
+            verdict = self._judge_failed(mandatory, "jev_unknown_label", 0)
+            verdict.diagnostics = {**verdict.diagnostics, **jev_fields}
+            return verdict, None
+        verdict = factory(
+            f"jev {judgement.choice} confidence={judgement.confidence:.3f}"
+        )
+        # Jev 는 토큰이 아니라 호출로 과금된다 -- 질문 예산에 청구할 토큰은 0 이다.
+        verdict.diagnostics = {
+            **self._diagnostics(
+                "attempted_passed" if verdict.ok else "attempted_rejected",
+                verdict.label,
+                0,
+            ),
+            **jev_fields,
+        }
+        verdict.tokens_spent = 0
+        return verdict, None
+
+    async def _grade_with_llm(self, prompt, mandatory):
         try:
             data, response = await call_json(
                 self.judge_model,

@@ -170,6 +170,56 @@ def build_trajectory_monitor(
     )
 
 
+def build_claim_judge(
+    config: "JevConfig",
+    *,
+    api_key: str | None = None,
+    client=None,
+):
+    """L6 심층분석 클레임 판정자(DECISIONS D99)를 만든다. 꺼져 있으면 `None`.
+
+    같은 규율이다: 켜졌는지 판단하는 자리는 여기 하나이고, 키 없음·모델 미핀은
+    "LLM 판정자 그대로"가 아니라 기동 실패다. 판정자가 조용히 바뀌지 않은 런은
+    매니페스트가 거짓말을 한다.
+    """
+    from neos.jev.claim_judge import TypeSafeClaimJudge
+
+    if not (config.enabled and config.judge_enabled):
+        return None
+    if config.judge_min_confidence is None:
+        raise MisconfiguredJev("jev.judge_min_confidence 가 없다")
+    if api_key is None:
+        api_key = _key_from_environment()
+    if not api_key or not api_key.strip():
+        raise MisconfiguredJev(
+            "Jev 판정자가 켜져 있는데 TYPESAFE_API_KEY 가 없다. "
+            "오설정은 'LLM 판정자 그대로' 로 번역되지 않는다."
+        )
+    if not config.model:
+        raise MisconfiguredJev("jev.model 이 비어 있다 -- 별칭으로 돈 판정은 재현할 수 없다.")
+    rubric = load_rubric(config.judge_rubric)
+    choices = [
+        name for name, question in rubric.questions.items() if question.get("type") == "choice"
+    ]
+    if len(choices) != 1:
+        raise MisconfiguredJev(
+            f"판정 루브릭 {config.judge_rubric!r} 은 choice 질문이 하나여야 한다: {choices}"
+        )
+    if client is None:
+        from typesafe_sdk import AsyncTypeSafeClient
+
+        client = AsyncTypeSafeClient(
+            api_key=api_key, model=config.model, timeout=config.timeout_sec
+        )
+    return TypeSafeClaimJudge(
+        client=client,
+        model=config.model,
+        rubric=rubric,
+        question=choices[0],
+        timeout_sec=config.timeout_sec,
+    )
+
+
 def _noul_questions(rubric_name: str) -> tuple[str, ...]:
     """루브릭의 noul 질문 이름들, 루브릭에 적힌 순서대로."""
     rubric = load_rubric(rubric_name)

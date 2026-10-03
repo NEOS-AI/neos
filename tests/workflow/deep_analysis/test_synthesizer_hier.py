@@ -841,7 +841,7 @@ async def test_with_budget2_off_a_starved_tier_still_reaches_the_model(budget2_o
 
 
 def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monkeypatch):
-    """오버레이가 한 줄이어야 #23 이 "BUDGET2 이전 코드"를 잰다 -- D98."""
+    """오버레이가 BUDGET2 끄기(D98)와 Jev 판정자(D99) 말고는 아무것도 바꾸지 않는다."""
     from pathlib import Path
 
     import yaml
@@ -850,9 +850,21 @@ def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monk
 
     overlay = Path("config/samples/sample-23.yaml")
     assert yaml.safe_load(overlay.read_text(encoding="utf-8")) == {
-        "deep_analysis": {"budget_aware_reduction": False}
+        "deep_analysis": {"budget_aware_reduction": False},
+        "jev": {
+            "enabled": True,
+            "model": "jev-1.13.0",
+            "judge_enabled": True,
+            "judge_min_confidence": 0.60,
+        },
     }
     monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
     config = loader.load_app_config(config_path=str(overlay))
     assert config.deep_analysis.budget_aware_reduction is False
+    assert config.jev.judge_enabled is True
+    # 표본 #23 은 도구 위험 게이트·감시자를 DA 에 켜지 않는다(D98 §7 그대로).
+    assert config.jev.tool_risk_gate_enabled is False
+    assert config.jev.monitor.shadow_enabled is False
