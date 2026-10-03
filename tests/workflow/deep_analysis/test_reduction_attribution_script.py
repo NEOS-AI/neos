@@ -393,3 +393,19 @@ async def test_sql_counts_match_the_parser_on_a_real_ledger():
         assert flags == {run_id: False}
     finally:
         await _delete_fixture_run(run_id)
+
+
+def test_root_rescue_removes_only_child_origin_losses_at_the_root():
+    """D103: 루트에서 잘린·뺀 자식 마커는 직계 자식 블록이 되살린다. 루트 자신의 클레임은 아니다."""
+    degraded = cli.Degraded(
+        reason="input_bound", source="children_join", own_available=3,
+        before=10, after=4, truncated=True, instrumented=True,
+    )
+    summary = cli.Summary(prompt=9, answer=5, instrumented=True)
+
+    root_d = cli.without_root_rescue(degraded, is_root=True)
+    assert root_d.truncated_away == 0 and root_d.own_dropped == 3
+    assert cli.without_root_rescue(summary, is_root=True).dropped == 0
+    # 루트가 아닌 노드는 그대로다.
+    assert cli.without_root_rescue(degraded, is_root=False) is degraded
+    assert cli.without_root_rescue(summary, is_root=False).dropped == 4
