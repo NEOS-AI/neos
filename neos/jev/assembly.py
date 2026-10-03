@@ -117,6 +117,13 @@ def build_trajectory_monitor(
         return None
     if monitor.pause_at_or_above is None:
         raise MisconfiguredJev("jev.monitor.pause_at_or_above 가 없다")
+    if monitor.enforce:
+        # 설정 검증과 같은 문이다 -- 검증을 건너뛴 설정(`model_construct`)도 여기서 막힌다.
+        from neos.config.schema import MONITOR_PAUSE_BOUNDARY_FIELDS
+
+        missing = [f for f in MONITOR_PAUSE_BOUNDARY_FIELDS if f not in monitor.model_fields_set]
+        if missing:
+            raise MisconfiguredJev(f"jev.monitor.enforce 의 멈춤 경계가 명시되지 않았다: {missing}")
     if api_key is None:
         api_key = _key_from_environment()
     if not api_key or not api_key.strip():
@@ -157,6 +164,9 @@ def build_trajectory_monitor(
             spend_warmup_turns=monitor.spend_warmup_turns,
         ),
         every_n_tool_results=monitor.every_n_tool_results,
+        # 트랙 Q5b. 경계를 전부 명시했는지는 설정 검증이 이미 확인했다(MP2).
+        enforce=monitor.enforce,
+        max_events=monitor.max_events,
     )
 
 

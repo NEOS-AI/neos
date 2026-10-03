@@ -34,6 +34,10 @@ from neos.api.handlers.scheduled_tasks_handlers import router as scheduled_tasks
 from neos.api.handlers.ui_submit_handlers import router as ui_submit_router  # Phase 8: A2UI
 from neos.api.handlers.coding_admin_handlers import router as coding_admin_router
 from neos.api.handlers.coding_handlers import router as coding_router
+from neos.api.handlers.standing_pause_handlers import (
+    resume_route_mounted,
+    resume_router as standing_resume_router,
+)
 from neos.api.handlers.coding_ws_handlers import router as coding_ws_router
 from neos.api.handlers.coding_workspace_ws_handlers import (
     router as coding_workspace_ws_router,
@@ -319,6 +323,28 @@ async def lifespan(app: FastAPI):
                     logger.info("✅ Slack adapter started")
                 except Exception as e:
                     logger.warning(f"⚠️ Slack adapter start failed: {e}")
+
+        # 상시 에이전트 소유자 알림(트랙 Q10b · Q3). 워커는 큐에 적기만 한다 -- 채널
+        # 어댑터가 이 프로세스에만 있으므로 여기서 꺼내 보낸다.
+        _standing = settings.config.standing_agents
+        if _standing.enabled and _standing.notifications.enabled:
+            from neos.standing.notifications import (
+                PostgresNotificationStore,
+                run_notification_drain,
+            )
+
+            background_tasks.append(
+                asyncio.create_task(
+                    run_notification_drain(
+                        PostgresNotificationStore(db_manager.get_session),
+                        poll_interval_seconds=_standing.notifications.poll_interval_seconds,
+                        batch_size=_standing.notifications.batch_size,
+                        max_attempts=_standing.notifications.max_attempts,
+                    ),
+                    name="standing_notification_drain",
+                )
+            )
+            logger.info("✅ Standing agent notification drain started")
 
         logger.info("🎉 Multi-Agent AI System (Enterprise Edition) startup completed successfully!")
         logger.info("📊 Metrics endpoint available at: /metrics")
@@ -639,6 +665,26 @@ if settings.config.standing_agents.enabled:
     _include_router_for_runtime(
         standing_agent_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
     )
+    # 알림 대상은 알림이 켜졌을 때만 있다. 재개 라우트는 아래(블록 밖)에서 붙인다.
+    from neos.api.handlers.standing_pause_handlers import (
+        notify_router as standing_notify_router,
+    )
+
+    if settings.config.standing_agents.notifications.enabled:
+        _include_router_for_runtime(
+            standing_notify_router, prefix=settings.API_V1_PREFIX, tags=["Standing Agents"]
+        )
+    # 상시 질문(트랙 Q3). 폴러는 Celery beat 이 같은 플래그로 등록한다.
+    if settings.config.standing_agents.questions.enabled:
+        from neos.api.handlers.standing_question_handlers import (
+            router as standing_question_router,
+        )
+
+        _include_router_for_runtime(
+            standing_question_router,
+            prefix=settings.API_V1_PREFIX,
+            tags=["Standing Agent Questions"],
+        )
     # 이벤트 트리거(트랙 Q4a). 배달 라우트는 인증 의존성이 없다 -- 서명이 인증이다.
     if settings.config.standing_agents.triggers.enabled:
         from neos.api.handlers.standing_trigger_handlers import (
@@ -650,6 +696,13 @@ if settings.config.standing_agents.enabled:
             _include_router_for_runtime(
                 _router, prefix=settings.API_V1_PREFIX, tags=["Standing Agent Triggers"]
             )
+# 멈춘 태스크의 재개(트랙 Q10b·Q5b) -- 사람만 쓰는 소유자 라우트. 태스크를 멈출 수 있는
+# 쪽(봉투 · 감시자 집행)이 하나라도 켜져 있으면 있다. 감시자는 상시 에이전트와 무관하게
+# 모든 태스크를 멈추므로 위의 `standing_agents` 블록 안에 둘 수 없다.
+if resume_route_mounted(settings.config):
+    _include_router_for_runtime(
+        standing_resume_router, prefix=settings.API_V1_PREFIX, tags=["Coding Agent"]
+    )
 # 관리형 샌드박스 운영자 제어 — 관리자 의존성은 라우터 자체에 박혀 있다
 # (`coding_admin_handlers.router`), 그래서 여기서 다시 걸지 않는다.
 _include_router_for_runtime(

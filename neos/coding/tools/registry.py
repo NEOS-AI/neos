@@ -95,6 +95,10 @@ _POLICY_FIX_NOTES = {
     "policy_device_secret_ref": "device tools never receive secrets",
     "policy_device_write_path": "device writes refuse dot paths and launchable file types",
     "policy_device_write_binary": "device writes take text only",
+    "policy_device_command_refused": (
+        "device commands are one allowlisted executable with plain arguments; "
+        "no shells, wrappers or inline code"
+    ),
 }
 _EXECUTE_WRAPPERS = frozenset(
     {
@@ -640,6 +644,94 @@ class _RegisteredTool:
         )
 
 
+def validate_argv(argv: tuple[str, ...], *, allowlist: frozenset[str]) -> None:
+    """샌드박스 `execute.v1` 의 argv 규칙 -- 한 함수다.
+
+    `execute.v1` 검증기와 기기 명령 검증기(트랙 Q16c, `catalog.check_device_input`)가 같이 부른다 --
+    사본이 둘이면 고침이 한쪽에만 도착한다. 실행 파일 허용 목록은 부르는 쪽이 넘긴다."""
+    from neos.coding.domain.approvals import is_denied_secret_path
+
+    if any("\0" in value for value in argv):
+        raise ToolValidationError("policy_schema_invalid")
+    if PurePosixPath(argv[0]).name != argv[0]:
+        raise ToolValidationError("policy_executable_path_denied")
+    executable = PurePosixPath(argv[0]).name
+    names = _unwrapped_command_names(argv)
+    if "git" in names and any(_is_git_dangerous_flag(part) for part in argv):
+        raise ToolValidationError("policy_git_operation_denied")
+    if any(name in _REMOVAL_EXECUTABLES for name in names):
+        for operand in _command_operands(argv):
+            if (
+                operand in _DANGEROUS_REMOVAL_OPERANDS
+                or _operand_escapes_workspace(operand)
+            ):
+                raise ToolValidationError("policy_dangerous_removal")
+    denied = next((name for name in names if name in _DEDICATED_EXECUTE_DENY), None)
+    if denied is not None:
+        raise ToolValidationError(
+            "policy_dedicated_tool_required",
+            fix_note=_dedicated_tool_fix_note(denied),
+        )
+    if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
+        raise ToolValidationError("policy_shell_command_denied")
+    if any(name in _INLINE_INTERPRETERS for name in names):
+        later = argv[1:]
+        if any(_is_inline_interpreter_flag(part) for part in later):
+            raise ToolValidationError("policy_inline_interpreter_denied")
+        if "php" in names and any(
+            part == "-r"
+            or part.startswith("-r=")
+            or (part.startswith("-r") and not part.startswith("--"))
+            for part in later
+        ):
+            raise ToolValidationError("policy_inline_interpreter_denied")
+    if any(
+        name
+        in {
+            "curl",
+            "ftp",
+            "nc",
+            "ncat",
+            "rsync",
+            "scp",
+            "sftp",
+            "ssh",
+            "telnet",
+            "wget",
+        }
+        for name in names
+    ):
+        raise ToolValidationError("policy_network_client_denied")
+    if any(name in {"npm", "pnpm", "yarn", "pip", "pip3"} for name in names) and any(
+        value
+        in {
+            "add",
+            "dlx",
+            "fetch",
+            "install",
+            "update",
+            "upgrade",
+        }
+        for value in argv[1:]
+    ):
+        raise ToolValidationError("policy_network_operation_denied")
+    for operand in _command_operands(argv):
+        if is_denied_secret_path(operand):
+            raise ToolValidationError("policy_secret_path_denied")
+        if _operand_escapes_workspace(operand):
+            raise ToolValidationError("policy_command_path_denied")
+    if executable not in allowlist:
+        raise ToolValidationError("policy_executable_not_allowed")
+    if "git" in names:
+        subcommand = _subcommand_after(argv, "git")
+        if subcommand not in {"status", "diff", "log"}:
+            raise ToolValidationError("policy_git_operation_denied")
+    if any(name in {"npm", "pnpm", "yarn"} for name in names) and any(
+        value in {"publish", "release"} for value in argv[1:]
+    ):
+        raise ToolValidationError("policy_publish_denied")
+
+
 class CodingToolRegistry:
     _TOOL_SPECS: ClassVar[tuple[_RegisteredTool, ...]] = (
         _RegisteredTool(
@@ -1013,6 +1105,7 @@ class CodingToolRegistry:
         secret_env_refs: bool = False,
         connectors: Any = None,
         device_tools: bool = False,
+        device_command_allowlist: frozenset[str] = frozenset(),
     ) -> None:
         if (
             max_command_timeout_sec <= 0
@@ -1044,6 +1137,9 @@ class CodingToolRegistry:
             from neos.coding.bridge.catalog import device_registered_tools
 
             self._tools.update({tool.name: tool for tool in device_registered_tools()})
+        # 트랙 Q16c: 기기 명령의 서버 상한(`device_bridge.command_allowlist`). 비어 있으면 어떤
+        # 기기 명령도 검증을 지나지 못한다(브리지의 선언도 같은 상한으로 거절된다).
+        self._device_command_allowlist = frozenset(device_command_allowlist)
 
     @classmethod
     def default(
@@ -1057,6 +1153,7 @@ class CodingToolRegistry:
         secret_env_refs: bool = False,
         connectors: Any = None,
         device_tools: bool = False,
+        device_command_allowlist: frozenset[str] = frozenset(),
     ) -> CodingToolRegistry:
         return cls(
             command_allowlist=command_allowlist,
@@ -1067,6 +1164,7 @@ class CodingToolRegistry:
             secret_env_refs=secret_env_refs,
             connectors=connectors,
             device_tools=device_tools,
+            device_command_allowlist=device_command_allowlist,
         )
 
     def _connector_definitions(self) -> tuple[ToolDefinition, ...]:
@@ -1271,7 +1369,9 @@ class CodingToolRegistry:
             check_device_input(data, stage="raw")
         self._normalize_paths(name, data)
         if device_call:
-            check_device_input(data, stage="normalized")
+            check_device_input(
+                data, stage="normalized", command_allowlist=self._device_command_allowlist
+            )
         if name == "chmod.v1":
             data["mode"] = _parse_numeric_mode(data["mode"])
             self._deny_secret_world_writable(data)
@@ -1409,88 +1509,7 @@ class CodingToolRegistry:
         return secret_ref_name(value) is not None and secret_env_name_allowed(key)
 
     def _validate_command(self, data: dict[str, Any]) -> None:
-        from neos.coding.domain.approvals import is_denied_secret_path
-
-        argv = tuple(data["argv"])
-        if any("\0" in value for value in argv):
-            raise ToolValidationError("policy_schema_invalid")
-        if PurePosixPath(argv[0]).name != argv[0]:
-            raise ToolValidationError("policy_executable_path_denied")
-        executable = PurePosixPath(argv[0]).name
-        names = _unwrapped_command_names(argv)
-        if "git" in names and any(_is_git_dangerous_flag(part) for part in argv):
-            raise ToolValidationError("policy_git_operation_denied")
-        if any(name in _REMOVAL_EXECUTABLES for name in names):
-            for operand in _command_operands(argv):
-                if (
-                    operand in _DANGEROUS_REMOVAL_OPERANDS
-                    or _operand_escapes_workspace(operand)
-                ):
-                    raise ToolValidationError("policy_dangerous_removal")
-        denied = next((name for name in names if name in _DEDICATED_EXECUTE_DENY), None)
-        if denied is not None:
-            raise ToolValidationError(
-                "policy_dedicated_tool_required",
-                fix_note=_dedicated_tool_fix_note(denied),
-            )
-        if any(name in {"sh", "bash", "zsh"} for name in names) and "-c" in argv[1:]:
-            raise ToolValidationError("policy_shell_command_denied")
-        if any(name in _INLINE_INTERPRETERS for name in names):
-            later = argv[1:]
-            if any(_is_inline_interpreter_flag(part) for part in later):
-                raise ToolValidationError("policy_inline_interpreter_denied")
-            if "php" in names and any(
-                part == "-r"
-                or part.startswith("-r=")
-                or (part.startswith("-r") and not part.startswith("--"))
-                for part in later
-            ):
-                raise ToolValidationError("policy_inline_interpreter_denied")
-        if any(
-            name
-            in {
-                "curl",
-                "ftp",
-                "nc",
-                "ncat",
-                "rsync",
-                "scp",
-                "sftp",
-                "ssh",
-                "telnet",
-                "wget",
-            }
-            for name in names
-        ):
-            raise ToolValidationError("policy_network_client_denied")
-        if any(name in {"npm", "pnpm", "yarn", "pip", "pip3"} for name in names) and any(
-            value
-            in {
-                "add",
-                "dlx",
-                "fetch",
-                "install",
-                "update",
-                "upgrade",
-            }
-            for value in argv[1:]
-        ):
-            raise ToolValidationError("policy_network_operation_denied")
-        for operand in _command_operands(argv):
-            if is_denied_secret_path(operand):
-                raise ToolValidationError("policy_secret_path_denied")
-            if _operand_escapes_workspace(operand):
-                raise ToolValidationError("policy_command_path_denied")
-        if executable not in self._command_allowlist:
-            raise ToolValidationError("policy_executable_not_allowed")
-        if "git" in names:
-            subcommand = _subcommand_after(argv, "git")
-            if subcommand not in {"status", "diff", "log"}:
-                raise ToolValidationError("policy_git_operation_denied")
-        if any(name in {"npm", "pnpm", "yarn"} for name in names) and any(
-            value in {"publish", "release"} for value in argv[1:]
-        ):
-            raise ToolValidationError("policy_publish_denied")
+        validate_argv(tuple(data["argv"]), allowlist=self._command_allowlist)
         if data["timeout_sec"] > self._max_command_timeout_sec:
             raise ToolValidationError("policy_command_timeout_exceeded")
         if data["max_output_bytes"] > self._max_command_output_bytes:

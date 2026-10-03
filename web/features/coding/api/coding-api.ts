@@ -133,6 +133,19 @@ export async function stopCodingTask(
   return response.json();
 }
 
+export async function resumeCodingTask(
+  taskId: string
+): Promise<{ task_id: string; status: "running" }> {
+  const response = await fetch(
+    `/api/coding/tasks/${encodeURIComponent(taskId)}/resume`,
+    { method: "POST" }
+  );
+  if (!response.ok) {
+    throw await responseError(response, "Could not resume coding task");
+  }
+  return response.json();
+}
+
 export async function steerCodingTask(
   taskId: string,
   instruction: string,

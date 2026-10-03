@@ -28,6 +28,8 @@ from neos.coding.domain.approvals import UserApprovalRule, UserRuleEffect
 #: 도구 이름의 모양(`execute.v1`, `write_file.v1`, `mcp__x__y` …). 모르는 도구 이름도
 #: 받는다 -- 규칙을 미리 걸어 둘 수 있게. 맞는 호출이 없으면 아무 일도 안 한다.
 _TOOL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+#: argv 접두를 받는 도구. 기기 명령(트랙 Q16c)은 argv 접두가 있는 allow 만 승인을 대신한다(BC5).
+_ARGV_TOOLS = frozenset({"execute.v1", "device_run_command.v1"})
 MAX_ARGV_PREFIX = 8
 MAX_ARGV_TOKEN = 128
 
@@ -49,8 +51,8 @@ def parse_rule_fields(effect: str, tool: str, argv_prefix: Sequence[Any] = ()) -
     if not _TOOL_RE.fullmatch(name):
         raise ValueError("tool must be a tool name such as execute.v1")
     prefix = tuple(argv_prefix or ())
-    if prefix and name != "execute.v1":
-        raise ValueError("argv_prefix applies to execute.v1 only")
+    if prefix and name not in _ARGV_TOOLS:
+        raise ValueError("argv_prefix applies to execute.v1 and device_run_command.v1 only")
     if len(prefix) > MAX_ARGV_PREFIX:
         raise ValueError(f"argv_prefix has at most {MAX_ARGV_PREFIX} tokens")
     for token in prefix:

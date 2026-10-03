@@ -1,7 +1,7 @@
 # Q4 이벤트 트리거 · Q10 에이전트 예산 봉투 — 설계와 첫 착지
 
 > **작성:** 2026-10-01 · **트랙:** Q4 · Q10 (정본 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) §4.2)
-> **지위:** Q4a · Q10a 는 **착지했다**(플래그 off). Q4b · Q10b 는 설계만 있다. 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** Q4a · Q10a · Q4b · Q10b **착지**(플래그 off). Q10b 는 [Q10b·Q3 설계](Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md). 설계와 코드가 어긋나면 코드가 이긴다.
 > **근거 규칙:** 현재 상태 서술은 전부 2026-10-01 `dev`(`0094c9b6`)에서 확인했고 경로를 단다.
 > **선행:** [Q13 설계](Q13_STANDING_AGENT_DESIGN_260930.md) a~f 전부 착지 · Q1 background ✅ · Q5 감시자 섀도 🟢
 
@@ -136,7 +136,7 @@ POST /api/v1/standing-triggers/{trigger_id}/deliveries    ← 인증 의존성 �
 | **Q4a** | 074 · `triggers.py` · 소유자 API · 서명 배달 API · 설정 검증 | 저장소 메모리·Postgres **같은 계약** · 남의 에이전트에 못 단다 · 지운 에이전트의 트리거는 배달에서 사라진다 · 사용자 삭제가 막히지 않는다(실 DB) · DB 에 비밀이 없다 · 필터 타입 엄격 · 서명: 본문·배달 id·시각 전부 서명 안, **`.` 이동 재생 거절** · 같은 배달 = 같은 태스크(두 멱등성 저장소) · 같은 id 라도 트리거가 다르면 다른 배달 · 거절·예외는 claim 을 풀어 재전송이 발동 · 인증 실패 6종이 **같은 401** · 413 은 서명 전 · 플래그 off 면 라우트 없음(제공되는 라우트로 읽는다) | ✅ 2026-10-01 |
 | **Q10a** | `budget.py` · `open_agent_task` 게이트 · safe point 섀도 · `budget.judged` | 경계(≥) · 몫 내림 · 12월→1월 · UTC · 지출 원천 메모리·Postgres **같은 계약**(실 체크포인트를 seq 역순으로 써서 **최신**을 고르는지) · 남의 에이전트·사람 태스크·지난달·체크포인트 없음 제외 · 보관도 센다 · 자기소개도 봉투 안 · 루프: 런당 한 번, 새 런은 다시, 사람 태스크는 판정 자체를 안 함, 고장은 런을 안 바꿈 · 런 서비스가 `agent_id` 를 싣는다 | ✅ 2026-10-01 |
 | **Q4b** | 채널 원천 — 지정 채널의 인바운드를 트리거로 | [Q2·Q4b 설계 §3](Q2_Q4B_RULES_CHANNEL_TRIGGERS_DESIGN_261001.md) | ✅ 2026-10-01 |
-| **Q10b** | 진행 중 태스크의 봉투 초과 → `PAUSING → PAUSED` · 사람만 쓰는 재개 API · `task.status.changed` 투영 | Q5 와 **같은 길**을 쓴다(감시자·봉투가 `PAUSED` 의 두 작성자, 분석 §6 결정 3). Q5 경계 실측 뒤 | 📐 |
+| **Q10b** | 진행 중 태스크의 봉투 초과 → `PAUSED` · 사람만 쓰는 재개 API · `task.status.changed` 투영 · 봉투 경고(D7) | [Q10b·Q3 설계](Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md) §2~§4 — 봉투는 safe point 안에서 스스로 판정하므로 `PAUSING` 을 거치지 않는다(P2). Q5 경계 실측을 기다리지 않았다: 봉투 판정은 결정적이고, 같은 `pause_task` 를 Q5 가 이어 쓴다 | ✅ 2026-10-02 |
 
 ## 5. ~~열린 질문~~ → 결정됨 (2026-10-01, 위임받아 Claude 가 고름 — [Q2·Q4b 설계 §1](Q2_Q4B_RULES_CHANNEL_TRIGGERS_DESIGN_261001.md) D4~D7)
 

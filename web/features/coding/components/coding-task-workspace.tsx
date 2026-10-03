@@ -1,6 +1,6 @@
 "use client";
 
-import { Radio, Square, TerminalSquare } from "lucide-react";
+import { Play, Radio, Square, TerminalSquare } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CodingApprovalCard } from "@/features/coding/components/coding-approval-card";
@@ -11,7 +11,10 @@ import { CodingSandboxStatus } from "@/features/coding/components/coding-sandbox
 import { CodingSteerComposer } from "@/features/coding/components/coding-steer-composer";
 import { PhaseTimeline } from "@/features/coding/components/phase-timeline";
 import { CodingWorkspaceDock } from "@/features/coding/components/workspace/coding-workspace-dock";
-import { stopCodingTask } from "@/features/coding/api/coding-api";
+import {
+  resumeCodingTask,
+  stopCodingTask,
+} from "@/features/coding/api/coding-api";
 import { useSandboxStatus } from "@/features/coding/sandbox/use-sandbox-status";
 import { useCodingStream } from "@/features/coding/stream/use-coding-stream";
 import type { CodingProjectionState } from "@/features/coding/types/projection";
@@ -36,6 +39,7 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false);
   const canStop =
     projection.taskStatus != null &&
     !TERMINAL_TASK_STATUSES.has(projection.taskStatus) &&
@@ -56,6 +60,27 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
       );
     } finally {
       setStopping(false);
+    }
+  }
+
+  // 트랙 Q10b -- 예산 봉투가 멈춘 태스크. 재개는 사람만 한다. 다시 넘어 있으면
+  // 다음 모델 턴 전에 또 멈춘다.
+  const paused = projection.taskStatus === "paused";
+
+  async function resumeRun() {
+    if (!paused || resuming) {
+      return;
+    }
+    setResuming(true);
+    setStopError(null);
+    try {
+      await resumeCodingTask(taskId);
+    } catch (cause) {
+      setStopError(
+        cause instanceof Error ? cause.message : "Could not resume coding task"
+      );
+    } finally {
+      setResuming(false);
     }
   }
 
@@ -94,6 +119,14 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
               waiting_approval
             </span>
           ) : null}
+          {paused ? (
+            <span
+              className="border border-sky-400/40 bg-sky-400/10 px-2 py-0.5 font-mono text-[10px] text-sky-300 uppercase tracking-wider"
+              data-testid="coding-paused-badge"
+            >
+              paused
+            </span>
+          ) : null}
           <UsageBadge projection={projection} />
         </div>
         <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground uppercase tracking-[0.14em]">
@@ -108,6 +141,27 @@ export function CodingTaskWorkspace({ taskId }: { taskId: string }) {
             ? "Live"
             : "Checkpoint restored"}
           <CodingSandboxStatus status={sandbox} />
+          {paused ? (
+            <Button
+              data-testid="coding-resume-button"
+              disabled={resuming}
+              onClick={() => {
+                resumeRun().catch((cause) => {
+                  setStopError(
+                    cause instanceof Error
+                      ? cause.message
+                      : "Could not resume coding task"
+                  );
+                });
+              }}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Play className="mr-1 size-3.5" />
+              Resume
+            </Button>
+          ) : null}
           <Button
             data-testid="coding-stop-button"
             disabled={!canStop || stopping}

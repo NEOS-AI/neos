@@ -787,13 +787,13 @@ Three properties are enforced rather than documented:
 While enforcement is on, the loop stops speculatively prefetching read-only
 tools: that path executes a tool before the decision and would outrun the gate.
 
-#### Trajectory monitor (shadow)
+#### Trajectory monitor (shadow, optional pause)
 
 `jev.monitor` judges a coding task's *flow* rather than one call: recent tool
 calls, their outcomes, the denial reasons and the task mode. It is roadmap
-track Q5 (`docs/OPENAI_DOTS_ANALYSIS_260930.md`). It is shadow-only: every
-judgement is one `monitor.judged` ledger event with `enforced: false`, and no
-task is paused.
+track Q5 (`docs/OPENAI_DOTS_ANALYSIS_260930.md`). By default it is shadow-only:
+every judgement is one `monitor.judged` ledger event with `enforced: false`, and
+no task is paused. `enforce` (track Q5b, below) lets a verdict pause the task.
 
 ```yaml
 jev:
@@ -814,6 +814,7 @@ jev:
     refusals: 1                    # FB5 model.refused
     spend_multiple: 4.0            # FB6 turn tokens vs median of earlier turns
     spend_warmup_turns: 5          # FB6 turns before it judges
+    enforce: false                 # Q5b: a would_pause verdict pauses the task
 ```
 
 Jev is the judge. When it errors, times out, is blocked, or returns no
@@ -822,7 +823,34 @@ probability, the fallback rules judge that one time and the event says so
 only the ledger. **Config can only make them stricter**: each field's default is
 its bound, so validation rejects a looser value. The monitor reads the ledger
 through the event store's `list_after`; a sink without it is never judged, and a
-monitor error is logged and never changes the run.
+monitor error is logged and never changes the run. The read is a per-task
+cursor: each model turn reads only the events after the last seq it saw (the
+most recent `max_events` are kept per task, in the worker process).
+
+**Enforcement (track Q5b, `docs/Q5B_MONITOR_PAUSE_DESIGN_261002.md`).** With
+`enforce: true` every judgement carries `enforced: true`, and a `would_pause`
+verdict -- from Jev *or* from the fallback rules; one flag lifts both -- pauses
+the task through the same path as the budget envelope: at the start of the next
+due model turn (before detached children step and before the model call), one
+transaction writes `monitor.judged` and `task.status.changed`
+(`status: paused`, `reason_code: monitor_jev` or `monitor_fallback_fb1`..`fb6`).
+The run stays `running`; only a person resumes it through
+`POST /api/v1/coding/tasks/{task_id}/resume`, which is mounted whenever
+enforcement is on. Unlike the envelope, the monitor watches **every** task, not
+only standing-agent tasks. After a resume the monitor waits for
+`every_n_tool_results` more tool results before it judges again. If both the
+envelope and the monitor would pause on the same turn, the envelope pauses and
+the monitor does not judge that turn.
+
+There is **no default pause boundary**. Enforcement refuses to start unless
+`shadow_enabled` is on and every boundary field -- `pause_at_or_above` and all
+eight fallback thresholds (`user_only` .. `spend_warmup_turns`) -- is written
+explicitly in config, even when the value equals the default: the defaults are
+the shadow's first values, not a measured line to stop tasks at. The fallback
+fields still only move in the stricter direction. A monitor fault (not a Jev
+fault, which the fallback rules judge) never pauses. FB5 (`model.refused`) does
+not fire in the loop: a refusal already ends the run as a non-retryable
+failure, which is stronger than a pause.
 
 ### Coding approval: USER_ONLY and background mode
 
@@ -920,6 +948,31 @@ vendor exec channel cannot be shown to be private --
 AES-GCM under a key derived from `NEOS_SECRET_BROKER_KEY`; changing that key
 makes every stored secret unreadable. Design: `docs/Q6_CREDENTIAL_BROKER_DESIGN_261001.md`.
 
+**Managed sandboxes (track Q6c).** A managed provider carries secrets only when
+**both** of these hold; with the defaults neither does, and every managed
+provider refuses with `secret_env_unsupported` exactly as before:
+
+```yaml
+sandbox:
+  managed:
+    secret_env_providers: []   # explicit per-provider opt-in: e2b | modal; no duplicates;
+                               # requires coding_model.secret_broker
+```
+
+1. the provider is named in `sandbox.managed.secret_env_providers`, and
+2. that provider's vendor SDK binding declares `StdioRelayEvidence` (TLS
+   verification pinned by its tests, an https source for the vendor not
+   retaining exec stdin, and a real-account smoke record).
+
+No vendor SDK binding exists in this repository today, so (2) cannot hold and
+no managed provider can be opened by configuration alone. Naming a provider
+whose binding carries no evidence stops the provider from starting
+(`managed_secret_channel_unproven:<name>`) rather than leaving an opt-in that
+does nothing. When opened, the value travels only in the `secret_env` field of
+the sandboxd `exec` frame over the vendor stdio relay -- never in a vendor API
+argument, vendor env field or vendor secret object. The smoke checklist a human
+must run first is in `docs/Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md` §5.
+
 ### Coding agent browser (track Q14a)
 
 ```yaml
@@ -982,7 +1035,42 @@ cancelled task's browser context is closed on that path by the worker process
 that holds it (the idle/lifetime sweep remains the backstop for other
 processes), and password-field values are masked in every frame, not only the
 main one. There is no new setting.
-Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md`.
+
+**Managed browser provider (track Q14c, off by default).**
+
+```yaml
+coding_model:
+  browser:
+    provider: host        # host (default, Q14a) | managed
+sandbox:
+  provider: managed       # required for provider: managed
+  managed:
+    enabled: true         # required for provider: managed
+```
+
+With `provider: managed` Chromium runs inside the task's managed sandbox
+instead of on the backend host, so a renderer escape lands in the vendor VM.
+The sandbox still gets no network: the in-sandbox guest
+(`python -m neos.coding.browser.guest`) forwards every page request over the
+guest channel to the host, where the same web_fetch judge and pinned one-hop
+fetch answer it. Every Q14a/Q14b guard is unchanged (they live in the host
+session, executor and gate, not in the driver). Differences:
+
+- `browser_fill_secret.v1` is refused with `browser_secret_channel_unavailable`
+  before the vault is opened: the channel is the vendor's exec stdio relay and
+  secrets are not sent over it until that relay is shown confidential (the same
+  rule as the sandboxd secret channel, track Q6b). Plain `type` still works.
+- Startup is refused unless `sandbox.provider: managed` and
+  `sandbox.managed.enabled` are set, and when `max_response_bytes` or
+  `max_request_body_bytes` exceed 8 MiB (the guest frame limit).
+- `allow_outside_development` is still required outside development; the
+  managed provider does not lift it.
+- **It cannot be switched on yet.** The guest-channel opener (attach to the
+  task's allocation, then the vendor's exec stdio) is part of the unfinished B2
+  runtime wiring, so the factory refuses `provider: managed` at startup rather
+  than fall back to the host browser.
+
+Design: `docs/Q14_AGENT_BROWSER_DESIGN_261001.md` (§8 for Q14c).
 
 ### Coding MCP connectors (tracks Q11a, Q11b)
 
@@ -1211,6 +1299,72 @@ credential before every write (`device_writes_off`).
   `policy_device_write_executable`, `device_write_too_large`,
   `device_no_space`.
 
+#### Device commands (track Q16c)
+
+```yaml
+coding_model:
+  device_bridge:
+    command_allowlist: []           # server bound on what any bridge may run; empty = no device commands
+    command_timeout_seconds: 60     # one device_run_command.v1 (<= 600); the client caps too
+    max_command_output_bytes: 65536 # stdout and stderr each (UTF-8 bytes); the client caps too
+```
+
+One command tool, `device_run_command.v1` (risk `command`): it runs one argv
+on the user's device with the working directory inside the shared folder.
+There is no shell string, no `stdin` and no `env` input. It needs **three
+things**, all off or empty by default: the credential's `allow_commands`
+(migration 090; `POST` or `PATCH {"allow_commands": true}`), the client's
+`--allow-commands` naming the executables, and the operator's
+`command_allowlist` containing every executable the client names:
+
+```bash
+NEOS_BRIDGE_TOKEN=ndb_... python -m neos.bridge \
+  --url wss://<host>/api/v1/coding/device-bridge/ws --root ~/project \
+  --allow-commands pytest,ruff [--max-command-seconds 60] [--max-command-output-bytes 65536]
+```
+
+A client that declares `run_command` against a credential without
+`allow_commands` is refused whole (`device_commands_not_enabled`, close
+4403); one that names an executable outside `command_allowlist` likewise
+(`device_command_not_allowed`). Turning commands off drops the live
+connection, and the socket rereads the credential before every command
+(`device_commands_off`). Shells, wrappers (`env`, `xargs`, `timeout` ...),
+privilege tools (`sudo` ...), launchers (`open`, `osascript` ...) and network
+clients can never be listed -- the config refuses them at load.
+
+- **Every command asks a person.** Only the owner's own `allow` rule **with
+  an argv prefix** (`device_run_command.v1` + `["pytest"]`) skips the
+  question. A tool-wide allow rule, the operator's `approval_allow_tools`,
+  auto mode and a remembered "always allow" do not. The approval screen shows
+  the whole (redacted) argv and cwd; events carry only the executable and cwd.
+- **Never unattended.** `autonomous` / `background` runs neither see nor may
+  call it, whatever `allow_unattended` or any allow rule says
+  (`policy_device_command_unattended`). Subagents never may
+  (`policy_device_child`). `explore` and `plan` hide it like `execute.v1`.
+- **Same argv rules as the sandbox, plus the device's own.** `execute.v1`'s
+  rules apply unchanged (git status/diff/log only, no package installs, no
+  inline `-c`/`-e`, no dangerous `rm`, dedicated tools first), and so do
+  `USER_ONLY` commands (`gh auth`, `npm token` ..., plus
+  `approval_user_only_extra`). Operands and cwd stay inside the shared folder;
+  secret paths and `secret://` anywhere are refused.
+- **On the device:** executables are resolved on `PATH` once at startup and
+  pinned (one inside the shared folder is refused); the child gets no stdin
+  and only `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `USER`, `LOGNAME`,
+  `TERM=dumb`, `NO_COLOR=1` -- never the bridge token; it runs in its own
+  process group, which is killed on timeout and cleaned after exit. Only
+  `neos/bridge/commands.py` starts a process.
+- **Results:** a server-built `exit_code: N` line, then stdout/stderr capped,
+  stripped of ANSI escapes and control characters, wrapped as untrusted
+  device content. Non-zero is `command_failed`; timeout is
+  `device_command_timeout`. Other failures: `policy_device_command_refused`,
+  `policy_executable_not_allowed`, `device_command_not_offered`,
+  `device_command_failed_to_start`.
+- When `command_allowlist` is not empty, `max_message_bytes` must exceed twice
+  `max_command_output_bytes`. There is no OS sandbox on the device: an
+  allowed executable that runs project code (`pytest`, `make`) runs whatever
+  that code is. Design: `docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md` §7; threat
+  model §5.
+
 The Redis relay has a real-Redis integration test that runs only when
 `NEOS_TEST_REDIS_URL` is set (`tests/coding/test_device_bridge_relay_redis.py`).
 
@@ -1333,6 +1487,8 @@ standing_agents:
     monthly_limit_micros: 20000000   # per agent per UTC calendar month ($20)
     background_share: 0.5            # background tasks may spend only this share
     reserve_background_share: true   # false: autonomous work may also spend that share
+    enforce: false                   # Q10b: pause running tasks that are over the envelope
+    warn_ratio: 0.8                  # Q10b: tell the owner once a month at this share
 ```
 
 Spend is not counted separately: it is the sum of the latest checkpoint's
@@ -1348,10 +1504,97 @@ work. With `reserve_background_share: false` autonomous work may spend the whole
 envelope, share included. With `background_share: 1.0` and the reservation on,
 autonomous work gets nothing. This applies to the self-introduction and to triggers alike.
 
-Running tasks are **not** stopped yet. When one is over the envelope at a model
-turn, the ledger gets one `budget.judged` event per run (`enforced: false`),
-visible in the activity feed. Pausing a running task is a later step shared with
-the trajectory monitor (Q5).
+With `enforce: false` (the default) running tasks are **not** stopped: when one
+is over the envelope at a model turn, the ledger gets one `budget.judged` event
+per run (`enforced: false`), visible in the activity feed.
+
+With `enforce: true` (track Q10b) an agent task that is over the envelope is
+**paused** at the start of its next model turn -- before its detached children
+take a step and before the model is called. One transaction writes
+`budget.judged` (`enforced: true`) and `task.status.changed` (`status: paused`,
+`reason_code`). The run itself stays `running`, like a task waiting for
+approval, so no worker picks the task up and resuming continues the same run
+from its latest checkpoint. Only a person resumes it:
+
+```
+POST /api/v1/coding/tasks/{task_id}/resume     # owner only; 409 task_not_paused otherwise
+```
+
+The Code UI shows a `paused` badge and a Resume button. Resuming an agent that
+is still over its envelope pauses it again before the next model call -- raise
+the limit or wait for the next month. Cancel works on a paused task. If the
+envelope cannot be read at a turn, the task is not paused (the next turn judges
+again). The route exists whenever something can pause a task:
+`standing_agents.enabled` (the envelope) or `jev.monitor.enforce` (the
+trajectory monitor, which pauses any task -- see below).
+
+#### Owner notices (tracks Q10b, Q3)
+
+```yaml
+standing_agents:
+  notifications:
+    enabled: false
+    poll_interval_seconds: 10   # how often the API process sends queued notices
+    batch_size: 20
+    max_attempts: 5             # then the notice is marked failed (the row stays)
+    max_body_chars: 3500        # longer bodies are cut and marked
+```
+
+An agent's notices go to one channel the owner sets:
+
+```
+GET/PUT/DELETE /api/v1/standing-agents/{agent_id}/notify-target
+               {"channel_type": "slack" | "discord" | "telegram", "channel_id": "..."}
+```
+
+Workers do not send: they write to the `standing_notifications` queue
+(migration 085) and the API process -- the only process with channel adapters
+-- sends from it. A notice is written only when the agent has a target, and its
+destination is fixed when it is written. Notices are deduplicated per agent:
+the budget warning once per month when spend reaches `warn_ratio` of the
+envelope, one notice per pause, and (track Q3) one per standing-question run.
+Failed sends are retried with backoff. A missing adapter for the channel type
+counts as a failed send. The notice-target routes exist only when notifications
+are on.
+
+#### Standing questions (track Q3)
+
+```yaml
+standing_agents:
+  questions:
+    enabled: false
+    max_per_agent: 5
+    min_interval_minutes: 360     # the cron's shortest gap must be at least this
+    profile: default              # deep-analysis profile for the runs
+    max_claims_per_section: 5     # claim lines per section in a notice
+    settle_timeout_minutes: 720   # a run still running after this is settled as failed
+```
+
+An agent asks the same question on a UTC cron schedule. Each occurrence opens an
+ordinary deep-analysis run (owner as `user_id`, no conversation) through the
+usual executor; a once-a-minute Celery beat poller (`poll-standing-questions`,
+registered only when both `standing_agents.enabled` and `questions.enabled` are
+on -- **nothing runs without Celery beat**) settles finished runs and dispatches
+due questions. A question has at most one run in flight.
+
+Settling compares the run's **verified claims** with the last settled run's:
+claims pair by the normalized claim hash, then by shared evidence blobs. The
+owner is notified (through the notice queue above) only when something was
+**newly verified** or **refuted** (a verified claim now rejected). Dropped
+claims and rephrase candidates are counted in the notice but never trigger one.
+The first settled run is a silent baseline; failed runs never become baselines.
+An occurrence is skipped (and `last_skip_reason` set) when the agent is not
+active or its envelope is out of background budget. Deep-analysis spend is not
+counted in the envelope, so the interval floor and the per-agent cap are what
+bound cost.
+
+```
+POST   /api/v1/standing-agents/{agent_id}/questions                {question, cron_expression}
+GET    /api/v1/standing-agents/{agent_id}/questions
+PATCH  /api/v1/standing-agents/{agent_id}/questions/{question_id}  {enabled}
+DELETE /api/v1/standing-agents/{agent_id}/questions/{question_id}
+GET    /api/v1/standing-agents/{agent_id}/questions/{question_id}/runs
+```
 
 ## Staging and Production
 

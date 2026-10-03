@@ -1,9 +1,11 @@
 # Q14 에이전트 브라우저 — 설계 (2026-10-01)
 
-> **지위:** Q14a 착지 · **Q14b 착지**(2026-10-02 — 비밀별 출처 묶임 + 견고성 셋, §7). 플래그 off, development 전용.
+> **지위:** Q14a 착지 · **Q14b 착지**(2026-10-02 — 비밀별 출처 묶임 + 견고성 셋, §7) ·
+> **Q14c 부분 착지**(2026-10-02 — 관리형 샌드박스 안의 브라우저: 드라이버·선 규약·guest·설정 검증, 플래그 off ·
+> **아직 켤 수 없다**: guest 채널 배선이 B2 에 묶여 있다, §8). 플래그 off, development 전용.
 > 설계와 코드가 어긋나면 코드가 이긴다.
 > 상위: [로드맵 §1 Q 행](DEEP_ANALYSIS_HARNESS_ROADMAP.md) · [dots 분석 §4.2 Q14 · §5 D6](OPENAI_DOTS_ANALYSIS_260930.md).
-> 결정 W1~W12(Q14a)·X1~X7(Q14b)은 위임받아 Claude 가 골랐다(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
+> 결정 W1~W12(Q14a)·X1~X7(Q14b)·MB1~MB8(Q14c)은 위임받아 Claude 가 골랐다(Q2·Q4b·Q6 과 같은 방식). 사람이 뒤집을 수 있다.
 > ⚠️ **선행 둘 중 하나가 닫혀 있다.** Q6 은 착지했지만 관리형 샌드박스 **B2 게이트는 통과하지 않았다**
 > ([B2 설계 메모](MANAGED_SANDBOX_B2_DESIGN_260915.md)). 그래서 Q14a 는 브라우저를 샌드박스 안이 아니라
 > **백엔드 호스트**에 두고, 그 대가로 development 밖에서는 열리지 않는다(W1·W3).
@@ -109,7 +111,8 @@ DurableCodingLoop ──(부모의 도구 단계만)── executor.execute(...,
 
 - ~~**Q14b** — 비밀별 출처 묶임~~ → **착지**(§7). 남은 것(Q14c 이후 또는 증분): 소유자 allow 규칙을 출처까지 좁히기(X7 —
   Q2 규칙 테이블 변경) · 프롬프트에 비밀 이름 목록 · 콘솔 요약 · 스크린샷(비전) · PUT/PATCH/DELETE · 여러 탭 · 다운로드·업로드
-- **Q14c (B2 의존)** — 브라우저를 **관리형 샌드박스 안으로** 옮긴다. 필요한 것: B2 게이트(할당 평면 배선 ·
+- **Q14c (B2 의존)** — 착지한 것과 남은 것은 **§8**. 아래는 Q14a 때 적은 원래 문장이다.
+  브라우저를 **관리형 샌드박스 안으로** 옮긴다. 필요한 것: B2 게이트(할당 평면 배선 ·
   게스트 이미지 · 실계정 smoke · 보안 검토, B2 메모 "남은 일") + 관리형 profile 의 egress 를 이 출구(W2)와 같은
   판정으로 여는 길 + sandboxd 의 비밀 채널(Q6b). 그때 `allow_outside_development` 를 지우고 운영 경계를
   B2 로 옮긴다. **그 전까지 운영 브라우징은 닫혀 있다**
@@ -150,3 +153,97 @@ DurableCodingLoop ──(부모의 도구 단계만)── executor.execute(...,
 
 **변이 12/12** — 묶임 없는 비밀 거절 · 다른 출처 거절 · 소유자 교차(메모리·Postgres) · 081 기본값 · AAD 의 출처 ·
 PUT 이 비운다 · 실패/취소 훅 · 정규화 · `Set-Cookie` 잇기(실제 Chromium) · 메인 프레임만(실제 Chromium).
+
+## 8. Q14c — 관리형 샌드박스 안의 브라우저 (2026-10-02)
+
+결정 MB1~MB8 은 위임받아 Claude 가 골랐다. 사람이 뒤집을 수 있다.
+
+**목적.** W1 이 정직하게 적은 구멍 — 렌더러 탈출이 **백엔드 호스트**에 닿는다 — 을 닫는 길을 연다. Chromium 을
+태스크의 관리형 샌드박스(벤더 VM) 안에서 띄우면 탈출은 그 VM 에 닿는다.
+
+**증거부터.** 이 트랙은 벤더 계정 없이 했다. 저장소에는 E2B·Modal SDK 바인딩이 없고(Protocol 만, Q6b C1),
+관리형 코딩 provider 의 runtime 배선(`prepare_coding_intent` 호출자 · 어댑터 등록)도 아직 없어 factory 가
+거절한다([B2 메모](MANAGED_SANDBOX_B2_DESIGN_260915.md) "남은 일"). 그래서 착지한 것은 **벤더와 무관한 절반**이다:
+드라이버 · 선 위 규약 · 샌드박스 쪽 guest · 설정 검증 · 가드 동등성 시험 · 로컬 프로세스 + 실제 Chromium 스모크.
+**벤더 위에서 돈다는 증거는 없다** — 아래 점검표(§8.4)가 그 증거를 만드는 순서다.
+
+### 8.1 결정
+
+| # | 결정 | 이유 |
+|---|---|---|
+| **MB1** | **샌드박스에도 네트워크를 열지 않는다. guest 가 페이지의 모든 요청을 선 위로 호스트에 넘기고, 호스트가 세션의 `serve` — W2 의 판정(`egress_refusal` → `_web_fetch_safety_reason`)과 IP 고정 한 홉 — 로 답한다.** 관리형 profile 은 `DENY_ALL` 그대로다. guest 는 **판정하지 않는다**: Chromium 은 샌드박스 안에서도 같은 `playwright_driver`(이름 풀이 실패 · 죽은 프록시 · 웹소켓 닫기)로 뜨고, route 마다 호스트에 묻는다. 답이 없거나 채널이 끊기면 `route.abort()`. **guest 는 페이지와 같은 신뢰 등급이다** — 렌더러를 쥔 공격자가 guest 도 쥔다고 본다. 그래서 guest 가 보낸 route 프레임은 모양을 검사한 뒤(깨진 base64 · 이상한 메서드 · 큰 머리 → abort) 페이지 요청과 **똑같이** 판정받고, guest 가 말하는 URL·출처·비밀번호 값은 가리기의 재료일 뿐 권한의 근거가 아니다(답의 타입이 틀리면 `browser_action_failed`) | 버린 대안: 관리형 profile 의 egress 를 허용 목록으로 열기(`outbound: allowlist`). (1) 벤더의 허용 목록은 이름 단위라 W2 가 하는 것 — 풀린 주소 전부 공개 · 사용자 정보 · 비밀 이름 질의 · 리다이렉트 매 홉 재판정 · DNS rebinding 을 막는 IP 고정 · 입력한 비밀의 출구(W8) — 을 표현하지 못한다. 판정이 둘이 되면 "고침은 한 호출부에만 도착한다". (2) 샌드박스에 네트워크를 여는 것은 D6·§9("샌드박스 코드는 네트워크 없음")와 부딪힌다 — 같은 샌드박스의 `execute.v1` 도 그 네트워크를 얻는다. (3) `profiles.py` 는 allowlist 를 쓰려면 벤더의 readback 을 요구하고 그 증거도 없다. 대가: 요청마다 벤더 중계 왕복이 하나 더 붙는다(느리다, §8.4 f) |
+| **MB2** | **대신 돌지 않는다.** 샌드박스에 닿지 못하면(할당 없음 · 채널 실패 · hello 불일치 · 응답 없음) `browser_unavailable` 이다 — 호스트 Chromium 으로 내려가지 않는다. 팩토리는 `provider: managed` 인데 채널 opener 가 주입되지 않았으면 **기동을 거절한다**. 드라이버는 주인 태스크 없는 컨텍스트를 열지 않는다 | W1 의 "다른 경로로 대신 돌지 않는다"와 같다. 운영자가 managed 라고 적었는데 호스트에서 돌면 이 트랙의 목적이 조용히 사라진다 |
+| **MB3** | **설정: `coding_model.browser.provider: host \| managed`, 기본 `host`.** `managed` 는 `sandbox.provider: managed` + `sandbox.managed.enabled` 를 요구하고, 본문 상한(`max_response_bytes`·`max_request_body_bytes`)을 8 MiB 로 묶는다(base64 + sandboxd 프레임 16 MiB). **W3 는 풀지 않는다** — development 밖에서는 managed 여도 `allow_outside_development` 가 필요하다. 팩토리가 평면 조건을 다시 본다 | 좁히기만. W3 를 지우는 것은 §5 대로 **B2 게이트를 통과한 뒤** 별도 커밋이다 — 오늘 managed 는 켤 수조차 없으므로 풀 이유도 없다. 기본값이 `host` 라 플래그가 꺼져 있거나 `provider` 를 적지 않은 배포는 오늘과 같다 |
+| **MB4** | **관리형 브라우저에서 `browser_fill_secret.v1` 은 금고를 열기 전에 `browser_secret_channel_unavailable`(denied) 로 거절한다.** 드라이버가 `confidential_channel` 을 선언한다 — 호스트 `PlaywrightDriver` 는 참(값은 워커 메모리에서 같은 기계의 Playwright 파이프로만 간다), `ManagedBrowserDriver` 는 **거짓 고정**(설정 키 없음), 선언하지 않은 구현은 거짓으로 읽는다(`getattr(..., False)`). `type` 의 평문 입력은 그대로 된다 | 비밀을 넣으면 값이 `fill` 프레임에 실려 **벤더 exec 의 stdio 중계**를 지난다 — Q6b C1 이 sandboxd 에 대해 막은 바로 그 운반로다. 판정을 복사하지 않고 같은 규칙(운반로의 `confidential_channel`, fail closed, 여는 것은 증거를 단 코드 변경)을 드라이버에 적용했다. 금고를 열기 **전에** 거절하므로 복호화도 없다. 관리형 비밀 채널은 다른 트랙이 다룬다 — 이 트랙은 그것을 구현하지 않았다. ⚠️ 비밀이 아니어도 채널을 지나는 것: 페이지 본문 · 사이트가 준 쿠키(=세션 자격증명) · 모델이 `type` 한 평문. 관리형에서 이것들은 벤더 중계를 지난다 — 잔류 위험으로 §8.4 g 에 적었다 |
+| **MB5** | **hello 가 먼저다.** guest 는 연결하자마자 `{"hello": {"protocol": 1, "bundle_digest": ..}}` 를 보내고, 호스트는 버전과 **guest bundle digest**(드라이버 계약 · guest · Playwright 드라이버 · 선 규약 · sandboxd 프레임 코덱, 다섯 파일의 바이트)가 자기 것과 같을 때만 무엇이든 보낸다. 다르거나 조용하면 `browser_unavailable` | sandboxd 의 bundle digest 와 같은 방식이다. 이것은 **버전 어긋남**을 잡는 것이지 보안 경계가 아니다 — guest 는 거짓말할 수 있다. 보안 쪽 고정은 B2 의 이미지 digest(`managed_image_unpinned`)다 |
+| **MB6** | **선 위 규약: sandboxd 의 프레임 코덱을 그대로**(4바이트 길이 + JSON, 16 MiB) 쓰고, 채널은 **태스크마다 하나 = 컨텍스트 하나 = 페이지 하나**. 호스트 → guest 호출은 `driver.py` 메서드 하나씩(`open` · `goto` · `snapshot` · `password_values` · `element_origin` · `click` · `fill` · `press_enter` · `title` · `close`), guest → 호스트는 route 프레임. 답은 지금 페이지 URL 을 싣는다(계약의 `page.url` 이 동기라서). 오류는 `timeout`·`failed` **코드만**. guest 진입점은 `python3 -m neos.coding.browser.guest`(`BROWSER_GUEST_ARGV`) — 벤더 `open_stdio(ref, argv)` 로 sandboxd 와 **별개의** stdio 를 연다 | sandboxd 의 `exec` 은 한 번 돌고 끝나는 호출이라 오래 사는 브라우저를 싣지 못하고, 장기 프로세스 op(Q6b §5 의 가칭 `proc.*`)는 없다. 벤더 SDK 의 `open_stdio` 는 이미 argv 를 받으므로 두 번째 stdio 가 가장 작은 길이다. 코덱을 다시 쓰지 않은 것은 "고침은 한 호출부에만" 때문이다 |
+| **MB7** | **수명은 세션이 정한다(W6·X5 그대로).** `sessions.close` → guest 에 `close` 호출 → 컨텍스트 닫힘 → guest 프로세스 종료. sweep 도 같은 길이다. 채널이 끊기면 기다리던 호출은 **그 자리에서** `browser_action_failed` 이고(시간 초과까지 기다리지 않는다) guest 는 답할 상대가 없는 호출을 취소하고 끝난다. 브라우저는 샌드박스를 **만들지도 지우지도 않는다** — 그것은 할당 평면의 일이다 | 브라우저 세션이 샌드박스 수명을 쥐면 두 번째 할당 원장이 생긴다(B2 메모가 한 번 되돌린 실수). 세션은 체크포인트에 싣지 않는다(W6) — 다른 워커가 이어받으면 페이지가 없다, 오늘과 같다 |
+| **MB8** | **가드는 드라이버 밑으로 내려가지 않는다.** 출구 판정 · 비밀 출처 묶임(W7·X1) · 비밀 출구(W8) · 가리기(W9·X6) · 실패·취소 때 닫기(X5) · 자식·DA 거절(W12) · background 천장(W4) 은 세션·실행기·게이트에 있고, 드라이버는 그것들을 모른다. 그래서 동등성 시험은 같은 시나리오를 `host`(가짜 드라이버를 세션 바로 밑에)와 `managed`(같은 가짜를 선 너머 실제 guest 밑에) 둘로 돌려 **같은 답**을 요구한다 | 관리형 경로에 가드를 다시 쓰면 둘이 갈라진다. 드라이버 계약에 생긴 변화는 둘뿐이다: `new_context(serve, *, task_id)` 와 `confidential_channel` 선언 |
+
+**거절·실패 코드 (새 코드 하나):** `browser_secret_channel_unavailable` — 드라이버의 채널이 비밀을 실을 만큼 사적이라고
+선언하지 않았다(관리형) · `denied`. 나머지(`browser_unavailable` 등)는 §2 표 그대로다.
+
+**꺼져 있으면:** `provider` 기본값이 `host` 이고 호스트 드라이버의 동작 · 도구 목록 · 검증 사유 · 이벤트 어휘 · 프롬프트는
+Q14b 와 같다(W11 시험이 그대로 통과한다). 드라이버 계약의 `new_context` 가 `task_id` 키워드를 받게 됐고 호스트
+드라이버는 그것을 쓰지 않는다. 마이그레이션 · API · 이벤트 kind: **없다**(예약 088 은 쓰지 않았다).
+
+### 8.2 구조
+
+```text
+BrowserSessions (호스트, 가드 전부) ──new_context(serve, task_id)──▶ ManagedBrowserDriver
+        ▲                                                              │ opener.open(task_id)  ← B2 배선(없음)
+        │ serve(request) = web_fetch 판정 + IP 고정 한 홉                 ▼
+        └──────────── route 프레임 ◀── 벤더 exec stdio (open_stdio, BROWSER_GUEST_ARGV) ──▶ 호출 프레임
+                                                              │
+                                     샌드박스: neos.coding.browser.guest ─ PlaywrightDriver ─ Chromium (네트워크 없음)
+```
+
+코드: `neos/coding/browser/wire.py`(규약·digest) · `guest.py`(샌드박스 쪽) · `managed_driver.py`(호스트 쪽) ·
+`session.py`(MB4 판정 · 팩토리) · `neos/config/schema.py`(`provider` · 검증).
+
+### 8.3 검증
+
+- `tests/coding/test_agent_browser_managed.py` — 68개. 메모리 파이프 위의 **실제 `BrowserGuest`** 가 Q14a 의 가짜
+  드라이버를 부린다. 출구 판정(6 사유) · 최상위 navigate 거절 · 비밀번호 가리기 · 실패를 코드로 · 닫기 · sweep 은
+  `host`/`managed` 둘 다 같은 답. 그 위에 관리형만의 것: guest 의 다른 메서드 · 깨진 route 프레임 거절 · 로그인 거절과
+  금고 미개봉(선 위 바이트 전체에서 비밀번호와 `fill` 이 없음) · hello 의 버전·digest · 조용한 guest · 할당 없음 ·
+  거짓말하는 guest · 끊긴 채널 · 태스크마다 채널 하나와 상한 · 설정 · 팩토리.
+- `tests/coding/test_agent_browser_managed_smoke.py` — 실제 Chromium, `NEOS_BROWSER_SMOKE=1` 일 때만. 벤더 대신
+  **로컬 자식 프로세스**(`python -m neos.coding.browser.guest`)의 stdin/stdout 이 채널이다. 2026-10-02 로컬에서
+  Playwright 1.61 + Chromium 1194(`NEOS_BROWSER_SMOKE_CHROMIUM`), Chromium 샌드박스 on·off 둘 다 통과: 선을 건너온
+  fulfill 로 페이지가 뜬다 · `10.0.0.1` 이미지는 호스트가 막는다 · PUT 은 나가지 않는다 · 평문 `type` + submit 의
+  POST 가 호스트를 지난다 · `browser_fill_secret.v1` 은 금고를 열지 않고 거절된다 · `close` 뒤 guest 가 0 으로 끝난다.
+  📌 이것이 증명하지 **않는** 것: E2B·Modal 어느 것에 대해서도 아무것도.
+- **변이 17/17** — 세션의 채널 판정 · 선언 없는 드라이버 · 관리형 고정값 · hello digest · hello 버전 · 원격 닫기 ·
+  guest 오류 문구 · 원격 비밀번호 값 · 설정 평면 검사 · 설정 본문 상한 · 팩토리 대체 · 팩토리 평면 재확인 · bundle
+  파일 목록 · base64 엄격 검사 · 끊긴 채널의 대기 호출 · 주인 없는 컨텍스트 · guest 의 취소. 처음 돌렸을 때 넷(버전 ·
+  base64 · 대기 호출 · 주인)이 살아남아 시험을 더했다.
+
+### 8.4 실계정 smoke 점검표 (벤더마다, 순서대로)
+
+선행: B2 runtime 배선(할당 평면이 태스크에 allocation 을 붙이고 코딩 provider 가 그것에 붙는다)과 그 위의
+**opener 구현** — 태스크의 살아 있는 runtime 을 소유권 검증(`_running_record`) 뒤 찾고 벤더 SDK `open_stdio(ref,
+BROWSER_GUEST_ARGV)` 를 부른다. 클라이언트 프로토콜(`SandboxProviderClient`)에 메서드 하나가 더 필요하다 — 바인딩이
+없어 쓰지 않았다. 각 항목은 날짜 · 벤더 · SDK 버전 · 이미지 digest 와 함께 이 절에 적는다.
+
+| # | 무엇을 | 통과 조건 |
+|---|---|---|
+| a | **guest 이미지** — Python · Playwright(호스트와 같은 핀) · 그 Playwright 의 Chromium 빌드 · guest bundle 다섯 파일을 담고 digest 로 고정 | hello 의 `bundle_digest` 가 호스트의 `guest_bundle_digest()` 와 같다. 이미지 digest 가 B2 의 핀(`managed_image_unpinned` 검사)을 통과한다 |
+| b | **샌드박스에 네트워크가 없다** — 브라우저가 떠 있는 동안 | profile readback(`verify_applied_network`)이 `DENY_ALL`. 샌드박스 안에서 공개 IP · 벤더 메타데이터 주소로 TCP 연결이 실패한다. route 를 끈 Chromium 이 아무 페이지도 못 띄운다 |
+| c | **스모크 시나리오**를 벤더 opener 로 — `test_agent_browser_managed_smoke.py` 의 로컬 프로세스 자리에 벤더 채널 | 같은 단언이 전부 통과: 호스트 fetch 기록은 허용된 URL 뿐 · `10.0.0.1` 차단 · PUT 없음 · 평문 POST 는 호스트를 지난다 · 로그인 거절 |
+| d | **Chromium 자신의 샌드박스** — 벤더 VM 안에서 `chromium_sandbox=True` 로 뜨는가 | 뜨면 그대로. 안 뜨면 `--no-chromium-sandbox` 를 운영에 쓸지 **사람이 결정**하고 여기 적는다(그 경우 렌더러 탈출 = guest 프로세스 권한 = 샌드박스 전체) |
+| e | **닫기 · 취소 · 장애** | `close`/sweep/X5 뒤 guest 프로세스가 벤더 프로세스 목록에서 사라진다 · 탐색 중 샌드박스를 죽이면 수 초 안에 `browser_action_failed`(timeout 아님) · 할당 정리 SLO 안에 orphan 0 |
+| f | **지연 · 크기** | 벤더 중계 왕복이 붙은 페이지 로드 시간 측정(하위 리소스 수 × 왕복) · 8 MiB 본문 왕복 · `max_requests` 근처에서 프레임 폭주 시 호스트 메모리 |
+| g | **벤더 쪽 기록** — 채널을 지나는 페이지 본문 · 쿠키 · 평문 입력이 벤더 exec 로그 · 대시보드 · 지원 도구에 남는가 | 문서 · 계약 근거(링크 · 날짜). 남는다면 B2 #5(residency · data flow) 검토로 넘긴다 — 비밀이 아니어도 사용자 데이터다 |
+| h | **비용 상한** | 브라우저가 붙은 샌드박스 수명 ≤ `max_lifetime_sec`, `max_contexts` 와 할당 쿼터가 같은 방향 |
+
+**로그인을 여는 것(MB4 뒤집기)** 은 위에 더해 Q6b §4 의 1~4 를 **그대로** 단다(벤더 바인딩의 TLS 검증 고정 ·
+exec stdin 비보존 근거 · 실계정 smoke · provider 이름으로 판정) — 그리고 브라우저 고유의 하나: `fill` 프레임의 값이
+벤더 로그 · 추적 어디에도 없음을 g 와 같은 방법으로 확인한다. 설정 키로 대신하지 않는다.
+
+### 8.5 남은 것
+
+- 벤더 위 증거 전부(§8.4) — 실계정이 필요하다
+- opener 구현 + `SandboxProviderClient` 의 브라우저 stdio 메서드 — B2 runtime 배선 뒤
+- MB3 의 W3 제거 — B2 게이트 통과 뒤 별도 커밋
+- 관리형 로그인 — 관리형 비밀 채널(다른 트랙)과 §8.4 의 추가 항목 뒤

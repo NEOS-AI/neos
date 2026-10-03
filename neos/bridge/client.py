@@ -40,8 +40,14 @@ def _encode_result(request_id: str, payload: dict[str, Any], limit: int) -> str:
     result = payload.get("result")
     while len(encoded.encode("utf-8")) > limit and isinstance(result, dict):
         text = result.get("text")
+        streams = [key for key in ("stdout", "stderr") if isinstance(result.get(key), str)]
         if isinstance(text, str) and text:
             result = {**result, "text": text[: len(text) // 2], "truncated": True}
+        elif streams and any(result[key] for key in streams):
+            # 명령 출력(Q16c): 긴 쪽을 반으로 -- 종료 코드는 그대로 간다.
+            longest = max(streams, key=lambda key: len(result[key]))
+            value = result[longest]
+            result = {**result, longest: value[: len(value) // 2], "truncated": True}
         else:
             entries = result.get("entries")
             if not isinstance(entries, list) or not entries:

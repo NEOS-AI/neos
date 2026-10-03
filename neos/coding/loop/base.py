@@ -16,6 +16,8 @@ from neos.coding.domain.durability import (
     PhaseCheckpointCommit,
     PhaseStart,
     RunLifecycleCommit,
+    TaskPauseCommit,
+    TaskResumeCommit,
     SteeringApplication,
     ToolExecutionClaim,
 )
@@ -89,6 +91,20 @@ class CodingRunRepository(Protocol):
     ) -> RunLifecycleCommit: ...
 
     async def mark_task_cancelled(self, *, task_id: str, now: datetime) -> None: ...
+
+    async def pause_task(
+        self,
+        *,
+        lease: ExecutionLease,
+        judgement_type: str,
+        judgement: Mapping[str, Any],
+        reason_code: str,
+        now: datetime,
+    ) -> TaskPauseCommit: ...
+
+    async def resume_paused_task(
+        self, *, task_id: str, owner_id: str, now: datetime
+    ) -> TaskResumeCommit | None: ...
 
     async def claimable_task_ids(self, *, limit: int) -> tuple[str, ...]: ...
 

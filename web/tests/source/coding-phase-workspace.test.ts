@@ -62,3 +62,29 @@ test("workspace cancel calls stop, not steer interrupt", () => {
   assert.match(composer, INTERRUPT_NOW_PATTERN);
   assert.doesNotMatch(composer, /stopCodingTask/);
 });
+
+test("a paused task shows itself and only a person resumes it (track Q10b)", () => {
+  const workspace = readFileSync(
+    "features/coding/components/coding-task-workspace.tsx",
+    "utf8"
+  );
+  const api = readFileSync("features/coding/api/coding-api.ts", "utf8");
+  const route = readFileSync(
+    "app/(code)/api/coding/tasks/[taskId]/resume/route.ts",
+    "utf8"
+  );
+  const composer = readFileSync(
+    "features/coding/components/coding-steer-composer.tsx",
+    "utf8"
+  );
+
+  assert.match(workspace, /projection\.taskStatus === "paused"/);
+  assert.match(workspace, /data-testid="coding-paused-badge"/);
+  assert.match(workspace, /data-testid="coding-resume-button"/);
+  assert.match(workspace, /resumeCodingTask/);
+  assert.match(api, /export async function resumeCodingTask/);
+  assert.match(api, /\/api\/coding\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/resume/);
+  assert.match(route, /\/api\/v1\/coding\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/resume/);
+  // 재개는 화면의 버튼 하나다 -- 스티어 입력기가 대신 재개하지 않는다.
+  assert.doesNotMatch(composer, /resumeCodingTask/);
+});

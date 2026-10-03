@@ -54,7 +54,7 @@ Q6 은 Q11(MCP)·Q14(브라우저)·Q16(기기 브리지)의 공통 선행이다
 | memory(development) | 자식 프로세스 환경에 직접 | ✅ |
 | Docker | `docker exec --env NAME`(값 없이) + docker CLI 프로세스의 환경에 값 — **호스트 `ps` 에 값이 보이지 않는다** | ✅ |
 | sandboxd(`LocalSandboxd`, 테스트 대역) | `exec` 의 별도 필드 `secret_env` — guest 가 `exec.secret_env.v1` 을 광고하고 attachment 가 기밀 채널을 선언할 때만 | ✅ Q6b — [Q6b 설계](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md) C2·C3 |
-| managed(E2B · Modal) | 거절 `secret_env_unsupported` — 벤더 exec stdio 중계의 기밀성을 보일 수 없다 | ⛔ Q6b C1 — 여는 증거 목록은 [Q6b 설계 §4](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md) |
+| managed(E2B · Modal) | 거절 `secret_env_unsupported` — 벤더 exec stdio 중계의 기밀성을 보일 수 없다 | ⛔ Q6b C1 — 여는 증거 목록은 [Q6b 설계 §4](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md). Q6c 가 그 판정을 코드로 옮겼다(provider 별 opt-in **그리고** 바인딩의 증거, [Q6c 설계](Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md)) — 바인딩이 없어 오늘도 거절 |
 
 > ⚠️ 오늘 `execute.v1` 은 네트워크 클라이언트를 막고 Docker 는 `network=none` 이다. 그래서 첫 소비자의 실용은 좁다
 > (오프라인 라이선스 키·로컬 서명 도구 정도). **Q6a 의 값은 부품이다** — Q11 의 MCP 커넥터 인증, Q14 의 로그인,
