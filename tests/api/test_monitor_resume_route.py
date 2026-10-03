@@ -95,7 +95,14 @@ def test_the_app_serves_the_route_with_only_the_monitor_enforcing(tmp_path) -> N
     result = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=ROOT,
-        env={**os.environ, "NEOS_CONFIG_PATH": str(config)},
+        # A placeholder key: an enforcing monitor refuses to boot without one
+        # (`MisconfiguredJev`), and CI has no real key. Booting the app makes no
+        # Jev call -- this only checks which routes are mounted.
+        env={
+            **os.environ,
+            "NEOS_CONFIG_PATH": str(config),
+            "TYPESAFE_API_KEY": "placeholder-not-used",
+        },
         capture_output=True,
         text=True,
         timeout=240,
