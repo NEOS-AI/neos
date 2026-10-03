@@ -116,6 +116,56 @@ async def sanitize(provider: str, operation: str, call: Awaitable[T]) -> T:
         raise ProviderClientError(provider, operation, kind) from None
 
 
+@dataclass(frozen=True, slots=True)
+class StdioRelayEvidence:
+    """트랙 Q6c MS2: 벤더 stdio 중계에 비밀을 실어도 된다는 **증거**.
+
+    이 값은 설정이 아니라 **SDK 바인딩 코드**가 싣는다(`sdk.stdio_relay_evidence`).
+    Q6b §4 의 네 항목 중 셋을 필드로 받는다 -- 넷째(provider 이름으로 판정)는
+    `secret_relay_proven` 과 `sandbox.managed.secret_env_providers` 가 맡는다.
+    오늘 저장소에는 바인딩이 없으므로 운영에서 이 값을 내는 코드는 없다.
+    """
+
+    vendor: str
+    #: 바인딩의 테스트가 `open_stdio` 전송이 TLS 이고 인증서 검증을 끄는 경로가 없음을 고정했다.
+    tls_verified: bool
+    #: 벤더 문서·계약 중 exec stdin 을 보존·로깅하지 않는다는 근거(https 링크 + 확인 날짜).
+    stdin_retention_source: str
+    #: 실계정 smoke(docs/Q6C_..._261002.md §5 체크리스트)를 사람이 돌린 기록 id·날짜.
+    smoke_record: str
+
+    def proves(self, vendor: str) -> bool:
+        return (
+            self.vendor == vendor
+            and self.tls_verified is True
+            and self.stdin_retention_source.startswith("https://")
+            and bool(self.smoke_record.strip())
+        )
+
+
+def declared_relay_evidence(sdk: object, vendor: str) -> StdioRelayEvidence | None:
+    """SDK 가 선언한 증거. 선언하지 않았거나 모자라면 ``None`` -- fail closed."""
+    evidence = getattr(sdk, "stdio_relay_evidence", None)
+    if isinstance(evidence, StdioRelayEvidence) and evidence.proves(vendor):
+        return evidence
+    return None
+
+
+def secret_relay_proven(client: object) -> bool:
+    """이 provider client 의 stdio 중계가 비밀을 실어도 되는가 (Q6c MS2).
+
+    client 가 `secret_relay_evidence` 를 선언하지 않으면 거짓이다 -- 테스트 대역과
+    옛 client 는 아무것도 하지 않아도 닫혀 있다.
+    """
+    name = getattr(client, "name", None)
+    evidence = getattr(client, "secret_relay_evidence", None)
+    return (
+        isinstance(name, str)
+        and isinstance(evidence, StdioRelayEvidence)
+        and evidence.proves(name)
+    )
+
+
 class ProviderSandboxStatus(StrEnum):
     STARTING = "starting"
     RUNNING = "running"

@@ -45,6 +45,7 @@ from neos.coding.model.base import (
     strip_thinking,
 )
 from neos.coding.model.errors import CodingModelError
+from neos.coding.monitor.monitor import pause_reason_code
 from neos.coding.phases import (
     CodingAgentPhase,
     parse_phase,
@@ -139,16 +140,17 @@ class ModelTurnMixin:
         """궤적 감시자(트랙 Q5)의 자리. **섀도** -- 무엇이 일어나도 런은 그대로다.
 
         감시자는 원장만 읽는다(`list_after`). 읽을 수 없는 싱크면 판정하지
-        않는다. 감시자의 고장이 태스크를 멈추게 하면 섀도가 아니다.
+        않는다. 감시자의 고장이 태스크를 멈추게 하면 섀도가 아니다. 멈추게 하는
+        길(`PAUSED`)은 `enforce` 일 때의 `_monitor_pause_point` 다(Q5b).
         """
         monitor = getattr(self, "_monitor", None)
         reader = getattr(deps.events, "list_after", None)
         if monitor is None or not callable(reader):
             return
+        if getattr(monitor, "enforce", False):
+            return  # Q5b -- `_monitor_pause_point` 가 이미 이 턴을 판정했다
         try:
-            events = await _read_ledger(
-                reader, input.task_id, limit=getattr(monitor, "max_events", 2000)
-            )
+            events = await monitor.read_ledger(reader, input.task_id)
             if not monitor.due(events):
                 return
             payload = await monitor.judge(events, mode=getattr(input, "mode", "interactive"))
@@ -236,11 +238,56 @@ class ModelTurnMixin:
             logger.warning("agent budget pause notice failed", exc_info=True)
         return commit.status_event
 
+    async def _monitor_pause_point(self, input, deps):
+        """감시자 집행(트랙 Q5b). `would_pause` 인 태스크를 **이 자리에서** `PAUSED` 로 보낸다.
+
+        봉투 집행(Q10b)과 같은 자리·같은 길이다: 턴의 맨 앞, 자식의 한 걸음 전이고,
+        멈춤은 `pause_task` 한 트랜잭션(판정 `monitor.judged` + `task.status.changed`)이다.
+        에이전트 태스크만이 아니라 **모든** 태스크를 본다.
+
+        판정이 멈춤이 아니면 섀도와 같이 `monitor.judged` 하나만 남긴다(`enforced: true`).
+        원장을 읽지 못하거나 감시자가 고장 나면 멈추지 않는다(MP5) -- Jev 의 실패는
+        고장이 아니라 폴백 판정이다(`judge`). 멈춤 커밋의 실패(`StaleExecutionLease`)는
+        그대로 올라간다. 반환값은 멈춤의 `task.status.changed` 이벤트, 아니면 `None`.
+        """
+        monitor = getattr(self, "_monitor", None)
+        reader = getattr(deps.events, "list_after", None)
+        if monitor is None or not getattr(monitor, "enforce", False) or not callable(reader):
+            return None
+        try:
+            events = await monitor.read_ledger(reader, input.task_id)
+            if not monitor.due(events):
+                return None
+            payload = await monitor.judge(events, mode=getattr(input, "mode", "interactive"))
+            if not payload.get("would_pause"):
+                await deps.events.append(
+                    task_id=input.task_id,
+                    event_type="monitor.judged",
+                    payload=payload,
+                    run_id=input.run_id,
+                )
+                return None
+        except Exception:  # noqa: BLE001 -- 위 독스트링: 고장은 멈춤이 아니다
+            logger.warning("trajectory monitor failed", exc_info=True)
+            return None
+        commit = await deps.repository.pause_task(
+            lease=deps.lease,
+            judgement_type="monitor.judged",
+            judgement=payload,
+            reason_code=pause_reason_code(payload),
+            now=self._clock(),
+        )
+        return commit.status_event
+
     async def _advance_one_model_turn(self, input, state, bound, deps):
         self._check_usage_budgets(state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
+        # 멈춤 자리(Q10b·Q5b). 봉투가 먼저다(MP4): 둘이 같은 턴에 멈추려 해도 멈춤
+        # 트랜잭션은 하나다 -- 봉투가 멈추면 감시자는 이 턴을 판정하지 않는다.
         paused = await self._envelope_pause_point(input, deps)
+        if paused is None:
+            paused = await self._monitor_pause_point(input, deps)
         if paused is not None:
             yield paused
             return

@@ -1711,7 +1711,8 @@ class JevMonitorConfig(StrictConfigModel):
     """궤적 감시자 -- 로드맵 트랙 Q5 (docs/OPENAI_DOTS_ANALYSIS_260930.md §6.1).
 
     판정자는 Jev 다(결정 5). Jev 가 대답하지 못하면 그 판정 한 번을 폴백 규칙
-    FB1~FB6 이 대신한다. **섀도만 있다** -- 기록할 뿐 멈추게 하지 않는다.
+    FB1~FB6 이 대신한다. 기본은 **섀도** -- 기록할 뿐 멈추게 하지 않는다.
+    `enforce`(트랙 Q5b)가 켜지면 `would_pause` 인 태스크를 `PAUSED` 로 보낸다.
 
     폴백 임계값은 첫 기본값이고 **더 엄하게만** 움직인다(결정 9) -- 각 필드의
     경계가 기본값이다. Jev 의 멈춤 경계(`pause_at_or_above`)는 기본값이 없다:
@@ -1737,6 +1738,47 @@ class JevMonitorConfig(StrictConfigModel):
     refusals: int = Field(default=1, ge=1, le=1)
     spend_multiple: float = Field(default=4.0, gt=1.0, le=4.0)
     spend_warmup_turns: int = Field(default=5, ge=1, le=5)
+
+    #: 트랙 Q5b (docs/Q5B_MONITOR_PAUSE_DESIGN_261002.md). 참이면 `would_pause` 인 판정이
+    #: 태스크를 `PAUSED` 로 보낸다 -- Jev 와 폴백이 **함께**(§6.1). 끄면(기본) Q5 섀도와
+    #: 바이트가 같다. 켜려면 `shadow_enabled` 와, **멈춤 경계 전부를 명시한** 설정이 있어야
+    #: 한다(MP2) -- 아래 폴백 기본값은 섀도의 첫 값이지 실측된 멈춤 경계가 아니다.
+    enforce: bool = False
+
+    @model_validator(mode="after")
+    def enforcement_needs_an_explicit_boundary(self) -> "JevMonitorConfig":
+        if not self.enforce:
+            return self
+        if not self.shadow_enabled:
+            raise ValueError(
+                "jev.monitor.enforce 는 jev.monitor.shadow_enabled 위에서만 켠다 -- "
+                "섀도로 본 적 없는 판정자는 멈추게 할 수 없다."
+            )
+        missing = [
+            name for name in MONITOR_PAUSE_BOUNDARY_FIELDS if name not in self.model_fields_set
+        ]
+        if missing:
+            raise ValueError(
+                "jev.monitor.enforce 를 켜려면 멈춤 경계를 전부 명시해야 한다(기본값으로 "
+                f"멈추지 않는다 -- 경계는 섀도 실측이 정한다). 빠진 것: {missing}"
+            )
+        return self
+
+
+#: 감시자가 실제로 멈추게 할 때(`enforce`) 설정에 **적혀 있어야** 하는 경계(Q5b MP2).
+#: Jev 경계 하나와 폴백 FB1~FB6 의 임계 전부다. 표시 창·박자(`every_n_tool_results`,
+#: `max_events`)는 경계가 아니라 판정 빈도라 여기 없다.
+MONITOR_PAUSE_BOUNDARY_FIELDS = (
+    "pause_at_or_above",
+    "user_only",
+    "mode_ceiling",
+    "denial_window",
+    "denials_in_window",
+    "repeated_call",
+    "refusals",
+    "spend_multiple",
+    "spend_warmup_turns",
+)
 
 
 class JevConfig(StrictConfigModel):
@@ -1772,6 +1814,7 @@ class JevConfig(StrictConfigModel):
     #: 한 번의 Jev 호출에 허용하는 시간. 넘으면 정적 정책으로 폴백한다(D-L1).
     timeout_sec: float = Field(default=5.0, gt=0, le=60)
     #: 궤적 감시자(트랙 Q5). `enabled` 와 `monitor.shadow_enabled` 가 둘 다 참일 때만 돈다.
+    #: `monitor.enforce`(Q5b)는 그 위에서 멈추게 한다.
     monitor: JevMonitorConfig = Field(default_factory=JevMonitorConfig)
 
     @field_validator("model")
@@ -1943,6 +1986,25 @@ class ManagedSandboxConfig(StrictConfigModel):
             "열지 않는다."
         ),
     )
+    secret_env_providers: tuple[Literal["e2b", "modal"], ...] = Field(
+        default=(),
+        description=(
+            "트랙 Q6c: 비밀 env(`secret://`)를 벤더 stdio 중계로 실어도 되는 관리형 "
+            "provider 의 명시 목록. 기본 비어 있음 -- 모든 관리형 provider 가 "
+            "`secret_env_unsupported` 로 거절한다. 여기 이름을 적어도 그 provider 의 SDK "
+            "바인딩이 증거(`StdioRelayEvidence`)를 달지 않았으면 provider 가 시작하지 "
+            "않는다(`managed_secret_channel_unproven:<name>`). 실계정 smoke 체크리스트: "
+            "docs/Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md §5."
+        ),
+    )
+
+    @field_validator("secret_env_providers")
+    @classmethod
+    def validate_secret_env_providers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """중복을 거부한다 -- 같은 이름 두 번은 오타(다른 provider 를 뜻했다)일 가능성이 높다."""
+        if len(set(value)) != len(value):
+            raise ValueError("secret_env_providers must not repeat a provider")
+        return value
 
     @field_validator("cleanup_retry_backoff_seconds")
     @classmethod
@@ -1989,6 +2051,9 @@ class SandboxConfig(StrictConfigModel):
 #: 트랙 Q14a 브라우저 도구 이름 -- `neos.coding.tools.registry.BROWSER_TOOL_NAMES` 와 같다.
 #: 이 계층은 `neos.coding.*` 에 의존하지 않으므로 따로 둔다(테스트가 둘이 같음을 고정한다).
 CODING_BROWSER_TOOL_NAMES = frozenset({"browser.v1", "browser_fill_secret.v1"})
+#: 트랙 Q14c -- 관리형 브라우저의 요청·응답 본문 상한. 본문은 base64 로 sandboxd 프레임(16 MiB)에
+#: 실린다. `neos.coding.browser.wire.BODY_LIMIT_BYTES` 와 같다(테스트가 고정한다).
+MANAGED_BROWSER_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 
 class CodingBrowserConfig(StrictConfigModel):
@@ -2001,6 +2066,10 @@ class CodingBrowserConfig(StrictConfigModel):
 
     enabled: bool = False
     allow_outside_development: bool = False
+    #: 트랙 Q14c. `host` 는 Q14a 그대로(백엔드 호스트의 Chromium). `managed` 는 Chromium 을
+    #: 태스크의 관리형 샌드박스 안에서 띄운다 -- 관리형 평면이 켜져 있어야 하고, 오늘은 guest
+    #: 채널 배선(B2)이 없어 팩토리가 거절한다. 관리형에서는 `browser_fill_secret.v1` 이 거절된다(MB4).
+    provider: Literal["host", "managed"] = "host"
     navigation_timeout_sec: float = Field(default=15, gt=0, le=60)
     action_timeout_sec: float = Field(default=10, gt=0, le=60)
     max_navigations: int = Field(default=30, ge=1, le=500)
@@ -2183,7 +2252,8 @@ class DeviceBridgeConfig(StrictConfigModel):
     """사용자 기기 브리지 -- 트랙 Q16a (docs/Q16_DEVICE_BRIDGE_DESIGN_261001.md).
 
     꺼져 있으면 자격증명 API 와 브리지 소켓을 **마운트하지 않고**, 도구 목록·프롬프트·
-    이벤트 어휘가 오늘과 바이트가 같다. 받는 등급은 READ_ONLY 와(Q16b) 자격증명이 허락한 WORKSPACE_WRITE 다.
+    이벤트 어휘가 오늘과 바이트가 같다. 받는 등급은 READ_ONLY 와(Q16b) 자격증명이 허락한 WORKSPACE_WRITE,
+    (Q16c) 자격증명이 허락하고 실행 파일이 `command_allowlist` 안인 COMMAND 다.
     소켓을 받는 API 프로세스와 루프를 도는 워커는 Redis 로 잇는다(B6).
     """
 
@@ -2200,6 +2270,13 @@ class DeviceBridgeConfig(StrictConfigModel):
     max_list_entries: int = Field(default=500, ge=1, le=5000)
     #: `device_write_file.v1` 한 번이 쓰는 본문 상한(UTF-8 바이트, Q16b). 브리지도 같은 값을 본다.
     max_write_bytes: int = Field(default=262_144, ge=1024, le=4_194_304)
+    #: 기기 명령(Q16c)의 서버 상한 -- 브리지가 선언할 수 있는 실행 파일. 기본은 **비어 있다**: 운영자가
+    #: 이름을 적기 전에는 어떤 브리지도 명령을 선언할 수 없다. 셸·래퍼·권한 상승·런처는 적을 수 없다.
+    command_allowlist: list[str] = Field(default_factory=list, max_length=32)
+    #: `device_run_command.v1` 한 번의 시간 상한(초). 모델이 더 짧게 달라고 할 수는 있다.
+    command_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    #: 명령의 stdout · stderr 각각의 상한(UTF-8 바이트). 브리지도 같은 값을 본다.
+    max_command_output_bytes: int = Field(default=65_536, ge=1024, le=1_048_576)
     #: 브리지가 보내는 메시지 하나의 상한. 넘으면 소켓을 닫는다.
     max_message_bytes: int = Field(default=2_097_152, ge=4096, le=16_777_216)
     #: 연결 표시(presence)의 수명. 소켓이 이 1/3 마다 갱신하고 자격증명을 다시 읽는다.
@@ -2211,6 +2288,19 @@ class DeviceBridgeConfig(StrictConfigModel):
     def _message_fits_a_read(self) -> "DeviceBridgeConfig":
         if self.max_message_bytes <= self.max_read_bytes:
             raise ValueError("device_bridge.max_message_bytes must exceed max_read_bytes")
+        if self.command_allowlist and self.max_message_bytes <= 2 * self.max_command_output_bytes:
+            raise ValueError(
+                "device_bridge.max_message_bytes must exceed twice max_command_output_bytes"
+            )
+        from neos.coding.bridge.command_policy import executable_name_refusal
+
+        refused = [name for name in self.command_allowlist if executable_name_refusal(name)]
+        if refused:
+            raise ValueError(
+                f"device_bridge.command_allowlist cannot name shells, wrappers or launchers: {refused}"
+            )
+        if len(set(self.command_allowlist)) != len(self.command_allowlist):
+            raise ValueError("device_bridge.command_allowlist names must be unique")
         return self
 
 
@@ -2730,12 +2820,29 @@ class AppConfig(StrictConfigModel):
         return self
 
     @model_validator(mode="after")
+    def validate_managed_secret_channel(self) -> "AppConfig":
+        """트랙 Q6c MS3. provider 별 비밀 채널 opt-in 은 브로커가 켜져 있을 때만 뜻이 있다.
+
+        브로커가 꺼져 있으면 실행기가 `secret_env` 를 채우지 않으므로 opt-in 은 아무것도
+        하지 않는다 -- "켜져 있다"고 적힌 채 아무 일도 하지 않는 플래그를 남기지 않는다.
+        증거(SDK 바인딩)는 설정이 볼 수 없으므로 provider 생성자가 본다.
+        """
+        if self.sandbox.managed.secret_env_providers and not self.coding_model.secret_broker:
+            raise ValueError(
+                "sandbox.managed.secret_env_providers requires coding_model.secret_broker"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_coding_browser(self) -> "AppConfig":
         """트랙 Q14a. 브라우저는 호스트에서 돈다 -- B2(관리형 샌드박스)가 아니다.
 
         development 밖에서는 운영자의 명시적 동의(`allow_outside_development`)가 있어야
         켜진다(S10·I7 과 같은 fail-closed 모양). 어디서 켜든 허용 호스트가 이름이어야 하고,
         운영자 allow 목록은 브라우저 도구를 담지 못한다 -- 사람 승인 또는 소유자 규칙만 넘는다.
+
+        트랙 Q14c: `provider: managed` 는 관리형 샌드박스 평면을 요구하고 본문 상한을 프레임에
+        맞춘다. 위 조건(W3 포함)은 하나도 풀지 않는다 -- 좁히기만.
         """
         browser = self.coding_model.browser
         if not browser.enabled:
@@ -2772,6 +2879,20 @@ class AppConfig(StrictConfigModel):
             raise ValueError(
                 "browser tools cannot be in approval_allow_tools or approval_always_allow"
             )
+        if browser.provider == "managed":
+            # 트랙 Q14c. 좁히기만: 관리형은 W3 를 풀지 않는다(B2 게이트 전) -- 위 조건은 그대로다.
+            if self.sandbox.provider != "managed" or not self.sandbox.managed.enabled:
+                raise ValueError(
+                    "coding_model.browser.provider=managed requires the managed sandbox "
+                    "plane (sandbox.provider=managed and sandbox.managed.enabled)"
+                )
+            if max(browser.max_response_bytes, browser.max_request_body_bytes) > (
+                MANAGED_BROWSER_MAX_BODY_BYTES
+            ):
+                raise ValueError(
+                    "coding_model.browser.provider=managed caps max_response_bytes and "
+                    f"max_request_body_bytes at {MANAGED_BROWSER_MAX_BODY_BYTES} (frame limit)"
+                )
         return self
 
     @model_validator(mode="after")

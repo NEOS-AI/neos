@@ -3,9 +3,11 @@
 판정자는 Jev 다(결정 5). Jev 가 대답하지 못하면(실패·타임아웃·WAF 차단·확률
 없음) 그 판정 한 번을 폴백 규칙 FB1~FB6 이 대신한다(결정 9, D-L1 의 모양).
 
-**섀도만 있다.** 판정 하나가 `monitor.judged` payload 하나이고 `enforced` 는
-언제나 False 다 -- 이 모듈은 태스크를 멈추게 하지 않는다. `PAUSED` 로 보내는
-길은 Jev 와 폴백이 **함께** 섀도에서 올라올 때 생긴다.
+판정 하나가 `monitor.judged` payload 하나다. 기본은 **섀도**(`enforced: false`)이고,
+`enforce` 가 켜지면(트랙 Q5b, docs/Q5B_MONITOR_PAUSE_DESIGN_261002.md) 모든 판정이
+`enforced: true` 를 싣고 `would_pause` 인 판정은 루프가 `pause_task` 로 태스크를
+`PAUSED` 로 보낸다. Jev 와 폴백은 **같은 플래그 하나로 함께** 올라온다(§6.1) --
+판정자마다 따로 켜는 길은 없다. 이 모듈은 판정만 하고 멈추게 하는 것은 루프다.
 
 감시자는 **원장만** 읽는다. 루프의 상태·전사를 받지 않는 것이 요점이다 --
 감시 대상이 감시자의 입력을 고를 수 없어야 한다.
@@ -18,6 +20,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 from neos.coding.domain.events import CodingEvent
+from neos.coding.monitor.ledger import LedgerTail, Reader
 from neos.coding.monitor.rules import (
     RULESET_VERSION,
     FallbackThresholds,
@@ -46,11 +49,24 @@ class TrajectoryMonitor:
         pause_at_or_above: float,
         limits: FallbackThresholds,
         every_n_tool_results: int,
+        enforce: bool = False,
+        max_events: int = 2000,
     ) -> None:
         self._scorer = scorer
         self._pause_at = pause_at_or_above
         self._limits = limits
         self._every_n = every_n_tool_results
+        #: 트랙 Q5b. 참이면 `would_pause` 가 멈춤이다 -- 루프의 `_monitor_pause_point`.
+        self.enforce = enforce
+        self._tail = LedgerTail(max_events=max_events)
+
+    @property
+    def max_events(self) -> int:
+        return self._tail.max_events
+
+    async def read_ledger(self, reader: Reader, task_id: str) -> list[CodingEvent]:
+        """원장의 최근 `max_events` 개. 마지막으로 본 seq 뒤만 읽는다(MP6)."""
+        return await self._tail.read(reader, task_id)
 
     def due(self, events: Sequence[CodingEvent]) -> bool:
         """마지막 판정 뒤로 도구 결과가 N 개 쌓였는가.
@@ -66,7 +82,11 @@ class TrajectoryMonitor:
 
     async def judge(self, events: Sequence[CodingEvent], *, mode: str) -> dict[str, Any]:
         """판정 하나의 `monitor.judged` payload."""
-        common = {"tool_results": _tool_results(events), "mode": mode, "enforced": False}
+        common = {
+            "tool_results": _tool_results(events),
+            "mode": mode,
+            "enforced": self.enforce,
+        }
         try:
             score = await self._scorer.score_tool_risk(_trajectory_state(events, mode))
             probability = getattr(score, "probability", None)
@@ -95,6 +115,13 @@ class TrajectoryMonitor:
             "rubric_digest": score.rubric_digest,
             "model": score.model,
         }
+
+
+def pause_reason_code(payload: dict[str, Any]) -> str:
+    """멈춤의 `task.status.changed` 가 싣는 사유 코드. 판정자와 규칙이 드러난다."""
+    if payload.get("judge") == "jev":
+        return "monitor_jev"
+    return f"monitor_fallback_{str(payload.get('rule') or 'none').lower()}"
 
 
 class _NoProbability(Exception):

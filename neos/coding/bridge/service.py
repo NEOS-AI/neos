@@ -1,4 +1,4 @@
-"""루프가 쥐는 것 -- 소유자의 브리지를 보고, 호출하고, 결과를 감싼다 (트랙 Q16a · Q16b).
+"""루프가 쥐는 것 -- 소유자의 브리지를 보고, 호출하고, 결과를 감싼다 (트랙 Q16a · Q16b · Q16c).
 
 어떤 실패도 예외로 루프에 올리지 않는다: 연결이 없거나, 늦거나, 답이 어긋나면 이름 붙은
 `ToolResult` 하나가 된다. 연결 표시를 읽지 못하면 **브리지가 없는 것**으로 본다 --
@@ -12,6 +12,7 @@ import uuid
 from typing import Any
 
 from neos.coding.bridge.catalog import (
+    COMMAND_TOOLS,
     WRITE_TOOLS,
     bridge_tool_name,
     device_unattended_refusal,
@@ -27,6 +28,15 @@ class DeviceBridgeService:
     def __init__(self, relay: DeviceBridgeRelay, config: Any) -> None:
         self._relay = relay
         self._config = config
+
+    @property
+    def command_claim_seconds(self) -> float:
+        """기기 명령 하나가 걸릴 수 있는 가장 긴 시간 + 여유 -- 루프가 claim 을 그만큼 쥔다(BC10)."""
+        return (
+            float(self._config.command_timeout_seconds)
+            + float(self._config.call_timeout_seconds)
+            + 30.0
+        )
 
     async def view(self, owner_id: str | None) -> BridgeView | None:
         if not owner_id:
@@ -56,7 +66,21 @@ class DeviceBridgeService:
         if refusal is not None:
             return failure_result(refusal, revision=revision)
         args = dict(call.input)
-        if bridge_name in WRITE_TOOLS:
+        timeout = float(self._config.call_timeout_seconds)
+        if bridge_name in COMMAND_TOOLS:
+            # Q16c. 실행 파일은 이 연결이 선언하고 서버 상한이 받은 것이어야 한다(BC3) -- 검증기는
+            # 서버 상한만 안다. 시간·출력 상한은 서버가 정해 넘기고, 기기도 자기 상한과 함께 본다.
+            argv = args.get("argv")
+            if not (isinstance(argv, list) and argv and argv[0] in view.executables):
+                return failure_result("device_command_not_offered", revision=revision)
+            cap = float(self._config.command_timeout_seconds)
+            requested = args.get("timeout_sec")
+            limit = min(float(requested), cap) if isinstance(requested, (int, float)) else cap
+            args["timeout_sec"] = limit
+            args["max_output_bytes"] = int(self._config.max_command_output_bytes)
+            # 기기는 시간 제한까지 돌고 그 뒤에 답한다 -- 기다리는 쪽은 그만큼 더 기다린다.
+            timeout = limit + float(self._config.call_timeout_seconds)
+        elif bridge_name in WRITE_TOOLS:
             # 운영 상한(BW11). 기기도 같은 값을 받아 한 번 더 본다.
             cap = int(self._config.max_write_bytes)
             if len(str(args.get("content", "")).encode("utf-8")) > cap:
@@ -74,9 +98,7 @@ class DeviceBridgeService:
             "unattended": bool(unattended),
         }
         try:
-            reply = await self._relay.request(
-                view, message, timeout=float(self._config.call_timeout_seconds)
-            )
+            reply = await self._relay.request(view, message, timeout=timeout)
         except DeviceRelayError as error:
             return failure_result(error.code, revision=revision)
         except Exception:  # noqa: BLE001 -- 중계가 깨져도 이름 붙은 실패 하나다
@@ -91,6 +113,7 @@ class DeviceBridgeService:
             max_read_bytes=int(self._config.max_read_bytes),
             max_list_entries=int(self._config.max_list_entries),
             digests=bool(view.tools & WRITE_TOOLS),
+            max_output_bytes=int(self._config.max_command_output_bytes),
         )
 
 

@@ -2,8 +2,8 @@
 
 ```
 GET    /api/v1/coding/device-bridges                # 내 브리지 목록 (+ 지금 붙어 있는가)
-POST   /api/v1/coding/device-bridges                # {name, allow_unattended?, allow_writes?} -- 토큰은 이 응답에만
-PATCH  /api/v1/coding/device-bridges/{bridge_id}    # {allow_unattended?, allow_writes?} -- 붙어 있으면 끊어 다시 붙게 한다
+POST   /api/v1/coding/device-bridges                # {name, allow_unattended?, allow_writes?, allow_commands?} -- 토큰은 이 응답에만
+PATCH  /api/v1/coding/device-bridges/{bridge_id}    # {allow_unattended?, allow_writes?, allow_commands?} -- 붙어 있으면 끊어 다시 붙게 한다
 DELETE /api/v1/coding/device-bridges/{bridge_id}    # 폐기 -- 붙어 있으면 끊는다
 ```
 
@@ -79,6 +79,8 @@ class BridgeOut(BaseModel):
     connected: bool = False
     #: 쓰기 도구를 선언해도 되는가(Q16b). 클라이언트의 `--allow-writes` 와 둘 다 있어야 한다.
     allow_writes: bool = False
+    #: 명령 도구를 선언해도 되는가(Q16c). 클라이언트의 `--allow-commands` 와 서버 상한이 함께 있어야 한다.
+    allow_commands: bool = False
 
 
 class CreatedBridgeOut(BridgeOut):
@@ -90,16 +92,18 @@ class CreateBridgeIn(BaseModel):
     name: str
     allow_unattended: bool = False
     allow_writes: bool = False
+    allow_commands: bool = False
 
 
 class UpdateBridgeIn(BaseModel):
     allow_unattended: bool | None = None
     allow_writes: bool | None = None
+    allow_commands: bool | None = None
 
     @model_validator(mode="after")
     def _something(self) -> "UpdateBridgeIn":
-        if self.allow_unattended is None and self.allow_writes is None:
-            raise ValueError("set allow_unattended or allow_writes")
+        if self.allow_unattended is None and self.allow_writes is None and self.allow_commands is None:
+            raise ValueError("set allow_unattended, allow_writes or allow_commands")
         return self
 
 
@@ -112,6 +116,7 @@ def _out(info: BridgeCredentialInfo, *, connected: bool = False) -> BridgeOut:
         last_connected_at=info.last_connected_at,
         connected=connected,
         allow_writes=info.allow_writes,
+        allow_commands=info.allow_commands,
     )
 
 
@@ -155,6 +160,7 @@ async def create_device_bridge(
             body.name,
             allow_unattended=body.allow_unattended,
             allow_writes=body.allow_writes,
+            allow_commands=body.allow_commands,
         )
     except BridgeLimit as error:
         raise HTTPException(status_code=409, detail={"code": "device_bridge_limit"}) from error
@@ -178,6 +184,8 @@ async def update_device_bridge(
         info = await store.set_unattended(current_user.user_id, bridge_id, body.allow_unattended)
     if info is not None and body.allow_writes is not None:
         info = await store.set_writes(current_user.user_id, bridge_id, body.allow_writes)
+    if info is not None and body.allow_commands is not None:
+        info = await store.set_commands(current_user.user_id, bridge_id, body.allow_commands)
     if info is None:
         raise HTTPException(status_code=404, detail="device bridge not found")
     # 붙어 있는 연결은 옛 설정을 쥐고 있다 -- 끊어서 새 설정으로 다시 붙게 한다.

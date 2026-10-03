@@ -164,3 +164,59 @@ async def test_deleting_the_user_deletes_their_bridges(store) -> None:
         await session.execute(text("DELETE FROM users WHERE user_id = :u"), {"u": ALICE})
         await session.commit()
     assert await store.authenticate(token) is None
+
+
+COMMANDS_MIGRATION = MIGRATION.with_name("090_add_device_bridge_commands.sql")
+
+#: Owned by this test (same reason as the Q16b pair). Emails do not start with `test` so the
+#: shared `test%@%` cleanup of other suites never races these rows.
+COMMANDER, STRANGER = "test_q16c_bridge_commander", "test_q16c_bridge_stranger"
+
+
+@pytest.fixture
+async def commander_store():
+    async with await db_manager.get_session() as session:
+        for user_id in (COMMANDER, STRANGER):
+            await session.execute(
+                text("INSERT INTO users (user_id, email) VALUES (:u, :e) ON CONFLICT DO NOTHING"),
+                {"u": user_id, "e": f"q16c-{user_id[-9:]}@example.org"},
+            )
+        await session.commit()
+    yield PostgresBridgeCredentialStore(db_manager.get_session, max_bridges=2)
+    async with await db_manager.get_session() as session:
+        await session.execute(
+            text("DELETE FROM users WHERE user_id IN (:a, :b)"), {"a": COMMANDER, "b": STRANGER}
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_commands_migration_applies_twice_and_defaults_off(commander_store) -> None:
+    """Q16c, 090. A bridge made before 090 (or without the flag) cannot declare commands, and
+    the three settings are separate columns."""
+    from tests.conftest import _run_sql_file
+
+    store = commander_store
+
+    await _run_sql_file(COMMANDS_MIGRATION)
+    await _run_sql_file(COMMANDS_MIGRATION)
+    async with await db_manager.get_session() as session:
+        column = (
+            await session.execute(
+                text(
+                    "SELECT is_nullable, column_default FROM information_schema.columns "
+                    "WHERE table_name = 'device_bridges' AND column_name = 'allow_commands'"
+                )
+            )
+        ).one()
+    assert column.is_nullable == "NO" and column.column_default == "false"
+
+    info, token = await store.create(COMMANDER, "commander")
+    assert info.allow_commands is False
+    flipped = await store.set_commands(COMMANDER, info.bridge_id, True)
+    assert flipped is not None and flipped.allow_commands is True
+    assert (flipped.allow_writes, flipped.allow_unattended) == (False, False)
+    assert (await store.authenticate(token)).allow_commands is True
+    assert await store.set_commands(STRANGER, info.bridge_id, False) is None
+    made_on = (await store.create(COMMANDER, "both", allow_commands=True))[0]
+    assert made_on.allow_commands is True and made_on.allow_writes is False

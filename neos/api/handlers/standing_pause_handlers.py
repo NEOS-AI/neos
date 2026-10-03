@@ -6,7 +6,10 @@
 - `resume_router` -- `POST /coding/tasks/{task_id}/resume`. **사람만** 쓴다: 소유자 인증
   라우트이고 어떤 도구도 이 길에 닿지 않는다. 멈추지 않은 태스크는 409
   `task_not_paused`, 남의 태스크는 다른 코딩 라우트와 같은 404 다.
-  `standing_agents.enabled` 일 때 마운트한다 -- 오늘 태스크를 멈추는 것은 봉투뿐이다.
+  태스크를 멈출 수 있는 쪽이 하나라도 있으면 마운트한다(`resume_route_mounted`) --
+  봉투(Q10b, `standing_agents.enabled`)와 감시자 집행(Q5b, `jev.monitor.enforce`).
+  감시자는 에이전트 태스크만이 아니라 모든 태스크를 멈추므로 상시 에이전트가 꺼져
+  있어도 재개 라우트가 있어야 한다. 멈출 수 없는 앱에는 라우트가 없다.
 - `notify_router` -- `GET/PUT/DELETE /standing-agents/{agent_id}/notify-target`. 에이전트의
   알림이 갈 채널 하나. `standing_agents.notifications.enabled` 일 때 마운트한다.
 """
@@ -29,6 +32,15 @@ from neos.standing.notifications import (
     NotifyTarget,
     PostgresNotificationStore,
 )
+
+def resume_route_mounted(config) -> bool:
+    """재개 라우트가 있어야 하는가 -- 태스크를 `PAUSED` 로 보낼 수 있는 쪽이 있는가.
+
+    `neos/main.py` 가 이 함수 하나로 정한다. 멈추는 쪽을 새로 더하면 여기에 더한다:
+    멈출 수 있는데 재개할 길이 없으면 멈춤이 덫이 된다(Q10b P8 과 같은 이유).
+    """
+    return bool(config.standing_agents.enabled or config.jev.monitor.enforce)
+
 
 resume_router = APIRouter(prefix="/coding", tags=["Coding Agent"])
 notify_router = APIRouter(prefix="/standing-agents", tags=["Standing Agents"])

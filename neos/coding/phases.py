@@ -35,6 +35,8 @@ _HIDDEN_WRITES = frozenset(
         "chmod.v1",
         "notebook_edit.v1",
         "execute.v1",
+        # 트랙 Q16c: 기기 명령은 샌드박스 명령과 같은 단계에서 숨는다(verify 에서는 보인다).
+        "device_run_command.v1",
         "spawn_agent.v1",
         "subagent_list.v1",
         "subagent_steer.v1",

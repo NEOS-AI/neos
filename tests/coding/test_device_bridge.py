@@ -100,13 +100,17 @@ def test_anything_but_read_only_refuses_the_whole_registration(declaration, code
 
 def test_the_opened_risks_are_read_only_and_one_write_tool() -> None:
     """B3: widening is a code change *and* a threat-model row -- this pins the set.
-    Q16a opened READ_ONLY, Q16b opened WORKSPACE_WRITE for `write_file` alone; COMMAND is closed."""
-    assert ALLOWED_DEVICE_RISKS == frozenset({ToolRisk.READ_ONLY, ToolRisk.WORKSPACE_WRITE})
+    Q16a opened READ_ONLY, Q16b opened WORKSPACE_WRITE for `write_file` alone, Q16c opened
+    COMMAND for `run_command` alone (the name predates Q16c; the set is what it pins)."""
+    assert ALLOWED_DEVICE_RISKS == frozenset(
+        {ToolRisk.READ_ONLY, ToolRisk.WORKSPACE_WRITE, ToolRisk.COMMAND}
+    )
     assert {name: spec.risk for name, spec in DEVICE_TOOLS.items()} == {
         "list_dir": ToolRisk.READ_ONLY,
         "stat": ToolRisk.READ_ONLY,
         "read_file": ToolRisk.READ_ONLY,
         "write_file": ToolRisk.WORKSPACE_WRITE,
+        "run_command": ToolRisk.COMMAND,
     }
 
 
@@ -120,6 +124,7 @@ def test_tool_names_fit_the_user_rule_shape() -> None:
         "device_stat.v1",
         "device_read_file.v1",
         "device_write_file.v1",
+        "device_run_command.v1",
     ]
     assert all(_TOOL_RE.fullmatch(name) for name in names)
 

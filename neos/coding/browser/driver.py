@@ -74,6 +74,13 @@ class BrowserContext(Protocol):
 
 
 class BrowserDriver(Protocol):
-    async def new_context(self, serve: RequestServer) -> BrowserContext: ...
+    #: 트랙 Q14c MB4: 이 드라이버가 페이지에 넣는 값이 지나는 길이 비밀을 실어도 될 만큼 사적인가.
+    #: 호스트 드라이버는 참(값은 워커 메모리에서 같은 기계의 Playwright 파이프로만 간다),
+    #: 관리형은 거짓 고정. 선언하지 않은 구현은 거짓으로 읽는다(fail closed) -- 세션이 `getattr` 로 본다.
+    confidential_channel: bool
+
+    #: `task_id` 는 컨텍스트의 주인이다. 호스트 드라이버는 쓰지 않고(프로세스 하나에 브라우저 하나),
+    #: 관리형은 그 태스크의 샌드박스를 고른다(Q14c).
+    async def new_context(self, serve: RequestServer, *, task_id: str = "") -> BrowserContext: ...
 
     async def aclose(self) -> None: ...

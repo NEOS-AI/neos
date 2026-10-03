@@ -66,6 +66,7 @@ from neos.coding.sandbox.managed.clients.base import (
     ProviderSandboxInfo,
     ProviderSandboxStatus,
     SandboxProviderClient,
+    secret_relay_proven,
 )
 from neos.coding.sandbox.managed.identity import ManagedCodingIdentity
 from neos.coding.sandbox.managed.ledger import (
@@ -158,10 +159,12 @@ class _Attachment:
 
     @property
     def confidential_channel(self) -> bool:
-        # 트랙 Q6b C1: 관리형 채널은 벤더 exec 의 stdio 중계다(`open_stdio`). 그 바인딩이
-        # 저장소에 없어서 TLS 와 벤더의 stdin 비보존을 보일 수 없다 -- 비밀을 싣지 않는다.
-        # 여는 것은 설정이 아니라 증거를 단 코드 변경이다(docs/Q6B_..._261002.md §3).
-        return False
+        # 트랙 Q6b C1 → Q6c MS2: 관리형 채널은 벤더 exec 의 stdio 중계다(`open_stdio`).
+        # 참이 되려면 운영자의 provider 별 opt-in(`secret_channel`) **과** SDK 바인딩이 단
+        # 증거(`secret_relay_proven`)가 둘 다 있어야 한다 -- 생성자가 이미 확인했고, 여기서
+        # 한 번 더 본다(설정만으로는 열리지 않는다). 바인딩이 없는 오늘은 항상 거짓이다.
+        provider = self._provider
+        return provider._secret_channel and secret_relay_proven(provider._client)
 
     async def attach(self) -> SandboxdLease:
         runtime = await self._provider._running_record(self._sandbox_id)
@@ -208,9 +211,14 @@ class ManagedSandboxProvider:
         clock: Callable[[], datetime] | None = None,
         fence: RuntimeFence | None = None,
         locks: _SharedLocks | None = None,
+        secret_channel: bool = False,
     ) -> None:
         if _PINNED_IMAGE.fullmatch(image_digest) is None:
             raise SandboxUnavailable("managed_image_unpinned")
+        if secret_channel and not secret_relay_proven(client):
+            # Q6c MS3: opt-in 했는데 증거가 없다 -- 조용히 거절로 남기지 않고 시작하지 않는다.
+            # 낡은 플래그가 "켜져 있다"고 적힌 채 아무 일도 하지 않는 상태를 만들지 않는다.
+            raise SandboxUnavailable(f"managed_secret_channel_unproven:{client.name}")
         self._client = client
         self._ledger = ledger
         self._identity = identity
@@ -226,6 +234,7 @@ class ManagedSandboxProvider:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._fence = fence
         self._locks = locks or _SharedLocks()
+        self._secret_channel = secret_channel
         # Connections are per view: a lease view that lets go of its handles
         # must not disconnect another view's sessions.
         self._clients: dict[str, tuple[int, SandboxdClient]] = {}
@@ -271,6 +280,7 @@ class ManagedSandboxProvider:
             clock=self._clock,
             fence=RuntimeFence.from_lease(lease),
             locks=self._locks,
+            secret_channel=self._secret_channel,
         )
 
     # ---- create / restore (attach) -------------------------------------------
@@ -1087,6 +1097,8 @@ def create_managed_sandbox_provider(
         operation_timeout_sec=config.execution.command_timeout_sec,
         max_pty_sessions=config.streams.pty_max_sessions,
         kill_switch=lambda: managed.global_kill_switch,
+        # Q6c MS3: provider 별 opt-in. 증거 없는 opt-in 은 생성자가 거절한다.
+        secret_channel=backend.client.name in managed.secret_env_providers,
     )
 
 

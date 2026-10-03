@@ -98,6 +98,11 @@ USER_ONLY_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
 )
 
 
+#: argv 를 싣는 도구. USER_ONLY 바닥 · 사용자 규칙의 argv 접두 · 피연산자 경로 검사가 이 둘에
+#: 똑같이 걸린다(트랙 Q16c -- 기기 명령은 샌드박스 명령보다 좁기만 하다).
+ARGV_TOOLS: frozenset[str] = frozenset({"execute.v1", "device_run_command.v1"})
+
+
 @dataclass(frozen=True, slots=True)
 class ApprovalGate:
     mode: ApprovalMode = ApprovalMode.MANUAL
@@ -281,7 +286,7 @@ def _call_paths(call: ValidatedToolCall) -> tuple[str, ...]:
     raw_paths = call.input.get("paths")
     if isinstance(raw_paths, (list, tuple)):
         found.extend(str(item) for item in raw_paths if item)
-    if call.name == "execute.v1":
+    if call.name in ARGV_TOOLS:
         from neos.coding.tools.registry import path_operands_from_argv
 
         argv = call.input.get("argv")
@@ -409,13 +414,13 @@ def _is_protected_instruction_write(
     call: ValidatedToolCall,
     workspace_root: str | None = None,
 ) -> bool:
-    if call.name not in _INSTRUCTION_WRITE_TOOLS and call.name != "execute.v1":
+    if call.name not in _INSTRUCTION_WRITE_TOOLS and call.name not in ARGV_TOOLS:
         return False
     if any(
         _is_instruction_file_path(path, workspace_root) for path in _call_paths(call)
     ):
         return True
-    if call.name == "execute.v1":
+    if call.name in ARGV_TOOLS:
         argv = call.input.get("argv")
         if isinstance(argv, (list, tuple)):
             return any(
@@ -469,7 +474,7 @@ def is_user_only(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
     은 DENY 도 REQUIRE_APPROVAL 도 아닌 결과를 실행하므로, 새 값은 열린 채로
     실패한다(fail-open).
     """
-    if call.name != "execute.v1":
+    if call.name not in ARGV_TOOLS:
         return False
     argv = call.input.get("argv")
     if not isinstance(argv, (list, tuple)) or not argv:
@@ -533,7 +538,7 @@ def user_rule_matches(rule: UserApprovalRule, call: ValidatedToolCall) -> bool:
         return False
     if not rule.argv_prefix:
         return True
-    if call.name != "execute.v1":
+    if call.name not in ARGV_TOOLS:
         return False
     argv = call.input.get("argv")
     if not isinstance(argv, (list, tuple)) or not argv:
@@ -574,6 +579,26 @@ def is_device_write(call: ValidatedToolCall) -> bool:
     from neos.coding.bridge.catalog import is_device_write_tool
 
     return is_device_write_tool(call.name)
+
+
+def is_device_command(call: ValidatedToolCall) -> bool:
+    from neos.coding.bridge.catalog import is_device_command_tool
+
+    return is_device_command_tool(call.name)
+
+
+def owner_argv_rule_allows(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
+    """소유자의 allow 규칙 중 **argv 접두가 있고** 이 호출에 맞는 것이 있는가 (트랙 Q16c, BC5).
+
+    도구 이름만 건 allow 는 기기 명령의 승인을 대신하지 못한다 -- 무엇을 돌려도 되는지 이름으로
+    말한 규칙만 사람을 대신한다.
+    """
+    return any(
+        rule.effect is UserRuleEffect.ALLOW
+        and rule.argv_prefix
+        and user_rule_matches(rule, call)
+        for rule in gate.user_rules
+    )
 
 
 def exceeds_mode_ceiling(call: ValidatedToolCall, gate: ApprovalGate) -> bool:
@@ -660,6 +685,12 @@ def _evaluate_approval(
     # 기억·auto 모드는 넘지 못한다: 기기는 사람의 것이라 넘길 수 있는 것은 소유자뿐이다.
     if is_device_write(call):
         if has_user_rule(call, gate, UserRuleEffect.ALLOW):
+            return ApprovalPolicyOutcome.ALLOW
+        return ApprovalPolicyOutcome.REQUIRE_APPROVAL
+    # 기기 명령(트랙 Q16c, BC5) -- 같은 자리, 더 좁다: 소유자의 allow 도 **argv 접두가 맞아야**
+    # 넘는다. 운영자 allow 목록·"항상 허용" 기억·auto 모드·도구 전체 allow 는 넘지 못한다.
+    if is_device_command(call):
+        if owner_argv_rule_allows(call, gate):
             return ApprovalPolicyOutcome.ALLOW
         return ApprovalPolicyOutcome.REQUIRE_APPROVAL
     if call.name in gate.allow_tools:
@@ -777,6 +808,24 @@ def approval_display_summary(call: ValidatedToolCall) -> Mapping[str, object]:
             "truncated": truncated,
         }
         return redact_sensitive(summary)
+    if call.name == "device_run_command.v1":
+        # 트랙 Q16c. 승인하는 사람이 **무엇을 어디서** 돌리는지 본다 -- argv 전체(가린 뒤)와 cwd.
+        # argv 는 `arguments` 로 싣는다: 승인 화면에만 있고 이벤트에는 없다(커넥터 인자와 같다).
+        argv = call.input.get("argv")
+        parts = [str(part) for part in argv] if isinstance(argv, (list, tuple)) else []
+        summary = {
+            "operation": call.name,
+            "executable": parts[0] if parts else "unknown",
+            "cwd": call.input.get("cwd") or ".",
+            "arguments": parts,
+        }
+        timeout = call.input.get("timeout_sec")
+        if timeout is not None:
+            summary["timeout_sec"] = timeout
+        warnings = _execute_warning_codes(list(parts))
+        if warnings:
+            summary["warnings"] = warnings
+        return redact_sensitive(summary)
     if call.name in {"browser.v1", "browser_fill_secret.v1"}:
         # 트랙 Q14a. 승인하는 사람이 **어디로** 가는지·어느 출처에 비밀이 들어가는지 본다.
         summary = {"operation": call.name}
@@ -877,6 +926,17 @@ _DENIAL_REASONS = {
     "device_writes_off": (
         "this device bridge does not allow writes; do not retry -- tell the user what to change"
     ),
+    "policy_device_command_unattended": (
+        "nobody is watching, and commands never run on the user's device without a person; "
+        "do not retry -- leave the command as a note for the user"
+    ),
+    "device_commands_off": (
+        "this device bridge does not allow commands; do not retry -- tell the user what to run"
+    ),
+    "device_command_not_offered": (
+        "the user did not allow that executable on this device bridge; do not retry -- "
+        "tell the user what to run"
+    ),
     "policy_device_child": (
         "subagents cannot reach the user's device; do not retry -- "
         "return the request to the parent instead"
@@ -972,6 +1032,8 @@ def denial_envelope(call, reason_code: str) -> dict[str, object]:
     excerpt.pop("patch", None)
     excerpt.pop("content", None)
     excerpt.pop("truncated", None)
+    if call.name == "device_run_command.v1":
+        excerpt.pop("arguments", None)  # 트랙 Q16c: argv 전체는 승인 화면에만
     raw_warnings = excerpt.pop("warnings", None)
     warnings = (
         tuple(str(item) for item in raw_warnings)

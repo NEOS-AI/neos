@@ -36,7 +36,9 @@ from neos.coding.sandbox.managed.clients.base import (
     ProviderSandboxStatus,
     ProviderSnapshot,
     Sleep,
+    StdioRelayEvidence,
     SuspendOutcome,
+    declared_relay_evidence,
     sanitize,
 )
 from neos.coding.sandbox.managed.identity import METADATA_IDEMPOTENCY_KEY
@@ -62,7 +64,11 @@ class E2BSandboxInfo:
 
 
 class E2BSdk(Protocol):
-    """The E2B surface NEOS **requires**. Not the vendor API."""
+    """The E2B surface NEOS **requires**. Not the vendor API.
+
+    선택 속성 ``stdio_relay_evidence: StdioRelayEvidence`` (트랙 Q6c MS2) -- 바인딩이
+    Q6b §4 증거를 갖췄을 때만 단다. 없으면 이 provider 는 비밀을 싣지 않는다.
+    """
 
     @property
     def reports_network_policy(self) -> bool: ...
@@ -134,6 +140,11 @@ class E2BProviderClient:
     @property
     def name(self) -> str:
         return PROVIDER
+
+    @property
+    def secret_relay_evidence(self) -> StdioRelayEvidence | None:
+        """트랙 Q6c MS2: 바인딩이 선언한 stdio 중계 증거. 바인딩이 없는 오늘은 ``None``."""
+        return declared_relay_evidence(self._sdk, PROVIDER)
 
     async def probe(self) -> ProviderCapabilities:
         return ProviderCapabilities(

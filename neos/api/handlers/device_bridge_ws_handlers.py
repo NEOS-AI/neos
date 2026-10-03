@@ -9,6 +9,8 @@ WS /api/v1/coding/device-bridge/ws      subprotocol neos.device-bridge.v1
 subprotocol) -- 쿼리 문자열은 받지 않는다(접근 로그에 남는다). 접속 뒤 첫 메시지는 도구
 선언(hello)이고, 받는 등급 밖이 하나라도 있으면 전부 거절한다(B3). 쓰기 도구는 자격증명의
 `allow_writes` 가 참일 때만 받는다 -- 아니면 역시 전부 거절(`device_writes_not_enabled`, Q16b BW2).
+명령 도구는 자격증명의 `allow_commands` 가 참이고 선언한 실행 파일이 서버 상한 안일 때만 받는다
+(`device_commands_not_enabled` · `device_command_not_allowed`, Q16c BC2 · BC3).
 
 `coding_model.device_bridge.enabled` 가 꺼져 있으면 `main.py` 가 마운트하지 않는다.
 nginx 는 이 경로를 업그레이드 location 으로 받는다(`config/nginx/nginx.conf`).
@@ -28,7 +30,7 @@ from neos.api.handlers.device_bridge_handlers import (
     get_device_bridge_config,
     get_device_bridge_relay,
 )
-from neos.coding.bridge.catalog import DeviceDeclarationRefused, parse_declaration
+from neos.coding.bridge.catalog import DeviceDeclarationRefused, parse_bridge_declaration
 from neos.coding.bridge.credentials import BridgeCredentialStore
 from neos.coding.bridge.relay import BridgeView, DeviceBridgeRelay
 from neos.coding.bridge.session import BridgeSocketSession
@@ -77,7 +79,12 @@ async def device_bridge_websocket(
         hello = json.loads(raw) if len(raw) <= 65_536 else None
         if not isinstance(hello, dict) or hello.get("type") != "hello":
             raise DeviceDeclarationRefused("device_declaration_invalid")
-        tools = parse_declaration(hello.get("tools"), allow_writes=info.allow_writes)
+        tools, executables = parse_bridge_declaration(
+            hello.get("tools"),
+            allow_writes=info.allow_writes,
+            allow_commands=info.allow_commands,
+            command_allowlist=config.command_allowlist,
+        )
     except (ValueError, DeviceDeclarationRefused) as error:
         code = error.code if isinstance(error, DeviceDeclarationRefused) else "device_declaration_invalid"
         await websocket.send_json({"v": 1, "type": "refused", "code": code})
@@ -90,6 +97,7 @@ async def device_bridge_websocket(
         conn_id="dbc_" + secrets.token_hex(16),
         tools=tools,
         allow_unattended=info.allow_unattended,
+        executables=executables,
     )
 
     async def recheck():

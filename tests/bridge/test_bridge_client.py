@@ -132,12 +132,16 @@ def test_the_client_declares_read_only_only(shared: Path) -> None:
 
 
 def test_the_client_never_executes_anything() -> None:
-    """B10. Scans the client's own source: no process, shell, exec or eval anywhere.
-    Mutation: add `subprocess.run` (or `os.system`) to any bridge module -> red."""
+    """B10. Scans the client's own source: no process, shell, exec or eval anywhere -- except
+    `commands.py`, the one module Q16c lets start a process (pinned by
+    `test_only_the_command_module_may_start_a_process`).
+    Mutation: add `subprocess.run` (or `os.system`) to any other bridge module -> red."""
     forbidden_modules = {"subprocess", "pty", "multiprocessing", "shlex"}
     forbidden_calls = {"system", "popen", "execv", "execve", "execvp", "spawnv", "eval", "exec", "startfile"}
     offenders = []
     for path in sorted(BRIDGE_SRC.glob("*.py")):
+        if path.name == "commands.py":
+            continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):

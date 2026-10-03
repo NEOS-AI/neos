@@ -98,7 +98,11 @@ class ToolCatalogMixin:
 
             # Q16b: 쓰기를 막는 단계에서는 기기 쓰기도 보이지 않는다(게이트도 같은 규칙으로 막는다).
             writes = not write_risk_blocked(ToolRisk.WORKSPACE_WRITE, state.phase)
-            definitions = tuple(definitions) + device_tool_definitions(view.tools, writes=writes)
+            # Q16c: 명령은 `execute.v1` 이 숨는 단계(explore·plan)에서 숨는다 -- 게이트도 같은 표를 본다.
+            commands = "device_run_command.v1" not in hidden_tools_for_phase(state.phase)
+            definitions = tuple(definitions) + device_tool_definitions(
+                view.tools, writes=writes, commands=commands
+            )
         if state.allowed_tools:
             definitions = tuple(
                 item
