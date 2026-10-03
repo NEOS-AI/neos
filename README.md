@@ -1,105 +1,129 @@
 # NEOS
 
-> 🤖 Intelligent Multi-Agent AI System
+> 🤖 Multi-Agent AI Search, Analysis & Coding System
 
-A next-generation AI system built with LangGraph, CrewAI, and FastAPI. Multiple specialized agents collaborate to process complex queries and deliver high-quality, integrated responses.
+NEOS is a multi-agent AI system built on FastAPI and LangGraph. Specialized agents collaborate to search, analyze and verify information, and a sandboxed coding agent runs long tasks with human approval gates. A Next.js frontend (`web/`) streams responses from the backend.
 
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## ✨ Key Features
 
-### 🔍 Intelligent Search Agents
-- **Knowledge Search**: Knowledge base-powered search
-- **Realtime Search**: Real-time web search via Tavily API
-- **WebLookUp Agent**: Direct URL content extraction and analysis
-  - 🎭 Playwright dynamic rendering support (JavaScript/SPA)
-  - Parallel processing of multiple URLs
-  - LLM-based content analysis
-- **Multi-Query Search**: Multi-angle analysis of complex queries
-- **Deep Research**: Expert-level in-depth research reports (15-30 minutes)
-- **HyperDeepResearch**: 200+ source collection, 8-stage systematic process (30-60 minutes)
+### 🔍 Search & Research
+- **Knowledge / Realtime Search**: knowledge-base search plus web search via the Tavily API
+- **WebLookUp Agent**: direct URL extraction and analysis, with optional Playwright rendering for JavaScript/SPA pages
+- **Multi-Query Search**: multi-angle decomposition of complex queries
+- **Deep Research / HyperDeepResearch**: long-form research reports; HyperDeep uses recursive (ROMA) decomposition with a refinement loop
+- **Research skills**: built-in skill sources such as arXiv, Semantic Scholar, OpenAlex, PubMed, SEC EDGAR, Wikipedia, Reddit and GitHub (`neos/skills/builtin/`)
 
-### 📊 Advanced Analysis Agents
-- **Data Analysis**: Statistical analysis and pattern discovery
-- **Comparative Analysis**: Multi-source comparative analysis
-- **Web Content Analysis**: Web page content analysis
+### 🧪 Verified Deep Analysis
+- Budgeted round loop that only puts **verified claims** in the report (`neos/workflow/deep_analysis/`)
+- Deterministic graders check evidence presence, live sources, quote matches and confidence inflation
+- Append-only event log with record/replay cassettes and an analytics API (`/api/v1/deep-analysis/...`)
 
-### 🎨 Content Generation Agents
-- **Image Generation**: OpenAI DALL-E 3
-- **API Call**: Weather, currency exchange, stock market data
-- **File Processing**: Document analysis, conversion, summarization
-- **Task Creation**: Automated project planning
+### 💻 Coding Agent
+- Durable coding loop with checkpoints, resume, and human approval for risky tool calls (`neos/coding/`)
+- Sandboxes: in-memory, Docker, or managed providers (E2B, Modal)
+- Subagents, a credential broker (`secret://` references), MCP client connectors, and a device bridge — all **behind feature flags, off by default**
 
-### 🚀 Intelligent Workflows
-- LangGraph-based complex agent orchestration
-- Dynamic routing: Automatic selection of optimal agents based on query intent and complexity
-- Quality validation: Automatic response quality evaluation and reprocessing
-- Real-time processing: WebSocket support
+### 🛰️ Standing Agents (experimental, flag-gated)
+- Long-lived per-user agents that run background tasks from webhooks, channels (Telegram/Discord/Slack) or schedules
+- Monthly budget envelopes, monitor-driven pause and human resume, standing questions that report only new verified/refuted claims
+
+### 🎨 Generation & Tools
+- **Image Generation** (OpenAI DALL-E 3), **API Call** agent (weather, exchange rates, stock data)
+- **File Processing**: PDF, Word, Excel, PowerPoint parsing; chat attachments reach the model
+- **Scheduled tasks** via Celery Beat
+
+### 🧭 Model Routing & Platform
+- Role-based model routing (user → conversation → feature override → role default) over Anthropic, OpenAI, Gemini and Ollama providers
+- Model facts live in one catalog: `neos/config/models.yaml`
+- Chat streaming over SSE (OpenResponses events + `neos:*` extensions)
+- Observability: OpenTelemetry, Prometheus/Grafana, Arize Phoenix
 
 ## 🚀 Quick Start
 
 ### 1. Installation
 
+NEOS uses [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`).
+
 ```bash
-# Clone the repository
 git clone https://github.com/NEOS-AI/neos.git
 cd neos
 
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# Create .venv and install dependencies (including the dev group)
+uv sync
 
-# Install dependencies
-pip install -r requirements.txt
+# Optional extras: reranker, sandbox, channels, ollama
+uv sync --extra channels
 
-# Install Playwright (optional, for dynamic page rendering)
-pip install playwright
-playwright install chromium
+# Playwright browser (for dynamic page rendering)
+uv run playwright install chromium
 ```
 
 ### 2. Configuration
 
+Secrets go in `.env`; non-secret runtime settings go in a YAML overlay.
+
 ```bash
-# Create secret env and local YAML overlay
 cp .env.template .env
 cp config/neos.example.yaml config/neos.local.yaml
-
-# Set NEOS_CONFIG_PATH=config/neos.local.yaml in .env.
-# Put secrets in .env and non-secret runtime settings in YAML.
-#
-# Required API keys
-# - OPENAI_API_KEY: OpenAI API key
-# - TAVILY_API_KEY: Tavily search API key
 ```
 
-For details, see [docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
+In `.env`, set at least:
 
-### 3. Start Database, and Dependency Services
+```dotenv
+NEOS_CONFIG_PATH=config/neos.local.yaml
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/neos
+REDIS_URL=redis://localhost:6379/0
+JWT_SECRET_KEY=<random string>
 
-Run PostgreSQL and Redis with Docker:
-
-```bash
-cd db
-docker-compose up -d
+# LLM / search keys (set the providers you use)
+ANTHROPIC_API_KEY=...
+OPENAI_API_KEY=...
+TAVILY_API_KEY=...
 ```
 
-For more details, see [db/README.md](./db/README.md).
+YAML loads as `config/neos.default.yaml` → `config/neos.<NEOS_ENV>.yaml` (default `development`) → `NEOS_CONFIG_PATH`; secrets come from `.env` (or `NEOS_SECRETS_PATH`), with real process env winning. See [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) and [docs/CONFIG_INVENTORY.md](./docs/CONFIG_INVENTORY.md).
 
-### 4. Run Application
+### 3. Database and Redis
+
+The database image (PostgreSQL 16 + pgvector) and schema bootstrap are driven by `make`:
 
 ```bash
-# Start development server
-python3 -m neos.main
+make image-build     # build the neos-paradedb image
+make db-up           # start the container and wait for pg_isready
+make db-bootstrap    # apply the schema in canonical order (creates the DB if missing)
 
-# Or run uvicorn directly
-uvicorn neos.main:app --reload --host 0.0.0.0 --port 8518
+# Redis-compatible cache/broker
+docker run --name neos-valkey -p 6379:6379 -d valkey/valkey
+```
 
-# Also, you could use Granian for better performance
+The schema order is defined by [db/BOOTSTRAP_ORDER.txt](./db/BOOTSTRAP_ORDER.txt). Run `make help` for all targets (`db-reset`, `db-shell`, `db-verify`, ...) and see [db/README.md](./db/README.md) for details.
+
+### 4. Run the Backend
+
+```bash
+# Development server (port 8518)
+uv run python -m neos.main
+
+# Or with uvicorn / Granian
+uv run uvicorn neos.main:app --reload --host 0.0.0.0 --port 8518
 uv run granian --port 8518 --host 0.0.0.0 neos/main:app
 ```
 
-### 5. Test API
+Celery workers (queues: `search`, `analysis`, `generation`, `default`) and Flower can be started from `docker-compose.dev.yml` with `--profile celery`.
+
+### 5. Run the Frontend (optional)
+
+```bash
+cd web
+cp .env.example .env.local   # set BACKEND_URL=http://localhost:8518, auth secrets, etc.
+pnpm install
+pnpm dev                     # http://localhost:3000
+```
+
+### 6. Test the API
 
 ```bash
 # Health check
@@ -114,62 +138,73 @@ CONV=$(curl -s -X POST http://localhost:8518/api/v1/chat/conversations \
   -d '{"title": "AI trends"}' | jq -r .conversation_id)
 curl -N -X POST "http://localhost:8518/api/v1/chat/conversations/$CONV/messages/stream" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"content": "Analyze AI trends in 2024"}'
+  -d '{"content": "Analyze AI trends in 2026"}'
 ```
 
-### 6. Optional test suites
+Interactive API docs: **Swagger UI** at http://localhost:8518/docs, **ReDoc** at http://localhost:8518/redoc.
 
-Most suites run with no external services. These need explicit opt-in:
+> In non-debug runtimes the legacy chat/query/workflow WebSocket routes are not mounted; chat uses the SSE stream above. Only the coding WebSocket remains, with ticket authentication.
+
+## 🧪 Running Tests
+
+```bash
+# Backend (pytest.ini sets asyncio mode and test paths)
+uv run pytest -q
+
+# Frontend
+cd web && pnpm test:source && pnpm typecheck
+```
+
+Integration tests need a bootstrapped PostgreSQL; `tests/conftest.py` only lets tests touch a database whose name ends in `_test`. Some suites need explicit opt-in:
 
 ```bash
 # Managed sandbox control plane against a real PostgreSQL
 CODING_TEST_DATABASE_URL='postgresql+asyncpg://user:pass@host/db' \
-  .venv/bin/pytest -q tests/coding/managed/integration -rs
+  uv run pytest -q tests/coding/managed/integration -rs
 
 # Vendor sandbox smokes (each creates one sandbox, <=300s, network blocked,
 # destroyed in finally)
 CODING_TEST_E2B=1 E2B_API_KEY=<key> \
-  .venv/bin/pytest -q tests/coding/managed/integration/test_e2b_opt_in.py -rs
+  uv run pytest -q tests/coding/managed/integration/test_e2b_opt_in.py -rs
 
 CODING_TEST_MODAL=1 MODAL_TOKEN_ID=<id> MODAL_TOKEN_SECRET=<secret> \
-  .venv/bin/pytest -q tests/coding/managed/integration/test_modal_opt_in.py -rs
+  uv run pytest -q tests/coding/managed/integration/test_modal_opt_in.py -rs
 
 # Docker sandbox gateway
 CODING_TEST_DOCKER=1 \
   CODING_TEST_DOCKER_IMAGE='registry/neos-sandbox@sha256:<digest>' \
-  .venv/bin/pytest -q tests/coding/integration/test_docker_workspace_gateway.py -rs
+  uv run pytest -q tests/coding/integration/test_docker_workspace_gateway.py -rs
 ```
 
-Skipped suites report the exact variable to set. Operations runbook:
-[docs/NEOS_CODING.md](docs/NEOS_CODING.md) §24.
+Skipped suites report the exact variable to set.
 
 ## 🎯 Usage Examples
 
-### CLI Commands
+### CLI
+
+> The CLI imports `rich`, which is not yet declared in `pyproject.toml`. Until it is, install it first: `uv pip install rich`.
 
 ```bash
-# General query
-python -m neos.cli workflow test "Analyze AI trends in 2026"
+uv run python -m neos.cli status
 
-# Stock price prediction
-python -m neos.cli workflow test "nvidia stock price prediction for Q1 2026"
+# Full workflow
+uv run python -m neos.cli workflow test "Analyze AI trends in 2026"
 
-# URL content analysis
-python -m neos.cli workflow web-lookup https://www.example.com
+# URL content analysis (--dynamic renders JavaScript with Playwright)
+uv run python -m neos.cli workflow web-lookup https://www.example.com
+uv run python -m neos.cli workflow web-lookup https://spa-app.com --dynamic
 
-# Dynamic page rendering (JavaScript support)
-python -m neos.cli workflow web-lookup https://spa-app.com --dynamic
+# Deep Research / HyperDeepResearch
+uv run python -m neos.cli workflow deep-research "AI semiconductor market outlook"
+uv run python -m neos.cli workflow hyper-deep-research "2026년 글로벌 AI 시장 전망"
 
-# Deep Research
-python -m neos.cli workflow deep-research "AI semiconductor market outlook"
-
-# HyperDeepResearch
-python -m neos.cli workflow hyper-deep-research "2025년 글로벌 AI 시장 전망"
+# Interactive mode
+uv run python -m neos.cli interactive
 ```
 
-For more CLI examples, see [docs/CLI_GUIDE.md](./docs/CLI_GUIDE.md).
+Other groups: `agent`, `mcp`, `dataset`, `config`. See [docs/CLI_GUIDE.md](./docs/CLI_GUIDE.md).
 
-### API Calls
+### API (Python)
 
 ```python
 import requests
@@ -197,79 +232,50 @@ with requests.post(
             print(line[6:])
 ```
 
-### Python Code
+### Agents in Python
 
 ```python
 from neos.agents.search_agents import WebLookUpAgent
 
-# Using WebLookUp Agent
 agent = WebLookUpAgent(use_playwright=True)
 result = await agent.execute(
     query="Analyze https://example.com",
-    context={"session_id": "session_123", "user_id": "user_456"}
+    context={"session_id": "session_123", "user_id": "user_456"},
 )
 ```
 
-## 📚 Documentation
+## 🗂️ Project Layout
 
-### User Guides
-- [CLI Guide](./docs/CLI_GUIDE.md)
-- [Playwright Setup](./docs/PLAYWRIGHT_SETUP.md)
-
-### Agents
-- [WebLookUp Agent](./docs/WEB_LOOKUP_AGENT.md)
-- [API Call Agent](./docs/API_INTEGRATIONS.md)
-
-### Other
-- [Roadmap](./docs/ROADMAP.md)
-- [Changelog](./changelog.md)
+| Path | Contents |
+|---|---|
+| `neos/api/` | FastAPI routers and handlers |
+| `neos/workflow/` | LangGraph workflow, deep analysis loop, HyperDeep, recursive (ROMA) engine |
+| `neos/agents/` | Search, analysis and generation agents |
+| `neos/coding/` | Coding agent loop, sandboxes, connectors, secrets, device bridge |
+| `neos/standing/` | Standing agents |
+| `neos/providers/` | Model provider plugins (Anthropic, OpenAI, Gemini, Ollama) |
+| `neos/config/` | Settings schema, loader, model catalog (`models.yaml`) |
+| `neos/skills/` | Skill auto-discovery and built-in skills |
+| `neos/memory/` | Short-term, episodic and long-term memory |
+| `neos/database/` | SQLAlchemy models and connections |
+| `neos/observability/` | Metrics and tracing |
+| `db/` | SQL schema, migrations, bootstrap order |
+| `config/` | Runtime YAML profiles, nginx, Prometheus, Grafana, Loki |
+| `web/` | Next.js frontend |
 
 ## 🛠️ Tech Stack
 
-- **Frameworks**: FastAPI, LangGraph, CrewAI
-- **Databases**: PostgreSQL + pgvector, Redis
-- **AI Models**: OpenAI GPT-4, DALL-E 3
-- **Search**: Tavily API
-- **Rendering**: Playwright, BeautifulSoup4
-- **Language**: Python 3.11+
+- **Backend**: Python 3.12+, FastAPI, Uvicorn/Granian, LangGraph
+- **LLMs**: Anthropic Claude, OpenAI, Google Gemini, Ollama (via role-based routing)
+- **Data**: PostgreSQL 16 + pgvector, Redis/Valkey (semantic cache, Celery broker)
+- **Tasks / Distribution**: Celery 5, Ray (optional, `RAY_ENABLED`)
+- **Search & Rendering**: Tavily, Playwright, Trafilatura
+- **Observability**: OpenTelemetry, Prometheus, Grafana, Loki, Arize Phoenix
+- **Frontend**: Next.js 16, React 19, NextAuth.js v5, Vercel AI SDK
 
-For more details, see [System Architecture](./docs/ARCHITECTURE.md).
+## 📚 Documentation
 
-## 📊 API Documentation
-
-After running the application, access interactive API documentation at:
-
-- **Swagger UI**: http://localhost:8518/docs
-- **ReDoc**: http://localhost:8518/redoc
-
-## 🌟 Highlights
-
-### WebLookUp Agent 🔗
-- Automatic URL content extraction and analysis
-- Static HTML: Fast processing (1-3 seconds)
-- Dynamic rendering: JavaScript/SPA support (10-30 seconds)
-- Parallel processing of multiple URLs
-
-### Deep Research 🔬
-- 4-stage in-depth exploration process
-- 30-50+ source collection
-- Expert-level markdown reports
-- Automatic gap analysis and validation
-
-### API Integration 🌐
-- Real-time weather, currency exchange, stock data
-- Automatic natural language parameter extraction
-- 160+ currency support
-- Financial statement retrieval
-
-## 🗺️ Roadmap
-
-See [ROADMAP.md](./docs/ROADMAP.md) for the complete roadmap.
-
-## 🙏 Acknowledgments
-
-- [LangGraph](https://github.com/langchain-ai/langgraph)
-- [CrewAI](https://github.com/crewAIInc/crewAI)
-- [FastAPI](https://github.com/fastapi/fastapi)
-- [Tavily](https://tavily.com)
-- [Playwright](https://playwright.dev)
+- **Setup**: [Configuration](./docs/CONFIGURATION.md) · [Config inventory](./docs/CONFIG_INVENTORY.md) · [Google OAuth](./docs/GOOGLE_OAUTH_SETUP.md) · [Database](./db/README.md)
+- **Usage**: [CLI Guide](./docs/CLI_GUIDE.md) · [API Integrations](./docs/API_INTEGRATIONS.md) · [OpenResponses spec](./docs/OPEN_RESPONSES_SPEC.md)
+- **Design**: [Model catalog](./docs/MODEL_CATALOG_DESIGN.md) · [Deep analysis harness](./docs/DEEP_ANALYSIS_HARNESS_DESIGN.md) · [Subagent runtime](./docs/SUBAGENT_RUNTIME_DESIGN.md) · [Standing agents](./docs/Q13_STANDING_AGENT_DESIGN_260930.md)
+- **Roadmap**: [Deep analysis harness roadmap](./docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md) (current track status) · [ROADMAP](./docs/ROADMAP.md)
