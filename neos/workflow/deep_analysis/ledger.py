@@ -582,7 +582,46 @@ class Ledger:
         if not isinstance(deterministic_code, str):
             deterministic_code = "" if deterministic == "passed" else verdict.code
 
+        def short_str(key: str, allowed: set[str] | None = None, limit: int = 128):
+            value = diagnostics.get(key)
+            if not isinstance(value, str):
+                return None
+            if allowed is not None and value not in allowed:
+                return None
+            return value[:limit]
+
+        # L6 (D99 · S13). 이 화이트리스트가 Jev 필드를 몰라서 표본 #23 의 원장에 판정자가
+        # 남지 않았다 -- `Verdict.diagnostics` 까지만 확인한 테스트는 그것을 못 봤다(D102).
+        # 클레임 문장·증거는 싣지 않는다: 이름·수치·digest 뿐이다.
+        probabilities = diagnostics.get("jev_probabilities")
+        if isinstance(probabilities, dict):
+            probabilities = {
+                str(label)[:32]: min(1.0, max(0.0, float(p)))
+                for label, p in list(probabilities.items())[:8]
+                if isinstance(p, (int, float))
+                and not isinstance(p, bool)
+                and math.isfinite(float(p))
+            }
+        else:
+            probabilities = None
+        judge_fields = {
+            "judge_backend": short_str("judge_backend", {"jev", "llm_fallback"}),
+            "jev_unavailable": short_str("jev_unavailable", limit=64),
+            "jev_model": short_str("jev_model", limit=64),
+            "jev_rubric_digest": short_str("jev_rubric_digest", limit=64),
+            "jev_choice": short_str("jev_choice", limit=32),
+            "jev_confidence": finite_float("jev_confidence", bounded=True),
+            "jev_min_confidence": finite_float("jev_min_confidence", bounded=True),
+            "jev_probabilities": probabilities,
+            "judge_detail": (
+                verdict.detail
+                if isinstance(verdict.detail, str) and verdict.detail.startswith("jev_")
+                else None
+            ),
+        }
+
         return {
+            **{key: value for key, value in judge_fields.items() if value is not None},
             "claim_id": claim_id,
             "outcome": outcome,
             "code": verdict.code if isinstance(verdict.code, str) else "",

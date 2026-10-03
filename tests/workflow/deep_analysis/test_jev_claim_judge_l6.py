@@ -245,3 +245,69 @@ def test_assembly_is_the_only_place_that_decides():
     judge = build_claim_judge(on, api_key="k", client=JevClient())
     assert isinstance(judge, TypeSafeClaimJudge)
     assert judge.labels == ("SUPPORTS", "PARTIAL", "UNRELATED", "CONTRADICTS")
+
+
+# -- 원장까지 도착하는가 (D102) ------------------------------------------------
+#
+# 위 테스트들은 `Verdict.diagnostics` 까지만 봤다. 원장의 `claim_graded` 는
+# `Ledger._claim_graded_payload` 의 화이트리스트를 지나며, 그것이 Jev 필드를 몰라서
+# 표본 #23 의 원장에 판정자가 하나도 남지 않았다. 여기서는 **원장이 쓰는 payload** 를 본다.
+
+
+async def test_a_jev_verdict_reaches_the_ledger_payload():
+    import json
+
+    from neos.workflow.deep_analysis.ledger import Ledger
+
+    verdict = await _grader(JevClient(_response("SUPPORTS", 0.9)), LlmJudge("SUPPORTS")).grade(
+        _claim(), value_est=1.0
+    )
+    payload = Ledger._claim_graded_payload("c1", "verified", verdict)
+    json.dumps(payload)  # 진짜 원장은 JSON 만 받는다
+    assert payload["judge_backend"] == "jev"
+    assert payload["jev_model"] == "jev-1.13.0"
+    assert payload["jev_rubric_digest"] == load_rubric("claim_judgement").digest
+    assert payload["jev_min_confidence"] == 0.5 and payload["jev_confidence"] == 0.9
+    assert payload["jev_probabilities"] == PROBS and payload["jev_choice"] == "SUPPORTS"
+
+
+async def test_the_ledger_tells_an_uncertain_rejection_from_a_waf_block():
+    from neos.workflow.deep_analysis.ledger import Ledger
+
+    uncertain = await _grader(JevClient(_response("SUPPORTS", 0.1)), LlmJudge("SUPPORTS")).grade(
+        _claim(), value_est=1.0
+    )
+    blocked = await _grader(JevClient(error=Blocked()), LlmJudge("SUPPORTS")).grade(
+        _claim(), value_est=1.0
+    )
+    assert Ledger._claim_graded_payload("c", "rejected", uncertain)["judge_detail"] == (
+        "jev_uncertain_mandatory"
+    )
+    b = Ledger._claim_graded_payload("c", "rejected", blocked)
+    assert b["judge_detail"] == "jev_provider_blocked" and b["jev_unavailable"] == "provider_blocked"
+
+
+async def test_a_fallback_is_visible_in_the_ledger():
+    from neos.workflow.deep_analysis.ledger import Ledger
+
+    verdict = await _grader(JevClient(error=TimeoutError()), LlmJudge("SUPPORTS")).grade(
+        _claim(), value_est=1.0
+    )
+    payload = Ledger._claim_graded_payload("c", "verified", verdict)
+    assert payload["judge_backend"] == "llm_fallback"
+    assert payload["jev_unavailable"] == "TimeoutError"
+
+
+async def test_with_jev_off_the_ledger_payload_gains_no_key():
+    """L6 이 꺼진 런의 원장은 바이트가 같아야 한다 -- 새 키가 하나도 없다."""
+    from neos.workflow.deep_analysis.ledger import Ledger
+
+    llm_only = AgenticGrader(
+        judge_model="claude-j",
+        threshold=0.0,
+        sample_rate=1.0,
+        max_output_tokens=800,
+        llm_client=LlmJudge("SUPPORTS"),
+    )
+    payload = Ledger._claim_graded_payload("c", "verified", await llm_only.grade(_claim(), 1.0))
+    assert not [key for key in payload if key.startswith(("jev_", "judge_"))]
