@@ -892,3 +892,26 @@ def test_sample_24_differs_from_sample_23_by_budget2_alone(tmp_path, monkeypatch
     config = loader.load_app_config(config_path="config/samples/sample-24.yaml")
     assert config.deep_analysis.budget_aware_reduction is True
     assert config.jev.judge_enabled is True
+
+
+def test_sample_25_differs_from_sample_24_by_the_compose_child_alone(tmp_path, monkeypatch):
+    """#25 의 비교 대상은 #24 하나다 -- 다른 것은 compose 자식 한 줄(D105)."""
+    from pathlib import Path
+
+    import yaml
+
+    from neos.config import loader
+
+    s24 = yaml.safe_load(Path("config/samples/sample-24.yaml").read_text(encoding="utf-8"))
+    s25 = yaml.safe_load(Path("config/samples/sample-25.yaml").read_text(encoding="utf-8"))
+    assert s25["jev"] == s24["jev"]
+    assert s25["deep_analysis"] == {**s24["deep_analysis"], "compose_child_enabled": True}
+    assert set(s25) == set(s24)
+
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
+    config = loader.load_app_config(config_path="config/samples/sample-25.yaml")
+    assert config.deep_analysis.compose_child_enabled is True
+    assert config.deep_analysis.code_research_enabled is False  # research 워커는 옛 경로

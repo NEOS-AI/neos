@@ -1205,6 +1205,12 @@ class DeepAnalysisConfig(StrictConfigModel):
     # development 밖에서 켜려면 관리형 평면이 필요하다(I7).
     code_research_enabled: bool = False
     code_research: CodeResearchConfig = Field(default_factory=CodeResearchConfig)
+    # 트랙 J4 (DECISIONS D105). 켜면 최종 조립을 `Synthesizer.assemble` 대신 compose 자식이
+    # 한다 -- verified 클레임을 **파일로** 공개하고(점진 공개), 자식이 리포트를 워크스페이스에
+    # 쓰고 `check_claims.v1` 로 인용을 스스로 검사한다. `code_research_enabled` 와 **따로** 둔
+    # 이유: 그것을 켜면 research 워커도 코딩 루프가 되어 한 표본에 처방 둘이 들어간다.
+    # development 밖에서 켜려면 관리형 평면이 필요하다(I7 과 같은 문).
+    compose_child_enabled: bool = False
 
     # Input allowances for the finalization stages, expressed as multiples of
     # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
@@ -2719,7 +2725,10 @@ class AppConfig(StrictConfigModel):
         바로 위 "production + docker 거절" 과 같은 판단이고, 같은 fail-closed
         형태로 둔다.
         """
-        if not self.deep_analysis.code_research_enabled:
+        if not (
+            self.deep_analysis.code_research_enabled
+            or self.deep_analysis.compose_child_enabled
+        ):
             return self
         # 심층 방어. 2026-09-23 부터 Docker provider 는 조사 샌드박스를
         # `profile` 과 함께 열고 그 네트워크 정책을 **스스로** 강제한다
