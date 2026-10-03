@@ -868,3 +868,27 @@ def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monk
     # 표본 #23 은 도구 위험 게이트·감시자를 DA 에 켜지 않는다(D98 §7 그대로).
     assert config.jev.tool_risk_gate_enabled is False
     assert config.jev.monitor.shadow_enabled is False
+
+
+def test_sample_24_differs_from_sample_23_by_budget2_alone(tmp_path, monkeypatch):
+    """#24 의 비교 대상은 #23 하나다 -- 다른 것은 BUDGET2 한 줄, 판정자는 같다(D101)."""
+    from pathlib import Path
+
+    import yaml
+
+    from neos.config import loader
+
+    s23 = yaml.safe_load(Path("config/samples/sample-23.yaml").read_text(encoding="utf-8"))
+    s24 = yaml.safe_load(Path("config/samples/sample-24.yaml").read_text(encoding="utf-8"))
+    assert s24["jev"] == s23["jev"]
+    assert s23["deep_analysis"] == {"budget_aware_reduction": False}
+    assert s24["deep_analysis"] == {"budget_aware_reduction": True}
+    assert set(s24) == set(s23) == {"deep_analysis", "jev"}
+
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
+    config = loader.load_app_config(config_path="config/samples/sample-24.yaml")
+    assert config.deep_analysis.budget_aware_reduction is True
+    assert config.jev.judge_enabled is True

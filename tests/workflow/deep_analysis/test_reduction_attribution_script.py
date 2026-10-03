@@ -335,6 +335,13 @@ def test_budget2_expectation_counts_a_missing_flag_as_a_mismatch():
     assert [p.split(":")[0] for p in problems] == ["aaaa0002", "aaaa0003"]
 
 
+def test_claim_judge_expectation_counts_a_missing_backend_as_a_mismatch():
+    """#23·#24 는 같은 판정자여야 비교가 성립한다(D101). 매니페스트에 없는 런은 모른다."""
+    backends = {"aaaa0001": "jev", "aaaa0002": None, "aaaa0003": "llm"}
+    problems = cli.claim_judge_problems(backends, expected="jev")
+    assert [p.split(":")[0] for p in problems] == ["aaaa0002", "aaaa0003"]
+
+
 @pytest.mark.asyncio
 async def test_sql_counts_match_the_parser_on_a_real_ledger():
     """두 집계가 같은 원장에서 같은 수를 내는지 -- 실제 Postgres 에서."""

@@ -1,0 +1,15 @@
+# 표본 #24 전용 오버레이 (DECISIONS D101 · D98 §1).
+#
+#   NEOS_CONFIG_PATH=config/samples/sample-24.yaml .venv/bin/python scripts/deep_analysis_funnel_sample.py ...
+#
+# #24 = #23 과 **같은 표본에서 BUDGET2 만 켠 것**이다. 비교 대상은 #23 하나다(D98 §1).
+# 그래서 #23 과 다른 것은 `budget_aware_reduction` 한 줄뿐이어야 하고, 판정자는 #23 과
+# **같은 Jev 블록**이다(D99 · D101) -- 판정자가 갈라지면 BUDGET2 효과를 가를 수 없다.
+# 테스트가 이 파일과 sample-23.yaml 의 차이가 그 한 줄임을 고정한다.
+deep_analysis:
+  budget_aware_reduction: true
+jev:
+  enabled: true
+  model: jev-1.13.0
+  judge_enabled: true
+  judge_min_confidence: 0.60

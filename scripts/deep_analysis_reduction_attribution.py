@@ -450,6 +450,20 @@ def budget2_problems(
     ]
 
 
+def claim_judge_problems(
+    backends: dict[str, str | None], expected: str
+) -> list[str]:
+    """런별 매니페스트의 `claim_judge.backend` (D99·D101). 없으면 기대와 다른 것으로 센다.
+
+    #23·#24 는 같은 판정자여야 비교가 성립한다 -- BUDGET2 플래그와 같은 이중 검사다.
+    """
+    return [
+        f"{prefix}: 매니페스트의 claim_judge.backend={value} (기대 {expected})"
+        for prefix, value in sorted(backends.items())
+        if value != expected
+    ]
+
+
 def verify_d92(counts: GateCounts) -> list[str]:
     problems: list[str] = []
     for field_name in ("summaries", "degradations", "input_bound", "truncated"):
@@ -519,6 +533,20 @@ async def _independent_counts(session, prefixes: list[str]) -> GateCounts:
         )
     ).one()
     return GateCounts(*(int(value or 0) for value in row))
+
+
+async def _manifest_configs(session, prefixes: list[str]) -> dict[str, dict]:
+    configs: dict[str, dict] = {}
+    for prefix in prefixes:
+        raw = await session.scalar(
+            select(DAEvent.payload)
+            .where(DAEvent.run_id.like(f"{prefix}%"), DAEvent.kind == "run_manifest")
+            .order_by(DAEvent.seq)
+            .limit(1)
+        )
+        payload = {} if raw is None else (raw if isinstance(raw, dict) else json.loads(raw))
+        configs[prefix] = payload.get("config", {})
+    return configs
 
 
 async def _budget2_flags(session, prefixes: list[str]) -> dict[str, bool | None]:
@@ -610,14 +638,20 @@ async def _run(
     extra_runs: list[str],
     verify: bool,
     expect_budget2: bool | None = None,
+    expect_claim_judge: str | None = None,
 ) -> int:
     by_sample: dict[str, list[RunAttribution]] = {}
     independent: GateCounts | None = None
     flags: dict[str, bool | None] = {}
+    judges: dict[str, str | None] = {}
     async with get_session_ctx() as session:
         if extra_runs:
             independent = await _independent_counts(session, extra_runs)
             flags = await _budget2_flags(session, extra_runs)
+            judges = {
+                prefix: (config.get("claim_judge") or {}).get("backend")
+                for prefix, config in (await _manifest_configs(session, extra_runs)).items()
+            }
         for sample in samples:
             by_sample[sample] = [
                 await _load_run(session, prefix) for prefix in SAMPLES[sample]
@@ -640,6 +674,8 @@ async def _run(
         problems = cross_check(parsed, independent)
         if expect_budget2 is not None:
             problems += budget2_problems(flags, expect_budget2)
+        if expect_claim_judge is not None:
+            problems += claim_judge_problems(judges, expect_claim_judge)
         if problems:
             print("🔴 독립 집계 게이트 실패 — 판정을 내지 않는다:")
             for problem in problems:
@@ -706,6 +742,11 @@ def main() -> int:
         help="--run 의 모든 런 매니페스트가 이 BUDGET2 상태를 적었는지 본다. #23 은 off (D-14).",
     )
     parser.add_argument(
+        "--expect-claim-judge",
+        choices=["jev", "llm"],
+        help="--run 의 모든 런 매니페스트가 이 판정자를 적었는지 본다. #23·#24 는 jev (D99·D101).",
+    )
+    parser.add_argument(
         "--no-verify-d92",
         action="store_true",
         help="D92 재현 게이트를 끈다. SAMPLES 를 확장할 때만 쓸 것.",
@@ -718,6 +759,7 @@ def main() -> int:
             args.run,
             verify=not args.no_verify_d92,
             expect_budget2=None if args.expect_budget2 is None else args.expect_budget2 == "on",
+            expect_claim_judge=args.expect_claim_judge,
         )
     )
 
