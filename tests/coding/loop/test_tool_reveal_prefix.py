@@ -139,7 +139,15 @@ async def test_the_reveal_is_announced_instead_of_rewriting_the_tools() -> None:
         for block in message["content"]
         if isinstance(block, dict) and block.get("type") == "tool_addition"
     ]
-    assert [block["tool"]["name"] for block in announced] == [REVEALED], (
+    # D106: 이름은 와이어에서 인코딩된다(`git_status.v1` → `git_status_v1`). 공개가 실제로
+    # 그 도구를 여는지는 "공개 블록의 이름 == 같은 payload 에 deferred 로 선언된 이름" 으로 본다.
+    from neos.coding.model.names import ToolNameCodec
+
+    wire = ToolNameCodec([REVEALED]).wire(REVEALED)
+    assert [block["tool"]["name"] for block in announced] == [wire], (
         "a deferred tool is hidden until it is announced, so without the "
         "block the reveal silently never happens"
+    )
+    assert wire in [tool["name"] for tool in deferred], (
+        "the reveal must name a tool this payload declared as deferred"
     )

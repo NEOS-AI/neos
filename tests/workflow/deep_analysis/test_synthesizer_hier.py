@@ -915,3 +915,14 @@ def test_sample_25_differs_from_sample_24_by_the_compose_child_alone(tmp_path, m
     config = loader.load_app_config(config_path="config/samples/sample-25.yaml")
     assert config.deep_analysis.compose_child_enabled is True
     assert config.deep_analysis.code_research_enabled is False  # research 워커는 옛 경로
+
+
+def test_sample_26_is_sample_25_again():
+    """#25 는 배선 결함으로 무효였다(D106). #26 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s25 = yaml.safe_load(Path("config/samples/sample-25.yaml").read_text(encoding="utf-8"))
+    s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
+    assert s26 == s25
