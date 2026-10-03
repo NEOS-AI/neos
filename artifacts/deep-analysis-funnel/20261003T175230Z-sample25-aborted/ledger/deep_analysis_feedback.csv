@@ -1,0 +1,17 @@
+id,run_id,claim_id,code,detail,salvage,attempt,resolved
+950,785b2e93,d32d3ae4,E_OVERCLAIM,jev PARTIAL confidence=0.740,,1,0
+951,785b2e93,ac519c16,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+952,785b2e93,039113a4,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+953,29e5988a,5f3429f2,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+954,29e5988a,b1b7e2d8,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+955,6206a6ce,1a9ee101,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+956,6206a6ce,0cb8e2b1,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+957,6206a6ce,bb4725ba,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+958,6206a6ce,ad3b668d,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+959,6206a6ce,6b661c27,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+960,6206a6ce,9e8c13ec,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+961,64a49fb3,c8a6a8f7,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+962,64a49fb3,771aa2be,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+963,95c7c715,58906bd4,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+964,95c7c715,074ffdfb,E_UNSUPPORTED,jev_uncertain_mandatory,,1,1
+965,95c7c715,b99f4047,E_OVERCLAIM,jev PARTIAL confidence=0.950,,1,0
