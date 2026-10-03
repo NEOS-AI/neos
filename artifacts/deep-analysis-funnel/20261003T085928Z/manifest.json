@@ -1,0 +1,876 @@
+{
+  "config_fingerprint": {
+    "git": {
+      "branch": "dev",
+      "commit": "1430199366aa349dc40538fe327760091ef51547",
+      "dirty": false,
+      "dirty_paths": []
+    },
+    "manifest_version": 1,
+    "runs": {
+      "090eb8e7": {
+        "budget": {
+          "available_for_investigation": 86400,
+          "finalization_floor_tokens": 53600,
+          "global_token_cap": 140000,
+          "grading_floor_tokens": 21600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 43200,
+          "synthesis_max_tokens": 2000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 2,
+          "parallel_workers": 2,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "dev",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      },
+      "24136c2b": {
+        "budget": {
+          "available_for_investigation": 194400,
+          "finalization_floor_tokens": 105600,
+          "global_token_cap": 300000,
+          "grading_floor_tokens": 41600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 84800,
+          "synthesis_max_tokens": 4000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 4,
+          "parallel_workers": 4,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "default",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      },
+      "4bbced6f": {
+        "budget": {
+          "available_for_investigation": 86400,
+          "finalization_floor_tokens": 53600,
+          "global_token_cap": 140000,
+          "grading_floor_tokens": 21600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 43200,
+          "synthesis_max_tokens": 2000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 2,
+          "parallel_workers": 2,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "dev",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      },
+      "67fea8f9": {
+        "budget": {
+          "available_for_investigation": 86400,
+          "finalization_floor_tokens": 53600,
+          "global_token_cap": 140000,
+          "grading_floor_tokens": 21600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 43200,
+          "synthesis_max_tokens": 2000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 2,
+          "parallel_workers": 2,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "dev",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      },
+      "9605ce9d": {
+        "budget": {
+          "available_for_investigation": 86400,
+          "finalization_floor_tokens": 53600,
+          "global_token_cap": 140000,
+          "grading_floor_tokens": 21600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 43200,
+          "synthesis_max_tokens": 2000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 2,
+          "parallel_workers": 2,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "dev",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      },
+      "c883583c": {
+        "budget": {
+          "available_for_investigation": 86400,
+          "finalization_floor_tokens": 53600,
+          "global_token_cap": 140000,
+          "grading_floor_tokens": 21600,
+          "min_viable_output_tokens": 2048,
+          "report_floor_funded_attempts": 1.2,
+          "report_floor_tokens": 43200,
+          "synthesis_max_tokens": 2000
+        },
+        "components": {
+          "agentic_grader": "graders.agentic:AgenticGrader",
+          "cassette": true,
+          "citation_renderer": "citation:CitationRenderer",
+          "fetch_fn": null,
+          "grader": "graders.deterministic:DeterministicGrader",
+          "report_grader": "graders.report:ReportGrader",
+          "search_fn": "web_search",
+          "synthesizer": "synthesizer:Synthesizer"
+        },
+        "config": {
+          "agentic_sample_rate": 0.3,
+          "agentic_threshold": 0.35,
+          "budget_aware_reduction": false,
+          "claim_judge": {
+            "backend": "jev",
+            "fallback": "llm",
+            "min_confidence": 0.6,
+            "model": "jev-1.13.0",
+            "rubric": "claim_judgement",
+            "rubric_digest": "6f294f1ad42d5ab46236282878fe1be669f79e55084ccbddabf71ca7bf662ed3"
+          },
+          "claim_retry_cap": 2,
+          "confidence_cap": {
+            "1": 0.6,
+            "2": 0.8,
+            "3": 0.95
+          },
+          "decompose_max_tokens": 3200,
+          "effort": {
+            "dig": {
+              "token_cap": 12000,
+              "wall_clock_cap": 600
+            },
+            "scout": {
+              "token_cap": 2000,
+              "wall_clock_cap": 120
+            },
+            "synth": {
+              "token_cap": 8000,
+              "wall_clock_cap": 300
+            }
+          },
+          "entailment_max_output_tokens": 3000,
+          "judge_max_output_tokens": 800,
+          "max_depth": 2,
+          "parallel_workers": 2,
+          "quote_match_threshold": 0.92,
+          "subquestions": {
+            "adopt_cap": 4,
+            "adopt_threshold": 0.3,
+            "budget_policy": "uniform",
+            "reviewer_enabled": false
+          }
+        },
+        "judge_equals_scout": false,
+        "manifest_version": 1,
+        "models": {
+          "dig": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          },
+          "judge": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-4-8",
+            "role": "everyday",
+            "source": "feature_override"
+          },
+          "scout": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-sonnet-5",
+            "role": "everyday",
+            "source": "role_default"
+          },
+          "synth": {
+            "effort": {
+              "level": null,
+              "refused": null,
+              "source": null
+            },
+            "model": "claude-opus-5-5",
+            "role": "powerful",
+            "source": "role_default"
+          }
+        },
+        "profile": "dev",
+        "prompts": {
+          "claim_entailment": "sha256:7887c12f6b4d00374710d418892cf7705316b718c0345974b5b76e5097d62072",
+          "decompose": "sha256:c7dce187b9c6b93fc168d4395f9c9e4005c08c1668a951c43f6ef5c214124bc5",
+          "final_compose": "sha256:867fa6dbc51ffea31bb67c8948184460ec591c824cf9eebf3174055daeb34b03",
+          "judge": "sha256:533f4c0d9c93edf49223b28a3318c4e6097b58466f5259908d0743dee86ca2dc",
+          "judge_computed": "sha256:438515a91c6648367cafef388cde0b04b42d25a528b47943d809c63cedc7d3e7",
+          "node_summary": "sha256:059060acf0d72ee7700bcf9a768064cc59def53df84a4f7a8b88298e88e6bf1e",
+          "report_judge": "sha256:76c1f9bbb6a93ebcc729d1bef6bbf119086b541a39f1b49ec26a66e7ca49402a",
+          "subq_review": "sha256:4f1361ed3660fa401ca3d97dcd6ca9fc119d9f4ca6df13f3d283555902b440fb",
+          "worker_brief": "sha256:79bdc780d0ee23fe7999489524d5f2041b98a08154834372e388cb188cb65cad"
+        },
+        "skills": null
+      }
+    }
+  },
+  "default_run": {
+    "case_id": "fact-eu-ai-act",
+    "category": "fact",
+    "elapsed_seconds": 813.6567763341591,
+    "profile": "default",
+    "question": "As of 2026-07-19, which EU AI Act obligations for providers of general-purpose AI models are already applicable, and on what dates did they begin to apply? Use official EU sources.",
+    "run_id": "24136c2b",
+    "status": "completed",
+    "tokens_spent": 156467
+  },
+  "dev_runs": [
+    {
+      "case_id": "fact-eu-ai-act",
+      "category": "fact",
+      "elapsed_seconds": 720.6568459998816,
+      "order": 0,
+      "profile": "dev",
+      "question": "As of 2026-07-19, which EU AI Act obligations for providers of general-purpose AI models are already applicable, and on what dates did they begin to apply? Use official EU sources.",
+      "run_id": "67fea8f9",
+      "status": "completed",
+      "tokens_spent": 65715
+    },
+    {
+      "case_id": "fact-aspartame",
+      "category": "fact",
+      "elapsed_seconds": 729.4342020419426,
+      "order": 1,
+      "profile": "dev",
+      "question": "Did WHO or IARC classify aspartame as carcinogenic in 2023, and how does that hazard classification differ from JECFA's risk assessment? Use primary institutional sources.",
+      "run_id": "c883583c",
+      "status": "completed",
+      "tokens_spent": 70791
+    },
+    {
+      "case_id": "tech-hybrid-search",
+      "category": "technical",
+      "elapsed_seconds": 825.6746965420898,
+      "order": 2,
+      "profile": "dev",
+      "question": "Compare PostgreSQL 17 and Elasticsearch 8.x for hybrid lexical and vector search, including native capabilities, consistency, ranking controls, and operational trade-offs. Prefer official documentation and primary sources.",
+      "run_id": "4bbced6f",
+      "status": "completed",
+      "tokens_spent": 71810
+    },
+    {
+      "case_id": "tech-free-threading",
+      "category": "technical",
+      "elapsed_seconds": 852.5733368750662,
+      "order": 3,
+      "profile": "dev",
+      "question": "Compare free-threaded CPython 3.13 with the standard GIL build for CPU-bound multithreaded workloads, extension compatibility, and production readiness. Use Python project documentation and primary benchmarks.",
+      "run_id": "9605ce9d",
+      "status": "completed",
+      "tokens_spent": 69358
+    },
+    {
+      "case_id": "policy-london-ulez",
+      "category": "causal_policy",
+      "elapsed_seconds": 950.1429013749585,
+      "order": 4,
+      "profile": "dev",
+      "question": "What measured effects did London's 2023 ULEZ expansion have on roadside air pollution and traffic by July 2026, and which findings support causal attribution rather than simple association? Use official evaluations and peer-reviewed research.",
+      "run_id": "090eb8e7",
+      "status": "completed",
+      "tokens_spent": 63036
+    }
+  ],
+  "execution_receipt": {
+    "exit_status": 0,
+    "finished_at": "2026-10-03T08:59:28.340662Z",
+    "pid": 8759,
+    "started_at": "2026-10-03T07:37:55.981610Z",
+    "verification": {
+      "ruff": {
+        "command": "python -m ruff check .",
+        "exit_status": 1,
+        "summary": [
+          "[*] 486 fixable with the `--fix` option (45 hidden fixes can be enabled with the `--unsafe-fixes` option)."
+        ]
+      },
+      "tests": {
+        "command": ".venv/bin/python -m pytest -q -p no:randomly",
+        "exit_status": 0,
+        "summary": "7949 passed, 83 skipped (2026-10-03, at bba69adc; later commits d95ce6da/14301993 re-ran their touched suites: 48 + 412 passed)"
+      }
+    }
+  },
+  "question_set_version": "mixed-v1",
+  "questions": {
+    "items": [
+      {
+        "case_id": "fact-eu-ai-act",
+        "category": "fact",
+        "question": "As of 2026-07-19, which EU AI Act obligations for providers of general-purpose AI models are already applicable, and on what dates did they begin to apply? Use official EU sources."
+      },
+      {
+        "case_id": "fact-aspartame",
+        "category": "fact",
+        "question": "Did WHO or IARC classify aspartame as carcinogenic in 2023, and how does that hazard classification differ from JECFA's risk assessment? Use primary institutional sources."
+      },
+      {
+        "case_id": "tech-hybrid-search",
+        "category": "technical",
+        "question": "Compare PostgreSQL 17 and Elasticsearch 8.x for hybrid lexical and vector search, including native capabilities, consistency, ranking controls, and operational trade-offs. Prefer official documentation and primary sources."
+      },
+      {
+        "case_id": "tech-free-threading",
+        "category": "technical",
+        "question": "Compare free-threaded CPython 3.13 with the standard GIL build for CPU-bound multithreaded workloads, extension compatibility, and production readiness. Use Python project documentation and primary benchmarks."
+      },
+      {
+        "case_id": "policy-london-ulez",
+        "category": "causal_policy",
+        "question": "What measured effects did London's 2023 ULEZ expansion have on roadside air pollution and traffic by July 2026, and which findings support causal attribution rather than simple association? Use official evaluations and peer-reviewed research."
+      }
+    ],
+    "schema_version": "1"
+  },
+  "schema_version": "1"
+}
