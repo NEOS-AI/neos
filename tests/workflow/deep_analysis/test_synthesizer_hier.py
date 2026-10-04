@@ -948,3 +948,14 @@ def test_sample_28_is_sample_27_again():
     s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
     s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
     assert s28 == s27
+
+
+def test_sample_29_is_sample_28_again():
+    """#28 은 크레딧 잔액 소진으로 무효였다(D111). #29 는 **같은 설정**으로 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
+    s29 = yaml.safe_load(Path("config/samples/sample-29.yaml").read_text(encoding="utf-8"))
+    assert s29 == s28
