@@ -926,3 +926,14 @@ def test_sample_26_is_sample_25_again():
     s25 = yaml.safe_load(Path("config/samples/sample-25.yaml").read_text(encoding="utf-8"))
     s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
     assert s26 == s25
+
+
+def test_sample_27_is_sample_26_again():
+    """#26 은 체크포인트 가림 깊이와 API 한도로 무효였다(D107). #27 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
+    s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
+    assert s27 == s26

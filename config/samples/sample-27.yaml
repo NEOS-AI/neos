@@ -1,0 +1,15 @@
+# 표본 #27 전용 오버레이 (DECISIONS D108 · J4 세 번째). #26 과 바이트가 같은 설정이다 -- #26 은 체크포인트 가림 깊이와
+# API 사용 한도로 무효였다(D107). 선행 조건(라이브 compose dry run 3/3 제출)은 D108 §1 에 적었다.
+#
+#   NEOS_CONFIG_PATH=config/samples/sample-27.yaml .venv/bin/python scripts/deep_analysis_funnel_sample.py ...
+#
+# #27 = #24 에서 **compose 자식만** 켠 것이다. 비교 대상은 #24 하나다. BUDGET2 와 판정자(Jev)는
+# #24 와 같다. research 워커는 옛 경로 그대로다(`code_research_enabled` 를 켜지 않는다 -- D105 §1).
+deep_analysis:
+  budget_aware_reduction: true
+  compose_child_enabled: true
+jev:
+  enabled: true
+  model: jev-1.13.0
+  judge_enabled: true
+  judge_min_confidence: 0.60
