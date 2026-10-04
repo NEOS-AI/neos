@@ -1,0 +1,264 @@
+{
+  "default_run": {
+    "case_id": "tech-free-threading",
+    "claim_funnel": {
+      "agentic_attempted": 24,
+      "agentic_exhausted": 0,
+      "agentic_passed": 14,
+      "agentic_rejected": 10,
+      "agentic_skipped": 0,
+      "avg_evidence_count": 1.1666666666666667,
+      "avg_excerpt_chars": 193.125,
+      "avg_source_count": 1.1666666666666667,
+      "confidence_clamped_by_source_count": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3_plus": 0
+      },
+      "confidence_clamped_count": 0,
+      "deterministic_passed": 24,
+      "deterministic_rejected": 0,
+      "evidence_missing_rate": 0.0,
+      "graded": 24,
+      "proposed": 24,
+      "quote_score_buckets": {
+        "above_threshold": 0,
+        "exact": 24,
+        "low": 0,
+        "near_miss": 0,
+        "unavailable": 0
+      },
+      "rejected": 10,
+      "source_dead_rate": 0.0,
+      "unverified": 0,
+      "verified": 14
+    },
+    "profile": "default"
+  },
+  "dev_funnel": {
+    "agentic_attempted": 77,
+    "agentic_exhausted": 0,
+    "agentic_passed": 69,
+    "agentic_rejected": 8,
+    "agentic_skipped": 0,
+    "avg_evidence_count": 1.2727272727272727,
+    "avg_excerpt_chars": 229.63636363636363,
+    "avg_source_count": 1.2727272727272727,
+    "confidence_clamped_by_source_count": {
+      "0": 0,
+      "1": 0,
+      "2": 1,
+      "3_plus": 0
+    },
+    "confidence_clamped_count": 1,
+    "deterministic_passed": 77,
+    "deterministic_rejected": 0,
+    "evidence_missing_rate": 0.0,
+    "graded": 77,
+    "proposed": 77,
+    "quote_score_buckets": {
+      "above_threshold": 0,
+      "exact": 77,
+      "low": 0,
+      "near_miss": 0,
+      "unavailable": 0
+    },
+    "rejected": 8,
+    "source_dead_rate": 0.0,
+    "unverified": 0,
+    "verified": 69
+  },
+  "dev_runs": [
+    {
+      "case_id": "fact-eu-ai-act",
+      "claim_funnel": {
+        "agentic_attempted": 11,
+        "agentic_exhausted": 0,
+        "agentic_passed": 9,
+        "agentic_rejected": 2,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.8181818181818181,
+        "avg_excerpt_chars": 287.45454545454544,
+        "avg_source_count": 1.8181818181818181,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 1,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 1,
+        "deterministic_passed": 11,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 11,
+        "proposed": 11,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 11,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 2,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 9
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "fact-aspartame",
+      "claim_funnel": {
+        "agentic_attempted": 23,
+        "agentic_exhausted": 0,
+        "agentic_passed": 23,
+        "agentic_rejected": 0,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.2173913043478262,
+        "avg_excerpt_chars": 231.3913043478261,
+        "avg_source_count": 1.2173913043478262,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 23,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 23,
+        "proposed": 23,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 23,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 0,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 23
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-hybrid-search",
+      "claim_funnel": {
+        "agentic_attempted": 21,
+        "agentic_exhausted": 0,
+        "agentic_passed": 19,
+        "agentic_rejected": 2,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.2857142857142858,
+        "avg_excerpt_chars": 236.61904761904762,
+        "avg_source_count": 1.2857142857142858,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 21,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 21,
+        "proposed": 21,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 21,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 2,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 19
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-free-threading",
+      "claim_funnel": {
+        "agentic_attempted": 12,
+        "agentic_exhausted": 0,
+        "agentic_passed": 10,
+        "agentic_rejected": 2,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.0833333333333333,
+        "avg_excerpt_chars": 206.08333333333334,
+        "avg_source_count": 1.0833333333333333,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 12,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 12,
+        "proposed": 12,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 12,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 2,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 10
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "policy-london-ulez",
+      "claim_funnel": {
+        "agentic_attempted": 10,
+        "agentic_exhausted": 0,
+        "agentic_passed": 8,
+        "agentic_rejected": 2,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.0,
+        "avg_excerpt_chars": 175.6,
+        "avg_source_count": 1.0,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 10,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 10,
+        "proposed": 10,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 10,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 2,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 8
+      },
+      "profile": "dev"
+    }
+  ],
+  "selection": {
+    "case_id": "tech-free-threading",
+    "dev_order": 3,
+    "dominant_stage": "agentic_loss"
+  }
+}
