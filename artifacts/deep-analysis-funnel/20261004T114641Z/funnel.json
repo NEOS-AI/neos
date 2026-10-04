@@ -1,0 +1,264 @@
+{
+  "default_run": {
+    "case_id": "policy-london-ulez",
+    "claim_funnel": {
+      "agentic_attempted": 22,
+      "agentic_exhausted": 0,
+      "agentic_passed": 20,
+      "agentic_rejected": 2,
+      "agentic_skipped": 0,
+      "avg_evidence_count": 1.0,
+      "avg_excerpt_chars": 151.5909090909091,
+      "avg_source_count": 1.0,
+      "confidence_clamped_by_source_count": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3_plus": 0
+      },
+      "confidence_clamped_count": 0,
+      "deterministic_passed": 22,
+      "deterministic_rejected": 0,
+      "evidence_missing_rate": 0.0,
+      "graded": 22,
+      "proposed": 22,
+      "quote_score_buckets": {
+        "above_threshold": 0,
+        "exact": 22,
+        "low": 0,
+        "near_miss": 0,
+        "unavailable": 0
+      },
+      "rejected": 2,
+      "source_dead_rate": 0.0,
+      "unverified": 0,
+      "verified": 20
+    },
+    "profile": "default"
+  },
+  "dev_funnel": {
+    "agentic_attempted": 73,
+    "agentic_exhausted": 0,
+    "agentic_passed": 54,
+    "agentic_rejected": 19,
+    "agentic_skipped": 3,
+    "avg_evidence_count": 1.2236842105263157,
+    "avg_excerpt_chars": 191.06578947368422,
+    "avg_source_count": 1.1973684210526316,
+    "confidence_clamped_by_source_count": {
+      "0": 0,
+      "1": 0,
+      "2": 0,
+      "3_plus": 0
+    },
+    "confidence_clamped_count": 0,
+    "deterministic_passed": 76,
+    "deterministic_rejected": 0,
+    "evidence_missing_rate": 0.0,
+    "graded": 76,
+    "proposed": 76,
+    "quote_score_buckets": {
+      "above_threshold": 0,
+      "exact": 76,
+      "low": 0,
+      "near_miss": 0,
+      "unavailable": 0
+    },
+    "rejected": 19,
+    "source_dead_rate": 0.0,
+    "unverified": 0,
+    "verified": 57
+  },
+  "dev_runs": [
+    {
+      "case_id": "fact-eu-ai-act",
+      "claim_funnel": {
+        "agentic_attempted": 12,
+        "agentic_exhausted": 0,
+        "agentic_passed": 8,
+        "agentic_rejected": 4,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.6666666666666667,
+        "avg_excerpt_chars": 218.5,
+        "avg_source_count": 1.6666666666666667,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 12,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 12,
+        "proposed": 12,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 12,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 4,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 8
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "fact-aspartame",
+      "claim_funnel": {
+        "agentic_attempted": 22,
+        "agentic_exhausted": 0,
+        "agentic_passed": 16,
+        "agentic_rejected": 6,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.1818181818181819,
+        "avg_excerpt_chars": 222.1818181818182,
+        "avg_source_count": 1.1818181818181819,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 22,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 22,
+        "proposed": 22,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 22,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 6,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 16
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-hybrid-search",
+      "claim_funnel": {
+        "agentic_attempted": 8,
+        "agentic_exhausted": 0,
+        "agentic_passed": 8,
+        "agentic_rejected": 0,
+        "agentic_skipped": 3,
+        "avg_evidence_count": 1.0,
+        "avg_excerpt_chars": 177.72727272727272,
+        "avg_source_count": 1.0,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 11,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 11,
+        "proposed": 11,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 11,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 0,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 11
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-free-threading",
+      "claim_funnel": {
+        "agentic_attempted": 17,
+        "agentic_exhausted": 0,
+        "agentic_passed": 11,
+        "agentic_rejected": 6,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.0,
+        "avg_excerpt_chars": 164.94117647058823,
+        "avg_source_count": 1.0,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 17,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 17,
+        "proposed": 17,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 17,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 6,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 11
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "policy-london-ulez",
+      "claim_funnel": {
+        "agentic_attempted": 14,
+        "agentic_exhausted": 0,
+        "agentic_passed": 11,
+        "agentic_rejected": 3,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.3571428571428572,
+        "avg_excerpt_chars": 160.85714285714286,
+        "avg_source_count": 1.2142857142857142,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 14,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 14,
+        "proposed": 14,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 14,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 3,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 11
+      },
+      "profile": "dev"
+    }
+  ],
+  "selection": {
+    "case_id": "policy-london-ulez",
+    "dev_order": 4,
+    "dominant_stage": "agentic_loss"
+  }
+}
