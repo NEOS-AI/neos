@@ -1,0 +1,226 @@
+deep_analysis job 437cfaa5 failed: model_provider_failed
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 65, in stream
+    async with self._client.messages.stream(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/lib/streaming/_messages.py", line 317, in __aenter__
+    raw_stream = await self.__api_request
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 2276, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 1941, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CfhD4RSSD39muXaJpTPWZ'}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 245, in _as_live_result
+    return await awaitable
+           ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/harness_bridge.py", line 205, in call_via_harness
+    turn = await collect_model_turn(adapter, request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 81, in collect_model_turn
+    async for event in iter_model_turn(model, request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 39, in iter_model_turn
+    async for event in model.stream(request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 185, in stream
+    raise CodingModelError(
+neos.coding.model.errors.CodingModelError: model_provider_failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/jobs.py", line 237, in execute_run
+    await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+  File "/opt/homebrew/anaconda3/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1893, in run
+    root_id = await self._ensure_root(root_text)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1019, in _ensure_root
+    subquestions = await _maybe_await(self.decompose_fn(root_text))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 41, in _maybe_await
+    return await value
+           ^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 971, in _decompose
+    data, _response = await call_json(
+                      ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 695, in call_json
+    response = await call_llm(
+               ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 518, in call_llm
+    return await _budgeted_dispatch(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 353, in _budgeted_dispatch
+    response = await invoke(reservation.max_output_tokens, dispatch)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 515, in invoke
+    recorded = await cassette.remember("llm", payload, produce)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/cassette.py", line 77, in remember
+    result = await producer()
+             ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 483, in produce
+    response = await _as_live_result(
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 249, in _as_live_result
+    raise LLMProviderError(str(exc)) from exc
+neos.workflow.deep_analysis.llm.LLMProviderError: model_provider_failed
+deep_analysis job cc5c9046 failed: model_provider_failed
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 65, in stream
+    async with self._client.messages.stream(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/lib/streaming/_messages.py", line 317, in __aenter__
+    raw_stream = await self.__api_request
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 2276, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 1941, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CfhD4UJ5ESdcQvFMzhbLA'}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 245, in _as_live_result
+    return await awaitable
+           ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/harness_bridge.py", line 205, in call_via_harness
+    turn = await collect_model_turn(adapter, request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 81, in collect_model_turn
+    async for event in iter_model_turn(model, request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 39, in iter_model_turn
+    async for event in model.stream(request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 185, in stream
+    raise CodingModelError(
+neos.coding.model.errors.CodingModelError: model_provider_failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/jobs.py", line 237, in execute_run
+    await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+  File "/opt/homebrew/anaconda3/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1893, in run
+    root_id = await self._ensure_root(root_text)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1019, in _ensure_root
+    subquestions = await _maybe_await(self.decompose_fn(root_text))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 41, in _maybe_await
+    return await value
+           ^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 971, in _decompose
+    data, _response = await call_json(
+                      ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 695, in call_json
+    response = await call_llm(
+               ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 518, in call_llm
+    return await _budgeted_dispatch(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 353, in _budgeted_dispatch
+    response = await invoke(reservation.max_output_tokens, dispatch)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 515, in invoke
+    recorded = await cassette.remember("llm", payload, produce)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/cassette.py", line 77, in remember
+    result = await producer()
+             ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 483, in produce
+    response = await _as_live_result(
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 249, in _as_live_result
+    raise LLMProviderError(str(exc)) from exc
+neos.workflow.deep_analysis.llm.LLMProviderError: model_provider_failed
+deep_analysis job 023f7a5e failed: model_provider_failed
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 65, in stream
+    async with self._client.messages.stream(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/lib/streaming/_messages.py", line 317, in __aenter__
+    raw_stream = await self.__api_request
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 2276, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/.venv/lib/python3.12/site-packages/anthropic/_base_client.py", line 1941, in request
+    raise self._make_status_error_from_response(response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CfhD4WNqumssc7gGFi35e'}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 245, in _as_live_result
+    return await awaitable
+           ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/harness_bridge.py", line 205, in call_via_harness
+    turn = await collect_model_turn(adapter, request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 81, in collect_model_turn
+    async for event in iter_model_turn(model, request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/harness/turn.py", line 39, in iter_model_turn
+    async for event in model.stream(request):
+  File "/Users/ywsung/Desktop/neos/neos/coding/model/anthropic.py", line 185, in stream
+    raise CodingModelError(
+neos.coding.model.errors.CodingModelError: model_provider_failed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/jobs.py", line 237, in execute_run
+    await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+  File "/opt/homebrew/anaconda3/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1893, in run
+    root_id = await self._ensure_root(root_text)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 1019, in _ensure_root
+    subquestions = await _maybe_await(self.decompose_fn(root_text))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 41, in _maybe_await
+    return await value
+           ^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/orchestrator.py", line 971, in _decompose
+    data, _response = await call_json(
+                      ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 695, in call_json
+    response = await call_llm(
+               ^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 518, in call_llm
+    return await _budgeted_dispatch(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 353, in _budgeted_dispatch
+    response = await invoke(reservation.max_output_tokens, dispatch)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 515, in invoke
+    recorded = await cassette.remember("llm", payload, produce)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/cassette.py", line 77, in remember
+    result = await producer()
+             ^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 483, in produce
+    response = await _as_live_result(
+               ^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/ywsung/Desktop/neos/neos/workflow/deep_analysis/llm.py", line 249, in _as_live_result
+    raise LLMProviderError(str(exc)) from exc
+neos.workflow.deep_analysis.llm.LLMProviderError: model_provider_failed
+artifacts/deep-analysis-funnel/20261004T123721Z
+49e5e84d
+4d1dbac3
+ad22b95e
+437cfaa5
+cc5c9046
+023f7a5e

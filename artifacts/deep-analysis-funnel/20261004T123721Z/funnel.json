@@ -1,0 +1,168 @@
+{
+  "default_run": {
+    "case_id": "fact-aspartame",
+    "claim_funnel": {},
+    "profile": "default"
+  },
+  "dev_funnel": {
+    "agentic_attempted": 43,
+    "agentic_exhausted": 0,
+    "agentic_passed": 38,
+    "agentic_rejected": 5,
+    "agentic_skipped": 0,
+    "avg_evidence_count": 1.2325581395348837,
+    "avg_excerpt_chars": 226.74418604651163,
+    "avg_source_count": 1.2325581395348837,
+    "confidence_clamped_by_source_count": {
+      "0": 0,
+      "1": 0,
+      "2": 0,
+      "3_plus": 0
+    },
+    "confidence_clamped_count": 0,
+    "deterministic_passed": 43,
+    "deterministic_rejected": 0,
+    "evidence_missing_rate": 0.0,
+    "graded": 43,
+    "proposed": 43,
+    "quote_score_buckets": {
+      "above_threshold": 0,
+      "exact": 43,
+      "low": 0,
+      "near_miss": 0,
+      "unavailable": 0
+    },
+    "rejected": 5,
+    "source_dead_rate": 0.0,
+    "unverified": 0,
+    "verified": 38
+  },
+  "dev_runs": [
+    {
+      "case_id": "fact-eu-ai-act",
+      "claim_funnel": {
+        "agentic_attempted": 12,
+        "agentic_exhausted": 0,
+        "agentic_passed": 12,
+        "agentic_rejected": 0,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.25,
+        "avg_excerpt_chars": 211.75,
+        "avg_source_count": 1.25,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 12,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 12,
+        "proposed": 12,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 12,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 0,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 12
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "fact-aspartame",
+      "claim_funnel": {
+        "agentic_attempted": 12,
+        "agentic_exhausted": 0,
+        "agentic_passed": 9,
+        "agentic_rejected": 3,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.1666666666666667,
+        "avg_excerpt_chars": 256.1666666666667,
+        "avg_source_count": 1.1666666666666667,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 12,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 12,
+        "proposed": 12,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 12,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 3,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 9
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-hybrid-search",
+      "claim_funnel": {
+        "agentic_attempted": 19,
+        "agentic_exhausted": 0,
+        "agentic_passed": 17,
+        "agentic_rejected": 2,
+        "agentic_skipped": 0,
+        "avg_evidence_count": 1.263157894736842,
+        "avg_excerpt_chars": 217.6315789473684,
+        "avg_source_count": 1.263157894736842,
+        "confidence_clamped_by_source_count": {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          "3_plus": 0
+        },
+        "confidence_clamped_count": 0,
+        "deterministic_passed": 19,
+        "deterministic_rejected": 0,
+        "evidence_missing_rate": 0.0,
+        "graded": 19,
+        "proposed": 19,
+        "quote_score_buckets": {
+          "above_threshold": 0,
+          "exact": 19,
+          "low": 0,
+          "near_miss": 0,
+          "unavailable": 0
+        },
+        "rejected": 2,
+        "source_dead_rate": 0.0,
+        "unverified": 0,
+        "verified": 17
+      },
+      "profile": "dev"
+    },
+    {
+      "case_id": "tech-free-threading",
+      "claim_funnel": {},
+      "profile": "dev"
+    },
+    {
+      "case_id": "policy-london-ulez",
+      "claim_funnel": {},
+      "profile": "dev"
+    }
+  ],
+  "selection": {
+    "case_id": "fact-aspartame",
+    "dev_order": 1,
+    "dominant_stage": "agentic_loss"
+  }
+}
