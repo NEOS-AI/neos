@@ -137,7 +137,7 @@ class ScriptedRuntime:
 _PIN = ModelPin(provider="anthropic", model="claude-opus-5-5")
 
 
-async def _run(ledger, provider, runtime_box, **runtime_kw):
+async def _run(ledger, provider, runtime_box, *, attempt=0, **runtime_kw):
     def factory(port):
         runtime_box.append(ScriptedRuntime(port, **runtime_kw))
         return runtime_box[-1]
@@ -154,6 +154,7 @@ async def _run(ledger, provider, runtime_box, **runtime_kw):
         runtime_factory=factory,
         model=_PIN,
         parent_id="run00001",
+        attempt=attempt,
         limits=None,
         command_limits=CommandLimits(timeout_sec=5, output_bytes=4096),
         max_steps=3,
@@ -319,7 +320,7 @@ async def test_a_failed_child_is_named_by_its_error_not_as_a_missing_submit():
         await run_compose_worker(
             ledger=ClaimLedger(), provider=MemoryProvider(), root_id="root0001", root_text="q",
             root_summary="", child_blocks=[], caveats=[], revision_hints=[],
-            runtime_factory=FailingRuntime, model=_PIN, parent_id="run00001", limits=None,
+            runtime_factory=FailingRuntime, model=_PIN, parent_id="run00001", attempt=0, limits=None,
             command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_steps=17,
         )
     assert info.value.reason == "child_failed:model_provider_failed"
@@ -336,3 +337,59 @@ def test_da_children_get_their_own_prompt_and_explore_keeps_its_own():
     assert "Do not edit, execute" not in compose
     assert _CODING_PROMPTS["research"]() != compose
     assert _CODING_PROMPTS["explore"]() == build_explore_system_prompt()
+
+
+# -- D109: 재시도가 끝난 첫 자식을 받았다 --------------------------------------------
+
+
+class StoreBackedRuntime:
+    """실제 `InMemorySubagentStore` 의 정체성 규칙을 따른다 -- 같은 키의 끝난 실행은 다시 돌지 않는다."""
+
+    def __init__(self, port, store):
+        self.port = port
+        self.store = store
+
+    async def advance(self, ticket):
+        from neos.subagent.types import SubagentStatus
+
+        record = await self.store.resolve_or_create(ticket)
+        if record.status is not SubagentStatus.PENDING:
+            # 런타임은 끝난 실행을 그 결과 그대로 돌려준다 -- 자식은 이 포트에 아무것도 하지 않는다.
+            return SimpleNamespace(kind=StepKind.COMPLETED, run_id=record.run_id, tokens_delta=0)
+        await self.port._session.write_file(REPORT_PATH, b"[C:c1aaaaaa]")
+        await self.port.execute("submit.v1", {"status": "completed", "claims": [], "report_path": REPORT_PATH})
+        await self.store.cancel(record.run_id, "test_terminal")  # 끝난 실행으로 만든다
+        return SimpleNamespace(kind=StepKind.COMPLETED, run_id=record.run_id, tokens_delta=1)
+
+
+async def test_each_attempt_gets_a_fresh_child_not_the_finished_one():
+    """#27: 시도 1 이 시도 0 의 끝난 자식을 받아 6/6 `submit_not_called` 였다(D109)."""
+    from neos.subagent.memory import InMemorySubagentStore
+
+    store = InMemorySubagentStore()
+    for attempt in (0, 1):
+        _text, summary = await run_compose_worker(
+            ledger=ClaimLedger(), provider=MemoryProvider(), root_id="root0001", root_text="q",
+            root_summary="", child_blocks=[], caveats=[], revision_hints=["E_REPORT_UNCITED"],
+            runtime_factory=lambda port: StoreBackedRuntime(port, store), model=_PIN,
+            parent_id="run00001", attempt=attempt, limits=None,
+            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_steps=3,
+        )
+        assert summary["cited_verified"] == 1
+    assert len(await store.list_for_parent_run("run00001")) == 2
+
+
+async def test_the_orchestrator_hands_each_attempt_its_number(monkeypatch):
+    monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
+    seen = []
+
+    async def fail(**kwargs):
+        seen.append(kwargs["attempt"])
+        raise ComposeFailed("submit_not_called")
+
+    monkeypatch.setattr(compose_worker, "run_compose_worker", fail)
+    orch = _orch(ClaimLedger(), FakeSynth(_summaries()), FlakyRenderer(0), grader=OkGrader())
+    orch.sandbox_provider = MemoryProvider()
+    orch.compose_runtime_factory = lambda port: None
+    await orch._finalize("root0001")
+    assert seen == list(range(settings.config.deep_analysis.report_retry_cap + 1))

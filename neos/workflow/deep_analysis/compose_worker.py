@@ -216,6 +216,7 @@ def build_compose_ticket(
     root_id: str,
     root_text: str,
     parent_id: str,
+    attempt: int,
     model: ModelPin,
     run_id: str | None = None,
     expected_checkpoint_id: str | None = None,
@@ -225,7 +226,10 @@ def build_compose_ticket(
         parent_kind=ParentKind.DEEP_ANALYSIS,
         parent_id=parent_id,
         parent_run_id=parent_id,
-        parent_tool_call_id=f"compose:{root_id}",
+        # 시도마다 새 자식이다. 서브에이전트 스토어는 (parent_kind, parent_id, parent_tool_call_id) 로
+        # 기존 실행을 돌려주므로, 시도 번호가 키에 없으면 재시도가 **끝난 첫 자식**을 받아 아무것도 하지
+        # 않고 `submit_not_called` 로 끝난다(#27, D109).
+        parent_tool_call_id=f"compose:{root_id}:{attempt}",
         spec=COMPOSE_SPEC,
         briefing=ParentBriefing(
             goal=(
@@ -263,6 +267,7 @@ async def run_compose_worker(
     runtime_factory: Any,
     model: ModelPin,
     parent_id: str,
+    attempt: int,
     limits: Any,
     command_limits: CommandLimits,
     max_steps: int,
@@ -315,6 +320,7 @@ async def run_compose_worker(
                 root_id=root_id,
                 root_text=root_text,
                 parent_id=parent_id,
+                attempt=attempt,
                 model=model,
                 run_id=run_id,
                 expected_checkpoint_id=checkpoint_id,

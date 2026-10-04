@@ -861,6 +861,7 @@ class Orchestrator:
                 runtime_factory=self.compose_runtime_factory,
                 model=compose_model_pin(),
                 parent_id=str(self.ledger.run_id),
+                attempt=attempt,
                 limits=SandboxLimits.safe_defaults(),
                 command_limits=CommandLimits(
                     timeout_sec=research.reexecution.cpu_sec,
