@@ -937,3 +937,14 @@ def test_sample_27_is_sample_26_again():
     s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
     s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
     assert s27 == s26
+
+
+def test_sample_28_is_sample_27_again():
+    """#27 은 재시도가 끝난 첫 compose 자식을 받아 무효였다(D109). #28 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
+    s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
+    assert s28 == s27
