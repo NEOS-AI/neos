@@ -53,6 +53,8 @@ COMPOSE_HEADER = (
     "아래 '하위 요약' 은 리듀스된 요약이라 클레임이 빠져 있을 수 있다. **모든 verified 클레임은 "
     "`claims/` 아래 질문별 파일에 있다** -- `claims/INDEX.md` 에서 시작해 필요한 파일을 읽고, "
     "`search_text.v1` 로 찾는다. 인용은 그 파일들에 있는 `[C:claimid]` 만 쓴다.\n"
+    "`list_tree.v1` 은 필요 없다 -- 경로는 `claims/INDEX.md` 에 다 있다. 파일은 한 턴에 함께 읽는다 "
+    "(턴 상한이 있다).\n"
     "다 쓰면 `check_claims.v1` 에 `{\"report_path\": \"report.md\"}` 를 넘겨 고아 인용과 인용 비율을 "
     "확인하고, 고친 뒤 `submit.v1` 에 `report_path` 를 담아 제출한다.\n\n---\n\n"
 )

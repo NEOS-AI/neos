@@ -80,8 +80,16 @@ def _redact_secret_values(text: str) -> str:
     return _SECRET_VALUE_RE.sub(_REDACTED, text)
 
 
-def redact_sensitive(value: Any, *, depth: int = 0, clip: bool = True) -> Any:
-    if depth >= _MAX_DEPTH:
+def redact_sensitive(
+    value: Any, *, depth: int = 0, clip: bool = True, max_depth: int = _MAX_DEPTH
+) -> Any:
+    """`max_depth` 를 넘는 값은 통째로 가린다. 기본값은 예전 그대로다.
+
+    D107: 서브에이전트 체크포인트는 **자식의 다음 턴 입력**이 되는 상태다. 깊이 6 에서 자르면
+    `list_tree` 결과 항목·도구 인자의 `path` 가 모델에게 `<redacted>` 로 보였다 -- 그 호출부만
+    깊은 상한을 넘긴다. 비밀 키 가림(`_is_secret_key`)은 깊이와 무관하게 그대로다.
+    """
+    if depth >= max_depth:
         return _REDACTED
     if isinstance(value, Mapping):
         redacted: dict[Any, Any] = {}
@@ -90,16 +98,18 @@ def redact_sensitive(value: Any, *, depth: int = 0, clip: bool = True) -> Any:
                 redacted[key] = _REDACTED
             else:
                 redacted[key] = redact_sensitive(
-                    child, depth=depth + 1, clip=clip
+                    child, depth=depth + 1, clip=clip, max_depth=max_depth
                 )
         return redacted
     if isinstance(value, list):
         return [
-            redact_sensitive(item, depth=depth + 1, clip=clip) for item in value
+            redact_sensitive(item, depth=depth + 1, clip=clip, max_depth=max_depth)
+            for item in value
         ]
     if isinstance(value, tuple):
         return tuple(
-            redact_sensitive(item, depth=depth + 1, clip=clip) for item in value
+            redact_sensitive(item, depth=depth + 1, clip=clip, max_depth=max_depth)
+            for item in value
         )
     if isinstance(value, str):
         value = _redact_secret_values(value)
