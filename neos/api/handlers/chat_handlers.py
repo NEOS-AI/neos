@@ -41,6 +41,7 @@ from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.services.attachment_blocks import AttachmentNotSupportedError
 from neos.services.chat_llm_service import chat_llm_service
+from neos.standing.channel_threads import build_channel_agent_threads
 from neos.api.services.chat_stream_pipeline import (
     ChatStreamPipeline,
     resolve_authorized_parent_message,
@@ -744,6 +745,8 @@ def _get_chat_stream_pipeline() -> ChatStreamPipeline:
         multi_agent_workflow=multi_agent_workflow,
         workflow_callback_cls=WorkflowStreamCallback,
         map_node_to_agent_fn=map_node_to_agent,
+        # Q8d: 늘 배선한다. `standing_agents.threads.enabled` 는 호출 때마다 읽힌다.
+        agent_threads=build_channel_agent_threads(db_manager.get_session),
     )
     return _chat_stream_pipeline
 

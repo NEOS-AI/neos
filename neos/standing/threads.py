@@ -26,6 +26,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from neos.standing.models import StandingAgent
 
@@ -122,7 +123,10 @@ class AgentThreadStore(Protocol):
     async def attach_session(
         self, agent_id: str, session_id: str, channel_type: str
     ) -> AgentThread | None:
-        """세션을 활성 스레드에 붙인다. 다른 에이전트에 붙은 세션이면 None -- 빼앗지 않는다."""
+        """세션을 활성 스레드에 붙인다. 다른 에이전트에 붙은 세션이면 None -- 빼앗지 않는다.
+
+        웹 세션은 스레드당 하나다(094). 이미 다른 웹 세션이 붙어 있으면 None.
+        """
         ...
 
     async def thread_for_session(self, session_id: str) -> AgentThread | None: ...
@@ -258,6 +262,11 @@ class InMemoryAgentThreadStore:
         if thread is None:
             return None
         existing = self._sessions.get(session_id)
+        if existing is None and channel_type == "web" and any(
+            s.channel_type == "web" and s.agent_thread_id == thread.agent_thread_id
+            for s in self._sessions.values()
+        ):
+            return None  # uq_standing_agent_thread_sessions_one_web
         if existing is None:
             self._sessions[session_id] = ThreadSession(
                 session_id, thread.agent_thread_id, channel_type, self._clock()
@@ -468,6 +477,16 @@ class PostgresAgentThreadStore:
         thread = await self.get_or_create_active(agent_id)
         if thread is None:
             return None
+        try:
+            return await self._attach(agent_id, thread, session_id, channel_type)
+        except IntegrityError as error:
+            if "uq_standing_agent_thread_sessions_one_web" in str(error):
+                return None
+            raise
+
+    async def _attach(
+        self, agent_id: str, thread: AgentThread, session_id: str, channel_type: str
+    ) -> AgentThread | None:
         async with await self._session_factory() as session:
             async with session.begin():
                 await session.execute(

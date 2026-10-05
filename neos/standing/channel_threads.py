@@ -24,8 +24,35 @@ from neos.standing.threads import AgentThreadStore, rotate_agent_thread, thread_
 
 logger = logging.getLogger(__name__)
 
-#: 붙을 수 있는 채널. 웹(`web:`)은 Q8d 가 따로 붙인다.
+#: 자동으로 붙을 수 있는 채널. 웹은 소유자가 지정한 대화 하나만 붙는다(Q8d, `web_session_id`).
 CHANNEL_TYPES = frozenset({"slack", "discord", "telegram"})
+WEB = "web"
+
+
+def web_session_id(conversation_id: str) -> str:
+    """웹 에이전트 대화의 세션 id. 채널 키(`v2:`)와 이름 공간이 겹치지 않는다."""
+    return f"{WEB}:{conversation_id}"
+
+
+def conversation_id_of(session_id: str) -> str | None:
+    prefix = f"{WEB}:"
+    return session_id[len(prefix):] if session_id.startswith(prefix) else None
+
+
+def _history(window: list[Any], channel_type: str) -> list[dict[str, Any]]:
+    """웹 채팅과 같은 모양. 다른 채널에서 온 턴에는 `[slack]` 같은 표지를 붙인다(§6)."""
+    return [
+        {
+            "role": turn.role,
+            "content": (
+                turn.content
+                if turn.channel_type == channel_type
+                else f"[{turn.channel_type}] {turn.content}"
+            ),
+            "timestamp": turn.created_at.isoformat(),
+        }
+        for turn in window
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,18 +165,45 @@ class ChannelAgentThreads:
             session_id=message.session_id,
             channel_type=message.channel_type,
             idem_key=idem,
-            history=[
-                {
-                    "role": turn.role,
-                    "content": (
-                        turn.content
-                        if turn.channel_type == message.channel_type
-                        else f"[{turn.channel_type}] {turn.content}"
-                    ),
-                    "timestamp": turn.created_at.isoformat(),
-                }
-                for turn in window
-            ],
+            history=_history(window, message.channel_type),
+        )
+
+    async def open_web_turn(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        user_text: str,
+        idem_key: str | None,
+    ) -> ChannelThreadTurn | None:
+        """웹 에이전트 대화의 턴(Q8d). 그 대화가 이 사용자의 `active` 에이전트 스레드에 붙어
+        있을 때만 연다. 대화 소유 검사는 파이프라인이 이미 했다(`get_owned_conversation`)."""
+        if not _enabled():
+            return None
+        session_id = web_session_id(conversation_id)
+        try:
+            thread = await self._threads.thread_for_session(session_id)
+            if thread is None:
+                return None
+            agent = await resolve_agent(self._agents, user_id, thread.agent_id)
+            if agent is None or agent.status is not StandingAgentStatus.ACTIVE:
+                return None
+            window = await thread_window(
+                self._threads, thread.agent_thread_id, limit=_window_limit()
+            )
+            await self._threads.append_turn(
+                thread.agent_thread_id, session_id, WEB, "user", user_text, idem_key=idem_key
+            )
+        except Exception:  # noqa: BLE001 -- 스레드는 대화를 막지 못한다
+            logger.warning("standing thread open failed session=%s", session_id, exc_info=True)
+            _count_failure("open")
+            return None
+        return ChannelThreadTurn(
+            agent_thread_id=thread.agent_thread_id,
+            session_id=session_id,
+            channel_type=WEB,
+            idem_key=idem_key,
+            history=_history(window, WEB),
         )
 
     async def close_turn(self, turn: ChannelThreadTurn, reply: str) -> None:

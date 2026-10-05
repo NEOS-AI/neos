@@ -531,3 +531,33 @@ async def test_the_feed_does_not_skip_a_late_commit() -> None:
         seen += [turn.content for _, turn in rows]
         cursor = rows[-1][0]
     assert sorted(seen) == ["fast", "slow"]
+
+
+# ---- Q8d: one web session per thread (094) ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_thread_takes_one_web_session(stores) -> None:
+    agents, threads = stores
+    agent = await _agent(agents)
+
+    first = await threads.attach_session(agent.agent_id, "web:c1", "web")
+    second = await threads.attach_session(agent.agent_id, "web:c2", "web")
+    again = await threads.attach_session(agent.agent_id, "web:c1", "web")
+    slack = await threads.attach_session(agent.agent_id, SLACK_DM, "slack")
+
+    assert first is not None and second is None and again == first
+    assert slack == first  # channel sessions are not limited
+    assert await threads.thread_for_session("web:c2") is None
+
+
+@pytest.mark.asyncio
+async def test_the_web_session_moves_with_rotation_and_stays_the_only_one(stores) -> None:
+    agents, threads = stores
+    agent = await _agent(agents)
+    await threads.attach_session(agent.agent_id, "web:c1", "web")
+
+    new = await rotate_agent_thread(threads, agent)
+
+    assert await threads.thread_for_session("web:c1") == new
+    assert await threads.attach_session(agent.agent_id, "web:c2", "web") is None

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Code2Icon, MessageCircleIcon } from "lucide-react";
+import { BotIcon, Code2Icon, MessageCircleIcon } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
 import { useState } from "react";
@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/sidebar";
 import { CodingTaskList } from "@/features/coding/components/coding-task-list";
 import { getChatHistoryPaginationKey } from "@/lib/chat-history-pagination";
+import { openAgentConversation } from "@/lib/standing-agent-api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,6 +42,27 @@ export function AppSidebar({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const { mutate } = useSWRConfig();
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false);
+  const [openingAgent, setOpeningAgent] = useState(false);
+
+  // 트랙 Q8d -- 상시 에이전트와의 웹 대화. 채널(Slack 등) DM 과 같은 맥락을 쓴다.
+  const handleOpenAgent = async () => {
+    setOpeningAgent(true);
+    try {
+      const conversationId = await openAgentConversation();
+      if (conversationId === null) {
+        toast.info("No standing agent yet.");
+        return;
+      }
+      setOpenMobile(false);
+      router.push(`/chat/${conversationId}`);
+    } catch (error: unknown) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not open the agent conversation"
+      );
+    } finally {
+      setOpeningAgent(false);
+    }
+  };
 
   const handleDeleteAll = () => {
     const deletePromise = fetch("/api/history", {
@@ -136,6 +158,15 @@ export function AppSidebar({ user }: { user: User | undefined }) {
               <Code2Icon className="size-4" />
               Code
             </Link>
+            <button
+              className="flex items-center gap-3 rounded-md px-2 py-2 text-left text-sidebar-foreground text-sm hover:bg-sidebar-accent disabled:opacity-60"
+              disabled={openingAgent}
+              onClick={handleOpenAgent}
+              type="button"
+            >
+              <BotIcon className="size-4" />
+              Agent
+            </button>
           </nav>
           {isCode ? (
             <div className="px-1 pb-3">
