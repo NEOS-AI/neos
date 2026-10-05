@@ -314,6 +314,15 @@ class EnterpriseMetricsCollector:
             ["op"],
             registry=self.registry,
         )
+        # Q15: 채널 음성 전사의 결과. 전사 비용은 비용 원장에 없고 이것으로만 센다.
+        # outcome = ok | too_large | too_long | unsupported_format | provider_error |
+        # timeout | empty | download_failed. 올리는 곳은 게이트웨이 한 곳(Q15c)이다.
+        self.channel_voice_transcriptions_total = Counter(
+            "channel_voice_transcriptions_total",
+            "Channel voice messages by transcription outcome",
+            ["outcome"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",
