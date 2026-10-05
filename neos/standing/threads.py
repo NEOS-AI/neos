@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -57,6 +59,38 @@ class ThreadTurn:
     role: str
     content: str
     created_at: datetime
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class TurnCursor:
+    """피드 커서 `(position, turn_id)` (Q8c). Postgres 의 position 은 턴을 쓴 트랜잭션 id
+    (`xact_id`)이고 독자는 `pg_snapshot_xmin` 미만만 읽는다 -- 늦게 커밋된 턴이 지나간 커서
+    뒤로 떨어지지 않게(마이그레이션 093 · Q13d 와 같은 이유). 메모리 구현의 position 은
+    추가 순서(`turn_id`)다."""
+
+    position: int
+    turn_id: int
+
+    def encode(self) -> str:
+        raw = json.dumps([self.position, self.turn_id], separators=(",", ":"))
+        return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    @classmethod
+    def decode(cls, value: str) -> "TurnCursor":
+        """불투명 문자열. 읽을 수 없으면 ValueError (API 는 422)."""
+        try:
+            padded = value + "=" * (-len(value) % 4)
+            position, turn_id = json.loads(base64.urlsafe_b64decode(padded))
+        except Exception as error:
+            raise ValueError("unreadable turn cursor") from error
+        if not (
+            type(position) is int and type(turn_id) is int and position >= 0 and turn_id >= 0
+        ):
+            raise ValueError("unreadable turn cursor")
+        return cls(position, turn_id)
+
+
+TURN_FEED_START = TurnCursor(0, 0)
 
 
 def new_agent_thread_id() -> str:
@@ -114,6 +148,24 @@ class AgentThreadStore(Protocol):
 
     async def recent_turns(self, agent_thread_id: str, *, limit: int) -> list[ThreadTurn]:
         """최근 `limit` 개, 오래된 것부터."""
+        ...
+
+    # ---- 읽기 API (Q8c). 전부 부작용이 없다 -- 활성 스레드를 열지 않는다.
+
+    async def active(self, agent_id: str) -> AgentThread | None: ...
+
+    async def get_thread(self, agent_id: str, agent_thread_id: str) -> AgentThread | None:
+        """그 에이전트의 스레드(보관 포함). 다른 에이전트의 스레드 id 는 None."""
+        ...
+
+    async def detach_session(self, agent_id: str, session_id: str) -> bool:
+        """그 에이전트의 스레드에 붙은 세션이면 떼고 True. 남의 세션·없는 세션은 False."""
+        ...
+
+    async def turns_after(
+        self, agent_thread_id: str, *, after: TurnCursor, limit: int
+    ) -> list[tuple[TurnCursor, ThreadTurn]]:
+        """피드. 커서 뒤의 턴을 커밋 순서에 가깝게, `limit` 개까지."""
         ...
 
 
@@ -274,6 +326,30 @@ class InMemoryAgentThreadStore:
     async def recent_turns(self, agent_thread_id: str, *, limit: int) -> list[ThreadTurn]:
         mine = [t for t in self._turns if t.agent_thread_id == agent_thread_id]
         return mine[-limit:] if limit > 0 else []
+
+    async def active(self, agent_id: str) -> AgentThread | None:
+        return self._active(agent_id)
+
+    async def get_thread(self, agent_id: str, agent_thread_id: str) -> AgentThread | None:
+        thread = self._threads.get(agent_thread_id)
+        return thread if thread is not None and thread.agent_id == agent_id else None
+
+    async def detach_session(self, agent_id: str, session_id: str) -> bool:
+        session = self._sessions.get(session_id)
+        if session is None or self._threads[session.agent_thread_id].agent_id != agent_id:
+            return False
+        del self._sessions[session_id]
+        return True
+
+    async def turns_after(
+        self, agent_thread_id: str, *, after: TurnCursor, limit: int
+    ) -> list[tuple[TurnCursor, ThreadTurn]]:
+        rows = [
+            (TurnCursor(turn.turn_id, turn.turn_id), turn)
+            for turn in self._turns
+            if turn.agent_thread_id == agent_thread_id
+        ]
+        return [row for row in rows if row[0] > after][: max(0, limit)]
 
 
 _THREAD_COLUMNS = "agent_thread_id, agent_id, created_at, archived_at"
@@ -561,6 +637,82 @@ class PostgresAgentThreadStore:
                 created_at=r.created_at,
             )
             for r in reversed(rows)
+        ]
+
+    async def active(self, agent_id: str) -> AgentThread | None:
+        return await self._read_active(agent_id)
+
+    async def get_thread(self, agent_id: str, agent_thread_id: str) -> AgentThread | None:
+        async with await self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        f"SELECT {_THREAD_COLUMNS} FROM standing_agent_threads"
+                        " WHERE agent_id = :agent_id AND agent_thread_id = :agent_thread_id"
+                    ),
+                    {"agent_id": agent_id, "agent_thread_id": agent_thread_id},
+                )
+            ).first()
+        return _thread(row) if row is not None else None
+
+    async def detach_session(self, agent_id: str, session_id: str) -> bool:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    text(
+                        """
+                        DELETE FROM standing_agent_thread_sessions s
+                        USING standing_agent_threads t
+                        WHERE s.session_id = :session_id
+                          AND t.agent_thread_id = s.agent_thread_id
+                          AND t.agent_id = :agent_id
+                        """
+                    ),
+                    {"session_id": session_id, "agent_id": agent_id},
+                )
+        return bool(result.rowcount)
+
+    async def turns_after(
+        self, agent_thread_id: str, *, after: TurnCursor, limit: int
+    ) -> list[tuple[TurnCursor, ThreadTurn]]:
+        if limit <= 0:
+            return []
+        async with await self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT xact_id::text AS position, turn_id, agent_thread_id, session_id,
+                           channel_type, role, content, created_at
+                    FROM standing_agent_thread_turns
+                    WHERE agent_thread_id = :agent_thread_id
+                      AND xact_id < pg_snapshot_xmin(pg_current_snapshot())
+                      AND (xact_id, turn_id) > (CAST(:position AS xid8), :turn_id)
+                    ORDER BY xact_id, turn_id
+                    LIMIT :limit
+                    """
+                ),
+                {
+                    "agent_thread_id": agent_thread_id,
+                    "position": after.position,
+                    "turn_id": after.turn_id,
+                    "limit": limit,
+                },
+            )
+            rows = result.all()
+        return [
+            (
+                TurnCursor(int(r.position), r.turn_id),
+                ThreadTurn(
+                    turn_id=r.turn_id,
+                    agent_thread_id=r.agent_thread_id,
+                    session_id=r.session_id,
+                    channel_type=r.channel_type,
+                    role=r.role,
+                    content=r.content,
+                    created_at=r.created_at,
+                ),
+            )
+            for r in rows
         ]
 
     async def _read_active(self, agent_id: str) -> AgentThread | None:

@@ -205,7 +205,12 @@ DELETE /api/v1/standing-agents/{agent_id}/thread/sessions/{session_id}     # 세
 POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation          # 웹 "에이전트 대화"를 만들거나 기존 것을 돌려준다 (Q8d)
 ```
 
-- 전부 `resolve_agent` 를 거친다. 남의 에이전트는 404 다(Q13 §6). 남의 스레드 id 도 404 다
+- 전부 `resolve_agent` 를 거친다. 남의 에이전트는 404 다(Q13 §6). 남의 스레드 id 도, 남의 세션 떼기도 404 다
+- **읽기는 부작용이 없다**(Q8c): `GET .../thread` 는 활성 스레드가 없으면 열지 않고 `{"thread": null, "sessions": []}` 다
+- **회전은 에이전트 상태를 보지 않는다**: 새로 시작은 일을 만들지 않는다. 채널의 `/new` 와 같다
+- **떼기는 스위치가 아니다**: 뗀 세션의 다음 DM 은 붙이기 규칙(§5)을 다시 거쳐 다시 붙는다. 잘못 붙은 세션이나 안 쓰는
+  세션을 목록에서 정리하는 것이다. 채널을 계속 빼 두려면 차단 목록이 필요하다 — 아직 정하지 않았다
+- 피드 커서는 `(xact_id, turn_id)` 를 감싼 불투명 문자열이다(`TurnCursor`). 읽을 수 없으면 422. 한 쪽 상한은 500(활동 피드와 같다)
 - 웹 에이전트 대화는 **에이전트당 하나**다. 그 대화의 메시지 전송은 기존 `/chat/conversations/{id}/messages/stream` 을
   그대로 쓴다. 새 스트림 엔드포인트를 만들지 않는다. FE 는 그 대화를 사이드바에서 구별해 보여 주기만 하면 된다
   (BFF·`use-chat-stream.ts` 는 그대로다)
@@ -216,7 +221,7 @@ POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation          # 웹
 |---|---|---|---|
 | **Q8a** ✅ **착지(2026-10-05)** | 마이그레이션 092 · `neos/standing/threads.py`(메모리·Postgres 저장소, `resolve_agent_thread`, `thread_window`, `rotate_agent_thread`) · 에이전트 삭제가 스레드를 함께 지운다 · 설정 `standing_agents.threads.enabled`(스키마 기본 off) **+ `config/neos.development.yaml` 에서 on**(결정 Q8-6, 같은 커밋) | 테스트 47(계약 43 · 설정 4) · 변이 12/12. 메모리·Postgres **같은 계약** · 활성 하나(경합 시 둘째가 첫째를 다시 읽는다) · 회전이 한 트랜잭션: 보관 + 새 스레드 + 세션 이동, 동시 회전 둘 = 회전 하나 · 창은 활성 스레드만, `limit` 경계 · 같은 `idem_key` 두 번 쓰기 = 한 행 · **에이전트 DELETE 뒤 스레드·세션·턴 0행**(보관된 것 포함) · **사용자 삭제가 한 문장으로 지운다**(실 DB) · 남의 에이전트 스레드는 None · 신선한 DB 2회 적용 · development 프로파일로 설정이 로드된다 | Q13 ✅ |
 | **Q8b** ✅ **착지(2026-10-05)** | 어댑터 `is_dm`(어댑터마다 판정 함수 하나를 게이트와 `metadata` 가 함께 쓴다) · `neos/standing/channel_threads.py`(붙이기 규칙·창·기록·회전) · 게이트웨이 배선(§8) · `main.py` 는 늘 배선하고 플래그는 호출 때마다 읽는다 | 테스트 26(게이트웨이 17 · 어댑터 9) · 변이 15/15. **실제 게이트웨이로**: Slack DM 턴 → Telegram DM 다음 턴의 `chat_history` 에 `[slack]` 표지와 함께 있다 · 그룹 채널·principals 미매핑·바인딩 세션·`paused` 에이전트는 붙지 않고 동작이 지금과 바이트 동일 · 스레드 저장소가 던져도 응답이 나오고 카운터가 오른다 · ~~승인 재개가 assistant 턴을 닫는다~~ 승인으로 끊긴 턴은 사용자 턴만 남는다(§8) · Slack 의 `/new` 뒤 Telegram 의 다음 턴이 빈 창을 본다 · 플래그 off 면 저장소를 부르지 않는다 | Q8a |
-| **Q8c** | API 읽기·회전·떼기(§9) · 활동 피드에 "세션 붙음"·"회전" 항목 | 플래그 off 면 라우트가 없다(`test_retired_routes._routes()` 로 읽는다 — `app.routes` 는 포함 라우터를 감춘다) · 커서가 늦은 커밋을 건너뛰지 않는다(실 DB) · 남의 에이전트·남의 스레드 id 는 모든 동사에서 404 · 목록이 배열 | Q8b |
+| **Q8c** ✅ **착지(2026-10-05)** | API 읽기·회전·떼기(§9) · 마이그레이션 093(피드 커서 인덱스) · `neos/api/handlers/standing_thread_handlers.py` · ~~활동 피드에 "세션 붙음"·"회전" 항목~~ → **넣지 않았다**(아래) | 테스트 32(계약 19 · API 13) · 변이 11/11. 플래그 off 면 라우트가 없다(`test_retired_routes._routes()` 로 읽는다 — `app.routes` 는 포함 라우터를 감춘다) · 커서가 늦은 커밋을 건너뛰지 않는다(실 DB) · 남의 에이전트·남의 스레드 id 는 모든 동사에서 404 · 목록이 배열 | Q8b |
 | **Q8d** | 웹 에이전트 대화: 엔드포인트(§9) · `ChatStreamPipeline` 배선(§8) · FE 사이드바 표시 | 웹 턴이 다음 Slack DM 의 창에 `[web]` 으로 보인다 · 붙지 않은 웹 대화는 동작이 지금과 같다 · 남의 대화를 에이전트 대화로 지정할 수 없다 · SSE 이벤트 fixture 가 바뀌지 않는다(양방향 테스트 통과) · 에이전트당 하나 | Q8c |
 
 - **Q8a 가 설계에서 바꾼 것**(2026-10-05): ① 피드 커서 인덱스 `(agent_thread_id, xact_id, turn_id)` 는 092 에 넣지 않았다 —
@@ -236,6 +241,11 @@ POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation          # 웹
   전에 판정하지만 결과는 같다(붙지 않는다)
 - ⚠️ 배포·개발 DB 에 092 를 적용해야 한다(`scripts/apply_schema.py`). 적용 전에는 에이전트 `DELETE` 가 없는 테이블을 지우려다
   실패한다 — dev DB 는 마이그레이션을 조용히 놓친 이력이 있다(066~090, 2026-10-03)
+- **Q8c 가 설계에서 바꾼 것**(2026-10-05): ① 활동 피드(F17, Q13d)에 "세션 붙음"·"회전"을 넣지 않았다. 활동 피드는 코딩 원장의
+  `CodingEvent` 를 합친 것이고, 그 이벤트 종류는 FE↔BE fixture(`coding_event_kinds.json`)가 양방향으로 고정한다. 스레드 사건을
+  섞으려면 코딩 이벤트 계약을 깨야 한다. 같은 정보는 스레드 API 가 준다(세션의 `attached_at`, 스레드의 `created_at`·`archived_at`)
+  ② 저장소에 부작용 없는 읽기 넷을 더했다: `active` · `get_thread`(에이전트 범위) · `detach_session`(에이전트 범위) · `turns_after`
+  ③ ⚠️ 플래그 **on** 분기(`main.py` 마운트)는 테스트가 없다 — Q13b 와 같은 이유(앱은 import 때 한 번 조립된다)
 - **Q9 가 Q8 위에 더할 것**(지금 만들지 않는다): "답할 세션" = 소유자가 가장 최근에 말한 붙은 세션. 턴 테이블을 조회해
   얻으므로 새 열이 필요 없다. 이 조회 함수는 그것을 처음 읽는 Q9 가 만든다
 - **Q15(음성)** 는 음성 → 텍스트를 user 턴으로 기록한다. 턴 `role` 은 늘리지 않는다

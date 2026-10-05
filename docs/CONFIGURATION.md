@@ -1616,7 +1616,17 @@ Channel DMs attach only when the sender is mapped to the owner through
 `channels.principals` and the agent is `active`; a paused or retired agent's DMs
 are answered without the thread. Thread failures never block a reply -- they are
 counted in `standing_thread_failures_total{op}`. The web side (Q8d) is not wired
-yet.
+yet. The routes below exist only when both `standing_agents.enabled` and
+`threads.enabled` are on; reads never open a thread, and detaching a session does
+not keep it out (its next DM attaches again).
+
+```
+GET    /api/v1/standing-agents/{agent_id}/thread                          # active thread + attached sessions
+GET    /api/v1/standing-agents/{agent_id}/threads                         # all threads, archived included
+GET    /api/v1/standing-agents/{agent_id}/threads/{agent_thread_id}/turns?after=&limit=
+POST   /api/v1/standing-agents/{agent_id}/thread/rotate                   # same as /new
+DELETE /api/v1/standing-agents/{agent_id}/thread/sessions/{session_id}
+```
 
 ## Staging and Production
 

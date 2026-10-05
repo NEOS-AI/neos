@@ -688,6 +688,18 @@ if settings.config.standing_agents.enabled:
             prefix=settings.API_V1_PREFIX,
             tags=["Standing Agent Questions"],
         )
+    # 채널 횡단 스레드(트랙 Q8c). 스레드를 쓰는 쪽(게이트웨이)은 늘 배선되고 플래그를 호출
+    # 때마다 읽지만, 읽는 API 는 꺼져 있으면 라우트가 없다.
+    if settings.config.standing_agents.threads.enabled:
+        from neos.api.handlers.standing_thread_handlers import (
+            router as standing_thread_router,
+        )
+
+        _include_router_for_runtime(
+            standing_thread_router,
+            prefix=settings.API_V1_PREFIX,
+            tags=["Standing Agent Threads"],
+        )
     # 이벤트 트리거(트랙 Q4a). 배달 라우트는 인증 의존성이 없다 -- 서명이 인증이다.
     if settings.config.standing_agents.triggers.enabled:
         from neos.api.handlers.standing_trigger_handlers import (

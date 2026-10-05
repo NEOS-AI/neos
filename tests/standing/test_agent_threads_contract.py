@@ -410,3 +410,124 @@ async def test_a_session_left_on_an_archived_thread_moves_to_the_active_one() ->
 
     assert attached == new
     assert await threads.thread_for_session(SLACK_DM) == new
+
+
+# ---- Q8c read API -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_active_reads_without_opening(stores) -> None:
+    agents, threads = stores
+    agent = await _agent(agents)
+
+    assert await threads.active(agent.agent_id) is None
+    assert await threads.list_threads(agent.agent_id) == []
+    opened = await resolve_agent_thread(threads, agent)
+    assert await threads.active(agent.agent_id) == opened
+
+
+@pytest.mark.asyncio
+async def test_get_thread_is_scoped_to_its_agent(stores) -> None:
+    agents, threads = stores
+    alice = await _agent(agents, ALICE)
+    bob = await _agent(agents, BOB)
+    old = await resolve_agent_thread(threads, alice)
+    await rotate_agent_thread(threads, alice)
+
+    archived = await threads.get_thread(alice.agent_id, old.agent_thread_id)
+    assert archived is not None and archived.archived_at is not None
+    assert await threads.get_thread(bob.agent_id, old.agent_thread_id) is None
+    assert await threads.get_thread(alice.agent_id, "sat_missing") is None
+
+
+@pytest.mark.asyncio
+async def test_detach_removes_only_the_agents_own_session(stores) -> None:
+    agents, threads = stores
+    alice = await _agent(agents, ALICE)
+    bob = await _agent(agents, BOB)
+    await threads.attach_session(alice.agent_id, SLACK_DM, "slack")
+
+    assert await threads.detach_session(bob.agent_id, SLACK_DM) is False
+    assert await threads.thread_for_session(SLACK_DM) is not None
+    assert await threads.detach_session(alice.agent_id, SLACK_DM) is True
+    assert await threads.thread_for_session(SLACK_DM) is None
+    assert await threads.detach_session(alice.agent_id, SLACK_DM) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", [1, 2, 100])
+async def test_the_feed_pages_every_turn_exactly_once_in_order(stores, page) -> None:
+    from neos.standing.threads import TURN_FEED_START
+
+    agents, threads = stores
+    agent = await _agent(agents)
+    thread = await threads.attach_session(agent.agent_id, SLACK_DM, "slack")
+    for index in range(5):
+        await threads.append_turn(thread.agent_thread_id, SLACK_DM, "slack", "user", f"t{index}")
+
+    seen, cursor = [], TURN_FEED_START
+    while True:
+        rows = await threads.turns_after(thread.agent_thread_id, after=cursor, limit=page)
+        if not rows:
+            break
+        seen += [turn.content for _, turn in rows]
+        cursor = rows[-1][0]
+
+    assert seen == [f"t{index}" for index in range(5)]
+
+
+@pytest.mark.parametrize("value", ["", "!!", "WzEsMl0x", "WyJhIiwxXQ", "Wy0xLDBd"])
+def test_unreadable_turn_cursors_are_value_errors(value) -> None:
+    from neos.standing.threads import TurnCursor
+
+    with pytest.raises(ValueError):
+        TurnCursor.decode(value)
+
+
+def test_a_turn_cursor_round_trips() -> None:
+    from neos.standing.threads import TurnCursor
+
+    cursor = TurnCursor(2**40, 7)
+    assert TurnCursor.decode(cursor.encode()) == cursor
+
+
+@pytest.mark.asyncio
+async def test_the_feed_does_not_skip_a_late_commit() -> None:
+    """A turn whose transaction started first but commits last must still be read --
+    the reason the cursor is (xact_id, turn_id) behind pg_snapshot_xmin, not turn_id."""
+    from neos.standing.threads import TURN_FEED_START
+
+    await _seed_users()
+    agents = PostgresStandingAgentStore(db_manager.get_session)
+    threads = PostgresAgentThreadStore(db_manager.get_session)
+    agent = await agents.create(ALICE, "Dot")
+    thread = await threads.attach_session(agent.agent_id, SLACK_DM, "slack")
+
+    slow = await db_manager.get_session()
+    try:
+        await slow.begin()
+        await slow.execute(
+            text(
+                "INSERT INTO standing_agent_thread_turns"
+                " (agent_thread_id, session_id, channel_type, role, content)"
+                " VALUES (:t, :s, 'slack', 'user', 'slow')"
+            ),
+            {"t": thread.agent_thread_id, "s": SLACK_DM},
+        )
+        await threads.append_turn(thread.agent_thread_id, SLACK_DM, "slack", "user", "fast")
+
+        # The slow transaction is open: nothing at or above its xid is handed out yet.
+        held = await threads.turns_after(thread.agent_thread_id, after=TURN_FEED_START, limit=10)
+        assert [turn.content for _, turn in held] == []
+        await slow.commit()
+    finally:
+        await slow.close()
+
+    seen, cursor = [], TURN_FEED_START
+    for _ in range(5):
+        rows = await threads.turns_after(thread.agent_thread_id, after=cursor, limit=1)
+        if not rows:
+            break
+        seen += [turn.content for _, turn in rows]
+        cursor = rows[-1][0]
+    assert sorted(seen) == ["fast", "slow"]
