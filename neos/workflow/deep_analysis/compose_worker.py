@@ -55,8 +55,11 @@ COMPOSE_HEADER = (
     "`search_text.v1` 로 찾는다. 인용은 그 파일들에 있는 `[C:claimid]` 만 쓴다.\n"
     "`list_tree.v1` 은 필요 없다 -- 경로는 `claims/INDEX.md` 에 다 있다. 파일은 한 턴에 함께 읽는다 "
     "(턴 상한이 있다).\n"
-    "다 쓰면 `check_claims.v1` 에 `{\"report_path\": \"report.md\"}` 를 넘겨 고아 인용과 인용 비율을 "
-    "확인하고, 고친 뒤 `submit.v1` 에 `report_path` 를 담아 제출한다.\n\n---\n\n"
+    "다 쓰면 `check_claims.v1` 에 `{\"report_path\": \"report.md\"}` 를 넘겨 고아 인용과 인용 비율, "
+    "그리고 **게이트가 실제로 반려하는 축**을 확인한다: 숫자나 고유명사가 든 문장 중 인용이 없는 것의 비율 "
+    "`uncited_ratio` 가 `uncited_threshold` 보다 낮아야 한다. `uncited_sentences` 의 문장은 `[C:claimid]` 를 "
+    "붙이거나, 뒷받침할 클레임이 없으면 '## 한계와 미확인 사항' 절로 옮기거나 뺀다. "
+    "고친 뒤 `submit.v1` 에 `report_path` 를 담아 제출한다.\n\n---\n\n"
 )
 
 
@@ -151,8 +154,15 @@ def render_brief(
 def check_report(text: str, verified_ids: set[str]) -> dict[str, Any]:
     """`check_claims.v1` 의 compose 모양 -- 결정론, 원장에 쓰지 않는다.
 
-    게이트가 실제로 반려하는 두 축을 미리 보인다: 고아 인용(`E_ORPHAN_CITE`)과 인용 비율.
+    게이트가 반려하는 축을 미리 보인다: 고아 인용(`E_ORPHAN_CITE`), 인용 비율, 그리고 **미인용 단정 문장의
+    비율**(`E_REPORT_UNCITED`, D114). 마지막은 게이트의 함수(`uncited_measure`)를 그대로 부른다 -- 렌더러가
+    `[C:…]` 를 같은 자리의 `[n]` 각주로 바꾸므로, 마커를 `[1]` 로 바꾼 텍스트가 게이트가 볼 텍스트와 같은
+    문장 경계·같은 인용 여부를 가진다.
     """
+    from neos.config.settings import settings
+
+    from .graders.report import uncited_measure
+
     cited = set(_MARKER.findall(text))
     orphans = sorted(cited - verified_ids)
     used = cited & verified_ids
@@ -163,6 +173,24 @@ def check_report(text: str, verified_ids: set[str]) -> dict[str, Any]:
         "available_verified": available,
         "cited_ratio": (len(used) / available) if available else None,
         "uncited_claim_ids": sorted(verified_ids - used)[:50],
+        **_uncited_preview(text, settings.config.deep_analysis.report_uncited_ratio_max, uncited_measure),
+    }
+
+
+#: 게이트의 재시도 힌트와 같은 크기(`graders.report._MAX_HINTED_SENTENCES`·`_MAX_HINT_CHARS`).
+_MAX_SHOWN_SENTENCES = 8
+_MAX_SHOWN_CHARS = 160
+
+
+def _uncited_preview(text: str, threshold: float, measure: Any) -> dict[str, Any]:
+    ratio, assertions, uncited, offenders = measure(_MARKER.sub("[1]", text))
+    return {
+        "uncited_ratio": round(ratio, 4),
+        "uncited_assertions": assertions,
+        "uncited_count": uncited,
+        "uncited_threshold": threshold,
+        "uncited_gate_ok": assertions > 0 and ratio < threshold,
+        "uncited_sentences": [s[:_MAX_SHOWN_CHARS] for s in offenders[:_MAX_SHOWN_SENTENCES]],
     }
 
 
@@ -171,8 +199,9 @@ def check_report(text: str, verified_ids: set[str]) -> dict[str, Any]:
 _COMPOSE_CHECK = ToolDefinition(
     name=CHECK_TOOL,
     description=(
-        "Check a report file you wrote: orphan [C:...] citations and how many "
-        "verified claims it cites. Read-only; the harness grades again."
+        "Check a report file you wrote: orphan [C:...] citations, how many "
+        "verified claims it cites, and the gate's uncited-assertion ratio with "
+        "the offending sentences. Read-only; the harness grades again."
     ),
     input_schema={
         "type": "object",
@@ -245,13 +274,14 @@ def build_compose_ticket(
     )
 
 
-def compose_max_turns(max_steps: int) -> int:
-    """`code_research.max_steps` 는 계약의 `2·max_turns + 1` 법에서 나온 수다 -- 거꾸로 푼다.
+def compose_max_steps(max_turns: int) -> int:
+    """계약의 `2·max_turns + 1` 법 -- 턴 하나가 모델 걸음과 도구 걸음이다.
 
-    티켓 기본값 4 로는 브리프 → 색인 → 파일 → 쓰기 → 검사 → 제출이 들어가지 않았다
-    (D106 진단 실행: `turns_exhausted`). 티켓의 상한은 8 이다.
+    D106 은 거꾸로 `code_research.max_steps`(17)에서 턴(8)을 풀었다. D114 가 턴을
+    `deep_analysis.compose_max_turns` 로 따로 두면서 걸음을 턴에서 유도한다 -- 그대로 17 이면 12 턴 전에
+    `compose_step_cap` 이 먼저 걸린다.
     """
-    return max(1, min(8, (max_steps - 1) // 2))
+    return 2 * max_turns + 1
 
 
 async def run_compose_worker(
@@ -270,7 +300,7 @@ async def run_compose_worker(
     attempt: int,
     limits: Any,
     command_limits: CommandLimits,
-    max_steps: int,
+    max_turns: int,
     profile: str = RESEARCH_PROFILE,
 ) -> tuple[str, dict[str, Any]]:
     """샌드박스를 열고, 파일을 놓고, 자식을 끝까지(걸음 상한 안에서) 돌리고, 리포트를 읽는다.
@@ -311,6 +341,7 @@ async def run_compose_worker(
             ),
         )
         runtime = runtime_factory(port)
+        max_steps = compose_max_steps(max_turns)
         run_id: str | None = None
         checkpoint_id: str | None = None
         steps = 0
@@ -324,7 +355,7 @@ async def run_compose_worker(
                 model=model,
                 run_id=run_id,
                 expected_checkpoint_id=checkpoint_id,
-                max_turns=compose_max_turns(max_steps),
+                max_turns=max_turns,
             )
             outcome = await runtime.advance(ticket)
             steps += 1

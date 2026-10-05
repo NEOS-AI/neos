@@ -109,6 +109,17 @@ def _sentences(body: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def uncited_measure(report: str) -> tuple[float, int, int, list[str]]:
+    """Check (b) exactly as the gate runs it: `_uncited_stats(_report_body(report))`.
+
+    Public because the compose child sees the same number before submitting
+    (`check_claims.v1`, D114) -- one function, so the preview cannot drift
+    from the verdict.
+    """
+
+    return _uncited_stats(_report_body(report))
+
+
 def _uncited_stats(body: str) -> tuple[float, int, int, list[str]]:
     """Return (ratio, assertion count, uncited count, uncited sentences).
 
@@ -256,9 +267,7 @@ class ReportGrader:
 
         # (b) marker-less factual-assertion ratio must stay under threshold.
         threshold = settings.config.deep_analysis.report_uncited_ratio_max
-        ratio, assertions, uncited, offenders = _uncited_stats(
-            _report_body(report)
-        )
+        ratio, assertions, uncited, offenders = uncited_measure(report)
         # Carried by every verdict from here on, not only the rejection:
         # recording the failing side alone yields a distribution censored at
         # the threshold, which cannot say whether the cut is in the right

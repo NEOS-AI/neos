@@ -4031,3 +4031,38 @@ D107 의 사용 한도와 다른 문구다. 감시(D108 W-J5)는 "usage limits" 
 - **빈 본문:** (a) 전 시도 실패 시 옛 조립기로 **명시적으로**(이벤트를 남기고) 떨어진다 · (b) 클레임 파일에서 최소 리포트를 결정론으로 짓는다 · (c) 그대로 둔다
 - **턴 상한:** compose `max_turns` 를 늘린다(지출 증가) · 런타임의 마지막 턴 도구를 실행한다(런타임 전체) · 그대로
 - **다음 처방(게이트의 미인용 축):** `check_claims.v1` 이 게이트의 미인용 문장 검사를 같은 코드로 돌려 보여 준다 — 표본 하나의 처방이다
+
+## D114. D113 의 결정 셋 -- 빈 본문 대체 · compose 턴 상한 12 · 자식이 게이트의 미인용 축을 본다 (2026-10-05)
+
+**결정 (사람의 결정, 2026-10-05):** D113 §3 의 셋을 모두 한다 — 빈 본문은 (a) 명시적 대체, 턴은 compose 상한을 늘린다,
+다음 처방은 `check_claims.v1` 이 게이트의 미인용 검사를 보인다.
+
+### 1. 빈 본문 → 옛 조립기로 **명시적으로** (a)
+
+compose 가 **모든** 시도에서 초안을 내지 못했을 때만(`last is None`), 재시도 루프 **밖에서** `Synthesizer.assemble` 을 한 번 부른다.
+원장에 `report_assembly_degraded{reason: compose_all_attempts_failed, attempts}` (기존 이벤트 종류 — FE 계약 불변), 부록에
+"옛 조립기의 초안을 실었다 -- 이 초안은 채점되지 않았다". 루프 **안의** 시도를 조립기로 바꾸지 않는 이유: compose 의 재시도 기회가 준다.
+반려된 compose 초안이 하나라도 있으면 대체하지 않는다(그 초안이 나간다). 고아 사유는 이제 앞 사유에 **덧붙는다**(옛 경로 바이트 동일).
+테스트 셋(대체 한 번 · 반려 초안이 있으면 대체 없음 · 샌드박스 없음도 대체) — 대체를 끄면 둘이 빨개진다.
+
+### 2. compose 턴 상한 8 → 12
+
+- 티켓 상한이 8 이었다(`SubagentTicket.__post_init__`). `MAX_TICKET_TURNS = 12` 로 이름을 붙이고 올렸다 — **기본값 4 는 그대로**라
+  explore 등 다른 스펙은 바뀌지 않는다. 런타임의 stale 리스(`DEFAULT_STALE_AFTER_SEC`)도 이 상수에서 계산한다(990 → 1,470 초)
+- 워크플로 노드 템플릿의 1-8 검사(`subagent_nodes.py`)는 **따로 둔다** — 사람이 그래프에 적는 노드의 정책이고 이 결정의 범위가 아니다
+- `deep_analysis.compose_max_turns: 12` (le = 티켓 상한, 테스트가 맞춘다). compose 의 걸음 상한은 이제 `2·턴 + 1 = 25` 로 유도한다 —
+  `code_research.max_steps`(17)를 그대로 쓰면 12 턴 전에 `compose_step_cap` 이 먼저 걸린다
+
+### 3. 처방 — 자식이 게이트의 미인용 축을 본다
+
+`check_claims.v1`(compose 모양)이 `uncited_ratio · uncited_assertions · uncited_count · uncited_threshold · uncited_gate_ok ·
+uncited_sentences`(최대 8, 160 자)를 더 돌려준다. **게이트의 함수를 그대로 부른다** — `graders/report.py` 에 `uncited_measure(report)`
+(= `_uncited_stats(_report_body(report))`) 를 공개하고 게이트도 그것을 쓴다(바이트 같은 동작). compose 원문의 `[C:…]` 를 `[1]` 로 바꿔
+넘긴다 — 렌더러가 마커를 같은 자리의 `[n]` 으로 바꾸므로(`citation.py`) 문장 경계·인용 여부가 게이트가 볼 텍스트와 같다. 테스트: 렌더한
+텍스트의 게이트 진단 = compose 원문의 미리보기(치환을 빼면 빨개진다 — D110 dry run 이 실제로 저지른 실수다). 브리프 머리말에 그 축을 적었다.
+
+⚠️ **한 표본에 변경 셋.** #30 은 셋을 함께 싣는다(사람의 결정). 서로 가로지르는 곳: 턴이 늘면 자식이 검사→고침을 더 돌 수 있어
+처방(§3)의 효과와 턴(§2)의 효과가 **초안 단위 미인용 비율에서 갈리지 않는다.** 대체(§1)는 compose 초안이 없는 런에만 나타나므로
+compose 초안 기준의 지표에서 뺄 수 있다. 사전 등록이 이 경계를 적는다.
+
+곁가지(고치지 않음): compose 티켓이 `input/output_cost_micros_per_million` 을 채우지 않는다 — 서브에이전트 `cost_micros` 가 0 인 이유로 보인다.

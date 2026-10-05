@@ -75,13 +75,17 @@ def test_ticket_requires_delegate_lineage() -> None:
         _ticket(lineage_kind=LineageKind.BRANCH)
 
 
-def test_ticket_clamps_max_turns_to_one_through_eight() -> None:
+def test_ticket_clamps_max_turns_to_one_through_the_ceiling() -> None:
+    from neos.subagent.types import MAX_TICKET_TURNS
+
+    assert MAX_TICKET_TURNS == 12  # 8 → 12 (D114, compose 재시도의 turns_exhausted)
     with pytest.raises(ValueError, match="max_turns"):
         _ticket(max_turns=0)
     with pytest.raises(ValueError, match="max_turns"):
-        _ticket(max_turns=9)
+        _ticket(max_turns=MAX_TICKET_TURNS + 1)
     assert _ticket(max_turns=1).max_turns == 1
-    assert _ticket(max_turns=8).max_turns == 8
+    assert _ticket(max_turns=MAX_TICKET_TURNS).max_turns == MAX_TICKET_TURNS
+    assert _ticket().max_turns == 4  # 기본값은 그대로다 -- 다른 스펙은 바뀌지 않는다
 
 
 def test_ticket_has_no_channel_fields() -> None:

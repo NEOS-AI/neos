@@ -157,7 +157,7 @@ async def _run(ledger, provider, runtime_box, *, attempt=0, **runtime_kw):
         attempt=attempt,
         limits=None,
         command_limits=CommandLimits(timeout_sec=5, output_bytes=4096),
-        max_steps=3,
+        max_turns=1,  # 걸음 상한 2·1+1 = 3
     )
 
 
@@ -263,8 +263,12 @@ async def test_with_the_flag_on_the_compose_child_writes_the_draft(monkeypatch):
     assert seen["root_id"] == "root0001" and seen["root_summary"] == "루트 요약"
 
 
-async def test_a_failing_compose_child_never_falls_back_to_assemble(monkeypatch):
-    """조용한 degrade 금지 -- 매 시도가 원장에 이유를 남기고, 옛 조립기는 한 번도 불리지 않는다."""
+async def test_a_failing_compose_child_falls_back_to_assemble_once_and_says_so(monkeypatch):
+    """조용한 degrade 금지 -- 매 시도가 원장에 이유를 남기고, 시도 **안에서는** 옛 조립기가 불리지 않는다.
+
+    모든 시도가 실패하면 루프 **밖에서** 옛 조립기를 한 번 부르고 원장·부록에 그 사실을 적는다(D114) --
+    #29 의 default 런은 부록 한 줄만 받았다(D113).
+    """
     monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
 
     async def fail(**_kw):
@@ -276,12 +280,40 @@ async def test_a_failing_compose_child_never_falls_back_to_assemble(monkeypatch)
     orch.sandbox_provider = MemoryProvider()
     orch.compose_runtime_factory = lambda port: None
 
-    await orch._finalize("root0001")
+    report = await orch._finalize("root0001")
 
-    assert synth.assemble_calls == 0
     reasons = [p["reason"] for (k, _q, p) in ledger.events if k == "code_worker_unsubmitted"]
     attempts = settings.config.deep_analysis.report_retry_cap + 1
     assert reasons == ["submit_not_called"] * attempts
+    assert synth.assemble_calls == 1
+    degraded = [p for (k, _q, p) in ledger.events if k == "report_assembly_degraded"]
+    assert degraded[0] == {"reason": "compose_all_attempts_failed", "attempts": attempts}
+    # 가짜 조립기의 초안은 고아를 인용한다 -- 그 사유가 compose 사유를 덮지 않고 덧붙는다.
+    assert [p["reason"] for p in degraded[1:]] == ["orphan_citations_delivered"]
+    assert "DRAFT-1" in report and "옛 조립기의 초안을 실었다" in report and "존재하지 않는" in report
+    graded = [p for (k, _q, p) in ledger.events if k == "report_graded"]
+    assert graded == []  # 대체 초안은 채점되지 않는다
+
+
+async def test_a_compose_draft_that_was_rejected_is_delivered_not_the_fallback(monkeypatch):
+    """대체는 compose 가 초안을 **하나도** 못 냈을 때만이다 -- 반려된 compose 초안이 있으면 그것이 나간다."""
+    from tests.workflow.deep_analysis.test_orchestrator_m4 import FailGrader as RejectGrader
+
+    monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
+
+    async def compose(**_kw):
+        return "COMPOSED [C:c1aaaaaa]\n\n## 출처", {"steps": 1}
+
+    monkeypatch.setattr(compose_worker, "run_compose_worker", compose)
+    ledger, synth = ClaimLedger(), FakeSynth(_summaries())
+    orch = _orch(ledger, synth, FlakyRenderer(0), grader=RejectGrader())
+    orch.sandbox_provider = MemoryProvider()
+    orch.compose_runtime_factory = lambda port: None
+
+    report = await orch._finalize("root0001")
+
+    assert synth.assemble_calls == 0 and "COMPOSED" in report
+    assert not [p for (k, _q, p) in ledger.events if k == "report_assembly_degraded"]
 
 
 async def test_a_missing_sandbox_is_reported_by_name(monkeypatch):
@@ -289,23 +321,27 @@ async def test_a_missing_sandbox_is_reported_by_name(monkeypatch):
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
     await _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())._finalize("root0001")
     reasons = {p["reason"] for (k, _q, p) in ledger.events if k == "code_worker_unsubmitted"}
-    assert reasons == {"sandbox_provider_missing"} and synth.assemble_calls == 0
+    assert reasons == {"sandbox_provider_missing"} and synth.assemble_calls == 1  # 루프 밖 대체 한 번(D114)
 
 
 # -- D106: 라이브에서 드러난 셋 ----------------------------------------------------
 
 
-def test_compose_turns_come_from_the_step_law():
-    from neos.workflow.deep_analysis.compose_worker import compose_max_turns
+def test_compose_steps_come_from_the_step_law_and_turns_fit_the_ticket():
+    from neos.subagent.types import MAX_TICKET_TURNS
+    from neos.workflow.deep_analysis.compose_worker import compose_max_steps
 
-    assert compose_max_turns(17) == 8  # 2·8 + 1
-    assert compose_max_turns(1) == 1 and compose_max_turns(99) == 8  # 티켓 상한
+    assert compose_max_steps(12) == 25  # 2·12 + 1 -- 옛 17 이면 12 턴 전에 걸음 상한이 걸린다
+    field = type(settings.config.deep_analysis).model_fields["compose_max_turns"]
+    assert field.default == 12
+    le = next(m.le for m in field.metadata if getattr(m, "le", None) is not None)
+    assert le == MAX_TICKET_TURNS  # 설정이 티켓이 받지 못할 값을 허락하지 않는다
 
 
 async def test_the_compose_ticket_carries_the_derived_turns():
     provider, box = MemoryProvider(), []
     await _run(ClaimLedger(), provider, box, report="[C:c1aaaaaa]")
-    assert box[0].tickets[0].max_turns == 1  # max_steps=3 → (3-1)//2
+    assert box[0].tickets[0].max_turns == 1
 
 
 async def test_a_failed_child_is_named_by_its_error_not_as_a_missing_submit():
@@ -321,7 +357,7 @@ async def test_a_failed_child_is_named_by_its_error_not_as_a_missing_submit():
             ledger=ClaimLedger(), provider=MemoryProvider(), root_id="root0001", root_text="q",
             root_summary="", child_blocks=[], caveats=[], revision_hints=[],
             runtime_factory=FailingRuntime, model=_PIN, parent_id="run00001", attempt=0, limits=None,
-            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_steps=17,
+            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_turns=8,
         )
     assert info.value.reason == "child_failed:model_provider_failed"
 
@@ -373,7 +409,7 @@ async def test_each_attempt_gets_a_fresh_child_not_the_finished_one():
             root_summary="", child_blocks=[], caveats=[], revision_hints=["E_REPORT_UNCITED"],
             runtime_factory=lambda port: StoreBackedRuntime(port, store), model=_PIN,
             parent_id="run00001", attempt=attempt, limits=None,
-            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_steps=3,
+            command_limits=CommandLimits(timeout_sec=5, output_bytes=4096), max_turns=1,
         )
         assert summary["cited_verified"] == 1
     assert len(await store.list_for_parent_run("run00001")) == 2
@@ -393,3 +429,36 @@ async def test_the_orchestrator_hands_each_attempt_its_number(monkeypatch):
     orch.compose_runtime_factory = lambda port: None
     await orch._finalize("root0001")
     assert seen == list(range(settings.config.deep_analysis.report_retry_cap + 1))
+
+
+# -- D114: compose 자식이 게이트의 미인용 축을 본다 -----------------------------------
+
+
+_MIXED = (
+    "## 요약\n"
+    "EU AI Act 는 2024년 8월 1일 발효되었다 [C:c1aaaaaa]. "
+    "GPAI 의무는 2025년 8월 2일부터 적용된다. "
+    "Commission 은 2026년 지침을 냈다 [C:g1bbbbbb].\n"
+    "근거가 부족한 부분이 있다.\n\n"
+    "## 한계와 미확인 사항\n- 2027년 일정은 확인하지 못했다.\n"
+)
+
+
+async def test_check_claims_shows_the_gate_s_own_uncited_measurement():
+    """미리보기 = 게이트. 렌더러는 `[C:id]` 를 같은 자리의 `[n]` 으로 바꾸므로(`citation.py`), 그렇게 바꾼 텍스트에
+    게이트가 내는 진단과 `check_claims.v1` 이 compose 원문에서 내는 값이 같아야 한다."""
+    from neos.workflow.deep_analysis.graders.report import ReportGrader
+
+    rendered = _MIXED.replace("[C:c1aaaaaa]", "[1]").replace("[C:g1bbbbbb]", "[2]")
+    verdict = await ReportGrader(ClaimLedger(), judge_model="x").grade_deterministic(rendered, "root0001")
+    preview = check_report(_MIXED, {"c1aaaaaa", "g1bbbbbb"})
+
+    for key in ("uncited_ratio", "uncited_assertions", "uncited_count", "uncited_threshold"):
+        assert preview[key] == verdict.diagnostics[key], key
+    assert preview["uncited_count"] == 1  # 한계 절의 문장은 게이트처럼 세지 않는다
+    assert preview["uncited_sentences"] == ["GPAI 의무는 2025년 8월 2일부터 적용된다."]
+    assert preview["uncited_gate_ok"] is (verdict.code != "E_REPORT_UNCITED")
+
+
+def test_the_brief_names_the_gate_s_axis():
+    assert "uncited_ratio" in COMPOSE_HEADER and "한계와 미확인 사항" in COMPOSE_HEADER

@@ -1211,6 +1211,10 @@ class DeepAnalysisConfig(StrictConfigModel):
     # 이유: 그것을 켜면 research 워커도 코딩 루프가 되어 한 표본에 처방 둘이 들어간다.
     # development 밖에서 켜려면 관리형 평면이 필요하다(I7 과 같은 문).
     compose_child_enabled: bool = False
+    # compose 자식의 턴 상한(D114). 8 에서 재시도 셋이 `turns_exhausted` 로 끝났다(#29, D113).
+    # 상한 12 는 서브에이전트 티켓의 상한(`neos.subagent.types.MAX_TICKET_TURNS`)이다 -- 테스트가 둘을 맞춘다.
+    # compose 의 걸음 상한은 이 값에서 `2·턴 + 1` 로 유도한다(`code_research.max_steps` 를 쓰지 않는다).
+    compose_max_turns: int = Field(default=12, ge=1, le=12)
 
     # Input allowances for the finalization stages, expressed as multiples of
     # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling

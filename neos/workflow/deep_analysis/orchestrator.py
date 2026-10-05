@@ -867,7 +867,7 @@ class Orchestrator:
                     timeout_sec=research.reexecution.cpu_sec,
                     output_bytes=research.reexecution.stdout_bytes,
                 ),
-                max_steps=research.max_steps,
+                max_turns=settings.config.deep_analysis.compose_max_turns,
                 profile=research.sandbox_profile,
             )
         except TokenBudgetExhausted:
@@ -1852,6 +1852,29 @@ class Orchestrator:
         # instead of reporting it. So the appendix names them instead.
         chosen = _best_rejected_draft(rejected)
         reason = "조립/채점 재시도 캡 소진."
+        if last is None and settings.config.deep_analysis.compose_child_enabled:
+            # D114: compose 자식이 **모든** 시도에서 초안을 내지 못했다. 그대로면 사용자는 부록 한 줄만
+            # 받는다(#29 `196c9173`, D113). 옛 조립기를 **한 번, 루프 밖에서** 부른다 -- 루프 안의 시도를
+            # 바꾸면 compose 의 재시도 기회가 줄고, 조용히 바꾸면 "compose 로 돌았다" 는 표본이 섞인다.
+            # 그래서 원장에 이름을 남기고, 부록에도 적고, 채점은 하지 않는다(캡은 이미 썼다).
+            await self.ledger.log(
+                "report_assembly_degraded",
+                root_id,
+                {"reason": "compose_all_attempts_failed", "attempts": cap + 1},
+            )
+            last = await self.synthesizer.assemble(
+                root_summary,
+                child_summaries,
+                caveats,
+                revision_hints=revision_hints,
+            )
+            last = _ensure_question_coverage(
+                _ensure_limits_section(last, caveats), child_summaries
+            )
+            reason = (
+                "조립/채점 재시도 캡 소진. compose 자식이 모든 시도에서 리포트를 내지 못해 "
+                "옛 조립기의 초안을 실었다 -- 이 초안은 채점되지 않았다."
+            )
         best = chosen or last_rendered
         if best is None and last:
             best, orphans = await self.citation_renderer.render_best_effort(last)
@@ -1861,8 +1884,9 @@ class Orchestrator:
                     root_id,
                     {"reason": "orphan_citations_delivered", "orphans": orphans},
                 )
-                reason = (
-                    "조립/채점 재시도 캡 소진. 그리고 조립기가 존재하지 않는 "
+                # 앞의 사유(캡 소진 · compose 대체)에 덧붙인다 -- 옛 경로에서는 바이트가 같다.
+                reason += (
+                    " 그리고 조립기가 존재하지 않는 "
                     f"클레임 id 를 인용했다({', '.join(orphans)}) -- 본문에 남은 "
                     "`[C:...]` 표기는 각주로 해소되지 못한 내부 주소이며 "
                     "출처가 아니다."
