@@ -1,0 +1,6 @@
+id,run_id,claim_id,code,detail,salvage,attempt,resolved
+1016,dff6f745,fa82511f,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+1017,dff6f745,d57a2827,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+1018,dff6f745,b9cd3144,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+1019,740a3539,2958b28d,E_UNSUPPORTED,jev_uncertain_mandatory,,1,0
+1020,740a3539,b75a65f6,E_OVERCLAIM,jev PARTIAL confidence=0.700,,1,0
