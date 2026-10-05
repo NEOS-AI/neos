@@ -188,3 +188,15 @@ def test_folded_result_accepts_exit_reason_and_full_summary() -> None:
     )
     assert result.exit_reason == "failed"
     assert result.full_summary == "head and tail"
+
+
+def test_the_database_turn_constraint_matches_the_ticket_ceiling() -> None:
+    """DB 없이도 도는 쪽 -- 091 의 상한 숫자가 코드의 상수와 같다. 055 의 8 이 compose 12 턴을 거절했다(D114)."""
+    import re
+    from pathlib import Path
+
+    from neos.subagent.types import MAX_TICKET_TURNS
+
+    sql = Path("db/migrations/091_widen_subagent_max_turns.sql").read_text(encoding="utf-8")
+    statements = "\n".join(line for line in sql.splitlines() if not line.startswith("--"))
+    assert re.findall(r"CHECK \(max_turns BETWEEN 1 AND (\d+)\)", statements) == [str(MAX_TICKET_TURNS)]

@@ -4066,3 +4066,11 @@ uncited_sentences`(최대 8, 160 자)를 더 돌려준다. **게이트의 함수
 compose 초안 기준의 지표에서 뺄 수 있다. 사전 등록이 이 경계를 적는다.
 
 곁가지(고치지 않음): compose 티켓이 `input/output_cost_micros_per_million` 을 채우지 않는다 — 서브에이전트 `cost_micros` 가 0 인 이유로 보인다.
+
+### 4. 라이브 dry run 이 다섯 번째 "가짜 초록"을 잡았다 — DB 의 턴 제약
+
+D114 코드 위의 첫 라이브 dry run(재시도 경로, 런 셋)이 **6/6 `IntegrityError`** — `subagent_runs_max_turns_check`.
+055 가 `CHECK (max_turns BETWEEN 1 AND 8)` 를 걸었고 메모리 스토어에는 그 제약이 없다. **고침:** `091_widen_subagent_max_turns.sql`
+(지우고 다시 건다, 두 번 적용해도 같다) — 테스트 DB·dev DB 에 적용(dev: `<= 8` → `<= 12` 확인). 테스트 둘: 라이브 Postgres 스토어가
+상한 턴의 티켓을 받는다(`CODING_TEST_DATABASE_URL` 이 있을 때 · 091 을 8 로 되돌리면 빨개진다) · DB 없이 도는 쪽이 091 의 숫자 = 코드 상수.
+표본 전에 잡혔다 — D107 의 규칙(라이브 dry run 선행)이 일한 첫 사례다.
