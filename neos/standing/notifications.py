@@ -109,6 +109,12 @@ class NotificationStore(Protocol):
 
     async def enqueue(self, notice: StandingNotice, *, now: datetime) -> bool: ...
 
+    async def enqueue_to(
+        self, notice: StandingNotice, target: NotifyTarget, *, now: datetime
+    ) -> bool:
+        """목적지를 직접 정해 적는다(트랙 Q9b) -- 알림 대상이 없어도 적힌다."""
+        ...
+
     async def claim_due(self, *, limit: int, now: datetime) -> list[QueuedNotice]: ...
 
     async def mark_sent(self, notification_id: str, *, now: datetime) -> None: ...
@@ -153,6 +159,29 @@ class InMemoryNotificationStore:
             return False
         notification_id = f"sn_{uuid4().hex}"
         self.rows[notification_id] = {
+            "agent_id": notice.agent_id,
+            "kind": notice.kind,
+            "dedupe_key": notice.dedupe_key,
+            "channel_type": target.channel_type,
+            "channel_id": target.channel_id,
+            "body": notice.body,
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": now,
+            "last_error": None,
+            "sent_at": None,
+        }
+        return True
+
+    async def enqueue_to(self, notice: StandingNotice, target: NotifyTarget, *, now: datetime) -> bool:
+        if notice.agent_id not in self.agents:
+            return False
+        if any(
+            row["agent_id"] == notice.agent_id and row["dedupe_key"] == notice.dedupe_key
+            for row in self.rows.values()
+        ):
+            return False
+        self.rows[f"sn_{uuid4().hex}"] = {
             "agent_id": notice.agent_id,
             "kind": notice.kind,
             "dedupe_key": notice.dedupe_key,
@@ -302,6 +331,11 @@ class PostgresNotificationStore:
                 )
                 return result.first() is not None
 
+    async def enqueue_to(self, notice: StandingNotice, target: NotifyTarget, *, now: datetime) -> bool:
+        async with await self._session_factory() as session:
+            async with session.begin():
+                return await enqueue_to_in_session(session, notice, target, now=now)
+
     async def claim_due(self, *, limit: int, now: datetime) -> list[QueuedNotice]:
         """`SKIP LOCKED` 로 꺼내고 다음 시도 시각을 미뤄 둔다 -- API 워커가 여럿이어도
         같은 알림을 둘이 동시에 보내지 않는다. 보낸 뒤 `mark_sent` 가 확정한다."""
@@ -388,6 +422,42 @@ class PostgresNotificationStore:
                             "next_attempt_at": now + retry_delay(int(row[0])),
                         },
                     )
+
+
+async def enqueue_to_in_session(
+    session, notice: StandingNotice, target: Any, *, now: datetime
+) -> bool:
+    """목적지를 직접 정한 적기의 SQL -- 다른 트랜잭션(질문 커밋, Q9b)이 자기 세션에서 부른다.
+
+    살아 있는 에이전트에만 적는다. 중복 키가 이미 쓰였으면 아무것도 하지 않는다(False).
+    """
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO standing_notifications
+                (notification_id, agent_id, kind, dedupe_key,
+                 channel_type, channel_id, body, status, attempts,
+                 next_attempt_at, created_at)
+            SELECT :notification_id, agent.agent_id, :kind, :dedupe_key,
+                   :channel_type, :channel_id, :body, 'pending', 0, :now, :now
+            FROM standing_agents agent
+            WHERE agent.agent_id = :agent_id AND agent.deleted_at IS NULL
+            ON CONFLICT (agent_id, dedupe_key) DO NOTHING
+            RETURNING notification_id
+            """
+        ),
+        {
+            "notification_id": f"sn_{uuid4().hex}",
+            "agent_id": notice.agent_id,
+            "kind": notice.kind,
+            "dedupe_key": notice.dedupe_key,
+            "channel_type": target.channel_type,
+            "channel_id": target.channel_id,
+            "body": notice.body,
+            "now": now,
+        },
+    )
+    return result.first() is not None
 
 
 class StandingNotifier:

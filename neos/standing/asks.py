@@ -25,7 +25,11 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+import logging
+
 from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
 
 #: 마이그레이션 095 의 CHECK 와 같아야 한다.
 ASK_WAITING = "waiting"
@@ -82,8 +86,9 @@ class PendingAskStore(Protocol):
         reply_session_id: str | None,
         asked_at: datetime,
         expires_at: datetime,
+        ask_id: str | None = None,
     ) -> PendingAsk | None:
-        """대기 질문을 연다. 그 에이전트에 이미 대기 중인 질문이 있으면 None."""
+        """대기 질문을 연다. `ask_id` 를 주면 그 id 로 연다(알림의 중복 키가 먼저 필요할 때, Q9b). 그 에이전트에 이미 대기 중인 질문이 있으면 None."""
         ...
 
     async def waiting_for_agent(self, agent_id: str) -> PendingAsk | None: ...
@@ -129,6 +134,7 @@ class InMemoryPendingAskStore:
         reply_session_id,
         asked_at,
         expires_at,
+        ask_id=None,
     ):
         async with self._lock:
             if any(
@@ -142,7 +148,7 @@ class InMemoryPendingAskStore:
             ):
                 return None
             ask = PendingAsk(
-                ask_id=new_ask_id(),
+                ask_id=ask_id or new_ask_id(),
                 agent_id=agent_id,
                 task_id=task_id,
                 run_id=run_id,
@@ -252,6 +258,7 @@ async def open_in_session(
     reply_session_id: str | None,
     asked_at: datetime,
     expires_at: datetime,
+    ask_id: str | None = None,
 ) -> PendingAsk | None:
     """한 행 INSERT. 대기 중인 질문이 이미 있거나 같은 도구 호출이면 None.
 
@@ -275,7 +282,7 @@ async def open_in_session(
             """
         ),
         {
-            "ask_id": new_ask_id(),
+            "ask_id": ask_id or new_ask_id(),
             "agent_id": agent_id,
             "task_id": task_id,
             "run_id": run_id,
@@ -413,15 +420,29 @@ DestinationFn = Callable[[str, "str | None"], Awaitable["ReplyDestination | None
 
 @dataclass(frozen=True, slots=True)
 class AgentAsks:
-    """루프가 쥐는 창구(설계 §5). `None` 이 off 다 -- 조립하는 쪽이 `ask_effective` 로 정한다.
+    """루프가 쥐는 창구(설계 §5). `_prepare_real_coding_loop` 가 늘 배선하고, 켜졌는지는
+    `enabled()` 가 호출 때마다 말한다(`ask_effective`).
 
     루프는 설정을 읽지 않는다. 질문을 커밋하는 트랜잭션은 루프의 저장소
-    (`request_user_answer`)가 갖고, 여기는 읽기 둘과 기한만 준다.
+    (`request_user_answer`)가 갖고, 여기는 읽기 둘 · 기한 · 알림 본문을 준다.
     """
 
     store: PendingAskStore
     destination: DestinationFn
     expire_hours: int = 24
+    #: 질문 알림 본문의 상한(`standing_agents.notifications.max_body_chars`).
+    max_body_chars: int = 3_500
+    #: 질문 경로가 켜졌는가 -- 루프가 호출 때마다 읽는다. 포트는 늘 배선되고(Q9b), 꺼져
+    #: 있으면 에이전트 태스크도 지금처럼 무인 DENY 다.
+    enabled: Callable[[], bool] = lambda: True
+
+    def notice_for(
+        self, ask_id: str, agent_id: str, questions: Sequence[Any], destination: "ReplyDestination"
+    ):
+        """질문 알림과 목적지. 루프가 질문 커밋에 함께 실어 같은 트랜잭션에서 적는다."""
+        return question_notice(
+            ask_id, agent_id, questions, destination, max_body_chars=self.max_body_chars
+        )
 
     async def for_call(self, task_id: str, run_id: str, tool_call_id: str) -> PendingAsk | None:
         return await self.store.for_call(task_id, run_id, tool_call_id)
@@ -447,4 +468,158 @@ def ask_effective(config: Any) -> bool:
         and standing.ask.enabled
         and standing.notifications.enabled
         and standing.threads.enabled
+    )
+
+
+# ---- delivery (track Q9b, design §6) ---------------------------------------------
+
+_REPLY_LINE = "Reply in this chat to answer."
+_ONE_LINE_EACH = "Answer one line per question, in order."
+
+
+def _question_lines(questions: Sequence[Any]) -> list[str]:
+    lines: list[str] = []
+    numbered = len(questions) > 1
+    for index, item in enumerate(questions, start=1):
+        if isinstance(item, Mapping):
+            prompt = str(item.get("prompt") or "")
+            labels = []
+            for option in item.get("options") or ():
+                label = option.get("label") if isinstance(option, Mapping) else option
+                if label:
+                    labels.append(str(label))
+        else:
+            prompt, labels = str(item), []
+        lines.append(f"{index}. {prompt}" if numbered else prompt)
+        lines.extend(f"   {chr(ord('a') + n)}) {label}" for n, label in enumerate(labels))
+    return lines
+
+
+def question_notice(
+    ask_id: str,
+    agent_id: str,
+    questions: Sequence[Any],
+    destination: ReplyDestination,
+    *,
+    max_body_chars: int,
+):
+    """질문 알림(설계 §6.2)과 그 목적지. 중복 키는 `question:{ask_id}` 다.
+
+    본문은 질문 목록(선택지 포함) 다음에, 질문이 여럿이면 "한 줄에 한 질문씩"(결정 Q-B),
+    맨 끝에 "Reply in this chat to answer." 를 둔다. 상한을 넘으면 질문 쪽을 자르고 안내 줄은 남긴다.
+    """
+    from neos.standing.notifications import (
+        KIND_QUESTION_ASKED,
+        NotifyTarget,
+        StandingNotice,
+        bounded_body,
+    )
+
+    footer = [_ONE_LINE_EACH] if len(questions) > 1 else []
+    footer.append(_REPLY_LINE)
+    tail = "\n\n" + "\n".join(footer)
+    head = bounded_body("\n".join(_question_lines(questions)), max(0, max_body_chars - len(tail)))
+    notice = StandingNotice(
+        agent_id=agent_id,
+        kind=KIND_QUESTION_ASKED,
+        dedupe_key=f"question:{ask_id}",
+        body=head + tail,
+    )
+    return notice, NotifyTarget(destination.channel_type, destination.channel_id)
+
+
+def owner_mapped_on(channels: Any, platform: str, owner_id: str | None) -> bool:
+    """`channels.principals` 가 그 플랫폼에서 소유자를 매핑하는가. 매핑이 없는 곳에서 온 답은
+    알아볼 수 없으므로(`mapped_owner`) 그곳에는 묻지 않는다(설계 §6.1)."""
+    if not owner_id:
+        return False
+    return any(
+        item.platform == platform and item.user_id == owner_id
+        for item in getattr(channels, "principals", None) or ()
+    )
+
+
+async def resolve_reply_destination(
+    agent_id: str,
+    owner_id: str | None,
+    *,
+    threads: Any,
+    notices: Any,
+    channels: Any,
+) -> ReplyDestination | None:
+    """질문을 보낼 곳(설계 §6.1): 최근 말한 붙은 채널 세션 → 알림 대상 → None.
+
+    읽기가 실패하면 None 이다 -- 묻지 않는다(`no_reply_channel`). 답이 올 수 없는 곳에
+    묻고 만료까지 매달리는 것보다 낫다.
+    """
+    from neos.api.channels.session_key import session_key_destination
+    from neos.standing.threads import reply_session_for
+
+    try:
+        session = await reply_session_for(threads, agent_id)
+        if session is not None:
+            address = session_key_destination(session.session_id)
+            if address is not None and owner_mapped_on(channels, address[0], owner_id):
+                return ReplyDestination(address[0], address[1], session.session_id)
+        if not owner_id:
+            return None
+        target = await notices.get_target(owner_id, agent_id)
+    except Exception:  # noqa: BLE001 -- 위 독스트링
+        logger.warning("agent ask destination lookup failed agent_id=%s", agent_id, exc_info=True)
+        return None
+    if target is None or not owner_mapped_on(channels, target.channel_type, owner_id):
+        return None
+    return ReplyDestination(target.channel_type, target.channel_id, None)
+
+
+async def enqueue_question(
+    notice_store: Any,
+    ask: PendingAsk,
+    *,
+    owner_id: str | None,
+    now: datetime,
+    max_body_chars: int,
+) -> bool:
+    """질문 알림을 **따로** 적는다 -- 루프는 질문 커밋과 같은 트랜잭션에서 적으므로 이것을 부르지
+    않는다. 다시 적어도 중복 키(`question:{ask_id}`)가 한 줄로 막는다. 목적지는 질문의
+    `reply_session_id`(v2 키)에서, 없으면 알림 대상에서 읽는다."""
+    from neos.api.channels.session_key import session_key_destination
+
+    destination = None
+    if ask.reply_session_id:
+        address = session_key_destination(ask.reply_session_id)
+        if address is not None:
+            destination = ReplyDestination(address[0], address[1], ask.reply_session_id)
+    if destination is None and owner_id:
+        target = await notice_store.get_target(owner_id, ask.agent_id)
+        if target is not None:
+            destination = ReplyDestination(target.channel_type, target.channel_id, None)
+    if destination is None:
+        return False
+    notice, target = question_notice(
+        ask.ask_id, ask.agent_id, ask.questions, destination, max_body_chars=max_body_chars
+    )
+    return await notice_store.enqueue_to(notice, target, now=now)
+
+
+def build_agent_asks(config: Any, session_factory: Callable[[], Awaitable[Any]]) -> AgentAsks:
+    """루프의 포트. 늘 만든다 -- 켜졌는지는 `enabled()` 가 호출 때마다 `ask_effective` 로 본다."""
+    from neos.standing.notifications import PostgresNotificationStore
+    from neos.standing.threads import PostgresAgentThreadStore
+
+    threads = PostgresAgentThreadStore(session_factory)
+    notices = PostgresNotificationStore(session_factory)
+    standing = config.standing_agents
+
+    async def destination(agent_id: str, owner_id: str | None) -> ReplyDestination | None:
+        return await resolve_reply_destination(
+            agent_id, owner_id, threads=threads, notices=notices, channels=config.channels
+        )
+
+    return AgentAsks(
+        store=PostgresPendingAskStore(session_factory),
+        destination=destination,
+        expire_hours=standing.ask.expire_hours,
+        max_body_chars=standing.notifications.max_body_chars,
+        enabled=lambda: ask_effective(config),
     )

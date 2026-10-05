@@ -166,11 +166,25 @@ class AgentThreadStore(Protocol):
         """그 에이전트의 스레드에 붙은 세션이면 떼고 True. 남의 세션·없는 세션은 False."""
         ...
 
+    async def reply_session(self, agent_id: str) -> ThreadSession | None:
+        """`reply_session_for` 의 저장소 쪽(Q9b)."""
+        ...
+
     async def turns_after(
         self, agent_thread_id: str, *, after: TurnCursor, limit: int
     ) -> list[tuple[TurnCursor, ThreadTurn]]:
         """피드. 커서 뒤의 턴을 커밋 순서에 가깝게, `limit` 개까지."""
         ...
+
+
+async def reply_session_for(store: AgentThreadStore, agent_id: str) -> ThreadSession | None:
+    """답할 세션(트랙 Q9b, 설계 §6.1) -- 소유자가 가장 최근에 **user 턴**을 남긴, 지금 활성
+    스레드에 붙은 채널 세션. 웹은 고르지 않는다.
+
+    턴은 에이전트의 **모든** 스레드에서 본다: 회전(`/new`)은 세션을 새 스레드로 옮기고 턴은
+    보관된 스레드에 남긴다. 세션은 활성 스레드에 붙은 것만 고른다 -- 뗀 세션에는 묻지 않는다.
+    """
+    return await store.reply_session(agent_id)
 
 
 async def resolve_agent_thread(
@@ -349,6 +363,21 @@ class InMemoryAgentThreadStore:
             return False
         del self._sessions[session_id]
         return True
+
+    async def reply_session(self, agent_id: str) -> ThreadSession | None:
+        active = self._active(agent_id)
+        if active is None:
+            return None
+        mine = {t.agent_thread_id for t in self._threads.values() if t.agent_id == agent_id}
+        for turn in sorted(self._turns, key=lambda t: t.turn_id, reverse=True):
+            if turn.role != "user" or turn.channel_type == "web":
+                continue
+            if turn.agent_thread_id not in mine:
+                continue
+            session = self._sessions.get(turn.session_id)
+            if session is not None and session.agent_thread_id == active.agent_thread_id:
+                return session
+        return None
 
     async def turns_after(
         self, agent_thread_id: str, *, after: TurnCursor, limit: int
@@ -733,6 +762,35 @@ class PostgresAgentThreadStore:
             )
             for r in rows
         ]
+
+    async def reply_session(self, agent_id: str) -> ThreadSession | None:
+        async with await self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT s.session_id, s.agent_thread_id, s.channel_type, s.attached_at
+                        FROM standing_agent_thread_turns turn
+                        JOIN standing_agent_threads spoken
+                          ON spoken.agent_thread_id = turn.agent_thread_id
+                         AND spoken.agent_id = :agent_id
+                        JOIN standing_agent_thread_sessions s
+                          ON s.session_id = turn.session_id
+                        JOIN standing_agent_threads active
+                          ON active.agent_thread_id = s.agent_thread_id
+                         AND active.agent_id = :agent_id
+                         AND active.archived_at IS NULL
+                        WHERE turn.role = 'user' AND s.channel_type <> 'web'
+                        ORDER BY turn.turn_id DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"agent_id": agent_id},
+                )
+            ).first()
+        if row is None:
+            return None
+        return ThreadSession(row.session_id, row.agent_thread_id, row.channel_type, row.attached_at)
 
     async def _read_active(self, agent_id: str) -> AgentThread | None:
         async with await self._session_factory() as session:

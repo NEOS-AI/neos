@@ -1178,6 +1178,9 @@ class PostgresCodingRunRepository:
         reply_channel_type: str,
         asked_at: datetime,
         expires_at: datetime,
+        ask_id: str | None = None,
+        notice: Any = None,
+        notice_target: Any = None,
     ) -> AskRequestCommit | None:
         """Track Q9: an agent's autonomous task asks its owner and waits.
 
@@ -1188,8 +1191,13 @@ class PostgresCodingRunRepository:
         `running`. `None` when the agent already has a waiting question (the
         partial unique index of migration 095) -- nothing else is written then.
         The SQL of the ask row lives in `neos.standing.asks`.
+
+        Track Q9b: `notice` (+ `notice_target`) is the owner's question notice. It is
+        written in this same transaction, so the ask and its notice exist together or
+        not at all -- a waiting task is never re-woken to write it again.
         """
         from neos.standing.asks import open_in_session
+        from neos.standing.notifications import enqueue_to_in_session
 
         if expires_at <= asked_at:
             raise ValueError("ask expiry must follow the ask")
@@ -1229,9 +1237,14 @@ class PostgresCodingRunRepository:
                     reply_session_id=reply_session_id,
                     asked_at=asked_at,
                     expires_at=expires_at,
+                    ask_id=ask_id,
                 )
                 if ask is None:
                     return None
+                if notice is not None:
+                    await enqueue_to_in_session(
+                        session, notice, notice_target, now=asked_at
+                    )
                 seq = await self._allocate_sequence_in_session(
                     session, task_id=lease.task_id, now=asked_at
                 )

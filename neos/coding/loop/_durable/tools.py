@@ -328,6 +328,7 @@ class ToolExecutionMixin:
             and getattr(input, "mode", "interactive") == "autonomous"
             and getattr(input, "agent_id", None) is not None
             and getattr(self, "_asks", None) is not None
+            and self._asks.enabled()
         )
 
     async def _ask_gate_step(self, input, state, bound, deps, call, validated):
@@ -399,6 +400,16 @@ class ToolExecutionMixin:
                     ),
                 )
             )
+        from neos.standing.asks import new_ask_id
+
+        ask_id = new_ask_id()
+        # 알림은 질문 커밋과 같은 트랜잭션에서 적힌다(Q9b) -- 워커는 게이트웨이를 부르지 않는다.
+        notice, notice_target = asks.notice_for(
+            ask_id,
+            input.agent_id,
+            list(validated.input.get("questions") or ()),
+            destination,
+        )
         now = self._clock()
         committed = await deps.repository.request_user_answer(
             lease=deps.lease,
@@ -411,6 +422,9 @@ class ToolExecutionMixin:
             reply_channel_type=destination.channel_type,
             asked_at=now,
             expires_at=now + timedelta(hours=asks.expire_hours),
+            ask_id=ask_id,
+            notice=notice,
+            notice_target=notice_target,
         )
         if committed is None:
             # 이 에이전트에 이미 대기 질문이 있다(095 의 부분 unique 인덱스). 이 태스크는

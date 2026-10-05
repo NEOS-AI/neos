@@ -214,6 +214,8 @@ class InMemoryCodingRunRepository:
 
         self.asks = InMemoryPendingAskStore()
         self.task_agents: dict[str, str] = {}
+        #: Q9b -- question notices written in the ask's transaction: (notice, target).
+        self.notices: list = []
 
     def _canonical_run(self, task_id):
         runs_by_id = {
@@ -316,6 +318,9 @@ class InMemoryCodingRunRepository:
         reply_channel_type,
         asked_at,
         expires_at,
+        ask_id=None,
+        notice=None,
+        notice_target=None,
     ):
         """Same contract as Postgres (track Q9): ask + checkpoint + `question.asked` +
         `running -> waiting_user` + status event, or `None` when the agent already waits."""
@@ -341,9 +346,12 @@ class InMemoryCodingRunRepository:
                 reply_session_id=reply_session_id,
                 asked_at=asked_at,
                 expires_at=expires_at,
+                ask_id=ask_id,
             )
             if ask is None:
                 return None
+            if notice is not None:
+                self.notices.append((notice, notice_target))
             self._durability_seq += 1
             checkpoint = CodingCheckpoint(
                 checkpoint_id=f"cc_ask_{tool_call.tool_call_id}",

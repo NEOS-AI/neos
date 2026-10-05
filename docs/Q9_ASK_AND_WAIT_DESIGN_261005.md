@@ -476,7 +476,7 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
 | 단계 | 무엇 | 테스트가 확인할 것 | 선행 |
 |---|---|---|---|
 | **Q9a** ✅ **착지(2026-10-05)** | 마이그레이션 095(§4) · `neos/standing/asks.py`(메모리·Postgres 저장소, `*_in_session`) · `request_user_answer` 트랜잭션 · `_approval_gate_step` 질문 갈래(§5) · `_with_answers` 일반화 · `TaskWaitingUser`·`CodingLoopWaitingUser`·`CodingTaskOutcome.WAITING_USER` 두 자리(§5.1) · 취소가 질문을 닫는다(§8.1) · `StandingAskConfig` · `ask_effective` · 도구 설명 · fixture 두 항목 | **계약(메모리·Postgres 같은 것):** 에이전트당 대기 하나 — **실 DB 에서 동시 `open` 둘 → 하나만**(Review Focus 3) · `answer` 는 한 번(둘째는 None) · `for_call` · 사용자 삭제 한 문장으로 0행(CASCADE) · 신선한 DB 2회 적용 + `question_asked` 알림 한 줄이 들어간다(§4 CHECK 이름) · **루프:** (a) 에이전트 autonomous → `WAITING_USER`, 도구 결과 없음, 런 `running`, 새 체크포인트의 머리가 그 호출 (b) interactive → 지금과 바이트 동일(승인 카드) (c) background → `policy_mode_ceiling` 그대로 (d) 사람이 연 autonomous(`agent_id` None) → 지금처럼 DENY (e) 대기 질문이 이미 있으면 `ask_pending` 거절이고 **그 태스크는 다음 단계를 계속 돈다** (f) 답할 곳이 없으면 `no_reply_channel`, 대기하지 않는다 (g) allow 목록에 있어도 질문으로 간다 (h) `ask_effective` 가 거짓이면 지금과 같다 (i) `waiting` 질문이 있는 태스크에 이어 달리기가 와도 모델을 부르지 않는다 (j) 대기 중 취소 → 질문 `cancelled`, 다음 질문이 열린다 · `test_event_kinds.py` 와 FE `coding-event-kinds.test.ts` 통과 | Q8 ✅ |
-| **Q9b** | `reply_session_for`(§6.1) · `session_key_destination` · `enqueue_to` + `*_in_session` · 알림 본문 · `request_user_answer` 가 같은 트랜잭션에서 알림을 적는다 | 최근 말한 세션 고르기(두 채널 중 나중 것) · **회전 뒤에도 옛 턴으로 세션을 고른다** · 붙은 세션이 없으면 알림 대상 · principals 가 그 채널의 소유자를 매핑하지 않으면 그 목적지는 없다 · 둘 다 없으면 None · 같은 질문을 두 번 적어도 한 줄(중복 키 `question:{ask_id}`) · 질문 행과 알림 행은 함께 있거나 함께 없다 · 워커에서 게이트웨이 호출 0회 · 본문에 선택지와 "Reply in this chat to answer." | Q9a |
+| **Q9b** ✅ **착지(2026-10-05)** | `reply_session_for`(§6.1) · `session_key_destination` · `enqueue_to` + `*_in_session` · 알림 본문 · `request_user_answer` 가 같은 트랜잭션에서 알림을 적는다 | 최근 말한 세션 고르기(두 채널 중 나중 것) · **회전 뒤에도 옛 턴으로 세션을 고른다** · 붙은 세션이 없으면 알림 대상 · principals 가 그 채널의 소유자를 매핑하지 않으면 그 목적지는 없다 · 둘 다 없으면 None · 같은 질문을 두 번 적어도 한 줄(중복 키 `question:{ask_id}`) · 질문 행과 알림 행은 함께 있거나 함께 없다 · 워커에서 게이트웨이 호출 0회 · 본문에 선택지와 "Reply in this chat to answer." | Q9a |
 | **Q9c** | 게이트웨이 `_route` 의 답 갈래(§7.1) · `neos/standing/ask_answers.py` · `answer_user_question` 트랜잭션 · `CodingRunService.resume_answered` · 스레드에 질문·답 턴 · `main.py` 배선(늘 배선하고 플래그는 호출 때마다 읽는다) | **실제 게이트웨이로:** **Review Focus 1** Slack 으로 묻고 Telegram DM 으로 답한다 → 재개(wake 한 번, 런 같음, 체크포인트 = 최신) · **Review Focus 2** 확인 문구에 질문 요약이 들어 있다 · `/new` 등 명령은 답이 아니다 · 미매핑 발신자 · 다른 소유자 · 그룹 채널 · 바인딩된 세션의 메시지는 답이 아니고 지금과 같이 흐른다 · 같은 인바운드 재시도(멱등 키)는 재개 한 번 · 두 채널 동시 답 → 답 하나 · 알림 대상으로 물었고 아직 붙지 않은 DM 의 답도 답이다 · 스레드에 질문(assistant)·답(user) 턴 · 답 뒤 루프가 `answers` 를 도구 입력에 싣고 `pairs` 가 맞다 · 태스크가 이미 `waiting_user` 가 아니면 답이 아니다 | Q9b |
 | **Q9d** | `expire_user_questions` · Celery 태스크와 `configure_standing_ask_beat_schedule` · `docs/CONFIGURATION.md` 영어 절 하나 · 이 문서 단계표 | 만료 시각이 지나면 질문 `expired` + 태스크 `waiting_user → running` + wake 한 번 + 루프가 `ask_expired` 거절로 이어 간다 + 알림 한 줄(질문과 같은 목적지) · 런은 닫히지 않는다 · 이미 답한 질문은 만료하지 않는다 · 취소된 태스크의 질문은 태스크를 건드리지 않고 닫힌다 · 두 폴러가 동시에 돌아도 만료 한 번(SKIP LOCKED) · 플래그 off 면 beat 등록이 없다 | Q9c |
 
@@ -491,6 +491,16 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
   ⑥ 질문 갈래의 `mode == autonomous` 조건은 background 에 대해서는 두 겹째 방어다 — background 는 갈래에 들어와도 천장
   (`read_only_ceiling`)이 `policy_mode_ceiling` 으로 거절한다. 그래서 "background 를 갈래에 넣기" 변이 하나만으로는 죽지 않고, 갈래의
   천장까지 함께 지운 변이가 죽는다
+- **Q9b 가 설계에서 바꾼 것**(2026-10-05): ① **루프 포트는 늘 배선한다**(`_prepare_real_coding_loop` → `build_agent_asks`).
+  켜졌는지는 포트의 `enabled()` 가 호출 때마다 `ask_effective(config)` 로 본다 — §9.1 의 "`ask_effective` 일 때만 만든다"를 바꿨다.
+  그래서 "포트가 배선됐고 플래그가 꺼짐"이 실제 조합이 되고, 그 조합이 지금과 같다는 것을 실제 포트로 시험한다(행 (h))
+  ② 질문 id 는 루프가 먼저 만든다(`new_ask_id`) — 알림의 중복 키 `question:{ask_id}` 가 질문 커밋 **전에** 필요하다. `open`·
+  `open_in_session`·`request_user_answer` 가 `ask_id` 를 받는다 ③ `request_user_answer` 는 `notice`·`notice_target` 을 받아
+  같은 트랜잭션에서 `enqueue_to_in_session` 으로 적는다. 알림을 못 쓰면 질문도 없다(실 DB 테스트) ④ 답할 세션의 SQL 은
+  `neos/standing/threads.py` 의 저장소 메서드 `reply_session` 에 두었다(그 테이블의 SQL 이 사는 곳). `reply_session_for` 는 그것을 부른다
+  ⑤ 목적지 조회가 실패하면 None(→ `no_reply_channel`)이다. 묻지 못하는 것이 답할 수 없는 곳에 묻는 것보다 낫다
+  ⑥ `enqueue_question(notice_store, ask, *, owner_id, now, max_body_chars)` — 목적지를 질문의 `reply_session_id` 에서, 없으면 알림
+  대상에서 읽는다. 루프는 이것을 쓰지 않는다(같은 트랜잭션에서 적는다). 다시 적기·운영 도구용이다
 - 플래그 **on** 분기의 `main.py` 배선은 Q8c·Q13b 와 같은 이유로 앱 수준 테스트가 없다(앱은 import 때 한 번 조립된다). 대신
   게이트웨이를 직접 만든 테스트로 덮는다
 
