@@ -278,6 +278,7 @@ async def lifespan(app: FastAPI):
             )
             from neos.api.channels.session_bind import PostgresChannelCodingBindStore
             from neos.api.channels.workflow_approvals import RuntimeWorkflowApprovals
+            from neos.standing.ask_answers import build_channel_ask_answers
             from neos.standing.channel_threads import build_channel_agent_threads
             _channel_gateway = ChannelGateway(
                 multi_agent_workflow,
@@ -286,6 +287,8 @@ async def lifespan(app: FastAPI):
                 workflow_approvals=RuntimeWorkflowApprovals(multi_agent_workflow),
                 # Q8b: 늘 배선한다. `standing_agents.threads.enabled` 는 호출 때마다 읽힌다.
                 agent_threads=build_channel_agent_threads(db_manager.get_session),
+                # Q9c: 늘 배선한다. 질문 경로가 켜졌는지(`ask_effective`)는 호출 때마다 읽힌다.
+                ask_answers=build_channel_ask_answers(db_manager.get_session),
             )
 
             if settings.CHANNEL_TELEGRAM_ENABLED:

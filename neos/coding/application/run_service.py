@@ -683,6 +683,39 @@ class CodingRunService:
                 logger.exception("coding resume wake failed task_id=%s", task_id)
         return commit
 
+    async def resume_answered(
+        self,
+        *,
+        ask_id: str,
+        owner_id: str,
+        answers: list[str],
+        channel_type: str,
+    ):
+        """The owner's answer resumes a waiting task (track Q9c). `None` when it is not
+        answered (not waiting, not this owner's, or the task moved on).
+
+        The Q10b resume path: the run was never closed, so the woken worker continues
+        the same run from its latest checkpoint and meets its `ask_user.v1` again --
+        this time answered.
+        """
+        answer = getattr(self._runs, "answer_user_question", None)
+        if answer is None:
+            return None
+        commit = await answer(
+            ask_id=ask_id,
+            owner_id=owner_id,
+            answers=answers,
+            channel_type=channel_type,
+            now=self._clock(),
+        )
+        if commit is not None and self._wake is not None:
+            try:
+                await self._wake(commit.ask.task_id, commit.checkpoint_id)
+            except Exception:
+                # The task is `running` again; the reconciliation sweep finds it.
+                logger.exception("coding answer wake failed ask_id=%s", ask_id)
+        return commit
+
     async def _mark_task_cancelled(self, task_id: str, now: datetime) -> None:
         marker = getattr(self._runs, "mark_task_cancelled", None)
         if marker is not None:

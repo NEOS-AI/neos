@@ -386,6 +386,42 @@ class InMemoryCodingRunRepository:
             self.task_statuses[lease.task_id] = WAITING_USER_STATUS
             return AskRequestCommit(ask=ask, checkpoint=checkpoint, events=(asked, status))
 
+    async def answer_user_question(self, *, ask_id, owner_id, answers, channel_type, now):
+        """Same contract as Postgres (track Q9c)."""
+        from neos.coding.domain.durability import AskAnswerCommit
+
+        async with self._durability_lock:
+            ask = self.asks.rows.get(ask_id)
+            if ask is None or ask.status != "waiting":
+                return None
+            owner = self.task_owners.get(ask.task_id)
+            if owner is not None and owner != owner_id:
+                return None
+            if self.task_statuses.get(ask.task_id) != "waiting_user":
+                return None
+            answered = await self.asks.answer(ask_id, answers, now=now)
+            checkpoint_id = self._latest_checkpoint_id(ask.task_id, ask.run_id)
+            events = []
+            for event_type, payload, tool_call_id in (
+                ("question.answered", {"ask_id": ask_id, "channel_type": channel_type}, ask.tool_call_id),
+                ("task.status.changed", {"status": "running", "resumed_by": "answer"}, None),
+            ):
+                self._durability_seq += 1
+                events.append(
+                    make_event(
+                        task_id=ask.task_id,
+                        seq=self._durability_seq,
+                        event_type=event_type,
+                        payload=payload,
+                        now=now,
+                        run_id=ask.run_id,
+                        tool_call_id=tool_call_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+                )
+            self.task_statuses[ask.task_id] = "running"
+            return AskAnswerCommit(ask=answered, events=tuple(events), checkpoint_id=checkpoint_id)
+
     async def pause_task(self, *, lease, judgement_type, judgement, reason_code, now):
         """Same contract as Postgres: judgement + `running -> paused`, run stays running."""
         async with self._durability_lock:

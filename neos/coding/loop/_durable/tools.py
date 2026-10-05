@@ -392,7 +392,10 @@ class ToolExecutionMixin:
         destination = await asks.reply_destination(
             input.agent_id, getattr(input, "owner_id", None)
         )
+        from neos.standing.asks import count_ask, new_ask_id
+
         if destination is None:
+            count_ask("refused_no_channel")
             return _Halt(
                 (
                     await self._commit_denied_tool(
@@ -400,7 +403,6 @@ class ToolExecutionMixin:
                     ),
                 )
             )
-        from neos.standing.asks import new_ask_id
 
         ask_id = new_ask_id()
         # 알림은 질문 커밋과 같은 트랜잭션에서 적힌다(Q9b) -- 워커는 게이트웨이를 부르지 않는다.
@@ -429,6 +431,7 @@ class ToolExecutionMixin:
         if committed is None:
             # 이 에이전트에 이미 대기 질문이 있다(095 의 부분 unique 인덱스). 이 태스크는
             # 멈추지 않는다 -- 거절을 받고 다음 단계를 계속 돈다(Review Focus 3).
+            count_ask("refused_pending")
             return _Halt(
                 (
                     await self._commit_denied_tool(
@@ -436,6 +439,7 @@ class ToolExecutionMixin:
                     ),
                 )
             )
+        count_ask("asked")
         return _Halt(tuple((event, state) for event in committed.events))
 
     # -- claim, execute, settle ----------------------------------------------

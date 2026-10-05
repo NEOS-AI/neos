@@ -39,6 +39,24 @@ ASK_CANCELLED = "cancelled"
 ASK_STATUSES = frozenset({ASK_WAITING, ASK_ANSWERED, ASK_EXPIRED, ASK_CANCELLED})
 
 
+#: `standing_ask_total{outcome}` 의 값(설계 §9.1). Q9d 가 `expired` 를 더한다.
+ASK_OUTCOMES = frozenset(
+    {"asked", "refused_pending", "refused_no_channel", "lookup_failed", "answered"}
+)
+
+
+def count_ask(outcome: str) -> None:
+    """질문 결과 하나를 센다. 계측 실패는 판정을 바꾸지 않는다."""
+    if outcome not in ASK_OUTCOMES:
+        raise ValueError(f"unknown ask outcome: {outcome!r}")
+    try:
+        from neos.observability.metrics import metrics
+
+        metrics.standing_ask_total.labels(outcome=outcome).inc()
+    except Exception:  # noqa: BLE001
+        logger.debug("standing ask counter unavailable", exc_info=True)
+
+
 def new_ask_id() -> str:
     return f"spa_{uuid4().hex}"
 
@@ -566,6 +584,7 @@ async def resolve_reply_destination(
         target = await notices.get_target(owner_id, agent_id)
     except Exception:  # noqa: BLE001 -- 위 독스트링
         logger.warning("agent ask destination lookup failed agent_id=%s", agent_id, exc_info=True)
+        count_ask("lookup_failed")
         return None
     if target is None or not owner_mapped_on(channels, target.channel_type, owner_id):
         return None

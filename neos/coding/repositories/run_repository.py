@@ -33,6 +33,7 @@ from neos.coding.domain.durability import (
     TaskPauseCommit,
     TaskResumeCommit,
     AskRequestCommit,
+    AskAnswerCommit,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -1317,6 +1318,111 @@ class PostgresCodingRunRepository:
             self._wake_outbox()
         return AskRequestCommit(
             ask=ask, checkpoint=checkpoint, events=(asked_event, status_event)
+        )
+
+    async def answer_user_question(
+        self,
+        *,
+        ask_id: str,
+        owner_id: str,
+        answers: list[str],
+        channel_type: str,
+        now: datetime,
+    ) -> AskAnswerCommit | None:
+        """Track Q9c: the owner's answer resumes the waiting task.
+
+        One transaction, shaped like `resume_paused_task` (the run was never closed;
+        the events carry the same run's latest checkpoint) and `resolve_tool_approval`
+        (the answer is written once): the ask `answered`, `waiting_user -> running`,
+        `question.answered`, `task.status.changed{running, resumed_by: answer}`.
+        `None` -- and nothing written -- when the ask is not waiting, is not this
+        owner's, or its task is no longer `waiting_user`.
+        """
+        from neos.standing.asks import answer_in_session
+
+        class _NotAnswered(Exception):
+            pass
+
+        try:
+            async with await self._session_factory() as session:
+                async with session.begin():
+                    row = (
+                        await session.execute(
+                            text(
+                                """
+                                SELECT ask.task_id, ask.run_id
+                                FROM standing_pending_asks ask
+                                JOIN coding_tasks task ON task.task_id = ask.task_id
+                                JOIN standing_agents agent ON agent.agent_id = ask.agent_id
+                                WHERE ask.ask_id = :ask_id
+                                  AND ask.status = 'waiting'
+                                  AND task.owner_id = :owner_id
+                                  AND task.deleted_at IS NULL
+                                  AND agent.owner_id = :owner_id
+                                  AND agent.deleted_at IS NULL
+                                FOR UPDATE OF ask, task
+                                """
+                            ),
+                            {"ask_id": ask_id, "owner_id": owner_id},
+                        )
+                    ).first()
+                    if row is None:
+                        return None
+                    task_id, run_id = row[0], row[1]
+                    updated = await session.execute(
+                        text(
+                            """
+                            UPDATE coding_tasks
+                            SET status = 'running', updated_at = :now,
+                                last_activity_at = :now
+                            WHERE task_id = :task_id AND status = 'waiting_user'
+                            RETURNING task_id
+                            """
+                        ),
+                        {"task_id": task_id, "now": now},
+                    )
+                    if updated.first() is None:
+                        raise _NotAnswered()
+                    ask = await answer_in_session(session, ask_id, answers, now=now)
+                    if ask is None:
+                        raise _NotAnswered()
+                    checkpoint_id = (
+                        await session.execute(
+                            text(
+                                """
+                                SELECT checkpoint_id FROM coding_checkpoints
+                                WHERE task_id = :task_id AND run_id = :run_id
+                                ORDER BY seq DESC LIMIT 1
+                                """
+                            ),
+                            {"task_id": task_id, "run_id": run_id},
+                        )
+                    ).scalar_one_or_none()
+                    answered_event = await self._append_event_in_session(
+                        session,
+                        task_id=task_id,
+                        event_type="question.answered",
+                        payload={"ask_id": ask_id, "channel_type": channel_type},
+                        now=now,
+                        run_id=run_id,
+                        tool_call_id=ask.tool_call_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+                    status_event = await self._append_event_in_session(
+                        session,
+                        task_id=task_id,
+                        event_type="task.status.changed",
+                        payload={"status": "running", "resumed_by": "answer"},
+                        now=now,
+                        run_id=run_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+        except _NotAnswered:
+            return None
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return AskAnswerCommit(
+            ask=ask, events=(answered_event, status_event), checkpoint_id=checkpoint_id
         )
 
     async def get_tool_approval(

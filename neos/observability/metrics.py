@@ -314,6 +314,14 @@ class EnterpriseMetricsCollector:
             ["op"],
             registry=self.registry,
         )
+        # 트랙 Q9: 상시 에이전트의 질문(묻고 기다리기) 결과. 판정이 나는 자리에서 센다 --
+        # asked · refused_pending · refused_no_channel · lookup_failed · answered (Q9d 가 expired).
+        self.standing_ask_total = Counter(
+            "standing_ask_total",
+            "Standing agent questions by outcome",
+            ["outcome"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",

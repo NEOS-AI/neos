@@ -301,8 +301,12 @@ class ChannelGateway:
         generations: Any | None = None,
         workflow_approvals: Any | None = None,
         agent_threads: Any | None = None,
+        ask_answers: Any | None = None,
     ) -> None:
         self._workflow = workflow
+        # Q9c 묻고 기다리기(`neos.standing.ask_answers.ChannelAskAnswers`). 없으면 답을 받지
+        # 않는다 -- 플래그는 그쪽이 호출 때마다 읽는다.
+        self._ask_answers = ask_answers
         # Q8b 채널 횡단 스레드(`neos.standing.channel_threads.ChannelAgentThreads`). 없으면
         # 스레드가 없다 -- 플래그는 그쪽이 호출 때마다 읽는다.
         self._agent_threads = agent_threads
@@ -423,6 +427,10 @@ class ChannelGateway:
     async def _route(self, message: ChannelMessage) -> str:
         command = parse_channel_command(message.text)
         if command.kind is ChannelCommandKind.CHAT:
+            # Q9c -- 기다리는 에이전트 질문의 답이면 여기서 끝난다(워크플로우는 돌지 않는다).
+            answered = await self._answer_waiting_question(message)
+            if answered is not None:
+                return answered
             binding = await self._binds.get(message.session_id)
             if binding is not None:
                 return await self._steer_bound_chat(message, binding)
@@ -450,6 +458,27 @@ class ChannelGateway:
         if command.kind is ChannelCommandKind.PROMPT:
             return await self._run_prompt_command(message, command)
         return await self._run_coding_command(message, command)
+
+    async def _answer_waiting_question(self, message: ChannelMessage) -> str | None:
+        """Q9c 답 확인 -- `CHAT` 메시지만 온다(명령은 답이 아니다). 확인 문구 또는 None.
+
+        코딩에 바인딩된 세션의 말은 그 태스크의 조향이므로 답이 아니다(설계 §7.1 의 3).
+        실패는 대화를 막지 않는다: 경고 한 줄을 남기고 None -- 메시지는 지금처럼 대화로 간다.
+        트랙 Q15 의 전사 단계가 이 앞에 선다(전사 → 답 확인).
+        """
+        if self._ask_answers is None:
+            return None
+        try:
+            if await self._binds.get(message.session_id) is not None:
+                return None
+            return await self._ask_answers.try_answer(message)
+        except Exception:
+            logger.warning(
+                "[ChannelGateway] ask answer check failed session=%s",
+                message.session_id,
+                exc_info=True,
+            )
+            return None
 
     async def _run_workflow(self, message: ChannelMessage) -> str:
         """

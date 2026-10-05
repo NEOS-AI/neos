@@ -303,8 +303,20 @@ async def reply_session_for(agent_id: str) -> ThreadSession | None:
 
 ### 6.2 알림 (`question_asked`)
 
-- 본문: 질문 목록(선택지가 있으면 `1) … 2) …` 로 함께) + `"Reply in this chat to answer."`. 질문이 둘 이상이면
-  `"Answer one per line, in order."` 를 덧붙인다(§7.2). 상한은 기존 `notifications.max_body_chars` 와 `bounded_body` 다
+- 본문(**Q9b 가 실제로 보내는 문구**, `neos/standing/asks.py` `question_notice`, 2026-10-05): 질문이 하나면 질문 그대로, 둘
+  이상이면 `1. …` `2. …` 로 번호를 단다. 선택지는 각 질문 아래에 `   a) …` `   b) …` 로 붙인다. 빈 줄 뒤에, 질문이 둘 이상이면
+  `Answer one line per question, in order.` 를, 맨 끝에 `Reply in this chat to answer.` 를 둔다. 상한(`notifications.max_body_chars`)을
+  넘으면 질문 쪽을 `bounded_body` 로 자르고 안내 줄은 남긴다. 예:
+  ```
+  1. Which branch?
+  2. Run tests?
+     a) yes
+     b) no
+
+  Answer one line per question, in order.
+  Reply in this chat to answer.
+  ```
+  답 나누기(§7.2)는 이 문구에 맞춘다 — 줄마다 하나, 앞의 `1.`·`1)` 번호는 뗀다
 - 중복 키 `question:{ask_id}`
 - **목적지를 직접 지정하는 적기**가 필요하다(§2.4 📌). `NotificationStore` 에 `enqueue_to(notice, target, *, now)` 를 더하고,
   Postgres 쪽에는 같은 SQL 의 `*_in_session` 변형을 둔다. 기존 `enqueue` 는 그대로 둔다
@@ -321,17 +333,17 @@ async def reply_session_for(agent_id: str) -> ThreadSession | None:
 
 ### 7.1 무엇이 답인가
 
-게이트웨이의 `_route` 에서, `CHAT` 갈래의 **바인딩 확인 뒤, `_run_workflow` 앞**에 둔다:
+게이트웨이의 `_route` 맨 앞, `CHAT` 갈래의 첫 줄에서 **따로 이름 붙인 작은 함수** `_answer_waiting_question` 을 부른다
+(Q9c 착지 모양). 바인딩 확인은 그 함수 안에서 한다 — 바인딩된 세션이면 None. 트랙 Q15 가 `_route` 앞단에 전사 단계를 더하므로,
+통합(Phase C)은 **전사 → 답 확인** 순서로 둔다:
 
 ```python
 if command.kind is ChannelCommandKind.CHAT:
-    binding = await self._binds.get(message.session_id)
-    if binding is not None:
-        return await self._steer_bound_chat(message, binding)
-    answered = await self._ask_answers.try_answer(message) if self._ask_answers is not None else None
+    answered = await self._answer_waiting_question(message)   # 바인딩·플래그·실패는 None
     if answered is not None:
         return answered                       # 확인 문구. 워크플로우는 돌지 않는다
-    return await self._run_workflow(message)
+    binding = await self._binds.get(message.session_id)
+    ...
 ```
 
 다음을 **전부** 만족할 때만 답이다. 하나라도 어긋나면 지금과 똑같이 대화로 간다.
@@ -440,11 +452,15 @@ class StandingAgentsConfig(StrictConfigModel):
   알림이 꺼져 있으면 질문이 나가지 않고(드레인이 없다, `main.py:329-352`), 스레드가 꺼져 있으면 답을 알아볼 수 없다(§7.1 의 4).
   둘 중 하나라도 꺼져 있는데 `ask.enabled` 만 켜져 있으면 **지금처럼 DENY** 다. 기동 때 경고 한 줄을 남긴다. 스키마 검증으로
   막지는 않는다 — 프로파일 하나를 켜는 순서가 기동을 깨지 않게 한다
-- 루프는 설정을 읽지 않는다. `_prepare_real_coding_loop` 가 `ask_effective` 일 때만 `asks` 포트를 만들어 넘기고, `None` 이 off 다
-  (`durable.py:136-150` 의 `jev`·`envelope` 와 같은 규칙)
+- 루프는 설정을 읽지 않는다. **포트는 늘 배선한다**(Q9b): `_prepare_real_coding_loop` 가 `build_agent_asks(config, …)` 로 포트를
+  만들어 넘기고, 켜졌는지는 포트의 `enabled()` 가 **호출 때마다** `ask_effective(config)` 로 본다. 꺼져 있으면 에이전트 태스크도
+  지금처럼 무인 DENY 다(배선된 실제 포트로 시험한다). 게이트웨이 쪽(`build_channel_ask_answers`)도 늘 배선하고 플래그를 호출 때마다
+  읽는다. 테스트에서 `asks=None` 은 여전히 off 다
 - `StrictConfigModel` 은 모르는 키를 거절한다. 그래서 development 프로파일에서 켜는 일은 스키마 키가 착지한 **뒤에**, 통합 단계에서
   오케스트레이터가 한다(계획 Global Constraints). 서브에이전트는 `config/neos.development.yaml` 을 고치지 않는다
-- 계측: `standing_ask_total{outcome}` — `asked`·`ask_pending`·`no_reply_channel`·`answered`·`expired`. 다른 standing 카운터처럼
+- 계측: `standing_ask_total{outcome}`(Q9c 가 착지시켰다, 2026-10-05 통제자 결정) — `asked`·`refused_pending`·`refused_no_channel`
+  (루프의 질문 갈래) · `lookup_failed`(답할 곳 조회 실패, `resolve_reply_destination`) · `answered`(게이트웨이의 답) · `expired`(Q9d 가 더한다).
+  값은 `neos/standing/asks.py` `ASK_OUTCOMES` 한 곳에 있다. 다른 standing 카운터처럼
   `neos_` 접두를 붙이지 않는다
 
 ### 9.2 원장 이벤트와 FE fixture (질문 3)
@@ -477,7 +493,7 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
 |---|---|---|---|
 | **Q9a** ✅ **착지(2026-10-05)** | 마이그레이션 095(§4) · `neos/standing/asks.py`(메모리·Postgres 저장소, `*_in_session`) · `request_user_answer` 트랜잭션 · `_approval_gate_step` 질문 갈래(§5) · `_with_answers` 일반화 · `TaskWaitingUser`·`CodingLoopWaitingUser`·`CodingTaskOutcome.WAITING_USER` 두 자리(§5.1) · 취소가 질문을 닫는다(§8.1) · `StandingAskConfig` · `ask_effective` · 도구 설명 · fixture 두 항목 | **계약(메모리·Postgres 같은 것):** 에이전트당 대기 하나 — **실 DB 에서 동시 `open` 둘 → 하나만**(Review Focus 3) · `answer` 는 한 번(둘째는 None) · `for_call` · 사용자 삭제 한 문장으로 0행(CASCADE) · 신선한 DB 2회 적용 + `question_asked` 알림 한 줄이 들어간다(§4 CHECK 이름) · **루프:** (a) 에이전트 autonomous → `WAITING_USER`, 도구 결과 없음, 런 `running`, 새 체크포인트의 머리가 그 호출 (b) interactive → 지금과 바이트 동일(승인 카드) (c) background → `policy_mode_ceiling` 그대로 (d) 사람이 연 autonomous(`agent_id` None) → 지금처럼 DENY (e) 대기 질문이 이미 있으면 `ask_pending` 거절이고 **그 태스크는 다음 단계를 계속 돈다** (f) 답할 곳이 없으면 `no_reply_channel`, 대기하지 않는다 (g) allow 목록에 있어도 질문으로 간다 (h) `ask_effective` 가 거짓이면 지금과 같다 (i) `waiting` 질문이 있는 태스크에 이어 달리기가 와도 모델을 부르지 않는다 (j) 대기 중 취소 → 질문 `cancelled`, 다음 질문이 열린다 · `test_event_kinds.py` 와 FE `coding-event-kinds.test.ts` 통과 | Q8 ✅ |
 | **Q9b** ✅ **착지(2026-10-05)** | `reply_session_for`(§6.1) · `session_key_destination` · `enqueue_to` + `*_in_session` · 알림 본문 · `request_user_answer` 가 같은 트랜잭션에서 알림을 적는다 | 최근 말한 세션 고르기(두 채널 중 나중 것) · **회전 뒤에도 옛 턴으로 세션을 고른다** · 붙은 세션이 없으면 알림 대상 · principals 가 그 채널의 소유자를 매핑하지 않으면 그 목적지는 없다 · 둘 다 없으면 None · 같은 질문을 두 번 적어도 한 줄(중복 키 `question:{ask_id}`) · 질문 행과 알림 행은 함께 있거나 함께 없다 · 워커에서 게이트웨이 호출 0회 · 본문에 선택지와 "Reply in this chat to answer." | Q9a |
-| **Q9c** | 게이트웨이 `_route` 의 답 갈래(§7.1) · `neos/standing/ask_answers.py` · `answer_user_question` 트랜잭션 · `CodingRunService.resume_answered` · 스레드에 질문·답 턴 · `main.py` 배선(늘 배선하고 플래그는 호출 때마다 읽는다) | **실제 게이트웨이로:** **Review Focus 1** Slack 으로 묻고 Telegram DM 으로 답한다 → 재개(wake 한 번, 런 같음, 체크포인트 = 최신) · **Review Focus 2** 확인 문구에 질문 요약이 들어 있다 · `/new` 등 명령은 답이 아니다 · 미매핑 발신자 · 다른 소유자 · 그룹 채널 · 바인딩된 세션의 메시지는 답이 아니고 지금과 같이 흐른다 · 같은 인바운드 재시도(멱등 키)는 재개 한 번 · 두 채널 동시 답 → 답 하나 · 알림 대상으로 물었고 아직 붙지 않은 DM 의 답도 답이다 · 스레드에 질문(assistant)·답(user) 턴 · 답 뒤 루프가 `answers` 를 도구 입력에 싣고 `pairs` 가 맞다 · 태스크가 이미 `waiting_user` 가 아니면 답이 아니다 | Q9b |
+| **Q9c** ✅ **착지(2026-10-05)** | 게이트웨이 `_route` 의 답 갈래(§7.1) · `neos/standing/ask_answers.py` · `answer_user_question` 트랜잭션 · `CodingRunService.resume_answered` · 스레드에 질문·답 턴 · `main.py` 배선(늘 배선하고 플래그는 호출 때마다 읽는다) | **실제 게이트웨이로:** **Review Focus 1** Slack 으로 묻고 Telegram DM 으로 답한다 → 재개(wake 한 번, 런 같음, 체크포인트 = 최신) · **Review Focus 2** 확인 문구에 질문 요약이 들어 있다 · `/new` 등 명령은 답이 아니다 · 미매핑 발신자 · 다른 소유자 · 그룹 채널 · 바인딩된 세션의 메시지는 답이 아니고 지금과 같이 흐른다 · 같은 인바운드 재시도(멱등 키)는 재개 한 번 · 두 채널 동시 답 → 답 하나 · 알림 대상으로 물었고 아직 붙지 않은 DM 의 답도 답이다 · 스레드에 질문(assistant)·답(user) 턴 · 답 뒤 루프가 `answers` 를 도구 입력에 싣고 `pairs` 가 맞다 · 태스크가 이미 `waiting_user` 가 아니면 답이 아니다 | Q9b |
 | **Q9d** | `expire_user_questions` · Celery 태스크와 `configure_standing_ask_beat_schedule` · `docs/CONFIGURATION.md` 영어 절 하나 · 이 문서 단계표 | 만료 시각이 지나면 질문 `expired` + 태스크 `waiting_user → running` + wake 한 번 + 루프가 `ask_expired` 거절로 이어 간다 + 알림 한 줄(질문과 같은 목적지) · 런은 닫히지 않는다 · 이미 답한 질문은 만료하지 않는다 · 취소된 태스크의 질문은 태스크를 건드리지 않고 닫힌다 · 두 폴러가 동시에 돌아도 만료 한 번(SKIP LOCKED) · 플래그 off 면 beat 등록이 없다 | Q9c |
 
 - 실 DB 테스트의 사용자 id 접두는 `test_q9_` 다(병렬 트랙과 테스트 DB 를 공유한다)
@@ -501,6 +517,14 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
   ⑤ 목적지 조회가 실패하면 None(→ `no_reply_channel`)이다. 묻지 못하는 것이 답할 수 없는 곳에 묻는 것보다 낫다
   ⑥ `enqueue_question(notice_store, ask, *, owner_id, now, max_body_chars)` — 목적지를 질문의 `reply_session_id` 에서, 없으면 알림
   대상에서 읽는다. 루프는 이것을 쓰지 않는다(같은 트랜잭션에서 적는다). 다시 적기·운영 도구용이다
+- **Q9c 가 설계에서 바꾼 것**(2026-10-05): ① 답 확인은 `_route` 의 `CHAT` 갈래 **첫 줄**의 `_answer_waiting_question` 이다. 바인딩 확인은
+  그 함수 안에서 한다(§7.1) — Q15 의 전사 단계와 통합 순서를 맞추기 위해서다 ② 답 확인 중 예외는 경고 한 줄과 None(→ 대화)이다.
+  답 확인은 대화를 막지 못한다 ③ `answer_user_question` 은 `channel_type` 을 받아 `question.answered{ask_id, channel_type}` 에
+  싣는다(채널 id·세션 키는 싣지 않는다). 결과는 `AskAnswerCommit(ask, events, checkpoint_id)` 이고, 태스크가 이미 `waiting_user` 가
+  아니면 트랜잭션을 되돌려 질문은 `waiting` 으로 남는다 ④ 질문을 찾은 **뒤에** 세션을 붙인다 — 대기 질문이 없는 DM 은 이 경로에서
+  아무것도 쓰지 않는다(붙이기는 Q8b 의 대화 경로가 한다) ⑤ 스레드의 질문 턴은 알림과 같은 번호(`1. …`)를 단다. 세션은
+  `reply_session_id`(없으면 답한 세션), 멱등 키는 `ask:{ask_id}` 다. 답 턴의 멱등 키는 인바운드 `idempotency_key` 다
+  ⑥ `standing_ask_total{outcome}` 을 이 단계가 착지시켰다(Q9a·Q9b 자리 포함, §9.1)
 - 플래그 **on** 분기의 `main.py` 배선은 Q8c·Q13b 와 같은 이유로 앱 수준 테스트가 없다(앱은 import 때 한 번 조립된다). 대신
   게이트웨이를 직접 만든 테스트로 덮는다
 

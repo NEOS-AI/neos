@@ -44,6 +44,17 @@ class TaskWaitingUser(RuntimeError):
     answered or expires (track Q9). Raised like `TaskPaused`, not `None`."""
 
 
+@dataclass(frozen=True, slots=True)
+class AskAnswerCommit:
+    """One transaction (track Q9c): the ask `answered`, `waiting_user -> running`,
+    `question.answered`, the status event -- and the checkpoint the woken worker
+    should expect (the same run's latest, like `TaskResumeCommit`)."""
+
+    ask: Any
+    events: tuple[CodingEvent, ...]
+    checkpoint_id: str | None
+
+
 def question_asked_payload(ask: Any, reply_channel_type: str) -> dict[str, Any]:
     """`question.asked` 의 payload -- 메모리 저장소와 Postgres 저장소가 같이 쓴다.
 
