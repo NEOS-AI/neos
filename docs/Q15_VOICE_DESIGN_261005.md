@@ -323,7 +323,7 @@ async def _route(self, message):
 | 단계 | 무엇 | 테스트가 확인할 것 | 선행 |
 |---|---|---|---|
 | **Q15a** ✅ **착지(2026-10-05)** | `neos/services/speech_to_text.py`(`Transcription`·`TranscriptionRefused`·`transcribe`) · `models.yaml` 의 `gpt-transcribe` + `aliases/defaults.transcription` · `ChannelVoiceConfig`(`channels.voice`) · 카운터 `channel_voice_transcriptions_total{outcome}` 등록 | `tests/services/test_speech_to_text.py`, 가짜 클라이언트로: 정상 전사(text·language·duration) · **Review Focus 4: 크기 초과 → 클라이언트 호출 0회**(가짜 클라이언트의 호출 기록이 빈다) · 길이 초과 → 호출 0회 · 길이 `None` 이면 길이 검사를 건너뛴다 · 지원 안 하는 형식 → 호출 0회 · `audio/ogg; codecs=opus` 는 지원 · 시간 초과 → `timeout` · 공급자 예외 → `provider_error` · 빈/공백 전사 → `empty` · 모델 id 는 카탈로그(`defaults.transcription`)에서 온다 · 설정: 기본 off, `max_bytes > 25_000_000` 거절, 모르는 키 거절 · 카탈로그 생성물에 diff 없음 | — |
-| **Q15b** | `media.py` 음성 수집(Telegram `voice`·`audio` · Slack `audio/*` · Discord 음성 메시지·`audio/*` 첨부)과 다운로드 상한 인자 · 어댑터 셋의 `has_attachment`·`receive_message` · Telegram 필터에 `VOICE`·`AUDIO` | `tests/api/channels/test_voice_collection.py`: 채널마다 음성 하나 → `metadata["voice"]`(bytes·filename·content_type·duration) · 둘 이상이면 첫 하나 · **플래그 off 면 수집 0, 다운로드 0**(off 동작 바이트 동일 — 캡션 없는 Telegram 음성은 핸들러에서 버려진다) · **크기를 아는 채널에서 상한 초과는 다운로드 전에 거른다**(fetch 호출 0회, `refused: "too_large"`) · Telegram 20 MB 상한이 `max_bytes` 보다 작으면 그것이 이긴다 · 길이를 아는 채널에서 `too_long` 도 다운로드 전 · `inbound_media` off 여도 음성은 수집 · `inbound_media` on 이면 음성 파일이 `attachments` 에 없다 · 본문 없는 음성이 게이트의 `EMPTY_TEXT` 에 걸리지 않는다 · 무시 채널·봇의 음성은 내려받지 않는다(fetch 0회) · 기존 첨부 상한(5 MiB)은 그대로 | Q15a(설정 키) |
+| **Q15b** ✅ **착지(2026-10-05)** | `media.py` 음성 수집(Telegram `voice`·`audio` · Slack `audio/*` · Discord 음성 메시지·`audio/*` 첨부)과 다운로드 상한 인자 · 어댑터 셋의 `has_attachment`·`receive_message` · Telegram 필터에 `VOICE`·`AUDIO` | `tests/api/channels/test_voice_collection.py`: 채널마다 음성 하나 → `metadata["voice"]`(bytes·filename·content_type·duration) · 둘 이상이면 첫 하나 · **플래그 off 면 수집 0, 다운로드 0**(off 동작 바이트 동일 — 캡션 없는 Telegram 음성은 핸들러에서 버려진다) · **크기를 아는 채널에서 상한 초과는 다운로드 전에 거른다**(fetch 호출 0회, `refused: "too_large"`) · Telegram 20 MB 상한이 `max_bytes` 보다 작으면 그것이 이긴다 · 길이를 아는 채널에서 `too_long` 도 다운로드 전 · `inbound_media` off 여도 음성은 수집 · `inbound_media` on 이면 음성 파일이 `attachments` 에 없다 · 본문 없는 음성이 게이트의 `EMPTY_TEXT` 에 걸리지 않는다 · 무시 채널·봇의 음성은 내려받지 않는다(fetch 0회) · 기존 첨부 상한(5 MiB)은 그대로 | Q15a(설정 키) |
 | **Q15c** | `gateway._route` 앞단 `_transcribe_voice` · 매핑 판정 헬퍼(`_run_workflow` 와 공유) · `docs/CONFIGURATION.md` 영어 절 하나 · 이 문서 단계표 | `tests/api/channels/test_gateway_voice.py`, 실제 게이트웨이로: 전사가 워크플로우 `query` 에 `[voice] …`(캡션은 그 뒤) · 에이전트 DM 이면 스레드 user 턴도 `[voice] …` · 실패(공급자·시간 초과) → `Could not transcribe the voice message.`, **워크플로우 0회** · 다운로드 전 거절(`refused`) → 문구, 공급자 0회 · **Review Focus 4: 상한 넘는 음성 → 공급자 0회**(게이트웨이 수준에서도 한 번 더) · **Review Focus 5: 게이트 밖 → 공급자 0회** — 무시 채널·봇 메시지는 어댑터 테스트로(실제 `_handle_message` → 공급자 가짜의 호출 0), 미매핑 발신자는 게이트웨이 테스트로(`_NO_OWNER`, 공급자 0회) · 오디오 바이트가 워크플로우 입력(`channel_attachments` 포함) 어디에도 없다 · 캡션이 명령이면 전사하지 않는다 · 전사가 `/new` 로 시작하는 말이어도 명령이 아니다 · 같은 `idem` 재전송은 공급자를 다시 부르지 않는다 · 주차된 음성은 풀릴 때 전사된다 · 플래그 off 면 공급자 0회·동작 동일 · 카운터 `outcome` 이 표(§9)대로 오른다 | Q15a · Q15b |
 
 - **Q15a 결과**(2026-10-05): 테스트 45(`tests/services/test_speech_to_text.py`) · 변이 21/21. 설계에서 바꾼 것: ① 형식 검사는 파일 확장자가
@@ -332,6 +332,15 @@ async def _route(self, message):
   `transcription_model()` 하나이고 카탈로그의 `wire_id` 가 있으면 그것을 보낸다 ③ 기본 클라이언트는 `build_async_openai(max_retries=0)` ·
   SDK `timeout` 과 `asyncio.wait_for` 를 둘 다 건다 ④ 공급자 오류 로그에는 예외 **타입 이름만** 남긴다(본문에 오디오·전사 조각이 섞일 수 있다)
   ⑤ 상한 `OPENAI_TRANSCRIPTION_MAX_BYTES = 25_000_000` 은 `neos/config/schema.py` 의 상수다 · FE 카탈로그 생성물은 바뀌지 않는다(생성 후 diff 0)
+- **Q15b 결과**(2026-10-05): 테스트 33(`tests/api/channels/test_voice_collection.py`, 실제 어댑터 `_handle_message` 로) · 변이 26/26.
+  설계에서 바꾼 것: ① Telegram 상한 상수 `TELEGRAM_DOWNLOAD_MAX_BYTES = 20_000_000` — Bot API 의 "20MB" 도 단위를 밝히지 않아 OpenAI 와 같은
+  규칙(작은 쪽, 10진)을 따랐다 ② 다운로드 함수는 공개 시그니처 `download_inbound_media(..., limit=MAX_INBOUND_MEDIA_BYTES)` 를 두고, 이유를 돌려주는
+  내부 `_download` 를 새로 두었다 — 음성은 `too_large`(받은 본문이 상한 초과)와 `download_failed`(차단 URL·HTTP 오류·예외)를 가려야 한다
+  ③ "오디오 있음" 판정 함수 `telegram_voice_media` · `slack_voice_file` · `discord_voice_attachment` 를 `media.py` 에 두고 어댑터의 게이트 계산과
+  수집이 함께 쓴다 ④ 파일 이름이 없으면 `voice.ogg`(Telegram voice, MIME 없으면 `audio/ogg`) · `audio.mp3`(Telegram audio, MIME 없으면
+  `audio/mpeg`) 처럼 MIME 에서 확장자를 붙인다 ⑤ Discord 음성 `read()` 실패는 `attachments_error`("Could not read the attached file.")가 아니라
+  `voice.refused = "download_failed"` 다 — 문구는 Q15c 게이트웨이가 낸다 ⑥ Slack `file_shared` 대체 경로는 바꾸지 않았다(§13 결정 6, dry run 몫)
+  ⑦ 테스트 헬퍼 `install_channel_settings` 에 `voice=` 인자를 더했다
 - 각 단계: TDD → 변이 테스트(핵심 동작마다 하나, 전부 죽어야 한다) → 그 브랜치에서 전체 스위트 → 커밋(계획 Global Constraints)
 - 실 DB 가 필요한 테스트는 없을 것으로 본다. 생기면 사용자 id 접두 `test_q15_`
 - **development 에서도 off 로 둔다.** 켜기는 §13 "켜기 게이트"(라이브 dry run 3/3)가 통과한 뒤에만 — Phase C 에서 오케스트레이터가 한다

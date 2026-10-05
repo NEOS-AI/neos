@@ -167,6 +167,16 @@ class DiscordAdapter(ChannelAdapterBase):
             # 게이트가 쓰는 판정 그대로(Q8b).
             "is_dm": discord_message_is_dm(raw),
         }
+        raw_attachments = list(getattr(raw, "attachments", None) or [])
+        voice_item = None
+        if settings.config.channels.voice.enabled:
+            from neos.api.channels.media import collect_discord_voice, discord_voice_attachment
+
+            voice_item = discord_voice_attachment(raw_attachments)
+            if voice_item is not None:
+                metadata["voice"] = await collect_discord_voice(
+                    voice_item, config=settings.config.channels.voice
+                )
         if settings.config.channels.inbound_media:
             from neos.api.channels.media import (
                 DiscordAttachmentRefused,
@@ -175,7 +185,8 @@ class DiscordAdapter(ChannelAdapterBase):
 
             try:
                 attachments = await collect_discord_attachments(
-                    list(getattr(raw, "attachments", None) or []),
+                    # 음성으로 잡힌 첨부는 첨부가 아니다 — 두 번 읽지 않고 워크플로우 첨부로 가지 않는다.
+                    [item for item in raw_attachments if item is not voice_item],
                 )
             except DiscordAttachmentRefused as exc:
                 metadata["attachments_error"] = exc.reason
@@ -296,7 +307,13 @@ class DiscordAdapter(ChannelAdapterBase):
         bot_user = self._client.user if self._client is not None else None
         bound = await session_wakes_without_mention(self._gateway, _discord_session_id(message))
         attachments = list(getattr(message, "attachments", None) or [])
-        has_attachment = bool(settings.config.channels.inbound_media and attachments)
+        from neos.api.channels.media import discord_voice_attachment
+
+        has_voice = bool(
+            settings.config.channels.voice.enabled
+            and discord_voice_attachment(attachments) is not None
+        )
+        has_attachment = bool(settings.config.channels.inbound_media and attachments) or has_voice
         ctx = GateContext(
             channel_type=self.channel_type,
             platform_user_id=str(getattr(message.author, "id", "")),
