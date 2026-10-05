@@ -176,13 +176,13 @@ async def rotate_agent_thread(store, agent: StandingAgent) -> AgentThread:
 |---|---|---|
 | 어댑터 3종 | 이미 계산한 `is_dm` 을 `ChannelMessage.metadata["is_dm"]` 에 싣는다. 값이 없으면 DM 이 아니다(fail-closed) | Q8b |
 | `gateway._run_workflow` | §5 판정 → 붙으면 (a) user 턴 기록 (b) 창으로 `chat_history` 를 채움 (c) 실행 (d) `final_response` 가 나오면 assistant 턴 기록 | Q8b |
-| `gateway._resume_workflow_approval` | 재개해서 `final_response` 가 나오면 assistant 턴을 기록한다. 승인으로 끊긴 턴은 재개 때 닫힌다 | Q8b |
+| ~~`gateway._resume_workflow_approval`~~ | ~~재개해서 `final_response` 가 나오면 assistant 턴을 기록한다~~ → **하지 않는다**(Q8b, 2026-10-05). 재개는 `RuntimeWorkflowApprovals.decide` 가 백그라운드에서 `astream` 을 돌리며 **청크를 버리고**, 게이트웨이에는 `"{request_id} approved"` 만 돌아온다. 소유자도 재개 결과를 받지 못한다. 스레드는 소유자가 본 것을 적으므로 승인으로 끊긴 턴은 사용자 턴만 남는다. 재개 결과가 채널로 가지 않는 결함은 로드맵 별건 **CH-RESUME** | — |
 | `gateway._run_new` | 붙은 세션이면 `rotate_agent_thread`. 지금 하는 세션 정리는 그대로 한다 | Q8b |
 | `ChatStreamPipeline._run_workflow` | 대화가 붙은 웹 세션이면 `prior_messages` 대신 `thread_window` 로 `chat_history` 를 채우고, 사용자·assistant 턴을 스레드에 기록한다. **SSE 이벤트는 바뀌지 않는다** — `chat_stream_event_types.json` fixture 에 새 kind 가 없다 | Q8d |
 
 - **스레드는 대화를 막지 못한다.** 스레드 읽기·쓰기가 실패하면 경고 한 줄을 남기고 스레드 없이 대화한다. 스레드는 맥락이지
   가드가 아니다. Q4b 의 "트리거는 대화를 막지 못한다"와 같은 규칙이다. 다만 실패 수는 계측한다(Prometheus 카운터
-  `neos_standing_thread_failures_total{op}`). 조용히 사라지는 실패는 이 저장소에서 반복됐다
+  `standing_thread_failures_total{op}` — op 는 `open`·`close`·`rotate`. 저장소의 다른 카운터처럼 `neos_` 접두가 없다). 조용히 사라지는 실패는 이 저장소에서 반복됐다
 - **멱등.** 채널 인바운드는 이미 `(session_id, idem)` 으로 한 번만 처리된다. 턴 쓰기도 같은 `idem` 을 `idem_key` 에 싣는다.
   웹은 저장된 사용자 메시지 id 를 쓴다
 - **동시성.** 세션 잠금(`_inflight`)은 세션 단위이고, 두 세션이 동시에 같은 스레드에 말할 수 있다. 각 턴은 시작할 때의 창을
@@ -215,7 +215,7 @@ POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation          # 웹
 | 단계 | 무엇 | 테스트가 확인할 것 | 선행 |
 |---|---|---|---|
 | **Q8a** ✅ **착지(2026-10-05)** | 마이그레이션 092 · `neos/standing/threads.py`(메모리·Postgres 저장소, `resolve_agent_thread`, `thread_window`, `rotate_agent_thread`) · 에이전트 삭제가 스레드를 함께 지운다 · 설정 `standing_agents.threads.enabled`(스키마 기본 off) **+ `config/neos.development.yaml` 에서 on**(결정 Q8-6, 같은 커밋) | 테스트 47(계약 43 · 설정 4) · 변이 12/12. 메모리·Postgres **같은 계약** · 활성 하나(경합 시 둘째가 첫째를 다시 읽는다) · 회전이 한 트랜잭션: 보관 + 새 스레드 + 세션 이동, 동시 회전 둘 = 회전 하나 · 창은 활성 스레드만, `limit` 경계 · 같은 `idem_key` 두 번 쓰기 = 한 행 · **에이전트 DELETE 뒤 스레드·세션·턴 0행**(보관된 것 포함) · **사용자 삭제가 한 문장으로 지운다**(실 DB) · 남의 에이전트 스레드는 None · 신선한 DB 2회 적용 · development 프로파일로 설정이 로드된다 | Q13 ✅ |
-| **Q8b** | 어댑터 `is_dm` · 게이트웨이 배선(§8) | **실제 게이트웨이로**: Slack DM 턴 → Telegram DM 다음 턴의 `chat_history` 에 `[slack]` 표지와 함께 있다 · 그룹 채널·principals 미매핑·바인딩 세션·`paused` 에이전트는 붙지 않고 동작이 지금과 바이트 동일 · 스레드 저장소가 던져도 응답이 나오고 카운터가 오른다 · 승인 재개가 assistant 턴을 닫는다 · Slack 의 `/new` 뒤 Telegram 의 다음 턴이 빈 창을 본다 · 플래그 off 면 저장소를 부르지 않는다 | Q8a |
+| **Q8b** ✅ **착지(2026-10-05)** | 어댑터 `is_dm`(어댑터마다 판정 함수 하나를 게이트와 `metadata` 가 함께 쓴다) · `neos/standing/channel_threads.py`(붙이기 규칙·창·기록·회전) · 게이트웨이 배선(§8) · `main.py` 는 늘 배선하고 플래그는 호출 때마다 읽는다 | 테스트 26(게이트웨이 17 · 어댑터 9) · 변이 15/15. **실제 게이트웨이로**: Slack DM 턴 → Telegram DM 다음 턴의 `chat_history` 에 `[slack]` 표지와 함께 있다 · 그룹 채널·principals 미매핑·바인딩 세션·`paused` 에이전트는 붙지 않고 동작이 지금과 바이트 동일 · 스레드 저장소가 던져도 응답이 나오고 카운터가 오른다 · ~~승인 재개가 assistant 턴을 닫는다~~ 승인으로 끊긴 턴은 사용자 턴만 남는다(§8) · Slack 의 `/new` 뒤 Telegram 의 다음 턴이 빈 창을 본다 · 플래그 off 면 저장소를 부르지 않는다 | Q8a |
 | **Q8c** | API 읽기·회전·떼기(§9) · 활동 피드에 "세션 붙음"·"회전" 항목 | 플래그 off 면 라우트가 없다(`test_retired_routes._routes()` 로 읽는다 — `app.routes` 는 포함 라우터를 감춘다) · 커서가 늦은 커밋을 건너뛰지 않는다(실 DB) · 남의 에이전트·남의 스레드 id 는 모든 동사에서 404 · 목록이 배열 | Q8b |
 | **Q8d** | 웹 에이전트 대화: 엔드포인트(§9) · `ChatStreamPipeline` 배선(§8) · FE 사이드바 표시 | 웹 턴이 다음 Slack DM 의 창에 `[web]` 으로 보인다 · 붙지 않은 웹 대화는 동작이 지금과 같다 · 남의 대화를 에이전트 대화로 지정할 수 없다 · SSE 이벤트 fixture 가 바뀌지 않는다(양방향 테스트 통과) · 에이전트당 하나 | Q8c |
 
@@ -226,7 +226,14 @@ POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation          # 웹
   `add_delete_listener` · `is_live` 를 더했다 — Postgres 가 같은 트랜잭션에서 하는 스레드 삭제를 메모리 구현이 흉내 내는 자리다
   ④ 저장소 메서드는 `agent_id` 를 받고, 소유 검사는 호출자의 `resolve_agent` 몫이다. 모듈 함수 `resolve_agent_thread` ·
   `rotate_agent_thread` 는 `StandingAgent` 를 받는다
-- ⚠️ **Q8a 만으로는 아무것도 스레드를 읽거나 쓰지 않는다.** development 에서 플래그가 켜져 있어도 첫 독자는 Q8b(게이트웨이)다
+- ~~⚠️ **Q8a 만으로는 아무것도 스레드를 읽거나 쓰지 않는다.**~~ → Q8b(2026-10-05)가 첫 독자다. development 에서는 소유자의 DM 이
+  이제 스레드에 붙는다 — `channels.principals` 에 소유자 매핑이 있어야 한다
+- **Q8b 가 설계에서 바꾼 것**(2026-10-05): ① 승인 재개 행을 지웠다(§8 — 재개 결과는 버려진다, CH-RESUME) ② 소유자 매핑은
+  게이트웨이의 `user_id` 가 아니라 `channel_threads.mapped_owner` 가 직접 한다 — principals 가 비면 게이트웨이의 `user_id` 는
+  매핑되지 않은 값(봇 사용자 id)이다 ③ 창은 이번 턴을 쓰기 **전에** 읽는다 — 이번 턴은 `query` 가 나른다(웹 파이프라인의
+  `history_messages[:-1]` 과 같은 이유) ④ 스레드에 적는 사용자 턴은 발신자 표지(`[U_alice]`) 없는 본문이다 — DM 의 발신자는
+  소유자 하나다 ⑤ 미매핑 발신자는 principals 가 있으면 게이트웨이가 워크플로우 전에 이미 거절한다(`_NO_OWNER`) — 스레드는 그
+  전에 판정하지만 결과는 같다(붙지 않는다)
 - ⚠️ 배포·개발 DB 에 092 를 적용해야 한다(`scripts/apply_schema.py`). 적용 전에는 에이전트 `DELETE` 가 없는 테이블을 지우려다
   실패한다 — dev DB 는 마이그레이션을 조용히 놓친 이력이 있다(066~090, 2026-10-03)
 - **Q9 가 Q8 위에 더할 것**(지금 만들지 않는다): "답할 세션" = 소유자가 가장 최근에 말한 붙은 세션. 턴 테이블을 조회해

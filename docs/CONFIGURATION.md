@@ -1612,8 +1612,11 @@ Group channels never attach. Starting over (`/new`, or rotating through the API)
 archives the active thread and opens a new one; attached sessions move to the
 new thread. Deleting the agent deletes its threads, sessions and turns in the
 same transaction. Design: `docs/Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md`.
-Q8a (2026-10-05) lands the store only -- nothing reads or writes a thread until
-the gateway wiring (Q8b) lands.
+Channel DMs attach only when the sender is mapped to the owner through
+`channels.principals` and the agent is `active`; a paused or retired agent's DMs
+are answered without the thread. Thread failures never block a reply -- they are
+counted in `standing_thread_failures_total{op}`. The web side (Q8d) is not wired
+yet.
 
 ## Staging and Production
 
