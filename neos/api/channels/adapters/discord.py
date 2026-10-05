@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 _DISCORD_MAX_CHARS = 2000  # Discord 단일 메시지 최대 길이
 
 
+
+def discord_message_is_dm(message: Any) -> bool:
+    """길드 밖 메시지(DM)인가. 게이트와 `ChannelMessage.metadata` 가 이 함수 하나를 쓴다."""
+    return getattr(message, "guild", None) is None
+
 class DiscordAdapter(ChannelAdapterBase):
     """Discord Bot 어댑터.
 
@@ -159,6 +164,8 @@ class DiscordAdapter(ChannelAdapterBase):
             "discord_guild_id": str(raw.guild.id) if raw.guild else None,
             "thread_id": str(raw.id),
             "idempotency_key": str(raw.id),
+            # 게이트가 쓰는 판정 그대로(Q8b).
+            "is_dm": discord_message_is_dm(raw),
         }
         if settings.config.channels.inbound_media:
             from neos.api.channels.media import (
@@ -295,7 +302,7 @@ class DiscordAdapter(ChannelAdapterBase):
             platform_user_id=str(getattr(message.author, "id", "")),
             channel_id=str(message.channel.id),
             text=message.content or "",
-            is_dm=getattr(message, "guild", None) is None,
+            is_dm=discord_message_is_dm(message),
             is_bot=bool(getattr(message.author, "bot", False)),
             is_self=self._client is not None and message.author == self._client.user,
             mentioned=_message_mentions_bot(message, bot_user),

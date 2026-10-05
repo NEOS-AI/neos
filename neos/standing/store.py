@@ -64,6 +64,15 @@ class InMemoryStandingAgentStore:
     def __init__(self, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
         self._live: dict[str, StandingAgent] = {}
         self._clock = clock
+        self._delete_listeners: list[Callable[[str], None]] = []
+
+    def add_delete_listener(self, listener: Callable[[str], None]) -> None:
+        """삭제 통지. Postgres 저장소가 같은 트랜잭션에서 지우는 딸린 행(Q8 스레드)을 메모리
+        구현이 흉내 내는 자리다."""
+        self._delete_listeners.append(listener)
+
+    def is_live(self, agent_id: str) -> bool:
+        return agent_id in self._live
 
     async def create(self, owner_id: str, name: str) -> StandingAgent:
         stored = normalize_agent_name(name)
@@ -126,6 +135,8 @@ class InMemoryStandingAgentStore:
         if await self.get_owned(owner_id, agent_id) is None:
             return False
         del self._live[agent_id]
+        for listener in self._delete_listeners:
+            listener(agent_id)
         return True
 
     async def set_onboarding_task(self, owner_id: str, agent_id: str, task_id: str) -> bool:
@@ -255,6 +266,13 @@ class PostgresStandingAgentStore:
                     ),
                     {"owner_id": owner_id, "agent_id": agent_id, "now": self._clock()},
                 )
+                if result.rowcount:
+                    # 에이전트는 soft delete 라 CASCADE 가 돌지 않는다. 스레드(그리고 CASCADE 로
+                    # 세션·턴)는 사용자의 대화 내용이므로 같은 트랜잭션에서 지운다(Q8 결정 4).
+                    await session.execute(
+                        text("DELETE FROM standing_agent_threads WHERE agent_id = :agent_id"),
+                        {"agent_id": agent_id},
+                    )
         return bool(result.rowcount)
 
     async def set_onboarding_task(self, owner_id: str, agent_id: str, task_id: str) -> bool:

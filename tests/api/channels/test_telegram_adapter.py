@@ -405,3 +405,20 @@ async def test_session_id_starts_with_v2_telegram_prefix(
     assert len(gateway.calls) == 1
     assert gateway.calls[0].session_id.startswith("v2:telegram:")
     assert gateway.calls[0].metadata["idempotency_key"] == "9001"
+
+
+@pytest.mark.parametrize(("chat_type", "expected"), [("private", True), ("supergroup", False), ("group", False)])
+async def test_receive_message_carries_the_gates_dm_verdict(
+    monkeypatch: pytest.MonkeyPatch, chat_type: str, expected: bool
+) -> None:
+    """Q8b: the gateway attaches only DMs to an agent thread; the adapter says which."""
+    from neos.api.channels.adapters.telegram import telegram_chat_is_dm
+
+    install_channel_settings(monkeypatch, allowed_users=[str(ALLOWLISTED_USER_ID)])
+    adapter = _make_adapter(FakeGateway())
+    update = _fake_update(text="hello", chat_type=chat_type)
+
+    message = await adapter.receive_message(update)
+
+    assert message.metadata["is_dm"] is expected
+    assert telegram_chat_is_dm(update.effective_chat) is expected

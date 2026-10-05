@@ -784,6 +784,17 @@ class StandingQuestionsConfig(StrictConfigModel):
     settle_timeout_minutes: int = Field(default=720, ge=1)
 
 
+class StandingThreadsConfig(StrictConfigModel):
+    """채널 횡단 스레드 -- 트랙 Q8 (docs/Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md).
+
+    에이전트마다 활성 스레드 하나. 소유자의 DM 채널 세션과 웹 에이전트 대화가 붙고, 다음
+    턴의 맥락을 스레드에서 읽는다. 창의 크기는 새 값이 아니라 `chat.max_history_messages`
+    다(웹 채팅과 같다). 꺼져 있으면 스레드를 읽지도 쓰지도 않는다.
+    """
+
+    enabled: bool = False
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -798,6 +809,7 @@ class StandingAgentsConfig(StrictConfigModel):
         default_factory=StandingNotificationsConfig
     )
     questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
+    threads: StandingThreadsConfig = Field(default_factory=StandingThreadsConfig)
 
 
 class LearnConfig(StrictConfigModel):

@@ -925,3 +925,27 @@ async def test_bot_profile_and_user_profile_is_bot_are_dropped(
 
     assert gateway.calls == []
     assert say.calls == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"channel": "D_alice", "channel_type": "im"}, True),
+        ({"channel": "D_alice", "channel_type": None}, True),
+        ({"channel": "C_general", "channel_type": "channel"}, False),
+    ],
+)
+async def test_receive_message_carries_the_gates_dm_verdict(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict, expected: bool
+) -> None:
+    """Q8b: the session key's scope is the team id and says nothing about DMs, so the
+    adapter hands its own verdict (the one the gate uses) to the gateway."""
+    from neos.api.channels.adapters.slack import slack_event_is_dm
+
+    adapter, _gateway, _say = _make_adapter(monkeypatch, allowed_users=["U_alice"])
+    event = _slack_message(**overrides)
+
+    message = await adapter.receive_message(event)
+
+    assert message.metadata["is_dm"] is expected
+    assert slack_event_is_dm(event) is expected

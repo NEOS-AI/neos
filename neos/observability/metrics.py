@@ -307,6 +307,13 @@ class EnterpriseMetricsCollector:
             ["outcome"],
             registry=self.registry,
         )
+        # Q8b: 스레드는 대화를 막지 못한다 -- 실패는 삼키되 여기서 센다.
+        self.standing_thread_failures_total = Counter(
+            "standing_thread_failures_total",
+            "Standing agent thread reads/writes that failed and were skipped",
+            ["op"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",

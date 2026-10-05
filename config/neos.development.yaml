@@ -67,3 +67,6 @@ standing_agents:
     # Q3 상시 질문. DA 비용을 줄이려고 dev 프로파일로 돈다.
     enabled: true
     profile: dev
+  threads:
+    # Q8 채널 횡단 스레드(결정 2026-10-05). 소유자의 DM 과 웹 에이전트 대화가 한 맥락을 쓴다.
+    enabled: true
