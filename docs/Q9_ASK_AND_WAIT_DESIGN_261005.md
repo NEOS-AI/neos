@@ -1,9 +1,8 @@
 # Q9 묻고 기다리기 — 설계
 
 > **작성:** 2026-10-05 · **트랙:** Q9 (정본 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) §4.2 Q9 행 · §6 결정 3) · **dots:** F11 "에이전트 발신"의 빠진 절반 — 묻고 기다리기
-> **지위:** 설계다. 코드는 아직 없다. 이미 내린 결정(§1)은 닫혔고, 권고 기본값은 §11 에서 이 문서가 확정한다. 권고와
-> 다르게 간 자리와 사람이 정할 것은 §11.2 열린 질문에 근거와 함께 남긴다. 코드가 착지하면 §10 단계표의 행을
-> "착지(커밋)"로 바꾼다. 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** 설계다. 이미 내린 결정(§1)은 닫혔다. 권고 기본값과 열린 질문 Q-A~Q-H 는 2026-10-05 체크포인트 ①에서 닫혔다(§11).
+> 코드가 착지하면 §10 단계표의 행을 "착지(커밋)"로 바꾼다. 설계와 코드가 어긋나면 코드가 이긴다.
 > **근거 규칙:** 현재 상태 서술은 전부 2026-10-05 `dev`(`39055fe6`, `8d149f39` 와 코드가 같다 — 그 사이 두 커밋은
 > `.gitignore` 와 artifacts 삭제뿐이다)에서 코드로 확인했고 경로를 단다. 실호출로 확인하지 않은 서술은 **[코드 읽기]**
 > 로 표시한다.
@@ -126,7 +125,7 @@ ALLOW 규칙이 있으면 R₀ 가 `ALLOW` 이다. 이때 접기는 아무것도
   그린다. `waiting_user` 에는 **배지가 없다.** 종결 상태가 아니므로 Stop 버튼은 켜진다(`:43-47`)
 - 태스크 목록과 셸은 `task.status` 를 원문 그대로 찍는다(`coding-task-list.tsx:111` · `coding-shell.tsx:84`). 그래서 목록에는
   `waiting_user` 가 글자로 보인다
-- 결론: **FE 작업은 필요하지 않다.** 배지 한 줄은 있으면 좋은 정도다(§11.2 Q-G)
+- 결론: **FE 작업은 필요하지 않다.** 배지도 만들지 않는다(결정 Q-G, §11.2)
 
 ## 3. 이름
 
@@ -365,7 +364,7 @@ if command.kind is ChannelCommandKind.CHAT:
 - 둘 이상이면 비지 않은 줄로 나눈다. 앞의 `1.`·`1)` 번호를 떼고, 줄 수가 질문 수와 같으면 그것을 순서대로 쓴다. 다르면 **모든
   질문에 메시지 전체**를 답으로 준다. 모델은 `pairs` 로 어떤 답이 어디에 갔는지 본다
 - 선택지(`options`)는 맞춰 보지 않는다. 자유 답을 그대로 넘긴다(결정 3: 질문은 자유 답)
-- 이 규칙은 계획에 없다. 사람의 확인을 받는다(§11.2 Q-B)
+- 결정 Q-B(2026-10-05, §11.2)로 닫혔다
 
 ### 7.3 재개 — Q10b 재개 경로를 그대로 쓴다 (질문 2)
 
@@ -395,21 +394,24 @@ if command.kind is ChannelCommandKind.CHAT:
 📌 **Q10b 재개 라우트(`POST /coding/tasks/{id}/resume`)는 `waiting_user` 를 재개하지 않는다**(`409 task_not_paused` 그대로).
 대기 중 태스크를 깨우는 것은 답뿐이다. 사람이 손으로 재개하면 답 없이 깨어나고, §5 의 2 에서 `waiting` 을 다시 만난다.
 
-## 8. 만료 (Q9d)
+## 8. 만료 (Q9d) — 태스크를 끝내지 않는다 (결정 Q-C)
+
+**승인 만료의 전례를 따른다**(`run_repository.py:1342-1420`): 만료는 태스크를 `running` 으로 돌리고 깨운다. 루프는 `ask_user.v1`
+에 `ask_expired` 거절을 돌려주고 답 없이 이어 간다. `WAITING_USER → EXPIRED` 전이와 런 닫기는 **쓰지 않는다.**
 
 - Celery beat 폴러 `expire_standing_asks`(60초)다. 등록은 `configure_standing_ask_beat_schedule(schedule, *, enabled)` 하나로 한다.
   Q3 의 `configure_standing_question_beat_schedule`(`neos/workflow/celery_app.py:227-235`)과 같은 모양이고, `enabled` 는
   `ask_effective(config)` 다
 - 한 트랜잭션 `expire_user_questions(limit, now)`: `ix_standing_pending_asks_due` 로 `FOR UPDATE SKIP LOCKED` 해서 꺼낸다(승인 만료
-  `run_repository.py:1352-1358` 와 같다) → 질문 `expired` → 태스크 `waiting_user → expired`(전이표 `models.py:57-58`) →
-  **런을 닫는다.** 런 상태에는 EXPIRED 가 없다(`neos/coding/domain/phases.py:23-29`). 그래서 `failed` + `error_code: ask_expired` 로
-  닫고 `run.failed` 이벤트를 쓴다(이미 있는 kind) → `task.status.changed{status: expired, reason_code: ask_expired}`
-- 같은 트랜잭션에서 알림 `ask_expired` 를 한 줄 적는다. 목적지는 그 질문의 `question:{ask_id}` 알림 행과 같은 곳이다
+  `run_repository.py:1352-1358` 와 같다) → 질문 `expired` → 태스크 `waiting_user → running` →
+  `task.status.changed{status: running, reason_code: ask_expired}`(새 kind 없음, 결정 Q-A). 이벤트는 같은 런의 최신 체크포인트 id 를 단다.
+  트랜잭션 뒤에 `_wake` 한다(승인 만료 `approval_service.expire_pending` 과 같다)
+- 깨어난 루프는 §5 의 2 에서 `expired` 를 찾고 `ask_expired` 로 거절한다. 이 거절 갈래는 Q9a 가 이미 만든다
+- 같은 트랜잭션에서 알림 `ask_expired`(결정 Q-D)를 한 줄 적는다. 목적지는 그 질문의 `question:{ask_id}` 알림 행과 같은 곳이다
   (`INSERT … SELECT channel_type, channel_id FROM standing_notifications WHERE agent_id = … AND dedupe_key = 'question:' || ask_id`).
   중복 키는 `ask_expired:{ask_id}` 다
-- **이미 답한 질문은 만료하지 않는다**(`WHERE status = 'waiting'`)
-- 📌 **권고(태스크 끝)는 승인 만료의 전례와 다르다.** 승인 만료는 태스크를 `running` 으로 돌리고 루프가 `approval_expired` 거절로
-  이어 간다(§2.3). 이 문서는 권고를 따르지만 사람의 확인을 받는다(§11.2 Q-C)
+- **이미 답한 질문은 만료하지 않는다**(`WHERE status = 'waiting'`). 태스크가 이미 `waiting_user` 가 아니면(취소 등) 질문만 `expired` 로
+  닫고 태스크는 건드리지 않는다
 
 ### 8.1 대기 중 취소
 
@@ -451,7 +453,7 @@ class StandingAgentsConfig(StrictConfigModel):
 |---|---|---|
 | 묻기 | `PostgresCodingRunRepository.request_user_answer` | `question.asked{ask_id, tool_call_id, questions(prompt 목록), expires_at, reply_channel_type}` → `task.status.changed{status: waiting_user}` |
 | 답 | `…answer_user_question` | `question.answered{ask_id, channel_type}` → `task.status.changed{status: running, resumed_by: answer}` |
-| 만료 | `…expire_user_questions` | `run.failed{status: failed, error_code: ask_expired}` → `task.status.changed{status: expired, reason_code: ask_expired}` |
+| 만료 | `…expire_user_questions` | `task.status.changed{status: running, reason_code: ask_expired}` (결정 Q-C — 태스크는 이어 간다) |
 
 - **세 트랜잭션 모두 `neos/coding/` 아래에 둔다.** `tests/coding/test_event_kinds.py` 는 `neos/coding` 의 `event_type=` 키워드를
   AST 로 훑어 fixture 와 **정확히 일치**하는지 본다(`test_event_kinds.py:14-22`, `_CODING_ROOT`). `neos/standing/` 에서 원장에 쓰면
@@ -464,7 +466,7 @@ class StandingAgentsConfig(StrictConfigModel):
     (`projection-reducer.ts:365-368`). 질문과 답의 본문은 채널에 있고, 답은 뒤따르는 `tool.completed` 의 `pairs` 에 실린다.
     `budget.judged`·`monitor.judged` 의 면제 이유와 같은 모양이다
   - 그래서 **FE 코드는 고치지 않는다.** 다만 fixture 가 FE 테스트의 입력이므로 Q9a 는 **FE 테스트를 실제로 돌려** 통과를 확인한다
-  - `run.failed`·`task.status.changed` 는 이미 fixture 에 있다. `waiting_user`·`expired` 는 `status` 값일 뿐 새 kind 가 아니다
+  - `task.status.changed` 는 이미 fixture 에 있다. `waiting_user` 는 `status` 값일 뿐 새 kind 가 아니다(결정 Q-A)
 - `CodingEvent` 는 FE 로 간다. 그래서 payload 에 **채널 id 와 세션 키를 싣지 않는다.** 채널 종류만 싣는다
 
 ## 10. 단계 — 전부 플래그 off 로 착지한다
@@ -476,7 +478,7 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
 | **Q9a** | 마이그레이션 095(§4) · `neos/standing/asks.py`(메모리·Postgres 저장소, `*_in_session`) · `request_user_answer` 트랜잭션 · `_approval_gate_step` 질문 갈래(§5) · `_with_answers` 일반화 · `TaskWaitingUser`·`CodingLoopWaitingUser`·`CodingTaskOutcome.WAITING_USER` 두 자리(§5.1) · 취소가 질문을 닫는다(§8.1) · `StandingAskConfig` · `ask_effective` · 도구 설명 · fixture 두 항목 | **계약(메모리·Postgres 같은 것):** 에이전트당 대기 하나 — **실 DB 에서 동시 `open` 둘 → 하나만**(Review Focus 3) · `answer` 는 한 번(둘째는 None) · `for_call` · 사용자 삭제 한 문장으로 0행(CASCADE) · 신선한 DB 2회 적용 + `question_asked` 알림 한 줄이 들어간다(§4 CHECK 이름) · **루프:** (a) 에이전트 autonomous → `WAITING_USER`, 도구 결과 없음, 런 `running`, 새 체크포인트의 머리가 그 호출 (b) interactive → 지금과 바이트 동일(승인 카드) (c) background → `policy_mode_ceiling` 그대로 (d) 사람이 연 autonomous(`agent_id` None) → 지금처럼 DENY (e) 대기 질문이 이미 있으면 `ask_pending` 거절이고 **그 태스크는 다음 단계를 계속 돈다** (f) 답할 곳이 없으면 `no_reply_channel`, 대기하지 않는다 (g) allow 목록에 있어도 질문으로 간다 (h) `ask_effective` 가 거짓이면 지금과 같다 (i) `waiting` 질문이 있는 태스크에 이어 달리기가 와도 모델을 부르지 않는다 (j) 대기 중 취소 → 질문 `cancelled`, 다음 질문이 열린다 · `test_event_kinds.py` 와 FE `coding-event-kinds.test.ts` 통과 | Q8 ✅ |
 | **Q9b** | `reply_session_for`(§6.1) · `session_key_destination` · `enqueue_to` + `*_in_session` · 알림 본문 · `request_user_answer` 가 같은 트랜잭션에서 알림을 적는다 | 최근 말한 세션 고르기(두 채널 중 나중 것) · **회전 뒤에도 옛 턴으로 세션을 고른다** · 붙은 세션이 없으면 알림 대상 · principals 가 그 채널의 소유자를 매핑하지 않으면 그 목적지는 없다 · 둘 다 없으면 None · 같은 질문을 두 번 적어도 한 줄(중복 키 `question:{ask_id}`) · 질문 행과 알림 행은 함께 있거나 함께 없다 · 워커에서 게이트웨이 호출 0회 · 본문에 선택지와 "Reply in this chat to answer." | Q9a |
 | **Q9c** | 게이트웨이 `_route` 의 답 갈래(§7.1) · `neos/standing/ask_answers.py` · `answer_user_question` 트랜잭션 · `CodingRunService.resume_answered` · 스레드에 질문·답 턴 · `main.py` 배선(늘 배선하고 플래그는 호출 때마다 읽는다) | **실제 게이트웨이로:** **Review Focus 1** Slack 으로 묻고 Telegram DM 으로 답한다 → 재개(wake 한 번, 런 같음, 체크포인트 = 최신) · **Review Focus 2** 확인 문구에 질문 요약이 들어 있다 · `/new` 등 명령은 답이 아니다 · 미매핑 발신자 · 다른 소유자 · 그룹 채널 · 바인딩된 세션의 메시지는 답이 아니고 지금과 같이 흐른다 · 같은 인바운드 재시도(멱등 키)는 재개 한 번 · 두 채널 동시 답 → 답 하나 · 알림 대상으로 물었고 아직 붙지 않은 DM 의 답도 답이다 · 스레드에 질문(assistant)·답(user) 턴 · 답 뒤 루프가 `answers` 를 도구 입력에 싣고 `pairs` 가 맞다 · 태스크가 이미 `waiting_user` 가 아니면 답이 아니다 | Q9b |
-| **Q9d** | `expire_user_questions` · Celery 태스크와 `configure_standing_ask_beat_schedule` · `docs/CONFIGURATION.md` 영어 절 하나 · 이 문서 단계표 | 만료 시각이 지나면 `waiting_user → expired` + 런 `failed(ask_expired)` + 알림 한 줄(질문과 같은 목적지) · 이미 답한 질문은 만료하지 않는다 · 두 폴러가 동시에 돌아도 만료 한 번(SKIP LOCKED) · 플래그 off 면 beat 등록이 없다 | Q9c |
+| **Q9d** | `expire_user_questions` · Celery 태스크와 `configure_standing_ask_beat_schedule` · `docs/CONFIGURATION.md` 영어 절 하나 · 이 문서 단계표 | 만료 시각이 지나면 질문 `expired` + 태스크 `waiting_user → running` + wake 한 번 + 루프가 `ask_expired` 거절로 이어 간다 + 알림 한 줄(질문과 같은 목적지) · 런은 닫히지 않는다 · 이미 답한 질문은 만료하지 않는다 · 취소된 태스크의 질문은 태스크를 건드리지 않고 닫힌다 · 두 폴러가 동시에 돌아도 만료 한 번(SKIP LOCKED) · 플래그 off 면 beat 등록이 없다 | Q9c |
 
 - 실 DB 테스트의 사용자 id 접두는 `test_q9_` 다(병렬 트랙과 테스트 DB 를 공유한다)
 - 플래그 **on** 분기의 `main.py` 배선은 Q8c·Q13b 와 같은 이유로 앱 수준 테스트가 없다(앱은 import 때 한 번 조립된다). 대신
@@ -491,42 +493,28 @@ development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이
 | 답을 알아보는 법 | 에이전트에 대기 질문이 있으면 소유자의 다음 DM(명령 제외)이 답이다. 확인 문구는 "Answer recorded — resuming." + 질문 요약이다 | ① **"붙은 세션"을 "붙는 세션"으로 넓혔다**(§7.1 의 4). 근거: 권고의 둘째 목적지(알림 대상)로 물으면 붙은 세션이 없다. 그 DM 은 Q8b 의 `open_turn` 이 첫 턴에 붙이지만(`channel_threads.py:129-169`), 그것은 `_run_workflow` 안에서 일어난다(`gateway.py:481-485`). 답 확인은 그보다 앞이므로, "이미 붙은"을 요구하면 그 답은 대화로 새고 질문은 만료까지 매달린다. ② 바인딩된 세션은 답이 아니다(Q8 §5 규칙 5) |
 | 동시 질문 | 에이전트당 대기 질문 하나다. 둘째는 `ask_pending` 거절이고 그 태스크는 계속 돈다 | 없음. ③ 계약에 `for_call` 을 더했다. 재개한 루프가 자기 질문을 찾는 열쇠다. 승인의 `get_tool_approval(task, run, tool_call)` 과 같은 자리다(`tools.py:263-267`) |
 | 어디로 묻나 | 최근 말한 붙은 채널 세션 → 알림 대상 → 없으면 `no_reply_channel` | ④ "최근 말한"을 **에이전트의 모든 스레드의 턴**으로 본다(회전, §6.1). ⑤ principals 가 소유자를 매핑하지 못하는 목적지는 없는 것으로 친다(§6.1) |
-| 만료 | `expire_hours`(기본 24) 뒤 `WAITING_USER → EXPIRED` + 소유자 알림 | ⑥ 런을 `failed(ask_expired)` 로 닫는다. 런 상태에 EXPIRED 가 없다(`phases.py:23-29`). ⑦ 알림 kind `ask_expired` 를 095 CHECK 에 더했다. 전례 차이는 Q-C |
+| 만료 | `expire_hours`(기본 24) 뒤 **`waiting_user → running` + `ask_expired` 거절로 이어 간다** + 소유자 알림(결정 Q-C, 승인 만료 전례) | ⑥ ~~런을 `failed(ask_expired)` 로 닫는다~~ → 결정 Q-C 로 철회. 런은 닫지 않는다. ⑦ 알림 kind `ask_expired` 를 095 CHECK 에 더했다(결정 Q-D) |
 | 보내기 | 워커는 큐에 `question_asked` 로 적고 API 프로세스가 보낸다 | ⑧ **질문 행과 같은 트랜잭션에서** 적는다(§6.2). ⑨ 목적지를 직접 정하는 적기 `enqueue_to` 를 더했다(지금 `enqueue` 는 알림 대상만 안다, `notifications.py:263-292`) |
 | 스레드 기록 | 질문은 assistant 턴, 답은 user 턴이다 | ⑩ **두 턴 모두 답이 올 때 API 프로세스가 적는다**(§7.3 의 5). 만료된 질문은 스레드에 남지 않는다 |
 | 무인 접기를 바꾸는 자리 | 계획은 "`approvals.py` 또는 설계가 정한 곳"이라 했다 → `tools.py` `_approval_gate_step` 하나로 정했다. `approvals.py` 는 고치지 않는다 | ⑪ ALLOW 도 질문으로 보낸다(§5 의 1) |
 | 멈춤 트랜잭션의 모양 | 계획은 "Q10b 와 같은 모양"이라 했다 → 런이 `running` 으로 남는 것은 같고, **체크포인트는 승인 대기처럼 새로 쓴다**(§5) | ⑫ 근거: 묻는 자리가 도구 단계 한가운데다(`model_turn.py:203-205` 의 전제가 서지 않는다) |
 
-### 11.2 열린 질문 — 사람이 정한다
+### 11.2 체크포인트 ① 결정 (2026-10-05, 닫힘)
 
-- **Q-A. `task.waiting_user` kind 를 만들지 않는다.** 계획은 원장 이벤트 kind 로 `task.waiting_user` 를 적었다. 그런데 상태 변화는
-  지금 전부 `task.status.changed{status}` 하나로 간다: 승인 대기(`run_repository.py:1142-1150`), 멈춤(`:297-306`), 재개(`:371-379`).
-  `is_pause_event` 도 그 payload 를 읽는다(`durability.py:61-67`). FE 리듀서도 `task.status.changed` 의 `status` 만 읽는다
-  (`projection-reducer.ts:365-368`). 새 kind 를 만들면 같은 사실을 두 kind 가 말하고, FE 는 그것을 투영하는 코드나 면제 사유를
-  하나 더 가져야 한다. **권고: `task.status.changed{status: "waiting_user"}` 로 하고 `task.waiting_user` 는 만들지 않는다.**
-  계획의 이름을 그대로 쓰기를 원하면 알려 달라
-- **Q-B. 질문이 여럿일 때 답 나누기(§7.2).** 계획에 규칙이 없다. 이 문서의 안: 줄 수가 질문 수와 같으면 줄마다, 다르면 모든
-  질문에 메시지 전체. 대안: 질문을 한 번에 하나씩 보내고 하나씩 받는다(대기 행이 질문마다 생기므로 "에이전트당 하나" 인덱스와
-  부딪힌다). 이 안으로 가도 되나?
-- **Q-C. 만료는 태스크를 끝내야 하나, 이어 가야 하나.** 권고는 `WAITING_USER → EXPIRED` 다(태스크 끝). 승인 만료의 전례는
-  `waiting_approval → running` 이고 루프가 `approval_expired` 거절로 이어 간다(`run_repository.py:1380-1410`, `tools.py:285-296`).
-  이어 가면 모델이 "답 없이" 일을 마칠 수 있고, 런을 강제로 닫지 않아도 된다. 대신 24 시간 뒤 사람이 보지 않는 사이에 일이 계속된다.
-  이 문서는 **권고(끝)** 로 썼다. 이어 가기로 바꾸면 §8 은 `ask_expired` 거절 + `running` 으로 바뀌고 전이표의 `WAITING_USER → EXPIRED` 는
-  쓰이지 않는다
-- **Q-D. 만료 알림 kind 이름 `ask_expired`.** 계획은 `question_asked` 만 적었고 만료 알림 kind 를 적지 않았다. 085 CHECK 가 kind 를
-  고정하므로 095 에 함께 넣어야 한다. `ask_expired` 로 가도 되나? (Q3 의 `question_changed` 와 헷갈리지 않게 `question_` 접두를 피했다)
-- **Q-E. 세션 키에서 보낼 주소를 거꾸로 읽는다(§6.1).** `build_session_key` 의 `_part` 는 `:` 를 `_` 로 바꾼다
-  (`session_key.py:28-32`). Slack·Discord·Telegram 의 채널 id 에는 `:` 가 없다고 보지만, 이것은 **[코드 읽기]** 다. 대안: 095 에서
-  `standing_agent_thread_sessions` 에 `channel_id`·`thread_id` 열을 더하고 붙일 때 채운다(이미 붙은 세션은 NULL 이라 다시 말할 때까지
-  목적지가 되지 못한다). 그리고 드레인은 `thread_id` 를 넘기지 않으므로 Slack 스레드 세션에 물어도 질문은 부모 DM 에 간다. 이번에는
-  둘 다 하지 않는 쪽으로 썼다
-- **Q-F. 사람이 연 autonomous 태스크의 `ask_user` 거절은 `denied_by: "user"` 로 읽힌다(§2.2).** 무인 접기의 DENY 가
-  `policy_approval_denied` 가 되고, `denial_envelope` 가 그 코드를 사람의 거절로 분류한다. Q9 범위 밖이다. 로드맵 별건으로 올릴지
-  정해 달라
-- **Q-G. FE `waiting_user` 배지.** 필요하지 않다(§2.6). 목록에는 글자로 보이고, 작업 화면에는 배지가 없다. `paused` 배지 옆에 한 줄을
-  더할지? 이 문서의 기본은 **하지 않는다**
-- **Q-H. 웹 에이전트 대화의 답.** Q8d 의 웹 에이전트 대화도 같은 스레드에 붙지만, 그 메시지는 게이트웨이가 아니라
-  `ChatStreamPipeline` 을 탄다. 계획은 채널 DM 만 답으로 본다. 웹에서 답하는 길은 이번에 만들지 않는다. 필요하면 별건이다
+위 ①~⑫ 와 필수 셋(§5.1 의 `TaskWaitingUser` 가드 + `CodingTaskOutcome.WAITING_USER` · §8.1 취소가 질문을 닫는다 · 095 가 085 CHECK
+를 지우기 전에 테스트 DB 에서 실제 이름을 확인한다)은 받아들여졌다(⑥ 은 Q-C 로 철회).
+
+1. ✅ **Q-A** — `task.waiting_user` kind 를 만들지 않는다. `task.status.changed{status: waiting_user}` 로 간다. fixture 에는
+   `question.asked`·`question.answered` 두 kind 만 더한다
+2. ✅ **Q-B** — 줄 수가 질문 수와 같으면 줄마다 나누고, 다르면 메시지 전체가 모든 질문의 답이다(§7.2). 질문 알림 본문은 "한 줄에 한
+   질문씩 답하라"고 말한다
+3. ✅ **Q-C** — **만료는 태스크를 끝내지 않는다.** 승인 만료 전례대로 `waiting_user → running`, 루프가 재개되고 `ask_user.v1` 은
+   `ask_expired` 거절을 받는다(§8). `WAITING_USER → EXPIRED` 전이와 런 닫기는 쓰지 않는다
+4. ✅ **Q-D** — 알림 kind `ask_expired` 를 095 CHECK 에 더한다
+5. ✅ **Q-E** — DM 주소를 v2 세션 키에서 거꾸로 읽는 것을 받아들인다. 질문은 DM 최상위로 간다(Slack 스레드 안으로 보내지 않는다)
+6. ✅ **Q-G** — FE 배지는 만들지 않는다
+7. ↪ **후속(범위 밖)** — **Q-F** 사람이 연 autonomous 태스크의 무인 DENY 가 `policy_approval_denied` · `denied_by: "user"` 로 적힌다
+   (§2.2). **Q-H** 웹 에이전트 대화(`ChatStreamPipeline`)에서 답하기. 둘 다 로드맵 별건 후보로만 남긴다
 
 ## 12. 되돌리지 말 것
 
