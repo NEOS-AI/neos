@@ -145,6 +145,23 @@ async def test_telegram_voice_is_collected_with_inbound_media_off(monkeypatch: p
     assert fetch.calls[0][0] == "https://api.telegram.org/file/bottest-token/voice/file_1.oga"
 
 
+async def test_collected_audio_is_redacted_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pickle
+
+    from neos.api.channels.media import AudioBytes
+
+    adapter, gateway, _fetch, _get_file = _telegram(monkeypatch, voice=_VOICE_ON)
+
+    await adapter._handle_message(_telegram_update(voice=_tg_voice()), None)
+
+    message = gateway.calls[0]
+    audio = message.metadata["voice"]["bytes"]
+    assert isinstance(audio, AudioBytes)
+    assert "ogg-bytes" not in repr(message)
+    with pytest.raises(TypeError):
+        pickle.dumps(message.metadata)
+
+
 async def test_telegram_audio_is_collected_when_there_is_no_voice(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter, gateway, _fetch, get_file = _telegram(monkeypatch, voice=_VOICE_ON)
     audio = SimpleNamespace(

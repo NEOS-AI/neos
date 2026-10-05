@@ -1630,6 +1630,50 @@ DELETE /api/v1/standing-agents/{agent_id}/thread/sessions/{session_id}
 POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation       # one per agent; 201 when created
 ```
 
+### Channel voice messages (track Q15)
+
+```yaml
+channels:
+  voice:
+    enabled: false          # off in every profile, development included (see the gate below)
+    max_bytes: 25000000     # cannot exceed 25,000,000 -- OpenAI's "25 MB" upload limit
+    max_seconds: 600        # applied only where the channel reports a duration
+    timeout_seconds: 60     # one provider call; the channel session lock is held meanwhile
+```
+
+When enabled, one audio item per inbound message is collected **separately from
+`channels.inbound_media`**: a Telegram `voice` (then `audio`), a Slack file whose
+`mimetype` is `audio/*`, or a Discord voice message / `audio/*` attachment. Size
+and duration are checked **before downloading** wherever the platform reports
+them; Telegram's effective size limit is `min(max_bytes, 20_000_000)` (Bot API
+download limit). The gateway then transcribes it with the OpenAI transcription
+API and the message body becomes `"[voice] <transcript>"`, followed by the
+caption if there was one. That text is what the workflow, a bound coding task's
+steer instruction and an agent's thread (Q8) see; the audio itself never reaches
+the workflow attachments, logs (`repr` shows only its length) or any store.
+
+- Only messages that pass the conversation gate are transcribed: ignored or
+  disallowed channels, bots and senders not mapped in `channels.principals` (when
+  principals are set) are never sent to the provider.
+- A caption that is a command (`/help`, ...) runs the command and the voice is
+  ignored. A transcript is never a command -- saying "slash new" does not reset.
+- Refusals reply and run no workflow: too large / too long / unsupported format /
+  download failed / "No speech was found in the voice message." / provider error
+  or timeout ("Could not transcribe the voice message.").
+- The model is the catalog's `defaults.transcription` (`gpt-transcribe`), not a
+  setting. Transcription spend is **not** in the cost ledger (the catalog prices
+  per token, the provider per minute); count it with
+  `channel_voice_transcriptions_total{outcome}` -- `ok`, `too_large`, `too_long`,
+  `unsupported_format`, `download_failed`, `empty`, `provider_error`, `timeout`.
+- **Enable gate.** OpenAI's docs disagree on whether `ogg` is accepted (the API
+  reference lists it, the speech-to-text guide does not), and Telegram and
+  Discord voice messages are OGG/Opus, sent as-is. Do not set `enabled: true` in
+  any profile until a live dry run passes 3/3: an OGG voice message transcribes,
+  a Slack in-app audio clip transcribes (record its `mimetype`), and an oversize
+  voice message is refused with zero provider calls.
+
+Design: `docs/Q15_VOICE_DESIGN_261005.md`.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

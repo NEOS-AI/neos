@@ -399,6 +399,22 @@ _VOICE_EXTENSION_BY_MIME = {
 }
 
 
+class AudioBytes(bytes):
+    """음성 원본. `bytes` 처럼 쓰이지만 **보이지도 저장되지도 않는다**(Q15c).
+
+    `repr`/`str` 은 길이만 말한다 — `ChannelMessage` 나 `metadata` 를 로그에 찍어도 오디오가
+    새지 않는다. 피클을 거절한다 — 어느 저장소에도 직렬화되지 않는다. 공급자에게만 간다.
+    """
+
+    def __repr__(self) -> str:
+        return f"<audio: {len(self)} bytes>"
+
+    __str__ = __repr__
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("voice audio is never serialized")
+
+
 def is_audio_content_type(content_type: Any) -> bool:
     mime = str(content_type or "").split(";", 1)[0].strip().lower()
     return mime.startswith("audio/")
@@ -422,7 +438,7 @@ def _voice_entry(
     refused: str | None,
 ) -> dict[str, Any]:
     return {
-        "bytes": data,
+        "bytes": AudioBytes(data) if data is not None else None,
         "filename": filename,
         "content_type": content_type,
         "duration_seconds": duration_seconds,
