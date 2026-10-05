@@ -1,7 +1,7 @@
 # Q15 채널 음성 → 텍스트 — 설계
 
 > **작성:** 2026-10-05 · **트랙:** Q15 (정본 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) §4.2 의 Q15 행 · §4.1 원칙) · **계획:** `docs/superpowers/plans/2026-10-05-q9-q15-parallel.md` Track Q15
-> **지위:** 설계다. 코드는 아직 없다. 코드가 착지하면 §11 단계표의 행을 "착지(커밋)"로 바꾼다. 설계와 코드가 어긋나면 코드가 이긴다.
+> **지위:** 설계다. 열린 질문 여섯 개 중 다섯은 2026-10-05 체크포인트 ①에서 닫혔고 하나(Slack 클립)는 켜기 게이트의 dry run 몫이다(§13). 코드가 착지하면 §11 단계표의 행을 "착지(커밋)"로 바꾼다. 설계와 코드가 어긋나면 코드가 이긴다.
 > **근거 규칙:** 현재 상태 서술은 전부 2026-10-05 `dev`(`39055fe6`, `8d149f39` 의 자손 — 그 사이 두 커밋은 산출물 삭제·`.gitignore`)에서
 > 코드로 확인했고 경로를 단다. 실호출로 확인하지 않은 서술은 **[코드 읽기]**, 플랫폼·공급자 문서로만 확인한 서술은 **[문서]** 로 표시한다.
 > 공급자 사실(모델 id·형식·상한·가격)은 §4 에 출처 URL 과 조회일을 단다. 확인하지 못한 값은 **미확인** 이라고 쓰고 지어내지 않는다.
@@ -24,6 +24,7 @@
 | — | 전부 플래그 off 로 착지한다. development 에서 켜는 것은 통합 단계(Phase C)에서 오케스트레이터가 한다 | 계획 Global Constraints |
 | — | 모델 id·가격은 추측하지 않는다. 공식 문서로 확인한 값만 `neos/config/models.yaml` 에 올린다 | 계획 Global Constraints · 메모리 retire-stale-models |
 | — | 새 의존성 없음(`openai>=3.8.0` 이 이미 있다 — `pyproject.toml` 19행, 잠금은 `uv.lock` 의 `openai 3.13.0`) | 계획 Tech Stack |
+| Q15-3~8 | 체크포인트 ①의 결정 — §13 (OGG 그대로 · 켜기 게이트 · 25_000_000 · `empty` · 카탈로그 키 · 바인딩 세션 전사) | 2026-10-05 사람의 결정 |
 | — | Phase C 머지 순서: `_route` 앞단에서 **전사 먼저, 그다음 Q9 답 판정**(음성으로 답할 수 있게) | 계획 Phase C |
 
 ## 2. 지금 코드 (2026-10-05 `39055fe6` 확인)
@@ -110,7 +111,7 @@
 - 모듈 **`neos/services/speech_to_text.py`**
 - 결과 **`Transcription(text: str, language: str | None, duration_seconds: float | None)`** — frozen dataclass
 - 거절 **`TranscriptionRefused(reason)`** — 예외. `reason ∈ {too_large, too_long, unsupported_format, provider_error, timeout, empty}`
-  (`empty` 는 계획이 설계에 맡긴 것 — §7.3 · 열린 질문 3)
+  (`empty` 는 계획이 설계에 맡긴 것 — §7.4 · §13 결정 3)
 - 함수 **`async def transcribe(audio: bytes, *, filename: str, content_type: str, duration_seconds: float | None, config: ChannelVoiceConfig, client=None) -> Transcription`**
 - 설정 **`channels.voice`** = `ChannelVoiceConfig(enabled: bool = False, max_bytes: int = 25_000_000, max_seconds: int = 600, timeout_seconds: float = 60)`
   — `neos/config/schema.py`, `ChannelConfig.voice`
@@ -137,7 +138,7 @@
 📌 **ogg 불일치가 이 트랙의 가장 큰 미확인이다.** Telegram 음성 노트와 Discord 음성 메시지는 둘 다 OGG/Opus 다(§5). 파라미터 계약인 API
 레퍼런스와 SDK 는 `ogg` 를 받는다고 하므로 **변환 없이 `.ogg` 로 보낸다**(새 의존성 없음). 다만 가이드가 빠뜨린 이유를 모르므로, development 에서
 켜기 전에 **라이브 dry run 3/3**(OGG 하나 · webm 또는 m4a 하나 · 상한 초과 하나)을 사람이 돌린다(메모리 live-children-need-live-dry-runs).
-`ogg` 가 거절되면 변환(ffmpeg 등)이 필요하고 그것은 새 의존성이라 멈추고 묻는다 — 열린 질문 1.
+`ogg` 가 거절되면 변환(ffmpeg 등)이 필요하고 그것은 새 의존성이라 멈추고 묻는다 — §13 결정 1.
 
 ## 5. 채널별 — 음성은 어떻게 도착하고, 크기·길이를 미리 아는가
 
@@ -197,7 +198,7 @@
     selectable: false
     description: "OpenAI speech-to-text (channel voice, Q15)"
     # 가격 $0.0045 / 분 (https://developers.openai.com/api/docs/models/gpt-transcribe, 2026-10-05).
-    # pricing 은 1M 토큰 단위만 받으므로 비워 둔다 — 비용 원장에 오르지 않는다(열린 질문 4).
+    # pricing 은 1M 토큰 단위만 받으므로 비워 둔다 — 비용 원장에 오르지 않는다(§13 결정 4).
 
 aliases:
   transcription:
@@ -232,14 +233,14 @@ defaults:
 ### 7.3 `max_bytes` 기본값과 검증
 
 - 기본 **`25_000_000`**(10진 25 MB). 계획의 권고 "25 MiB"(26,214,400)는 문서의 "25 MB"를 2진으로 읽은 것인데, 문서가 단위를 밝히지 않으므로
-  **작은 쪽**을 고른다. 25 MiB 로 두면 25,000,001~26,214,400 바이트 사이의 파일이 상한 검사를 통과하고 공급자에서 거절될 수 있다(열린 질문 2)
+  **작은 쪽**을 고른다. 25 MiB 로 두면 25,000,001~26,214,400 바이트 사이의 파일이 상한 검사를 통과하고 공급자에서 거절될 수 있다(§13 결정 2)
 - 스키마 검증: `0 < max_bytes <= 25_000_000` · `max_seconds > 0` · `timeout_seconds > 0`. 공급자 상한보다 큰 값은 기동을 멈춘다(`extra="forbid"` 와 같은 원칙)
 - `timeout_seconds` 기본 **60**(잠정). 공급자 문서에 지연 수치가 없다. 세션 잠금을 그만큼 쥐므로(§8) 더 길게 두지 않는다
 
 ### 7.4 빈 전사 = `empty` 거절
 
 계획이 설계에 맡긴 항목이다. **거절한다.** 무음·잡음 녹음의 결과 `""` 를 `"[voice] "` 로 워크플로우에 보내면 빈 질문에 대한 답을 사고, 에이전트 DM 이면
-빈 user 턴이 스레드에 남는다. reason 집합에 `empty` 가 하나 늘어난다(열린 질문 3).
+빈 user 턴이 스레드에 남는다. reason 집합에 `empty` 가 하나 늘어난다(§13 결정 3).
 
 ## 8. 게이트웨이 배선 (Q15c)
 
@@ -280,7 +281,7 @@ async def _route(self, message):
   user 턴이 `[voice] …` 가 된다. 턴 `role` 은 늘리지 않는다(Q8 §10)
 - **전사 텍스트는 명령이 되지 않는다.** `[voice]` 로 시작하므로 `parse_channel_command` 는 늘 `CHAT` 이다. "슬래시 뉴"라고 말해도 `/new` 가 아니다.
   사람이 말로 위험한 명령을 실수로 내지 않게 하는 성질이라 테스트로 고정한다
-- **바인딩된 코딩 세션**에서도 같은 자리에서 전사되어, 조향(`_steer_bound_chat`)이 `[voice] …` 를 받는다(열린 질문 5)
+- **바인딩된 코딩 세션**에서도 같은 자리에서 전사되어, 조향(`_steer_bound_chat`)이 `[voice] …` 를 받는다(§13 결정 5)
 - 서킷 브레이커: `_transcribe_voice` 는 던지지 않는다(거절은 문구로 돌아온다). 공급자 장애가 채널 브레이커를 열지 않는다
 - 세션 잠금은 전사 동안(최대 `timeout_seconds`) 쥔다. 그동안 온 같은 세션의 메시지는 지금처럼 주차된다
 - 상시 에이전트 채널 트리거(Q4b)는 **전사 텍스트를 보지 않는다** — 트리거는 게이트 전에 캡션만 본다(§2.4). 트리거를 위해 전사하면 게이트 밖 메시지를
@@ -327,7 +328,7 @@ async def _route(self, message):
 
 - 각 단계: TDD → 변이 테스트(핵심 동작마다 하나, 전부 죽어야 한다) → 그 브랜치에서 전체 스위트 → 커밋(계획 Global Constraints)
 - 실 DB 가 필요한 테스트는 없을 것으로 본다. 생기면 사용자 id 접두 `test_q15_`
-- development 에서 켜기(Phase C) 전에 사람이 **라이브 dry run 3/3** 을 돌린다(§4 📌)
+- **development 에서도 off 로 둔다.** 켜기는 §13 "켜기 게이트"(라이브 dry run 3/3)가 통과한 뒤에만 — Phase C 에서 오케스트레이터가 한다
 
 ## 12. 계획의 권고 기본값과 다르게 정한 것
 
@@ -344,19 +345,30 @@ async def _route(self, message):
 그 밖의 권고(수집이 `inbound_media` 와 별개 · `max_seconds` 600 은 길이를 아는 채널만 · `"[voice] <transcript>"` + 캡션 뒤 · 오디오를 워크플로우 첨부로
 넘기지 않음 · 게이트 통과 메시지만 전사)는 그대로 따른다.
 
-## 13. 열린 질문 (사람에게)
+## 13. 결정 (2026-10-05, 체크포인트 ① — 사람의 결정)
 
-1. **OGG 를 변환 없이 보내도 되나.** 공식 문서가 갈린다 — API 레퍼런스는 `ogg` 를 받고 가이드는 빼먹었다(§4). Telegram·Discord 음성은 OGG/Opus 다.
-   설계는 레퍼런스를 따라 그대로 보내고, 켜기 전 라이브 dry run 으로 확인한다. 거절되면 변환이 필요하고 그것은 새 의존성(ffmpeg 류)이다 — 그때 다시 묻는다
-2. **`max_bytes` 기본 25_000_000(10진) 으로 두어도 되나**(권고 25 MiB 와 다르다, §12)
-3. **빈 전사를 `empty` 로 거절**하고 "No speech was found in the voice message." 로 답해도 되나(reason 이 하나 는다, §7.4)
-4. **전사 비용을 비용 원장에 올리지 않아도 되나.** 카탈로그의 `pricing` 은 1M 토큰 단위뿐이라 분당 $0.0045 를 담지 못한다(§2.6). 이번에는 카운터만 남긴다.
-   원장에 올리려면 `ModelPricing` 에 분 단위 필드가 필요하다 — 별건
-5. **바인딩된 코딩 세션의 음성도 전사해 조향으로 넘기나.** 설계는 "그렇다"(`_route` 앞단이라 저절로 그렇게 된다). 코딩 태스크에 말로 지시하는 것을 막고 싶으면
-   바인딩 세션에서는 전사하지 않도록 조건 하나를 더한다
-6. **Slack 오디오 클립의 실제 모양**(앱 안에서 녹음한 클립의 `mimetype`, 그것이 `file_share` 메시지 이벤트로 오는지 `file_shared` 로만 오는지)은 문서로 확인하지
-   못했다. `file_shared` 대체 경로는 지금 `video/*` 만 다룬다(`slack.py` 495행). 라이브 dry run 에서 확인하고, 클립이 `video/*`·`file_shared` 로만 오면
-   Q15b 에 그 경로를 더한다
+열린 질문 여섯 개 중 다섯은 2026-10-05 체크포인트 ①에서 닫혔다(6 은 켜기 게이트 몫). §12 표와 §8 의 이탈 아홉 개(미매핑 판정을 전사 앞으로 끌어와 헬퍼 하나로 공유 ·
+`metadata["voice"].refused` · outcome `download_failed` · 말한 "/new" 는 명령이 아니다 등)도 받아들여졌다.
+
+1. ✅ **OGG 는 변환 없이 보낸다.** 단 문서가 갈리므로(§4) **`channels.voice.enabled` 는 development 에서도 꺼 둔다** — 통합 단계에서
+   **라이브 dry run 3/3 이 통과해야** 켠다(아래 "켜기 게이트"). 거절되면 변환(새 의존성)을 다시 묻는다
+2. ✅ **`max_bytes` 기본 `25_000_000`.** Telegram 실효 상한은 `min(max_bytes, 20 MB)`
+3. ✅ **빈 전사는 `empty` 로 거절**하고 `No speech was found in the voice message.` 로 답한다
+4. ✅ **모델은 카탈로그 키 `gpt-transcribe`**, 고르는 자리는 `aliases.transcription.openai` / `defaults.transcription`. `pricing` 은 비운다.
+   **비용은 카운터로만 센다** — 전사 비용이 비용 원장에 없다는 사실은 로드맵 메모로 남긴다(Phase C, 오케스트레이터)
+5. ✅ **바인딩된 코딩 세션의 음성도 전사**하고, 전사 텍스트가 조향 지시가 된다(`_route` 앞단에서 저절로)
+6. ⏳ **Slack 앱 안 클립의 `mimetype`·도착 이벤트**는 열린 채로 남긴다 — 켜기 게이트의 dry run 에서 확인한다
+
+### 켜기 게이트 (development)
+
+`config/neos.development.yaml` 에 `channels.voice.enabled: true` 를 넣는 일은 **아래 셋이 실제 OpenAI 호출로 모두 통과한 뒤에만** 한다(메모리
+live-children-need-live-dry-runs). 그 전에는 스키마 기본(off)이 development 에서도 그대로다.
+
+| # | dry run | 통과 조건 |
+|---|---|---|
+| 1 | Telegram 또는 Discord 음성 메시지(OGG/Opus) | `ok` — 전사가 `[voice] …` 로 답에 반영된다 |
+| 2 | Slack 오디오(앱 안 클립) | `ok` — 그리고 클립의 `mimetype`·도착 이벤트를 기록한다(결정 6) |
+| 3 | 상한 초과 음성 | 거절 문구, **공급자 호출 0회**(카운터 `too_large`) |
 
 ## 14. 되돌리지 말 것
 
