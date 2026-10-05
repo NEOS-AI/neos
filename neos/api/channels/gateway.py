@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 if TYPE_CHECKING:
     from neos.workflow.graph import MultiAgentWorkflow
 
-from .base import ChannelMessage
+from .base import ChannelMessage, RetryableReply
 from .commands import (
     ChannelCommandKind,
     display_name_from_metadata,
@@ -409,7 +409,11 @@ class ChannelGateway:
             else:
                 response = await self._route(message)
             if idem:
-                await self._inbound.remember(message.session_id, idem, response)
+                if isinstance(response, RetryableReply):
+                    # Q9c -- "다시 보내 주세요"를 기억하면 같은 이벤트의 재전송이 그 문구만 돌려받는다.
+                    await self._inbound.abandon(message.session_id, idem)
+                else:
+                    await self._inbound.remember(message.session_id, idem, response)
         except Exception as e:
             logger.error(
                 f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
@@ -463,7 +467,9 @@ class ChannelGateway:
         """Q9c 답 확인 -- `CHAT` 메시지만 온다(명령은 답이 아니다). 확인 문구 또는 None.
 
         코딩에 바인딩된 세션의 말은 그 태스크의 조향이므로 답이 아니다(설계 §7.1 의 3).
-        실패는 대화를 막지 않는다: 경고 한 줄을 남기고 None -- 메시지는 지금처럼 대화로 간다.
+        **질문을 찾기 전의** 실패만 여기서 삼킨다: 경고 한 줄을 남기고 None -- 메시지는 지금처럼
+        대화로 간다. 질문을 찾은 **뒤의** 실패는 `ChannelAskAnswers` 가 `RetryableReply` 로 바꾼다
+        -- 다시 보내 달라는 응답이고, `dispatch` 는 그것을 멱등 기록에 남기지 않는다(Q9c 고침 1).
         트랙 Q15 의 전사 단계가 이 앞에 선다(전사 → 답 확인).
         """
         if self._ask_answers is None:

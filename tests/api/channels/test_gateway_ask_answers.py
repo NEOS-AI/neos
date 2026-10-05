@@ -364,3 +364,123 @@ async def test_the_answer_reaches_the_ask_split_by_line(monkeypatch) -> None:
 )
 def test_split_answers(text, count, expected) -> None:
     assert split_answers(text, count) == expected
+
+
+# ---- fix round 1: a matched answer is never lost to the conversation --------------
+
+
+def _counted(outcome):
+    from neos.observability.metrics import metrics
+
+    return metrics.standing_ask_total.labels(outcome=outcome)._value.get()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_resume_after_a_match_asks_to_resend_and_the_resend_answers(monkeypatch) -> None:
+    """A transient DB error after the question matched: no chat turn, a resend reply,
+    a counted `answer_failed` -- and the SAME event retried can still answer (the
+    idempotency record must not lock the owner out)."""
+    from neos.standing.ask_answers import RESEND
+
+    _settings(monkeypatch)
+    world = World()
+    await world.waiting()
+    real_resume = world._resume
+    failures = [RuntimeError("deadlock detected")]
+
+    async def flaky(ask, owner_id, answers, channel_type):
+        if failures:
+            raise failures.pop()
+        return await real_resume(ask, owner_id, answers, channel_type)
+
+    world.answers._resume = flaky
+    before = _counted("answer_failed")
+
+    first = await world.gateway.dispatch(_slack("main", idem="ev-7"))
+
+    assert first == RESEND
+    assert world.workflow.calls == []
+    assert (await world.asks.for_call("ct_1", "cr_1", "a1")).status == "waiting"
+    assert world.woken == []
+    assert _counted("answer_failed") == before + 1
+
+    again = await world.gateway.dispatch(_slack("main", idem="ev-7"))
+
+    assert again.startswith("Answer recorded")
+    assert (await world.asks.for_call("ct_1", "cr_1", "a1")).answers == ("main",)
+    assert world.woken == [("ct_1", "cc_ask")]
+    assert world.workflow.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_attach_after_a_match_also_asks_to_resend(monkeypatch) -> None:
+    from neos.standing.ask_answers import RESEND
+
+    _settings(monkeypatch)
+    world = World()
+    await world.waiting()
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("pool exhausted")
+
+    world.threads.attach_session = broken
+
+    reply = await world.gateway.dispatch(_slack("main"))
+
+    assert reply == RESEND
+    assert world.workflow.calls == []
+
+
+@pytest.mark.asyncio
+async def test_an_error_before_any_match_still_goes_to_the_conversation(monkeypatch) -> None:
+    _settings(monkeypatch)
+    world = World()
+    await world.waiting()
+    before = _counted("answer_failed")
+
+    async def broken(agent_id):
+        raise RuntimeError("db down")
+
+    world.asks.waiting_for_agent = broken
+
+    reply = await world.gateway.dispatch(_slack("main"))
+
+    assert reply == "reply 1"
+    assert _counted("answer_failed") == before
+
+
+@pytest.mark.asyncio
+async def test_two_answers_at_once_resume_once_and_the_other_is_told(monkeypatch) -> None:
+    """Gap 1: Slack and Telegram answer the same question at the same moment."""
+    import asyncio
+
+    from neos.standing.ask_answers import ALREADY_ANSWERED
+
+    _settings(monkeypatch)
+    world = World()
+    agent, _ask = await world.waiting()
+    await world.threads.attach_session(agent.agent_id, SLACK_DM, "slack")
+    await world.threads.attach_session(agent.agent_id, TELEGRAM_DM, "telegram")
+    real_resume = world._resume
+    arrived: list[str] = []
+    both_here = asyncio.Event()
+
+    async def racing(ask, owner_id, answers, channel_type):
+        arrived.append(channel_type)
+        if len(arrived) == 2:
+            both_here.set()
+        await both_here.wait()
+        return await real_resume(ask, owner_id, answers, channel_type)
+
+    world.answers._resume = racing
+
+    replies = await asyncio.gather(
+        world.gateway.dispatch(_slack("main")),
+        world.gateway.dispatch(_telegram("develop")),
+    )
+
+    assert sorted(arrived) == ["slack", "telegram"]  # both really matched the question
+    assert sum(reply.startswith("Answer recorded") for reply in replies) == 1
+    assert sum(reply == ALREADY_ANSWERED for reply in replies) == 1
+    assert len(world.woken) == 1
+    assert world.workflow.calls == []

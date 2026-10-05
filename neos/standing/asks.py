@@ -41,7 +41,15 @@ ASK_STATUSES = frozenset({ASK_WAITING, ASK_ANSWERED, ASK_EXPIRED, ASK_CANCELLED}
 
 #: `standing_ask_total{outcome}` 의 값(설계 §9.1). Q9d 가 `expired` 를 더한다.
 ASK_OUTCOMES = frozenset(
-    {"asked", "refused_pending", "refused_no_channel", "lookup_failed", "answered"}
+    {
+        "asked",
+        "refused_pending",
+        "refused_no_channel",
+        "lookup_failed",
+        "answered",
+        # Q9c 고침 1 -- 질문을 찾은 뒤 재개가 실패했다(소유자에게 다시 보내 달라고 했다).
+        "answer_failed",
+    }
 )
 
 

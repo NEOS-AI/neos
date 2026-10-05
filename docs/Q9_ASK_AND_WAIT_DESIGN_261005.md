@@ -367,6 +367,13 @@ if command.kind is ChannelCommandKind.CHAT:
 - **경합:** 두 채널에서 동시에 답이 오면 `answer` 의 `WHERE status = 'waiting'` 이 하나만 통과시킨다. 진 쪽 메시지는 보통 대화로
   간다. 같은 메시지의 재시도는 게이트웨이의 인바운드 멱등이 처음 결과를 돌려주므로 재개는 한 번이다(`gateway.py:376-381`, `:397-402`)
 - **그룹 채널 · 미매핑 · 다른 소유자의 메시지**는 4번에서 떨어진다
+- **질문을 찾은 뒤의 실패**(Q9c 고침 1, 2026-10-05): 일시적 DB 오류·교착·풀 고갈로 붙이기나 재개가 실패하면 메시지를 대화로 흘리지
+  **않는다**. 흘리면 진짜 답이 채팅이 되고, 질문은 기다리는 채로 남아 소유자의 다음 엉뚱한 DM 이 답이 된다. 대신
+  `Could not record your answer — please send it again.` 로 답하고 `standing_ask_total{outcome="answer_failed"}` 를 센다. 이 응답은
+  `RetryableReply` 이고 게이트웨이는 그것을 인바운드 멱등 기록에 **남기지 않는다** — 같은 이벤트의 재전송이 다시 답이 될 수 있다.
+  질문을 찾기 **전의** 실패는 지금처럼 경고 한 줄과 함께 대화로 간다
+- **동시에 온 두 답**: 진 쪽(재개 트랜잭션이 None 이고 질문이 이미 `answered`)은 대화가 되지 않고
+  `That question was already answered — the agent is resuming.` 을 받는다. 태스크가 움직여서(취소 등) None 이면 지금처럼 대화로 간다
 
 ### 7.2 답 → `answers` 목록
 
@@ -459,7 +466,7 @@ class StandingAgentsConfig(StrictConfigModel):
 - `StrictConfigModel` 은 모르는 키를 거절한다. 그래서 development 프로파일에서 켜는 일은 스키마 키가 착지한 **뒤에**, 통합 단계에서
   오케스트레이터가 한다(계획 Global Constraints). 서브에이전트는 `config/neos.development.yaml` 을 고치지 않는다
 - 계측: `standing_ask_total{outcome}`(Q9c 가 착지시켰다, 2026-10-05 통제자 결정) — `asked`·`refused_pending`·`refused_no_channel`
-  (루프의 질문 갈래) · `lookup_failed`(답할 곳 조회 실패, `resolve_reply_destination`) · `answered`(게이트웨이의 답) · `expired`(Q9d 가 더한다).
+  (루프의 질문 갈래) · `lookup_failed`(답할 곳 조회 실패, `resolve_reply_destination`) · `answered`(게이트웨이의 답) · `answer_failed`(질문을 찾은 뒤 재개 실패, Q9c 고침 1) · `expired`(Q9d 가 더한다).
   값은 `neos/standing/asks.py` `ASK_OUTCOMES` 한 곳에 있다. 다른 standing 카운터처럼
   `neos_` 접두를 붙이지 않는다
 

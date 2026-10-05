@@ -24,6 +24,11 @@ class ChannelMessage:
     metadata: Dict[str, Any] = field(default_factory=dict)  # 채널별 추가 메타데이터
 
 
+class RetryableReply(str):
+    """다시 보내 달라는 응답(트랙 Q9c). 게이트웨이는 이 응답을 인바운드 멱등 기록에 **남기지 않는다**
+    -- 같은 이벤트가 다시 와도 처음부터 처리되어야 하기 때문이다(기록이 남으면 재전송이 막힌다)."""
+
+
 class ChannelAdapterBase(ABC):
     """
     채널 어댑터 공통 인터페이스

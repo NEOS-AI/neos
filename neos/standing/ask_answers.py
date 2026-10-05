@@ -25,6 +25,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from neos.api.channels.base import RetryableReply
 from neos.standing.asks import PendingAsk, PendingAskStore, ask_effective, count_ask
 from neos.standing.models import StandingAgentStatus
 from neos.standing.resolve import resolve_agent
@@ -32,6 +33,10 @@ from neos.standing.resolve import resolve_agent
 logger = logging.getLogger(__name__)
 
 CONFIRMATION = "Answer recorded — resuming."
+#: 질문을 찾은 뒤 기록·재개가 실패했다(일시적 DB 오류 등). 대화로 흘리지 않고 다시 보내 달라고 한다.
+RESEND = "Could not record your answer — please send it again."
+#: 다른 채널에서 같은 질문의 답이 먼저 닿았다. 이 메시지는 대화가 되지 않는다.
+ALREADY_ANSWERED = "That question was already answered — the agent is resuming."
 _SUMMARY_CHARS = 120
 _NUMBERED = re.compile(r"^\s*\d+\s*[.)]\s*")
 
@@ -138,21 +143,36 @@ class ChannelAskAnswers:
         ask = await self._asks.waiting_for_agent(agent.agent_id)
         if ask is None:
             return None
-        thread = await self._threads.attach_session(
-            agent.agent_id, message.session_id, message.channel_type
-        )
-        if thread is None:
-            return None
         text = (message.text or "").strip()
         if not text:
             return None
-        answers = split_answers(text, len(ask.questions))
-        commit = await self._resume(ask, owner, answers, message.channel_type)
-        if commit is None:
-            return None
+        # 여기부터 질문을 찾았다. 실패는 대화로 흘리지 않는다 -- 흘리면 진짜 답이 채팅이 되고,
+        # 질문은 기다리는 채로 남아 소유자의 다음 엉뚱한 DM 이 답이 된다(Q9c 고침 1).
+        try:
+            thread = await self._threads.attach_session(
+                agent.agent_id, message.session_id, message.channel_type
+            )
+            if thread is None:
+                return None
+            answers = split_answers(text, len(ask.questions))
+            commit = await self._resume(ask, owner, answers, message.channel_type)
+            if commit is None:
+                return await self._not_resumed(ask)
+        except Exception:  # noqa: BLE001 -- 원인과 상관없이 다시 보내 달라고 한다
+            logger.warning("standing ask answer failed ask_id=%s", ask.ask_id, exc_info=True)
+            count_ask("answer_failed")
+            return RetryableReply(RESEND)
         count_ask("answered")
         await self._record_turns(thread.agent_thread_id, ask, message, text)
         return confirmation(ask)
+
+    async def _not_resumed(self, ask: PendingAsk) -> str | None:
+        """재개되지 않았다. 다른 채널의 답이 먼저 닿았으면 그렇게 말한다(대화로 보내지 않는다).
+        태스크가 움직였으면(취소 등) None -- 지금처럼 대화로 간다."""
+        current = await self._asks.for_call(ask.task_id, ask.run_id, ask.tool_call_id)
+        if current is not None and current.status == "answered":
+            return ALREADY_ANSWERED
+        return None
 
     async def _record_turns(self, agent_thread_id: str, ask: PendingAsk, message: Any, text: str) -> None:
         from neos.api.channels.session_key import session_key_destination
