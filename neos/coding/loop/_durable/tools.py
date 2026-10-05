@@ -61,6 +61,7 @@ from neos.coding.loop._durable.signatures import _is_stall_denied
 from neos.coding.loop._durable.state import (
     CodingLoopFailure,
     CodingLoopWaitingApproval,
+    CodingLoopWaitingUser,
     DelegatedSpawn,
 )
 from neos.coding.loop._durable.tool_results import (
@@ -78,6 +79,11 @@ _APPROVAL_DENIALS = {
     ApprovalStatus.DENIED: "approval_denied",
     ApprovalStatus.EXPIRED: "approval_expired",
     ApprovalStatus.INVALIDATED: "approval_invalidated",
+}
+#: 트랙 Q9 -- 닫힌 질문을 다시 만난 루프의 거절 사유(설계 §5 의 2).
+_ASK_DENIALS = {
+    "expired": "ask_expired",
+    "cancelled": "ask_cancelled",
 }
 _MAX_HOOK_RETRIES = 2
 _MAX_BATCH = 10
@@ -230,6 +236,8 @@ class ToolExecutionMixin:
         return validated
 
     async def _approval_gate_step(self, input, state, bound, deps, call, validated):
+        if self._answerable_ask(input, validated):
+            return await self._ask_gate_step(input, state, bound, deps, call, validated)
         outcome = await self._evaluate_call(
             validated,
             state,
@@ -294,7 +302,7 @@ class ToolExecutionMixin:
                     ),
                 )
             )
-        validated = self._with_approval_answers(validated, approval)
+        validated = self._with_answers(validated, approval.display_summary.get("answers"))
         if (
             bool(approval.display_summary.get("remember"))
             and validated.risk in _REMEMBERED_RISKS
@@ -305,6 +313,116 @@ class ToolExecutionMixin:
                 | {approval_remember_key(validated)},
             )
         return validated, state
+
+    # -- ask and wait (track Q9) ------------------------------------------------
+
+    def _answerable_ask(self, input, validated) -> bool:
+        """에이전트 autonomous 태스크의 `ask_user.v1` -- 답할 사람이 채널에 있다(Q9).
+
+        interactive 는 승인 카드 그대로다(결정 Q9-2). background 는 이 갈래로 오지 않고
+        천장(`policy_mode_ceiling`)이 거절한다(결정 Q9-1). 사람이 연 autonomous 태스크
+        (`agent_id` 없음)는 답할 채널이 없으므로 지금처럼 무인 DENY 다.
+        """
+        return (
+            validated.name == "ask_user.v1"
+            and getattr(input, "mode", "interactive") == "autonomous"
+            and getattr(input, "agent_id", None) is not None
+            and getattr(self, "_asks", None) is not None
+        )
+
+    async def _ask_gate_step(self, input, state, bound, deps, call, validated):
+        """질문 갈래(설계 §5). 승인 갈래와 같은 뼈대 -- 판정이 먼저, 기록 조회가 나중이다.
+
+        무인 접기(`fold_for_unattended`)를 **부르지 않는** 길이다: `unattended=False` 로
+        판정하므로 사용자 block · deny 목록 · Jev 밴딩은 그대로 걸리고, 접기만 빠진다.
+        운영자의 전역 `approval_unattended` 는 `_approval_gate` 가 계속 OR 한다 -- 운영자가
+        좁힌 것을 Q9 가 넓히지 않는다. ALLOW 도 질문으로 보낸다: 답 없는 `ask_user` 실행은
+        빈 답이다.
+        """
+        outcome = await self._evaluate_call(
+            validated,
+            state,
+            deps,
+            input.task_id,
+            call.tool_call_id,
+            unattended=False,
+            read_only_ceiling=_background(input),
+        )
+        if outcome is ApprovalPolicyOutcome.DENY:
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input,
+                        state,
+                        bound,
+                        deps,
+                        call,
+                        policy_denial_reason(
+                            validated,
+                            self._approval_gate(
+                                state,
+                                unattended=False,
+                                read_only_ceiling=_background(input),
+                            ),
+                        ),
+                    ),
+                )
+            )
+        asks = self._asks
+        existing = await asks.for_call(input.task_id, input.run_id, call.tool_call_id)
+        if existing is not None:
+            if existing.status == "answered":
+                return self._with_answers(validated, list(existing.answers or ())), state
+            if existing.status == "waiting":
+                raise CodingLoopWaitingUser(existing.ask_id)
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input,
+                        state,
+                        bound,
+                        deps,
+                        call,
+                        _ASK_DENIALS.get(existing.status, "ask_expired"),
+                        audit=False,
+                    ),
+                )
+            )
+        destination = await asks.reply_destination(
+            input.agent_id, getattr(input, "owner_id", None)
+        )
+        if destination is None:
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "no_reply_channel"
+                    ),
+                )
+            )
+        now = self._clock()
+        committed = await deps.repository.request_user_answer(
+            lease=deps.lease,
+            tool_call=call,
+            validated=validated,
+            loop_state=self._dump_state(input, state),
+            workspace_revision=str(bound.binding.workspace_revision),
+            agent_id=input.agent_id,
+            reply_session_id=destination.session_id,
+            reply_channel_type=destination.channel_type,
+            asked_at=now,
+            expires_at=now + timedelta(hours=asks.expire_hours),
+        )
+        if committed is None:
+            # 이 에이전트에 이미 대기 질문이 있다(095 의 부분 unique 인덱스). 이 태스크는
+            # 멈추지 않는다 -- 거절을 받고 다음 단계를 계속 돈다(Review Focus 3).
+            return _Halt(
+                (
+                    await self._commit_denied_tool(
+                        input, state, bound, deps, call, "ask_pending"
+                    ),
+                )
+            )
+        return _Halt(tuple((event, state) for event in committed.events))
 
     # -- claim, execute, settle ----------------------------------------------
 

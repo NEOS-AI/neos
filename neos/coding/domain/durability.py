@@ -33,6 +33,43 @@ class TaskPaused(RuntimeError):
 
 #: `task.status.changed` 의 `status` 값. 루프가 멈춤을 커밋했다는 신호이기도 하다.
 PAUSED_STATUS = "paused"
+#: 트랙 Q9 -- 질문을 보내고 답을 기다리는 태스크의 `task.status.changed` 값.
+WAITING_USER_STATUS = "waiting_user"
+#: 트랙 Q9 -- 루프가 질문을 커밋했다는 원장 이벤트. 워커는 이것을 보면 이어 달리지 않는다.
+QUESTION_ASKED = "question.asked"
+
+
+class TaskWaitingUser(RuntimeError):
+    """The task is `waiting_user` -- no worker may advance it until its question is
+    answered or expires (track Q9). Raised like `TaskPaused`, not `None`."""
+
+
+def question_asked_payload(ask: Any, reply_channel_type: str) -> dict[str, Any]:
+    """`question.asked` 의 payload -- 메모리 저장소와 Postgres 저장소가 같이 쓴다.
+
+    `CodingEvent` 는 FE 로 간다. 채널 id 와 세션 키는 싣지 않고 채널 **종류**만 싣는다(설계 §9.2).
+    """
+    prompts = [
+        str(item.get("prompt") or "") if isinstance(item, Mapping) else str(item)
+        for item in ask.questions
+    ]
+    return {
+        "ask_id": ask.ask_id,
+        "questions": prompts,
+        "expires_at": ask.expires_at.isoformat(),
+        "reply_channel_type": reply_channel_type,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class AskRequestCommit:
+    """One transaction (track Q9): the pending ask, a checkpoint whose head is the
+    `ask_user.v1` call, `question.asked`, `running -> waiting_user`, the status event.
+    The run stays `running` -- like `waiting_approval`."""
+
+    ask: Any
+    checkpoint: Any
+    events: tuple[CodingEvent, ...]
 
 
 @dataclass(frozen=True, slots=True)

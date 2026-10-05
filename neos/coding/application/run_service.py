@@ -13,6 +13,7 @@ from neos.coding.domain.durability import (
     SteeringApplication,
     TaskPaused,
     TaskResumeCommit,
+    TaskWaitingUser,
     ToolExecutionDisposition,
     is_pause_event,
 )
@@ -260,6 +261,11 @@ class CodingRunService:
             # resumes it. Not `None`: that means "completed" to the runner.
             await self._release_lease(lease)
             raise TaskPaused(task_id)
+        if task is not None and task.status is CodingTaskStatus.WAITING_USER:
+            # Q9 -- like a paused task: the run is still `running`, so a lease can be
+            # had, but nothing may move until the question is answered or expires.
+            await self._release_lease(lease)
+            raise TaskWaitingUser(task_id)
         if task is not None and task.status is CodingTaskStatus.CANCELLED:
             committed = await self._cancel_active_run(lease, now)
             await self._release_lease(lease)

@@ -30,12 +30,23 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-#: 마이그레이션 085 의 CHECK 와 같아야 한다.
+#: 마이그레이션 085 의 CHECK 와 같아야 한다(kind 는 095 가 넓혔다).
 NOTIFY_CHANNEL_TYPES = frozenset({"slack", "discord", "telegram"})
 KIND_BUDGET_WARNING = "budget_warning"
 KIND_TASK_PAUSED = "task_paused"
 KIND_QUESTION_CHANGED = "question_changed"
-NOTICE_KINDS = frozenset({KIND_BUDGET_WARNING, KIND_TASK_PAUSED, KIND_QUESTION_CHANGED})
+#: 트랙 Q9 -- 에이전트가 소유자에게 묻는다(Q9b) · 답 없이 질문이 만료됐다(Q9d). 095 가 CHECK 를 넓혔다.
+KIND_QUESTION_ASKED = "question_asked"
+KIND_ASK_EXPIRED = "ask_expired"
+NOTICE_KINDS = frozenset(
+    {
+        KIND_BUDGET_WARNING,
+        KIND_TASK_PAUSED,
+        KIND_QUESTION_CHANGED,
+        KIND_QUESTION_ASKED,
+        KIND_ASK_EXPIRED,
+    }
+)
 
 _TRUNCATED = "\n…(잘림)"
 

@@ -26,10 +26,13 @@ from neos.coding.domain.durability import (
     PhaseStart,
     RunLifecycleCommit,
     PAUSED_STATUS,
+    WAITING_USER_STATUS,
+    question_asked_payload,
     StaleExecutionLease,
     SteeringApplication,
     TaskPauseCommit,
     TaskResumeCommit,
+    AskRequestCommit,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -247,6 +250,11 @@ class PostgresCodingRunRepository:
                     ),
                     {"task_id": task_id, "now": now},
                 )
+                # 트랙 Q9 (설계 §8.1) -- 대기 질문을 같은 트랜잭션에서 닫는다. 남겨 두면 그 행이
+                # "에이전트당 대기 하나" 인덱스를 쥐고 다음 질문을 전부 `ask_pending` 으로 만든다.
+                from neos.standing.asks import cancel_for_task_in_session
+
+                await cancel_for_task_in_session(session, task_id)
 
     async def pause_task(
         self,
@@ -1155,6 +1163,147 @@ class PostgresCodingRunRepository:
             checkpoint=checkpoint,
             events=(requested_event, status_event),
             created=True,
+        )
+
+    async def request_user_answer(
+        self,
+        *,
+        lease: ExecutionLease,
+        tool_call: ToolCallCompleted,
+        validated: ValidatedToolCall,
+        loop_state: Mapping[str, Any],
+        workspace_revision: str,
+        agent_id: str,
+        reply_session_id: str | None,
+        reply_channel_type: str,
+        asked_at: datetime,
+        expires_at: datetime,
+    ) -> AskRequestCommit | None:
+        """Track Q9: an agent's autonomous task asks its owner and waits.
+
+        One transaction, shaped like `request_tool_approval` (the ask is made in
+        the middle of a tool step, so it writes its own checkpoint): the pending
+        ask, a checkpoint whose head is this `ask_user.v1` call, `question.asked`,
+        `running -> waiting_user` and `task.status.changed`. The run stays
+        `running`. `None` when the agent already has a waiting question (the
+        partial unique index of migration 095) -- nothing else is written then.
+        The SQL of the ask row lives in `neos.standing.asks`.
+        """
+        from neos.standing.asks import open_in_session
+
+        if expires_at <= asked_at:
+            raise ValueError("ask expiry must follow the ask")
+        async with await self._session_factory() as session:
+            async with session.begin():
+                await self._validate_lease_in_session(session, lease, now=asked_at)
+                locked = await session.execute(
+                    text(
+                        """
+                        SELECT task.task_id
+                        FROM coding_tasks task
+                        JOIN coding_runs run ON run.task_id = task.task_id
+                        WHERE task.task_id = :task_id
+                          AND task.deleted_at IS NULL
+                          AND task.status = 'running'
+                          AND task.agent_id = :agent_id
+                          AND run.run_id = :run_id
+                          AND run.status = 'running'
+                        FOR UPDATE OF task, run
+                        """
+                    ),
+                    {
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "agent_id": agent_id,
+                    },
+                )
+                if locked.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                ask = await open_in_session(
+                    session,
+                    agent_id=agent_id,
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    questions=list(validated.input.get("questions") or ()),
+                    reply_session_id=reply_session_id,
+                    asked_at=asked_at,
+                    expires_at=expires_at,
+                )
+                if ask is None:
+                    return None
+                seq = await self._allocate_sequence_in_session(
+                    session, task_id=lease.task_id, now=asked_at
+                )
+                checkpoint = CodingCheckpoint(
+                    checkpoint_id=f"cc_{uuid4().hex}",
+                    task_id=lease.task_id,
+                    run_id=lease.run_id,
+                    seq=seq,
+                    loop_state=dict(loop_state),
+                    workspace_revision=workspace_revision,
+                    created_at=asked_at,
+                )
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO coding_checkpoints
+                            (checkpoint_id, task_id, run_id, seq,
+                             loop_state_json, workspace_revision, created_at)
+                        VALUES
+                            (:checkpoint_id, :task_id, :run_id, :seq,
+                             CAST(:loop_state AS JSONB),
+                             :workspace_revision, :created_at)
+                        """
+                    ),
+                    {
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "task_id": lease.task_id,
+                        "run_id": lease.run_id,
+                        "seq": seq,
+                        "loop_state": json.dumps(dict(loop_state)),
+                        "workspace_revision": workspace_revision,
+                        "created_at": asked_at,
+                    },
+                )
+                updated = await session.execute(
+                    text(
+                        """
+                        UPDATE coding_tasks
+                        SET status = 'waiting_user', updated_at = :now,
+                            last_activity_at = :now
+                        WHERE task_id = :task_id AND status = 'running'
+                        RETURNING task_id
+                        """
+                    ),
+                    {"task_id": lease.task_id, "now": asked_at},
+                )
+                if updated.first() is None:
+                    raise StaleExecutionLease(lease.task_id)
+                asked_event = await self._insert_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    seq=seq,
+                    event_type="question.asked",
+                    payload=question_asked_payload(ask, reply_channel_type),
+                    now=asked_at,
+                    run_id=lease.run_id,
+                    tool_call_id=tool_call.tool_call_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+                status_event = await self._append_event_in_session(
+                    session,
+                    task_id=lease.task_id,
+                    event_type="task.status.changed",
+                    payload={"status": WAITING_USER_STATUS},
+                    now=asked_at,
+                    run_id=lease.run_id,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                )
+        if self._wake_outbox is not None:
+            self._wake_outbox()
+        return AskRequestCommit(
+            ask=ask, checkpoint=checkpoint, events=(asked_event, status_event)
         )
 
     async def get_tool_approval(
