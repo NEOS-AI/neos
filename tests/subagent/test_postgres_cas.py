@@ -31,6 +31,8 @@ pytestmark = pytest.mark.no_db
 
 _NOW = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
 _MIGRATION = Path("db/migrations/055_add_subagent_tables.sql")
+# 055 가 표를 만들고 091 이 `max_turns` 제약을 티켓 상한에 맞춘다(D114).
+_MIGRATIONS = (_MIGRATION, _MIGRATION.with_name("091_widen_subagent_max_turns.sql"))
 
 
 def _write(**overrides) -> CheckpointWrite:
@@ -352,9 +354,10 @@ async def live_postgres():
 
     engine = create_async_engine(url)
     async with engine.begin() as connection:
-        for statement in _MIGRATION.read_text().split(";"):
-            if statement.strip():
-                await connection.exec_driver_sql(statement)
+        for migration in _MIGRATIONS:
+            for statement in migration.read_text().split(";"):
+                if statement.strip():
+                    await connection.exec_driver_sql(statement)
     maker = async_sessionmaker(engine, expire_on_commit=False)
 
     async def session_factory():
@@ -532,3 +535,30 @@ async def test_live_reserve_stale_expected_is_mismatch(live_postgres) -> None:
     loaded = await store.get(run_id)
     assert loaded.latest_seq == 1
     assert loaded.latest_checkpoint_id == checkpoint_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_live_store_accepts_the_ticket_turn_ceiling(live_postgres) -> None:
+    """DB 의 `max_turns` 제약이 코드의 티켓 상한과 같다(091, D114). 055 의 8 이 compose 의 12 턴 행을 거절했다."""
+    from neos.subagent.types import (
+        MAX_TICKET_TURNS,
+        ModelPin,
+        ParentBriefing,
+        ParentKind,
+        SubagentTicket,
+    )
+
+    store = PostgresSubagentStore(live_postgres)
+    ticket = SubagentTicket(
+        parent_kind=ParentKind.DEEP_ANALYSIS,
+        parent_id=f"da_{uuid4().hex[:8]}",
+        parent_run_id=f"da_{uuid4().hex[:8]}",
+        parent_tool_call_id="compose:root:0",
+        spec="explore",
+        briefing=ParentBriefing(goal="ceiling"),
+        model=ModelPin(provider="anthropic", model="claude-test"),
+        max_turns=MAX_TICKET_TURNS,
+    )
+    record = await store.resolve_or_create(ticket)
+    assert record.max_turns == MAX_TICKET_TURNS

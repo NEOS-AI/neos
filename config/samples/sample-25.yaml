@@ -1,0 +1,15 @@
+# 표본 #25 전용 오버레이 (DECISIONS D105 · J4).
+#
+#   NEOS_CONFIG_PATH=config/samples/sample-25.yaml .venv/bin/python scripts/deep_analysis_funnel_sample.py ...
+#
+# #25 = #24 에서 **compose 자식만** 켠 것이다. 비교 대상은 #24 하나다. BUDGET2 와 판정자(Jev)는
+# #24 와 같다 -- 테스트가 이 파일과 sample-24.yaml 의 차이가 `compose_child_enabled` 한 줄임을 고정한다.
+# research 워커는 옛 경로 그대로다(`code_research_enabled` 를 켜지 않는다 -- D105 §1).
+deep_analysis:
+  budget_aware_reduction: true
+  compose_child_enabled: true
+jev:
+  enabled: true
+  model: jev-1.13.0
+  judge_enabled: true
+  judge_min_confidence: 0.60

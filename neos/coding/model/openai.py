@@ -22,6 +22,7 @@ from neos.coding.model.base import (
 )
 from neos.coding.model.buffers import ToolArgumentBuffer, complete_tool_buffer
 from neos.coding.model.errors import CodingModelError
+from neos.coding.model.names import ToolNameCodec
 from neos.coding.model.stop import normalize_stop_reason
 
 _COMPLETION_TOKEN_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
@@ -48,9 +49,11 @@ class OpenAICodingModel:
         seen_usage = False
         finish_reason: str | None = None
         try:
+            # D106: 와이어 이름은 이 요청의 코덱으로 만들고 같은 코덱으로 되돌린다.
+            codec = ToolNameCodec.for_request(request)
             async with asyncio.timeout(request.limits.timeout_sec):
                 stream = await self._client.chat.completions.create(
-                    **_to_openai_request(request)
+                    **_to_openai_request(request, codec)
                 )
                 async for raw in stream:
                     usage = getattr(raw, "usage", None)
@@ -79,7 +82,7 @@ class OpenAICodingModel:
                     if text:
                         yield TextDelta(str(text))
                     for call in getattr(delta, "tool_calls", None) or ():
-                        async for event in self._consume_tool_delta(buffers, call):
+                        async for event in self._consume_tool_delta(buffers, call, codec):
                             yield event
         except CodingModelError:
             raise
@@ -122,10 +125,13 @@ class OpenAICodingModel:
         self,
         buffers: dict[int, ToolArgumentBuffer],
         call: object,
+        codec: ToolNameCodec,
     ) -> AsyncIterator[ModelEvent]:
         index = int(getattr(call, "index", 0) or 0)
         function = getattr(call, "function", None)
         name = str(getattr(function, "name", "") or "")
+        if name:
+            name = codec.original(name)
         call_id = str(getattr(call, "id", "") or "")
         buffer = buffers.get(index)
         if buffer is None:
@@ -159,12 +165,16 @@ def _uses_max_completion_tokens(model: str) -> bool:
     return lowered.startswith(_COMPLETION_TOKEN_PREFIXES)
 
 
-def _to_openai_request(request: ModelRequest) -> dict[str, object]:
+def _to_openai_request(
+    request: ModelRequest, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
+    if codec is None:
+        codec = ToolNameCodec.for_request(request)
     messages: list[dict[str, object]] = [
         {"role": "system", "content": request.system}
     ]
     for message in request.messages:
-        messages.extend(_message_to_openai(message))
+        messages.extend(_message_to_openai(message, codec))
     payload: dict[str, object] = {
         "model": request.model,
         "messages": messages,
@@ -176,7 +186,7 @@ def _to_openai_request(request: ModelRequest) -> dict[str, object]:
             {
                 "type": "function",
                 "function": {
-                    "name": tool.name,
+                    "name": codec.wire(tool.name),
                     "description": tool.description,
                     "parameters": dict(tool.input_schema),
                 },
@@ -190,7 +200,9 @@ def _to_openai_request(request: ModelRequest) -> dict[str, object]:
     return payload
 
 
-def _message_to_openai(message: CanonicalMessage) -> list[dict[str, object]]:
+def _message_to_openai(
+    message: CanonicalMessage, codec: ToolNameCodec | None = None
+) -> list[dict[str, object]]:
     if message.role == "system":
         # Tool reveals have no text form here: this provider has no
         # mid-conversation tool changes, so its array was never made
@@ -239,7 +251,7 @@ def _message_to_openai(message: CanonicalMessage) -> list[dict[str, object]]:
                 "id": item.tool_call_id,
                 "type": "function",
                 "function": {
-                    "name": item.name,
+                    "name": codec.wire(item.name) if codec is not None else item.name,
                     "arguments": json.dumps(
                         dict(item.input), separators=(",", ":")
                     ),

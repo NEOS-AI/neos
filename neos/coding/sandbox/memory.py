@@ -257,7 +257,10 @@ class MemorySandboxProvider:
         clock: Callable[[], datetime] | None = None,
         idle_timeout: timedelta | None = None,
     ) -> None:
-        self._root = root
+        # 절대경로로 고정한다 (D106). 설정의 기본값은 상대경로(`.neos/sandboxes`)이고,
+        # `resolve_workspace_path` 는 절대경로를 돌려준다 -- 둘이 섞이면 `list_tree` 의
+        # `relative_to` 가 ValueError 로 죽었다(표본 #25 의 compose 자식이 첫 `list_tree` 에서 맞았다).
+        self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         self._allowed_env_names = allowed_env_names
         self._process_runner = process_runner or BoundedProcessRunner()

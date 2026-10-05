@@ -841,7 +841,7 @@ async def test_with_budget2_off_a_starved_tier_still_reaches_the_model(budget2_o
 
 
 def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monkeypatch):
-    """오버레이가 한 줄이어야 #23 이 "BUDGET2 이전 코드"를 잰다 -- D98."""
+    """오버레이가 BUDGET2 끄기(D98)와 Jev 판정자(D99) 말고는 아무것도 바꾸지 않는다."""
     from pathlib import Path
 
     import yaml
@@ -850,9 +850,124 @@ def test_the_sample_23_overlay_turns_budget2_off_and_nothing_else(tmp_path, monk
 
     overlay = Path("config/samples/sample-23.yaml")
     assert yaml.safe_load(overlay.read_text(encoding="utf-8")) == {
-        "deep_analysis": {"budget_aware_reduction": False}
+        "deep_analysis": {"budget_aware_reduction": False},
+        "jev": {
+            "enabled": True,
+            "model": "jev-1.13.0",
+            "judge_enabled": True,
+            "judge_min_confidence": 0.60,
+        },
     }
     monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
     config = loader.load_app_config(config_path=str(overlay))
     assert config.deep_analysis.budget_aware_reduction is False
+    assert config.jev.judge_enabled is True
+    # 표본 #23 은 도구 위험 게이트·감시자를 DA 에 켜지 않는다(D98 §7 그대로).
+    assert config.jev.tool_risk_gate_enabled is False
+    assert config.jev.monitor.shadow_enabled is False
+
+
+def test_sample_24_differs_from_sample_23_by_budget2_alone(tmp_path, monkeypatch):
+    """#24 의 비교 대상은 #23 하나다 -- 다른 것은 BUDGET2 한 줄, 판정자는 같다(D101)."""
+    from pathlib import Path
+
+    import yaml
+
+    from neos.config import loader
+
+    s23 = yaml.safe_load(Path("config/samples/sample-23.yaml").read_text(encoding="utf-8"))
+    s24 = yaml.safe_load(Path("config/samples/sample-24.yaml").read_text(encoding="utf-8"))
+    assert s24["jev"] == s23["jev"]
+    assert s23["deep_analysis"] == {"budget_aware_reduction": False}
+    assert s24["deep_analysis"] == {"budget_aware_reduction": True}
+    assert set(s24) == set(s23) == {"deep_analysis", "jev"}
+
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
+    config = loader.load_app_config(config_path="config/samples/sample-24.yaml")
+    assert config.deep_analysis.budget_aware_reduction is True
+    assert config.jev.judge_enabled is True
+
+
+def test_sample_25_differs_from_sample_24_by_the_compose_child_alone(tmp_path, monkeypatch):
+    """#25 의 비교 대상은 #24 하나다 -- 다른 것은 compose 자식 한 줄(D105)."""
+    from pathlib import Path
+
+    import yaml
+
+    from neos.config import loader
+
+    s24 = yaml.safe_load(Path("config/samples/sample-24.yaml").read_text(encoding="utf-8"))
+    s25 = yaml.safe_load(Path("config/samples/sample-25.yaml").read_text(encoding="utf-8"))
+    assert s25["jev"] == s24["jev"]
+    assert s25["deep_analysis"] == {**s24["deep_analysis"], "compose_child_enabled": True}
+    assert set(s25) == set(s24)
+
+    monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
+    config = loader.load_app_config(config_path="config/samples/sample-25.yaml")
+    assert config.deep_analysis.compose_child_enabled is True
+    assert config.deep_analysis.code_research_enabled is False  # research 워커는 옛 경로
+
+
+def test_sample_26_is_sample_25_again():
+    """#25 는 배선 결함으로 무효였다(D106). #26 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s25 = yaml.safe_load(Path("config/samples/sample-25.yaml").read_text(encoding="utf-8"))
+    s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
+    assert s26 == s25
+
+
+def test_sample_27_is_sample_26_again():
+    """#26 은 체크포인트 가림 깊이와 API 한도로 무효였다(D107). #27 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s26 = yaml.safe_load(Path("config/samples/sample-26.yaml").read_text(encoding="utf-8"))
+    s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
+    assert s27 == s26
+
+
+def test_sample_28_is_sample_27_again():
+    """#27 은 재시도가 끝난 첫 compose 자식을 받아 무효였다(D109). #28 은 **같은 설정**을 고친 코드 위에서 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s27 = yaml.safe_load(Path("config/samples/sample-27.yaml").read_text(encoding="utf-8"))
+    s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
+    assert s28 == s27
+
+
+def test_sample_29_is_sample_28_again():
+    """#28 은 크레딧 잔액 소진으로 무효였다(D111). #29 는 **같은 설정**으로 다시 돈다."""
+    from pathlib import Path
+
+    import yaml
+
+    s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
+    s29 = yaml.safe_load(Path("config/samples/sample-29.yaml").read_text(encoding="utf-8"))
+    assert s29 == s28
+
+
+def test_sample_30_is_sample_29_with_the_compose_turns_named():
+    """#30 = #29 + D114. 설정에서 보이는 차이는 `compose_max_turns: 12` 한 줄이다(나머지 둘은 코드다)."""
+    from pathlib import Path
+
+    import yaml
+
+    s29 = yaml.safe_load(Path("config/samples/sample-29.yaml").read_text(encoding="utf-8"))
+    s30 = yaml.safe_load(Path("config/samples/sample-30.yaml").read_text(encoding="utf-8"))
+    assert s30["deep_analysis"] == {**s29["deep_analysis"], "compose_max_turns": 12}
+    assert {k: v for k, v in s30.items() if k != "deep_analysis"} == {k: v for k, v in s29.items() if k != "deep_analysis"}

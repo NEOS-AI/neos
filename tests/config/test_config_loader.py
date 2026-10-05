@@ -26,6 +26,8 @@ def isolate_repo_dotenv(tmp_path, monkeypatch):
     # 거기에 키가 있는지는 **앞서 돈 테스트**가 정했다 -- 이 파일만 돌리면 10건이
     # 깨지고 전체 스위트에서는 통과했다. CI 가 주는 것과 같은 자리표시자를 준다.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
 
 
 def write_yaml(path: Path, content: str) -> Path:

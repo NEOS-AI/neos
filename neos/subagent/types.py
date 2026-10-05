@@ -73,6 +73,10 @@ class ModelPin:
             raise ValueError("model pin required")
 
 
+# 티켓 하나가 가질 수 있는 턴의 상한. 8 이었다 -- compose 자식의 재시도가 8 턴에서 끊겨
+# (`turns_exhausted`, D113) 12 로 올렸다(D114). 기본값(`max_turns`)은 그대로라 다른 스펙은 바뀌지 않는다.
+MAX_TICKET_TURNS = 12
+
 @dataclass(frozen=True, slots=True)
 class SubagentTicket:
     """Parent-issued work item. No channel/peer keys by construction."""
@@ -97,8 +101,8 @@ class SubagentTicket:
     def __post_init__(self) -> None:
         if self.lineage_kind is not LineageKind.DELEGATE:
             raise ValueError("P1 lineage_kind must be delegate")
-        if not 1 <= self.max_turns <= 8:
-            raise ValueError("max_turns must be 1–8")
+        if not 1 <= self.max_turns <= MAX_TICKET_TURNS:
+            raise ValueError(f"max_turns must be 1–{MAX_TICKET_TURNS}")
         if not 0 <= self.spawn_depth <= 1:
             raise ValueError("spawn_depth must be 0 or 1")
         # Identity fence is structural: these names are not fields.

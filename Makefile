@@ -17,7 +17,7 @@ PGUSER      ?= postgres
 PGDATABASE  ?= neos
 export PGPASSWORD ?= password
 
-.PHONY: help image-build image-push db-up db-down db-bootstrap db-reset db-check db-verify db-shell release dev-jev-shadow jev-shadow-report
+.PHONY: help image-build image-push db-up db-down db-bootstrap db-reset db-check db-verify db-shell release dev-jev-shadow dev-jev-enforce jev-shadow-report
 
 help:
 	@grep -E '^[a-z][a-zA-Z0-9_-]*:.*?## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | expand -t22
@@ -88,6 +88,11 @@ DEV_PORT          ?= 8518
 
 dev-jev-shadow: ## 개발 서버를 L2 섀도 오버레이로 띄운다 (게이트는 꺼진 채)
 	NEOS_CONFIG_PATH=$(JEV_SHADOW_CONFIG) uvicorn neos.main:app --reload --host 0.0.0.0 --port $(DEV_PORT)
+
+JEV_ENFORCE_CONFIG ?= config/samples/dev-jev-enforce.yaml
+
+dev-jev-enforce: ## 개발 서버를 Jev 집행 오버레이로 띄운다 (L3 게이트·Q5b 멈춤·L6 판정자, 잠정 경계)
+	NEOS_CONFIG_PATH=$(JEV_ENFORCE_CONFIG) uvicorn neos.main:app --reload --host 0.0.0.0 --port $(DEV_PORT)
 
 jev-shadow-report: ## 섀도 판독 (SINCE=YYYY-MM-DD 필수, TRY=0.2:0.9 후보 경계)
 	@test -n "$(SINCE)" || { echo "SINCE=<섀도를 켠 날> 을 주어야 한다"; exit 2; }

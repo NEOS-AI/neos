@@ -32,6 +32,13 @@ def strip_channel_keys(value: Any) -> Any:
     return value
 
 
+#: 체크포인트의 깊이 상한(D107). 자식의 다음 턴은 이 상태에서 다시 지어지므로, 여기서 잘린 값은
+#: 모델에게 `<redacted>` 로 보인다. 도구 결과(`messages[i].content.entries[j].path`)가 7 단계다.
+CHECKPOINT_REDACT_DEPTH = 32
+
+
 def persist_payload(value: Any) -> Any:
     # Child fold/steer read this back; do not clip last_assistant_text.
-    return redact_sensitive(strip_channel_keys(value), clip=False)
+    return redact_sensitive(
+        strip_channel_keys(value), clip=False, max_depth=CHECKPOINT_REDACT_DEPTH
+    )

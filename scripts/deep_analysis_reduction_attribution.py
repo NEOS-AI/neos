@@ -82,7 +82,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from sqlalchemy import func, select
 
 from neos.database.connection import get_session_ctx
-from neos.database.deep_analysis_models import DAClaim, DAEvent
+from neos.database.deep_analysis_models import DAClaim, DAEvent, DAQuestion
 
 # --------------------------------------------------------------------------
 # 사전 등록된 상수 (D93). 표본을 본 뒤에 움직이지 말 것.
@@ -272,6 +272,30 @@ def parse_degraded(payload: dict) -> Degraded:
     )
 
 
+def without_root_rescue(item, *, is_root: bool):
+    """D103: 루트 노드에서 잃은 **자식 출처** 마커는 손실이 아니다.
+
+    `Synthesizer.assemble` 은 루트 요약에 더해 직계 자식의 답을 그대로 조립 프롬프트에
+    싣는다. 루트 요약은 그 자식 답들을 리듀스한 것이므로, 루트에서 잘리거나(LLM 이) 뺀
+    마커는 자식 블록으로 되돌아온다. 원 규칙은 그것을 손실로 세어 버킷 합이 실제 격차를
+    넘었고(#23 의 W-2 음수, D102) 이 함수가 그 구제분을 뺀다. 루트 **자신의** 클레임
+    (`own_claims_available`)은 자식 블록에 없으므로 그대로 둔다.
+    """
+    if not is_root:
+        return item
+    if isinstance(item, Summary):
+        return Summary(prompt=item.answer, answer=item.answer, instrumented=item.instrumented)
+    return Degraded(
+        reason=item.reason,
+        source=item.source,
+        own_available=item.own_available,
+        before=item.after,
+        after=item.after,
+        truncated=item.truncated,
+        instrumented=item.instrumented,
+    )
+
+
 def attribute(
     summaries: list[Summary], degradations: list[Degraded]
 ) -> Attribution:
@@ -450,6 +474,20 @@ def budget2_problems(
     ]
 
 
+def claim_judge_problems(
+    backends: dict[str, str | None], expected: str
+) -> list[str]:
+    """런별 매니페스트의 `claim_judge.backend` (D99·D101). 없으면 기대와 다른 것으로 센다.
+
+    #23·#24 는 같은 판정자여야 비교가 성립한다 -- BUDGET2 플래그와 같은 이중 검사다.
+    """
+    return [
+        f"{prefix}: 매니페스트의 claim_judge.backend={value} (기대 {expected})"
+        for prefix, value in sorted(backends.items())
+        if value != expected
+    ]
+
+
 def verify_d92(counts: GateCounts) -> list[str]:
     problems: list[str] = []
     for field_name in ("summaries", "degradations", "input_bound", "truncated"):
@@ -462,7 +500,7 @@ def verify_d92(counts: GateCounts) -> list[str]:
     return problems
 
 
-async def _load_run(session, prefix: str) -> RunAttribution:
+async def _load_run(session, prefix: str, *, exclude_root_rescue: bool = False) -> RunAttribution:
     verified = await session.scalar(
         select(func.count())
         .select_from(DAClaim)
@@ -473,7 +511,7 @@ async def _load_run(session, prefix: str) -> RunAttribution:
     degradations: list[Degraded] = []
     rows = (
         await session.execute(
-            select(DAEvent.kind, DAEvent.payload)
+            select(DAEvent.kind, DAEvent.payload, DAEvent.qid)
             .where(
                 DAEvent.run_id.like(f"{prefix}%"),
                 DAEvent.kind.in_(("node_summary", "node_reduction_degraded")),
@@ -481,12 +519,26 @@ async def _load_run(session, prefix: str) -> RunAttribution:
             .order_by(DAEvent.seq)
         )
     ).all()
-    for kind, raw in rows:
+    root_ids: set[str] = set()
+    if exclude_root_rescue:
+        root_ids = {
+            str(qid)
+            for qid in (
+                await session.scalars(
+                    select(DAQuestion.id).where(
+                        DAQuestion.run_id.like(f"{prefix}%"),
+                        DAQuestion.parent_id.is_(None),
+                    )
+                )
+            ).all()
+        }
+    for kind, raw, qid in rows:
         payload = raw if isinstance(raw, dict) else json.loads(raw)
+        is_root = str(qid) in root_ids
         if kind == "node_summary":
-            summaries.append(parse_summary(payload))
+            summaries.append(without_root_rescue(parse_summary(payload), is_root=is_root))
         else:
-            degradations.append(parse_degraded(payload))
+            degradations.append(without_root_rescue(parse_degraded(payload), is_root=is_root))
 
     return RunAttribution(
         prefix=prefix,
@@ -519,6 +571,20 @@ async def _independent_counts(session, prefixes: list[str]) -> GateCounts:
         )
     ).one()
     return GateCounts(*(int(value or 0) for value in row))
+
+
+async def _manifest_configs(session, prefixes: list[str]) -> dict[str, dict]:
+    configs: dict[str, dict] = {}
+    for prefix in prefixes:
+        raw = await session.scalar(
+            select(DAEvent.payload)
+            .where(DAEvent.run_id.like(f"{prefix}%"), DAEvent.kind == "run_manifest")
+            .order_by(DAEvent.seq)
+            .limit(1)
+        )
+        payload = {} if raw is None else (raw if isinstance(raw, dict) else json.loads(raw))
+        configs[prefix] = payload.get("config", {})
+    return configs
 
 
 async def _budget2_flags(session, prefixes: list[str]) -> dict[str, bool | None]:
@@ -610,21 +676,28 @@ async def _run(
     extra_runs: list[str],
     verify: bool,
     expect_budget2: bool | None = None,
+    expect_claim_judge: str | None = None,
+    exclude_root_rescue: bool = False,
 ) -> int:
     by_sample: dict[str, list[RunAttribution]] = {}
     independent: GateCounts | None = None
     flags: dict[str, bool | None] = {}
+    judges: dict[str, str | None] = {}
     async with get_session_ctx() as session:
         if extra_runs:
             independent = await _independent_counts(session, extra_runs)
             flags = await _budget2_flags(session, extra_runs)
+            judges = {
+                prefix: (config.get("claim_judge") or {}).get("backend")
+                for prefix, config in (await _manifest_configs(session, extra_runs)).items()
+            }
         for sample in samples:
             by_sample[sample] = [
-                await _load_run(session, prefix) for prefix in SAMPLES[sample]
+                await _load_run(session, prefix, exclude_root_rescue=exclude_root_rescue) for prefix in SAMPLES[sample]
             ]
         if extra_runs:
             by_sample["(직접 지정)"] = [
-                await _load_run(session, prefix) for prefix in extra_runs
+                await _load_run(session, prefix, exclude_root_rescue=exclude_root_rescue) for prefix in extra_runs
             ]
 
     all_runs = [run for runs in by_sample.values() for run in runs]
@@ -640,6 +713,8 @@ async def _run(
         problems = cross_check(parsed, independent)
         if expect_budget2 is not None:
             problems += budget2_problems(flags, expect_budget2)
+        if expect_claim_judge is not None:
+            problems += claim_judge_problems(judges, expect_claim_judge)
         if problems:
             print("🔴 독립 집계 게이트 실패 — 판정을 내지 않는다:")
             for problem in problems:
@@ -706,6 +781,16 @@ def main() -> int:
         help="--run 의 모든 런 매니페스트가 이 BUDGET2 상태를 적었는지 본다. #23 은 off (D-14).",
     )
     parser.add_argument(
+        "--expect-claim-judge",
+        choices=["jev", "llm"],
+        help="--run 의 모든 런 매니페스트가 이 판정자를 적었는지 본다. #23·#24 는 jev (D99·D101).",
+    )
+    parser.add_argument(
+        "--exclude-root-rescue",
+        action="store_true",
+        help="D103 수정 규칙: 루트 노드에서 잃은 자식 출처 마커(직계 자식 블록이 구제한다)를 버킷에서 뺀다.",
+    )
+    parser.add_argument(
         "--no-verify-d92",
         action="store_true",
         help="D92 재현 게이트를 끈다. SAMPLES 를 확장할 때만 쓸 것.",
@@ -718,6 +803,8 @@ def main() -> int:
             args.run,
             verify=not args.no_verify_d92,
             expect_budget2=None if args.expect_budget2 is None else args.expect_budget2 == "on",
+            expect_claim_judge=args.expect_claim_judge,
+            exclude_root_rescue=args.exclude_root_rescue,
         )
     )
 

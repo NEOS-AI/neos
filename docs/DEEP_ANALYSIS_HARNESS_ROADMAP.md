@@ -1,6 +1,8 @@
 # 심층분석 하네스 통합 로드맵 — 코딩 루프로 조사하는 검증형 분석
 
 > **이 문서가 로드맵의 정본이다.** 앞으로의 계획·변경·판정은 여기에 적는다.
+> **착지한 작업의 경위는 [DEEP_ANALYSIS_HARNESS_DONE.md](DEEP_ANALYSIS_HARNESS_DONE.md)에 있다** — 여기는 남은 것과
+> 지켜야 할 것만 든다.
 >
 > **수치와 판정의 원본은 여전히 이 문서가 아니다:** 수치는 `deep_analysis_events` 테이블과
 > `artifacts/deep-analysis-funnel/<ts>/`, 판정은 `neos/workflow/deep_analysis/DECISIONS.md`
@@ -10,53 +12,50 @@
 > **샌드박스에서 코드를 짜고 돌리는 에이전트 루프**로 간다(§2). 그리고 프롬프트·런타임 전략을
 > Fable 5.1 기준으로 다시 세웠다(§5·§6).
 >
-> **직전 판본(2026-09-11 압축본, 518줄)** 은 git에 있다. 그 판본의 절 번호는 이 문서와 다르다:
+> 지난 판본은 git 에 있다. 절 번호는 판본마다 다르다:
 >
 > ```bash
-> git show 31b37111:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md > /tmp/roadmap_0911.md   # 압축본
 > git show c071585a:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md > /tmp/roadmap_full.md   # 3,199줄 전임본
+> git show 31b37111:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md > /tmp/roadmap_0911.md   # 2026-09-11 압축본
+> git show 0fbfdbe4:docs/DEEP_ANALYSIS_HARNESS_ROADMAP.md > /tmp/roadmap_1002.md   # 2026-10-03 압축 직전(1,358줄, 취소선 이력 전부)
 > ```
 >
-> 이번 개편에서 **버린 결론은 없다.** 인용 생산 사슬(§7)·표본 경계(§8)·타협하지 않는 것(§9)·
-> 작업 규칙(§10)은 그대로 옮겼다. 트랙 C·D·F·G·H의 서술은 줄였고, 줄인 상세는 압축본에 있다.
+> 개편과 압축에서 **버린 결론은 없다.** 2026-10-03 압축은 착지 경위를 DONE 문서로 옮겼을 뿐이다 —
+> 절 번호(§1~§15, §12.1~§12.12)는 코드 주석이 가리키므로 **바꾸지 않았다.**
 
 ### 이 문서를 갱신하는 규칙
 
 - **종결한 항목은 §11 인벤토리에서 지운다.** ✅로 남기지 않는다 — 유령 백로그가 남은 일을 과대평가하게 만든다
+- **착지한 항목의 경위는 DONE 문서에 적는다.** 여기에는 "✅ 착지(날짜) — DONE §n" 한 줄만 남긴다. 착지가 만든
+  **지켜야 할 규칙**(되돌리지 말 것·받아들인 위험)은 여기에 남긴다
 - **새 표본 경계가 생기면 §8에 먼저 적는다.** 사전 등록보다 먼저다
-- **반증된 서술은 지우지 말고 취소선으로 남긴다** — 근거 없이 사라진 결론은 되살아난다
+- **반증된 서술은 지우지 말고 취소선으로 남긴다** — 근거 없이 사라진 결론은 되살아난다. 착지로 해소된 취소선은
+  DONE 문서로 옮겨도 된다
 - **절대 수치는 적지 않는다.** 적어야 하면 측정 날짜를 함께 적는다
-- **§4·§5·§12는 아직 설계다.** 코드가 착지하면 그 줄을 "착지(커밋)"로 바꾸고, 설계와 코드가 어긋나면 **코드가 이긴다**
+- **§4·§5·§12의 설계와 코드가 어긋나면 코드가 이긴다**
 
-**기준 시점: 2026-09-23** (코딩 스트림 짝 규칙 · §12.9. 트랙 L 은 2026-09-22, 그 앞의 서술은 2026-09-15 기준이다)
-· 🆕 **2026-09-28 코드 대조**(`403aeb77`): §1 J 행 · §4.5 J1 · §10.1 · §10.3 · §11 · §12.3 · §13 E·E′ · §15 를 고쳤다.
-근거와 검증 로그는 [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) §9.2
-· 🆕 **2026-09-28 낡은 서술 정리**: `TAVILY_API_KEY` 가 채워졌다(§1 A · §7 · §11). 이미 닫힌 K1b·K4b·D-L2·D-L3·
-고아 볼륨을 "남은 것"으로 적던 줄(§3.3 · §4.5 · §5.2 · §5.5 · §8 · §11 · §12 머리 · §12.5 · §12.7 · §12.8 · §12.11)과
-§13 B 의 역할 매핑을 코드에 맞췄다
-· 🆕 **2026-09-30 외부 비교**: OpenAI dots(상시 에이전트)를 코드와 대조했다 — §1 Q · §11 · §13 Q · §15.
-~~**트랙 Q 는 제안이다**~~ → **같은 날 Q0 결정: 트랙 Q 를 세운다, 범위는 dots 전체**(§11 결정됨). 정본은
-[OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md)
+**기준 시점: 2026-10-03** (압축 + 같은 날 사람의 결정 묶음 — §11 결정 색인 2026-10-03 행. 압축. 내용 기준은 트랙 Q 2026-10-02 · L 2026-09-24 · J·K 2026-09-28 코드 대조(`403aeb77`) ·
+그 앞은 2026-09-15). 트랙 Q 의 정본은 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md)
 
 ---
 
-## 1. 한눈에 — 트랙 ~~열두~~ 열세 개
+## 1. 한눈에 — 트랙 열세 개
 
 | 트랙 | 상태 | 남은 것 |
 |---|---|---|
-| **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · 코드 인벤토리 비었다 | 🔴 **라이브 표본 #23** — ~~`ANTHROPIC_WORKSPACE_ID` 값 하나에 막혀 있다~~ **키 선행은 사라졌다**(2026-09-23 실호출, §7). ~~남은 선행은 D93 사전 등록 다시 쓰기뿐이다~~ **D98 로 다시 썼다**(2026-09-24). ~~남은 선행은 **`TAVILY_API_KEY` 하나**다~~ **`.env` 에 채워졌다**(2026-09-28 확인). **코드·키 쪽 선행은 없다 — 남은 것은 사람이 §7 실행 순서대로 한 번 돌리는 것이다.** 키가 실제로 동작하는지는 아직 보지 않았다 — preflight 가 실호출로 확인한다(D94) |
-| **B. 역할 기반 모델 라우팅** | ✅ 안정 | 유지보수. **effort 축이 들어오면 여기에 붙는다**(K5) |
-| **C. 프론트엔드** | ✅ FE1~FE17 종결 · 🆕 **코딩 스트림 짝 규칙**(2026-09-23, §12.9) · 🆕 **챗 SSE 짝 규칙 · DA 재개 버튼 · 그래프 서브에이전트 표시**(2026-09-27) | 새 kind 는 이제 ~~**두**~~ **세** fixture 가 문다 — DA(`deep_analysis_event_kinds.json`) · 코딩(`coding_event_kinds.json`) · 챗 SSE(`chat_stream_event_types.json`, 2026-09-27). 챗 fixture 가 처음 드러낸 구멍: `response.reasoning.*` 가 훅에서 버려지고 있었다 |
+| **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · ✅ **#23·#24 돌았다(2026-10-03)** — BUDGET2 는 P-1~P-3 셋 다 맞았고(D104), **CITE1 의 원인 = 자기 클레임 침묵 폐기**(`children_join` 이 노드 자신의 verified 를 빼먹는다, D103 수정 규칙 · D104) | 처방 사전 등록 — 좁은 수정(`children_join` 에 자기 클레임) 과 J4 중 하나씩 · verified 119→82 감시(D104 §5) |
+| **B. 역할 기반 모델 라우팅** | ✅ 안정 | 유지보수. effort 축이 붙었다(K5) |
+| **C. 프론트엔드** | ✅ FE1~FE17 · 이벤트 짝 fixture 셋(DA · 코딩 · 챗 SSE, [DONE §6](DEEP_ANALYSIS_HARNESS_DONE.md)) | 새 kind 는 세 fixture 중 하나를 거친다(§13 C) |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2 · D4(전송만 SDK로) · D3b. **J가 D4의 수요처가 된다** |
-| **E. 코딩 에이전트** | 🟢 플랜 14개 완료 · development 프로파일 실제 루프 on | E-S2 배포 결정 · 잔여는 [PLAN_260913.md](PLAN_260913.md) A~H. managed provider **B2 게이트 미충족** |
+| **E. 코딩 에이전트** | 🟢 플랜 14개 완료 · development 프로파일 실제 루프 on · ✅ **E-S2 결정(2026-10-03): development 에서 켠다**, staging·production 은 B2 게이트 뒤(설정 검증이 Docker·managed 를 요구한다) | 잔여는 [PLAN_260913.md](PLAN_260913.md) A~H. managed provider **B2 게이트 미충족** |
 | **F. 개선 루프 서브에이전트화** | 🔴 닫힘 | 재개하려면 새 스펙 + 새 사전 등록 |
-| **G. 그래프 계약·검증** | 🟢 C3·C4 live(플래그 off) | 켜는 결정 · M-0 재측정(사전 등록 완료) |
-| **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료(꺼짐) | H2 · H4 · H5 |
+| **G. 그래프 계약·검증** | 🟢 C3·C4 live · ✅ **development 에서 켰다**(2026-10-03, `workflow.graph_design_enabled`) | M-0 재측정(사전 등록 완료) · staging·production 기본값은 그대로 off |
+| **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료 · ✅ **H3 development 에서 켰다**(2026-10-03, G 와 같은 플래그) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
-| **J. 코딩 루프 조사** 🆕 | ~~🟢 **J1·J2·J3 착지**(코드 대조 2026-09-23)~~ → ~~🟡 **J1 부분 착지 · J2·J3 착지**(코드 대조 2026-09-28)~~ → 🟢 **J1·J1.5·J2·J3 착지**(2026-09-28, J1.5 가 J1 의 빈 표면을 채웠다) — 도구 셋(`fetch.v1`·`submit.v1`·`check_claims.v1`) · 스펙 셋 · `evidence_cap_reached` · S9 플래그 off 테스트 · 계산 클레임 재실행 · 오프라인 섀도 · 이벤트 kind 여섯(DA fixture 에 있다). **전부 플래그 off**. ~~🔴 **조사 자식은 코드를 돌릴 수 없다**: 계약 §2 의 research 도구 열 개 중 포트가 내미는 것은 위 셋뿐이다(`research_tools.py` `definitions()`). `ChildStepper` 가 포트 ∩ 스펙만 보여 주므로 `execute.v1`·`read_file.v1`·`write_file.v1` 이 사라진다. 샌드박스는 열리지만 쓰이지 않는다. 스크립트를 원장 blob 으로 넣는 경로도 없어서 계산 클레임 재실행(J2)은 **합성 fixture 에서만 초록**이다~~ → ✅ **J1.5 로 닫혔다**(2026-09-28): 조사 자식이 게이트된 코딩 도구 다섯으로 스크립트를 돌리고, 그 스크립트가 원장에 들어가고, 그 계산이 **진짜 원장 위에서 verified 가 된다**(`test_code_research_e2e.py`, §4.5 J1.5 행) | ~~🆕 **J1.5**(선행: ~~child 게이트~~ 코딩 절반 ✅ · ~~GRADE1~~ ✅ — **선행이 비었다**) →~~ **J4**(#23 판정 뒤). ~~J1 절반~~은 낡은 서술이었다 — §11 인벤토리가 J3 착지를 적는 동안 이 줄은 J1 에 머물러 있었다. ~~⚠️ development 에는 읽기 전용 마운트도 profile 강제도 **없다**~~ → **Docker 경로에서 닫혔다**(2026-09-23, §12.11 ③). ⚠️ managed·memory provider 에는 아직 남아 있다(계약 §3.2) |
-| **K. Fable 5.1 적응** 🆕 | 🟢 **표본 없이 되는 K는 다 썼다**(K0·K1·K2·K7·K1c·K1d·K6·K4a·K2b, 2026-09-15~19) — 코딩 루프 · 자식 · DA 세 경로 + 거절 분기 + 상태 줄 + 도구 공개 | ~~키가 있어야 하는 것이 둘이다 — K1b·K4b~~ **둘 다 끝났다**(2026-09-24, §5.6 — K4b 는 착지, reasoning 토큰 0 결함도 같이 잡았다) · ~~K5④⑤~~ **K5④ DA 절반 착지**(2026-09-24, §5.2 R-05 — 호출부가 0개였다) · ~~K5④ 코딩 루프 절반~~ ✅(2026-09-28) · K5⑤ 벤치 · ~~K9~~ **K9 모드 신호·오버레이 착지**(2026-09-28, autonomous 에 P-01·P-02 — 남은 것은 P-02 의 interactive 투입) · K10·K11. **K3 착지(2026-09-22, 기본 off)** — 켜는 것은 A1·A2 숫자 뒤 |
-| **L. Jev 확률 판정 층** 🆕 | 🟢 **L0·L1·L2 완료**(2026-09-23, 전부 플래그 off). 핀 **`jev-1.13.0`** · 기준선 §12.7 · durable 루프 배선 · 실 API end-to-end | ~~**D-L2**~~ **쪼갰다** · ~~**D-L3**~~ **WAF 차단은 좁힌다**(2026-09-24, §12.12) · 🆕 **L2 섀도 켤 준비 완료**(오버레이 + 판독기, 2026-09-24 — 켜는 것은 사람) · 가격 하나 · ~~프론트 라벨~~ **투영 착지**(2026-09-23, §12.9) · 판정 문장·재접속 복원 착지(§12.10) · 그다음 L3~L7. **D-L1 닫혔다** ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · L6 은 **#23 판정 뒤** |
-| **Q. 상시 에이전트** 🆕 (2026-09-30) | 🟡 **방향 결정됨 · Q1·Q2 착지 · Q5 섀도 착지**(2026-09-30 — Q1·Q2 테스트 30 · 변이 8/8, Q5 테스트 40 · 변이 11/11) — Q0: 넣는다, 범위는 dots 전체(F1~F22). USER_ONLY 는 코드 고정·설정은 늘리기만 · `PAUSED`/`WAITING_USER` 는 감시자·묻고 기다리기가 쓴다 · 감시자 판정자는 Jev(섀도 먼저) · 에이전트는 사용자당 하나로 시작 · 상시 질문의 차이는 클레임 단위. 가드 부품은 이미 있다(`ToolRisk.READ_ONLY` · `ApprovalPolicyOutcome` · unattended 접기 · Jev), 능력 쪽이 비었다 | ~~**Q1** background 모드 · **Q2** USER_ONLY~~ ✅ · Q2 의 사용자 규칙 · ~~**Q5** 감시자~~ 🟢 섀도(`jev.monitor`, `make` 타깃 없음 — 켜려면 경계를 적는다) → Q5 경계 실측 → `PAUSED` 작성 → 상시 가동(Q3·Q4). **Q13** 에이전트 개체 📐 설계 완료 · 🟢 **Q13a 착지**([Q13 설계](Q13_STANDING_AGENT_DESIGN_260930.md), 2026-09-30 — 열린 질문 셋 다 닫힘: 명시적 생성 · paused 는 진행 중 태스크를 건드리지 않는다 · 이름은 길이 무제한·소유자 안 중복 금지). 🟢 **Q13b 착지**(API·플래그 `standing_agents.enabled`, 2026-09-30). 🟢 **Q13c 착지**(`coding_tasks.agent_id` · `open_agent_task` — 기본 background·interactive 거절·멈춘 에이전트는 못 연다 · `task.created` 의 `actor`, 2026-09-30 — 테스트 20 · 변이 11/11. 부르는 곳은 아직 없다). 🟢 **Q13d 착지**(활동 피드 `GET /standing-agents/{id}/activity` — 커서는 쓴 트랜잭션 id `xact_id` + `pg_snapshot_xmin` 가드로 늦은 커밋도 건너뛰지 않는다, 마이그레이션 072, 2026-09-30 — 테스트 25 · 변이 14/14). 🟢 **Q13e 착지**(메모 — `agent:{id}` 네임스페이스, `write_approval` 과 무관하게 **STAGED 로만** · GEPA 는 `agent:` 런을 거절(F18), 2026-09-30 — 테스트 17 · 변이 11/11). 🟢 **Q13f 착지**(자기소개 — 만들 때 background 태스크 하나, 성공한 최종 답이 STAGED 메모. 태스크는 메모를 쓰지 않고 `CodingRunService` 완료 훅이 옮긴다 · 마이그레이션 073, 2026-10-01 — 테스트 30 · 변이 22/22). **Q13 단계표 a~f 전부 착지.** 🟢 **Q4a 착지**(서명된 webhook → 에이전트 background 태스크 — 비밀은 마스터 키 파생 · 배달 id 도 서명 · 인증 실패는 한 모양의 401 · 마이그레이션 074) · 🟢 **Q10a 착지**(에이전트 × 월 봉투 — 지출은 최신 체크포인트 누적 비용의 합, 새 태스크는 막고 진행 중은 섀도 `budget.judged`) — 둘 다 플래그 off, 2026-10-01, [Q4·Q10 설계](Q4_Q10_TRIGGER_BUDGET_DESIGN_261001.md). 🟢 **Q2 사용자 규칙 착지**(allow/require/block — 사용자 allow 는 위험 등급 기본 승인만 바꾼다, 매 단계 새로 읽는다, 마이그레이션 075) · 🟢 **Q4b 채널 트리거 착지**(세 어댑터, 대화와 독립, 발신자는 소유자 매핑 + 허용 목록, 076) — 둘 다 플래그 off, 2026-10-01, [Q2·Q4b 설계](Q2_Q4B_RULES_CHANNEL_TRIGGERS_DESIGN_261001.md)(결정 D4~D11 은 위임받아 Claude 가 골랐다). 🟢 **Q6a 자격증명 브로커 착지**(2026-10-01, 플래그 `coding_model.secret_broker` off — `execute.v1` 의 env 값 `secret://<name>` 을 실행기가 실행 직전에 소유자 금고에서 풀고 결과를 값 자체로 가린다 · 비밀마다 묶인 env 이름 하나 · 사람 승인 또는 소유자 allow 만 넘는다 · 자식은 못 쓴다 · AES-GCM 봉인, 마이그레이션 077 · memory·Docker 만 싣고 sandboxd·managed 는 `secret_env_unsupported`, [Q6 설계](Q6_CREDENTIAL_BROKER_DESIGN_261001.md), 결정 S1~S9 는 위임받아 Claude 가 골랐다 — 테스트 44 · 변이 3/3). 🟢 **Q11a 착지**(2026-10-01, 플래그 off, [Q11 설계](Q11_MCP_CLIENT_DESIGN_261001.md)) — 옛 `*mcp*` 넷은 이름만 MCP, 신고만 하고 진짜는 `neos/coding/connectors/`(M1) · SDK 없이 최소 JSON-RPC(stdio·streamable HTTP — `mcp` SDK 는 sse-starlette 를 끌어와 phoenix 핀과 부딪친다, M3) · **위험을 선언해야 등록**(미선언은 READ_ONLY 가 아니라 없음 · `readOnlyHint` 무시, M4) · `mcp__<server>__<tool>`(M5) · 서버 자격증명은 Q6 비밀, `ValidatedToolCall.secret_refs` → `carries_secret_refs` 한 판정(M7) · 📌 비밀 푸는 호출은 배치·프리페치로 앞지르지 않는다(M13 — 그 경로엔 금고가 묶여 있지 않던 잠복 구멍) · 결과는 가린 뒤 자르고 untrusted(M9) · 자식 거절(M11) — 테스트 65 · 변이 16/16. 🟢 **Q14a 착지**(2026-10-01, 플래그 off · development 전용, [Q14 설계](Q14_AGENT_BROWSER_DESIGN_261001.md)) — 백엔드 호스트의 headless Chromium(W1, B2 미충족 — 렌더러 탈출은 호스트에 닿는다, 문서에 적었다) · Chromium 자신은 네트워크가 없고 모든 요청을 호스트가 web_fetch 판정 함수 그대로 + IP 고정 한 홉으로 대신 받는다(W2) · development 밖은 운영자 명시 동의 + 설정 검증(W3) · 도구 둘 COMMAND(`browser.v1` · `browser_fill_secret.v1` — Q2 규칙이 이름으로 맞추므로, W4) · 로그인은 Q6 판정 하나를 넓혀서만, 입력한 비밀은 다른 출처로 못 나간다(W7·W8) · 자식·DA 조사 경로에는 없다(W12, D6) — 테스트 68 · 변이 12/12. 🟢 **Q16a 착지**(2026-10-01, 플래그 off, [Q16 설계](Q16_DEVICE_BRIDGE_DESIGN_261001.md) · [위협 모델](Q16_DEVICE_BRIDGE_THREAT_MODEL.md)) — 페어링 토큰은 한 번만 보이고 해시만(B1, 080, 키는 `user_id` — 기기는 사람의 것) · **READ_ONLY 만**, 등급 없는 선언은 전체 거절(B3) · 소켓은 API 워커·루프는 Celery 워커라 **Redis 중계**(B6) · 무인 런은 브리지별 `allow_unattended`(기본 false) — 노출·게이트·소켓이 한 함수(B7) · `secret://` 는 정규화 전에 거절, 브리지는 비밀을 받지 않는다(B8) · 자식 거절(B11) · 📌 `test_retired_routes._routes()` 가 포함된 라우터의 소켓 경로를 빈 문자열로 읽어 소켓 부재 검사가 공허했다 — 고쳤다 — 테스트 115 · 변이 27/27. 통합(Q6→Q14→Q11→Q16 순 cherry-pick) 뒤 전체 스위트는 알려진 flaky `test_fingerprint_reports_ledger_manifests_without_credential_shaped_keys` 하나만 실패, 기준선 테스트 이름 누락 0. 🟢 **Q6b 착지**(2026-10-02, Q6 플래그 아래, [Q6b 설계](Q6B_SANDBOX_SECRET_CHANNEL_DESIGN_261002.md)) — sandboxd `exec` 에 `env` 와 다른 필드 `secret_env`(C2, 비밀 없는 프레임은 바이트 동일) · guest 가 `exec.secret_env.v1` 을 광고하고 호스트가 lease 마다 확인, 모르는 guest 에는 **보내기 전에** `secret_env_unsupported` — 옛 guest 는 필드를 조용히 버리고 비밀 없이 돈다(C3) · **관리형 E2B·Modal 은 계속 거절**(C1 — 벤더 exec stdio 중계의 기밀성을 보일 바인딩이 저장소에 없다, 여는 것은 증거를 단 코드 변경) — 📌 **운영에서 새로 비밀을 싣는 provider 는 없다**(로컬 sandboxd 는 시험용) · guest 번들 digest 가 바뀌었다 — 테스트 12 · 변이 10/10. 🟢 **Q11b 착지**(2026-10-02, 플래그 off, [Q11 설계 §5](Q11_MCP_CLIENT_DESIGN_261001.md)) — 소유자 토큰이 있어야 `tools/list` 에 답하는 서버는 **운영자 고정 매니페스트**(`pinned_tools`) — 소유자별 발견은 하지 않았다(배열이 소유자마다 갈리고 캐시가 생기며 발견이 승인 밖에서 비밀을 푼다, N1) · 고정 서버는 시작 때 연결하지 않고 목록이 전부(N2) · **어긋나면 부르지 않는다** — 호출마다 같은 승인된 연결로 `tools/list` 를 맞춰 보고 `connector_tool_missing`/`connector_schema_drift`(N4·N5) — 테스트 28 · 변이 9/9. 🟢 **Q14b 착지**(2026-10-02, [Q14 설계 §7](Q14_AGENT_BROWSER_DESIGN_261001.md)) — 비밀별 브라우저 출처 묶임 `user_secrets.browser_origins`(081, 기본 빈 배열 = 어디에도 입력 안 됨 — ⚠️ Q14b 전 비밀은 출처를 붙여 다시 PUT 해야 브라우저에 쓰인다) · 출처는 AAD 에 봉인(X3) · 실패·취소 태스크의 세션을 그 자리에서 닫는다(X5) · 비밀번호 가리기 모든 프레임(X6) · 여러 `Set-Cookie` 는 실제 Chromium 쿠키 둘 로그인으로 확인(X4) — 테스트 28 + 실 Chromium 2 · 변이 12/12. 🟢 **Q16b 착지**(2026-10-02, [Q16 설계 §6](Q16_DEVICE_BRIDGE_DESIGN_261001.md)) — 위협 모델 §3 줄·§4 표가 **먼저**("위협 모델은 지속적 개선"의 첫 증분), `device_write_file.v1` 하나(파일 전체) · 두 열쇠(자격증명 `allow_writes`·083 + 클라이언트 `--allow-writes`, 어긋나면 등록 전체 거절) · 쓰기마다 사람 승인(소유자 allow 만 넘는다) · 무인 쓰기는 어떤 허락으로도 거절 · `base_sha256` read-before-write · 링크 없는 경로(fd 걷기)·dot·자동 실행 확장자 거절 · 임시 파일 + rename/link · 실 Redis 중계 시험 7/7(`NEOS_TEST_REDIS_URL`, 숨은 결함 없음) — 변이 22/22. 통합(Q6b→Q11b→Q14b→Q16b) 뒤 전체 스위트 7,584 통과 · 실패는 알려진 flaky 하나, 기준선 이름 누락은 Q16b 의 의도된 이름 변경 하나뿐. 마이그레이션 078·079·082·084 는 비어 있다(예약했으나 쓰이지 않음). 🟢 **Q10b 착지**(2026-10-02, 플래그 `standing_agents.budget.enforce` off, [Q10b·Q3 설계](Q10B_Q3_PAUSE_STANDING_QUESTIONS_DESIGN_261002.md)) — **`PAUSED` 의 첫 작성자**: 모델 턴의 맨 앞(자식 한 걸음·모델 호출 **전**)에서 봉투를 넘은 에이전트 태스크를 한 트랜잭션(`budget.judged` `enforced: true` + `running → paused` + `task.status.changed`)으로 멈춘다 · **런은 `running` 으로 남는다**(승인 대기와 같은 모양 — 재개는 같은 런의 최신 체크포인트에서, P1) · 리스 획득은 태스크 상태를 보지 않아 런 서비스가 `TaskPaused` 로 막고 러너는 `PAUSED`(멈춤을 `None`=완료로 읽지 않게, P4) · 재개는 사람만 `POST /coding/tasks/{id}/resume`(P6) · 판정을 못 읽으면 멈추지 않는다(P5) · FE `paused` 배지·Resume · 소유자 알림(D7 80% 경고·멈춤 알림)은 **워커가 큐에 적고 API 프로세스가 보낸다**(085) — 📌 채널 게이트웨이는 API 프로세스에만 있어 **기존 스케줄 태스크의 워커 채널 전송은 경고 한 줄로 조용히 죽어 있었다**(이 트랙 범위 밖, 기록만) — 변이 20/20(처음 살아남은 하나: 대상 없는 에이전트의 알림이 **남의 채널**로 갈 수 있었다). 🟢 **Q3 착지**(2026-10-02, 플래그 `standing_agents.questions` off) — 상시 질문은 `scheduled_tasks` 가 아니라 `agent_id` 키 테이블(086, SQ1) · DA 런은 기존 제출 계약 그대로(SQ2) · beat 폴러가 정산 → 제출, 질문마다 진행 중 하나(SQ3) · 차이는 클레임, 1차 키 `claim_hash`·보조 키 증거 blob(결정 8) · **새로 검증·반증일 때만** 알리고 사라짐·재표현 후보는 수만(SQ6) · 첫 정산은 침묵하는 기준선, 실패 런은 기준선 아님(SQ7) · 제출 문은 에이전트 active + 봉투 background 판정 — 📌 DA 지출은 봉투에 안 들어간다, 주기 하한(기본 360분)·개수 상한이 비용 상한(SQ8·SQ9) · 📌 blob 해시는 내용 해시라 갱신되는 출처의 재표현은 보조 키로 짝나지 않는다(관찰, 넓히는 것은 사람의 결정) — 변이 24/24. 🟢 **Q5b 착지**(2026-10-02, 플래그 `jev.monitor.enforce` off, [Q5b 설계](Q5B_MONITOR_PAUSE_DESIGN_261002.md)) — 감시자도 같은 `pause_task`(`monitor.judged`, 사유 `monitor_jev`/`monitor_fallback_fbN`, MP1) · **경계 아홉을 config 에 명시해야 켜진다**(기본값과 같아도, `model_fields_set` — 경계 실측은 사람의 몫, MP2) · 한 턴에 봉투가 먼저, 멈춤 트랜잭션은 하나(MP4) · 원장 판독을 커서로(`LedgerTail`, MP6) · 재개 라우트는 감시자 집행만으로도 마운트(MP7) · 📌 `jev.monitor.max_events` 가 판독에 닿지 않던 결함과 테스트 대역의 seq 번호 결함을 고쳤다 — 변이 21/21. 🟢 **Q14c 착지(켤 수 없음)**(2026-10-02, `coding_model.browser.provider: managed`, [Q14 설계 §8](Q14_AGENT_BROWSER_DESIGN_261001.md)) — 샌드박스 안 게스트가 Chromium 을 돌리고 **모든 요청을 호스트의 기존 판정으로 되돌린다**(샌드박스는 네트워크 없음, MB1) · 폴백 없음(MB2) · 관리형 브라우저의 `browser_fill_secret.v1` 은 `browser_secret_channel_unavailable`(MB4) — ⚠️ 통로를 여는 부분은 B2 배선 몫이라 **팩토리가 `managed` 를 거절한다**, 실계정 체크리스트 a~h — 변이 17/17. 🟢 **Q6c 착지(열린 것 없음)**(2026-10-02, [Q6c 설계](Q6C_MANAGED_SECRET_CHANNEL_DESIGN_261002.md)) — 비밀은 기존 sandboxd `secret_env` 필드로 벤더 stdio 중계를 탄다(벤더 per-exec env·벤더 비밀 객체는 기각, MS1) · **바인딩 코드가 증거 객체를 선언**하고(MS2) **운영자가 공급자별로 켜야**(`sandbox.managed.secret_env_providers`, MS3) 열린다 — 📌 E2B·Modal SDK 가 저장소에 없어 둘 다 여전히 `secret_env_unsupported`, 실계정 스모크 R1~R11 — 변이 17/17. 🟢 **Q16c 착지**(2026-10-02, [Q16 설계 §7](Q16_DEVICE_BRIDGE_DESIGN_261001.md) · [위협 모델 §5](Q16_DEVICE_BRIDGE_THREAT_MODEL.md)) — 위협 모델 줄·12위협 표가 **먼저** · `device_run_command.v1` 하나(argv 만) · 열쇠 셋(자격증명 `allow_commands` 090 · 클라이언트 `--allow-commands` · 운영자 상한 `command_allowlist`, 기본 빈) · 매 호출 사람 승인(argv 접두가 맞는 소유자 규칙만 대신) · 무인은 어떤 설정으로도 거절 · 클라이언트는 `shell=False`·환경 세척·프로세스 그룹 kill — ⚠️ 기기 OS 샌드박스 없음(BC12, 받아들인 위험) — 변이 28/28. 📌 **"알려진 flaky" `test_fingerprint_reports_ledger_manifests_without_credential_shaped_keys` 는 flaky 가 아니었다** — 지문에 git 브랜치 이름·dirty 경로가 실려 브랜치나 수정 파일에 `secret`·`credential` 이 있으면 결정적으로 깨졌다(`c042b8b3` 에서 고침). 남은 것: 감시자 경계 실측(Q5b 켜기) · B2 배선 + 관리형 브라우저 통로(Q14c 켜기) · 벤더 SDK 바인딩·증거·실계정 스모크(Q6c 열기) · 기존 스케줄 태스크의 워커 채널 전송 구멍(Q10b 알림 큐로 옮길 수 있다) · Q11 장기 프로세스 op(샌드박스 안 stdio) · Q14 소유자 규칙을 출처까지 좁히기(Q2 규칙 테이블 변경) · 실 Redis 시험을 CI 서비스 컨테이너로 등(순서는 [dots 분석 §4](OPENAI_DOTS_ANALYSIS_260930.md)). Q17 조직 에이전트는 **트랙 P 테넌트 격리 뒤**. 순서·항목 Q1~Q18: [dots 분석 §4](OPENAI_DOTS_ANALYSIS_260930.md) |
+| **J. 코딩 루프 조사** | 🟢 **J0·J1·J1.5·J2·J3 착지**, 전부 플래그 off — 조사 자식이 게이트된 코딩 도구로 스크립트를 돌리고 그 계산이 진짜 원장 위에서 verified 가 된다([DONE §1](DEEP_ANALYSIS_HARNESS_DONE.md)) | **J4**(#23 판정 뒤) → J5 → J6. ⚠️ 계약 §3.2 downgrade 는 managed·memory provider 에 남았다(§12.11) |
+| **K. Fable 5.1 적응** | 🟢 **표본 없이 되는 K 는 다 썼다** — K0·K1·K1b·K1c·K1d·K2·K2b·K3(기본 off)·K4a·K4b·K5①~④·K6·K7·P-05(기본 off)·K9 모드·오버레이([DONE §2](DEEP_ANALYSIS_HARNESS_DONE.md)) | K5⑤ 벤치 · P-02 interactive 투입 · K10 · K11 · K8. **K3 를 켜는 것은 A1·A2 숫자 뒤** |
+| **L. Jev 확률 판정 층** | 🟢 **L0·L1·L2 완료 · L4 코드 착지 · D-L1·D-L2·D-L3 닫힘**, 핀 `jev-1.13.0`([DONE §3](DEEP_ANALYSIS_HARNESS_DONE.md)) · ✅ **L6 착지(2026-10-03, D99)** — 인용 클레임 판정자 = Jev, #23 부터 · **L3 게이트**는 개발 오버레이(`make dev-jev-enforce`)에서 잠정 경계로 켠다 | 가격 하나 · L4 사후 백테스트(#23 원장) · L5(건너뛰었다 — D99 §3) · L7. ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · 경계값은 전부 **잠정**이다 |
+| **Q. 상시 에이전트** (2026-09-30) | ✅ **development 에서 켰다**(2026-10-03 — 상시 에이전트·트리거·예산 봉투+멈춤·알림·상시 질문·비밀 브로커·기기 브리지는 `neos.development.yaml`, Jev 감시자 Q5b 멈춤·브라우저 Q14a 는 `make dev-jev-enforce`). 🟢 **Q0 결정 · 가드 전부와 능력 대부분 착지**(2026-09-30~10-05): Q1 · Q2(+사용자 규칙) · Q3 · Q4a·b · Q5(섀도)·Q5b · Q6a·b·c · **Q8a~d**(10-05, [설계](Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md)) · Q10a·b · Q11a·b · Q13a~f · Q14a·b·c · Q16a·b·c([DONE §7](DEEP_ANALYSIS_HARNESS_DONE.md)). `PAUSED` 의 작성자가 생겼다(Q10b·Q5b) | 착지했지만 **켤 수 없는 것:** 감시자 경계 실측(Q5b) · B2 배선 + 관리형 브라우저 통로(Q14c) · 벤더 SDK 바인딩·증거·실계정 스모크(Q6c). **아직 없는 항목:** Q7 · Q9 · Q12 · Q15 · Q17(트랙 P 테넌트 격리 뒤) · Q18. **별건:** **CH-HIST** 채널 대화가 이전 턴을 보지 않는다 · **CH-RESUME** 채널 승인 뒤 재개 결과가 버려진다(§11) · 스케줄 태스크의 워커 채널 전송 구멍 · Q11 장기 프로세스 op · Q14 규칙을 출처까지 · 실 Redis 시험의 CI 화. 순서는 [dots 분석 §4](OPENAI_DOTS_ANALYSIS_260930.md) |
 
 **기본 플래그** — 두 제품 표면이 아직 프로덕션 기본 경로에 없다. 줄 번호는 적지 않는다.
 
@@ -67,13 +66,23 @@ SandboxConfig.enabled                 = False   (development: true, provider mem
 CodingModelConfig.enabled             = False   (development: true)
 WorkflowConfig.graph_design_enabled   = False
 WorkflowConfig.subagent_nodes_enabled = False
-# J (스키마에 있다):  deep_analysis.code_research_enabled = False
-# L (스키마에 있다):  jev.enabled                    = False
-#                    jev.tool_risk_shadow_enabled   = False
-#                    jev.tool_risk_gate_enabled     = False
-#                    jev.judge_shadow_enabled       = False   ⚠️ 읽는 코드가 없다 (2026-09-28)
-# ~~J가 더할 것(설계) · L이 더할 것(설계)~~ — 둘 다 착지했다 (2026-09-28 코드 대조)
+# J:  deep_analysis.code_research_enabled = False
+# L:  jev.enabled                    = False
+#     jev.tool_risk_shadow_enabled   = False
+#     jev.tool_risk_gate_enabled     = False
+#     jev.judge_shadow_enabled       = False   ⚠️ 읽는 코드가 없다 (2026-09-28)
+# Q:  standing_agents.enabled · jev.monitor(.enforce) · standing_agents.budget.enforce ·
+#     standing_agents.questions · coding_model.secret_broker · 커넥터·브라우저·기기 브리지 — 전부 off
+#     (정확한 키는 각 설계 문서와 CONFIGURATION.md)
+# L6: jev.judge_enabled              = False   (sample-23.yaml: true, D99)
 ```
+
+**development 프로파일 (2026-10-03)** — 스키마 기본값은 위 그대로다. `config/neos.development.yaml` 이 켜는 것:
+`graph_design_enabled`(G·H3) · `standing_agents.{enabled, triggers, budget.enforce, notifications, questions}`(Q) ·
+`coding_model.secret_broker`(Q6) · `coding_model.device_bridge`(Q16). `config/samples/dev-jev-enforce.yaml`
+(`make dev-jev-enforce`)이 더하는 것: Jev L3 게이트 · Q5b 감시자 멈춤 · L6 판정자 · Q14a 브라우저 — **경계는 전부 잠정값**.
+Jev 를 development.yaml 에 넣지 않는 이유: 테스트·CI 가 그 프로파일을 읽는다(실호출 과금 · 401 폴백 오염).
+**켤 수 없어 켜지 않은 것:** Q14c·Q6c(B2 배선·벤더 증거 전에는 팩토리가 거절) · Q11 MCP(연결할 서버가 정해지지 않았다 — 서버 없이 켠 플래그는 아무것도 하지 않는다)
 
 ---
 
@@ -131,6 +140,10 @@ fetch된 원문에 문자 그대로 있는지만 본다. 따라서 워커를 코
 
 ### 3.1 목표 상태
 
+> ✅ **2026-10-03 일반화(사람의 결정):** NEOS 의 1차 실행 모델은 **재실행 가능한 검증이 붙은 코드 실행**이다.
+> 검증형 분석은 그 한 사례다 — 코딩 태스크도, 상시 에이전트도 같은 문장 아래 선다. 한계도 같이 적는다:
+> **검증할 수 있는 부분을 코드로 한다** — 재실행으로 검증되지 않는 판단(의미 정합성 등)은 판정자의 몫으로 남는다.
+>
 > **검증형 분석을 NEOS의 1차 실행 모델로 승격한다.** 사용자가 "이 주장이 사실인가"를 물으면,
 > 모든 문장이 검증된 클레임으로 역추적되는 리포트가 나온다. 실패하면 조용히 degrade하지 않고
 > 원장에 이유를 남긴다.
@@ -155,14 +168,16 @@ fetch된 원문에 문자 그대로 있는지만 본다. 따라서 워커를 코
 > 🔴 **6/6은 "출하하라"가 아니다.** 조용한 실패를 막는 기준이지 조사 품질의 증명이 아니다.
 > W6(승격)의 관문은 **리덕션 층**(§7)과 `ROADMAP.md`의 R1·R2·R6이다. S2를 다시 두껍게 세우는 것은 필수에 가깝다.
 
-### 3.3 J가 더하는 출하 기준 — ~~설계, 미충족~~ ~~테스트 둘 착지 · 둘 미충족 (2026-09-28 코드 대조)~~ ~~셋 착지 · 하나 부분 (2026-09-28, J1.5)~~ 넷 다 착지 (2026-09-28)
+### 3.3 J가 더하는 출하 기준 — 넷 다 착지 (2026-09-28)
 
 | # | 기준 | 왜 | 상태 |
 |---|---|---|---|
-| **S7** | 계산 클레임은 **재실행 없이는 verified가 되지 않는다** | 코드가 만든 숫자는 발췌보다 더 그럴듯하게 틀린다 | ~~🟡 채점기·재실행은 J2 로 착지했지만 **합성 fixture 에서만** 초록이다(§1 J 행) → J1.5~~ → 🟢 **실제 경로에서 초록**(2026-09-28) — 조사 자식이 돌린 스크립트가 진짜 원장·채점기·재실행기(메모리 provider 의 진짜 `python3`)를 거쳐 verified 가 된다. `tests/workflow/deep_analysis/test_code_research_e2e.py`. 가짜는 자식 모델과 `fetch_url` 둘뿐 |
-| **S8** | 코딩 워커의 모든 실행이 원장에서 **스크립트 digest + 입력 raw_ref + 출력 digest**로 복원된다 | "매니페스트 없는 런은 표본이 아니다"의 확장 | ~~🔴 스크립트 바이트를 원장 blob 으로 넣는 경로가 없다 → J1.5~~ → ~~🟡 **클레임이 된 실행은 복원된다**(2026-09-28):~~ 🟢 **모든 실행이 복원된다**(같은 날, 아래 두 단계). ① `execute.v1` 은 **돌리기 전에** 스크립트를 원장 blob 으로 넣고(`sandbox-script://` 표시) 결과에 `script_ref`·`output_digest` 를 싣는다 — 계산 클레임은 그 둘과 `inputs` 를 그대로 옮긴다. ~~**아직 아닌 것:** 클레임에 인용되지 않은 실행은 스크립트 blob 만 남고 **그 실행이 무엇을 냈는지**(출력 digest)는 원장에 없다 — 기준의 "모든 실행" 에 못 미친다~~ ② 실행마다 원장 이벤트 `script_executed`(`script_ref` · `output_digest` · 종료 코드 · 한도 여부 · `evidence_refs`)를 워커에게 결과를 주기 **전에** 남긴다 — 버린 시도도 남는다. `evidence_refs` 는 그 실행 때 샌드박스에 놓여 있던 증거(복원 + 이번 fetch)다. 스크립트가 실제로 연 파일은 샌드박스 밖에서 알 수 없어 **상한 집합**이고, 정확한 입력은 클레임의 `inputs` 가 싣는다. 한도에 걸린 실행은 digest 가 null. 라벨은 없다(`compute_reexecuted` 와 같은 이유, fixture 에 사유). 테스트 넷 + E2E 단언, 변이 넷 |
-| **S9** | 플래그 off일 때 워커 프롬프트·도구 목록·이벤트 어휘가 **바이트 단위로** 같다 | 트랙 I가 세운 방법. 켜는 커밋만 경계가 된다 | 🟢 테스트 착지 — `tests/workflow/deep_analysis/test_code_research_invariants.py` (I1 절) |
-| **S10** | 샌드박스를 요구하는 프로파일에서 샌드박스가 없으면 **실패한다**(비샌드박스 폴백 없음) | PLAN_260913 B5를 DA 경로에도 | 🟢 설정 검증 착지 — 같은 파일이 development 밖·managed 평면 없음 거절과 Docker `network=none` 강제를 고정한다. ⚠️ managed·memory provider 의 계약 §3.2 downgrade 는 남았다(§12.11 ③) |
+| **S7** | 계산 클레임은 **재실행 없이는 verified가 되지 않는다** | 코드가 만든 숫자는 발췌보다 더 그럴듯하게 틀린다 | 🟢 실제 경로에서 초록 — `tests/workflow/deep_analysis/test_code_research_e2e.py` |
+| **S8** | 코딩 워커의 모든 실행이 원장에서 **스크립트 digest + 입력 raw_ref + 출력 digest**로 복원된다 | "매니페스트 없는 런은 표본이 아니다"의 확장 | 🟢 모든 실행이 `script_executed` 로 남는다(버린 시도 포함). `evidence_refs` 는 **상한 집합**이고 정확한 입력은 클레임의 `inputs` 가 싣는다 |
+| **S9** | 플래그 off일 때 워커 프롬프트·도구 목록·이벤트 어휘가 **바이트 단위로** 같다 | 트랙 I가 세운 방법. 켜는 커밋만 경계가 된다 | 🟢 `test_code_research_invariants.py` (I1 절) |
+| **S10** | 샌드박스를 요구하는 프로파일에서 샌드박스가 없으면 **실패한다**(비샌드박스 폴백 없음) | PLAN_260913 B5를 DA 경로에도 | 🟢 설정 검증. ⚠️ managed·memory provider 의 계약 §3.2 downgrade 는 남았다(§12.11) |
+
+경위: [DONE §1.4](DEEP_ANALYSIS_HARNESS_DONE.md)
 
 ### 3.4 L이 더하는 출하 기준 (설계, 미충족)
 
@@ -260,12 +275,12 @@ ComputedEvidence
 
 | 단계 | 내용 | 선행 | 표본 필요 |
 |---|---|---|---|
-| ~~**J0**~~ | ✅ [계약 문서](DEEP_ANALYSIS_CODE_RESEARCH_CONTRACT.md) (2026-09-15): 스펙 셋 · 도구 넷 · `ComputedEvidence` · 거절 코드 다섯 · 이벤트 kind 여섯 · `research-offline-v1` · 불변식 I1~I7 | — | 없음 |
-| **J1** | 도구 경계: `fetch.v1`→`fetch.py`, blob 읽기 전용 마운트, `submit.v1`, 카탈로그 fail-closed 셋째 타입. **S9 바이트 동일 테스트**. ~~🟡 **부분 착지**(2026-09-28): 계약 §3.2 의 `execute.v1` 표면이 조사 포트에 없다~~ → ✅ J1.5 가 채웠다(같은 날). `check_claims.v1`(J4 몫)은 먼저 들어왔다 | J0 | 없음 |
-| ~~🆕 **J1.5**~~ ✅ | ✅ **착지**(2026-09-28). **완료 조건 충족: `execute.v1` → 계산 클레임 → 재실행 → verified**, 진짜 원장 위에서(`test_code_research_e2e.py`). ① **포트 합성** — `ResearchToolPort` 가 `CodingSurface`(질문 샌드박스 세션 + 레지스트리 + 게이트)를 받아 코딩 도구 다섯(`list_tree`·`read_file`·`search_text`·`write_file`·`execute`)을 내민다. 정의는 레지스트리의 것을 그대로 쓴다. 레지스트리의 `command_allowlist={"python3"}` 가 계약 §3.2 의 argv allowlist 를 코드로 만든다(`-c`·셸은 레지스트리가 이미 막는다). ② **조사 자식의 게이트**(CHILD-GATE 의 조사 절반) — 코딩 자식과 같은 `authorize` 모양, 판정 자리는 오케스트레이터(`research_gate.py`). 규칙은 하나에서 나온다: **재실행기가 똑같이 다시 돌릴 수 있는 것만** — argv 는 `python3 <워크스페이스의 .py>` 하나, cwd 는 루트, env·stdin 없음, `evidence/` 쓰기 금지. 거절은 원장 `code_tool_denied`(FE 라벨 짝). 바인드 없는 게이트는 전부 거절(`policy_gate_unbound`). ③ **스크립트 → 원장** — `execute.v1` 은 실행기를 거치지 않고 재실행기와 **같은 호출**로 돈다(실행기는 출력을 미리보기로 잘라 digest 가 달라진다). 돌리기 **전에** 스크립트를 blob 으로 넣고, digest 는 재실행기와 같은 함수(`digest_stdout`)로 만든다. 한도에 걸린 실행에는 digest 를 주지 않는다. 스크립트 blob 은 `sandbox-script://` 로 표시되고 **두 채점기가 그것을 증거·입력으로 거절한다** — 없으면 워커가 자기 스크립트를 quote 로 인용해 통과시킬 수 있었다(I4). `/evidence` 한도에 청구하지 않는다. ④ **brief 전달** — 조사 티켓의 briefing 이 이 질문의 verified quote 클레임을 **ID 와 함께**(`why`), 막다른 길(`already_tried`), 수선 지시(`scope`)를 싣는다. 🔍 **계획에 없던 구멍 둘**: (a) 계산의 `premises` 는 원장 claim_id 여야 하는데 자식은 그 ID 를 볼 길이 없었다(`verified_summaries` 는 본문만). 사람의 결정: **다음 라운드에 ID 공개** — 계산은 둘째 라운드부터 가능하다. (b) E2E 가 찾았다: 질문 샌드박스는 라운드마다 새로 열려 **라운드 1 의 `/evidence` 가 라운드 2 에 없었다** — 계산이 가능한 첫 라운드에 계산이 읽을 증거가 언제나 사라진 뒤였다. `LedgerEvidenceStore.restore` 가 원장에서 다시 놓는다(계약 §9 결정 4). 📌 **계약 해석이 바뀌었다(사람의 결정):** research 자식도 계산 클레임을 낸다(계약 §2 는 analyze 몫으로 적었다). 대신 결정 3 의 "같은 질문" 을 briefing 의 기대가 아니라 **채점기 규칙 2 로 강제**한다. J3 섀도도 같은 한도·같은 briefing 을 받는다(`command_limits` 는 기본값 없이 필수 — 호출부 둘이 모두 적어야 한다). 테스트 스물여섯 + E2E 하나, 변이 스물둘. 📌 표본 경계가 **아니다** — 전부 플래그 뒤다(플래그 off 면 계산 클레임·스크립트 blob 이 없고, quote 경로의 채점 호출은 바이트가 같다) | J1 · ~~**child 도구 게이트**(§11)~~ 코딩 절반 ✅(2026-09-28), 조사 자식 절반 ✅(같은 날, 이 행) | 없음 |
-| **J2** | 계산 클레임 채점기 + 재실행 + 이벤트 짝(fixture 양방향). ~~🟡 **착지, 합성 fixture 에서만 초록**(2026-09-28) — 실제 스크립트가 원장에 들어오는 경로는 J1.5.~~ → 🟢 실제 경로 E2E 초록(J1.5, 같은 날). 규칙 2 에 **같은 질문** 검사가 붙었다(J1.5). ✅ **GRADE1 닫힘**(2026-09-28): 재실행을 통과한 계산 클레임이 판정자에게 **빈 증거 블록**("(증거 없음)")으로 가서 UNRELATED 로 떨어질 수 있었다. 이제 계산 클레임은 전용 프롬프트 `judge_computed.md`(v1)로 판정한다 — 계약 §5 대로 **질문 · 재실행으로 확인된 값 · 전제 인용**을 싣고 "문장이 값과 전제를 넘지 않는가, 계산이 질문에 답하는가"만 묻는다(산술은 결정론 채점기 몫). 맥락 없이 온 계산 클레임은 **판정하지 않고 거절**한다(`computed_context_missing`, 토큰 0). 인용 클레임의 판정 프롬프트는 바이트가 같다(테스트). 딸려 고친 것: 수리가 `pending` 으로 되돌린 계산 클레임을 `_regrade_pending` 이 **인용 클레임으로 재채점**하고 있었다 (`kind`·`computation` 을 되짓지 않았다) — 판정자가 계산 클레임에 PARTIAL 을 줄 수 있게 되면서 산 경로가 됐다. 📌 표본 경계가 **아니다** — J 플래그가 꺼져 있으면 계산 클레임이 없다. 다만 런 매니페스트의 `prompts` 에 `judge_computed` 해시 키가 **하나 늘었다** — 이 커밋 앞뒤 매니페스트는 그 키로 다르다 | J1 | 없음(합성 fixture·변이 테스트) |
-| **J3** | **오프라인 섀도**: 저장된 blob·카세트로 코딩 워커를 돌려 제안만 비교. 원장에 쓰지 않는다. 🟢 **착지**(2026-09-21) — `shadow.py` · `cassette_model.py` · `scripts/deep_analysis_offline_shadow.py`. brief 는 `assignment.build_assignment` 로 오케스트레이터와 공유한다. ⚠️ brief 가 **지금** 원장 상태로 조립되므로 "그때 그 패스"의 재현이 아니다 — 보고서가 그렇게 말한다 | J2 | 없음(카세트) |
-| **J4** | compose 자식 + 클레임 파일 공개 + `check_claims.v1` | **#23 판정** · J3 | 사전 등록 |
+| ~~**J0**~~ ✅ | [계약 문서](DEEP_ANALYSIS_CODE_RESEARCH_CONTRACT.md) (2026-09-15) | — | 없음 |
+| ~~**J1**~~ ✅ | 도구 경계 · S9 바이트 동일 테스트 (2026-09-23, 빈 표면은 J1.5 가 채웠다) — [DONE §1.1](DEEP_ANALYSIS_HARNESS_DONE.md) | J0 | 없음 |
+| ~~**J1.5**~~ ✅ | `execute.v1` → 계산 클레임 → 재실행 → verified, 진짜 원장 위에서 (2026-09-28) — [DONE §1.2](DEEP_ANALYSIS_HARNESS_DONE.md). 📌 남긴 규칙: 조사 게이트는 **재실행 가능성**으로 판정한다(§12.3) · 스크립트 blob(`sandbox-script://`)은 증거·입력이 될 수 없다(I4) · 계산의 premises ID 는 **다음 라운드에** 공개된다 · research 자식도 계산 클레임을 내되 전제는 **같은 질문**(채점기 규칙 2) | J1 · CHILD-GATE | 없음 |
+| ~~**J2**~~ ✅ | 계산 클레임 채점기 + 재실행 + 이벤트 짝 · **GRADE1** 전용 판정 프롬프트 `judge_computed.md` (2026-09-28) — [DONE §1.3](DEEP_ANALYSIS_HARNESS_DONE.md). 📌 런 매니페스트 `prompts` 에 `judge_computed` 키가 늘었다 | J1 | 없음 |
+| ~~**J3**~~ ✅ | 오프라인 섀도 (2026-09-21). ⚠️ brief 가 **지금** 원장 상태로 조립되므로 "그때 그 패스"의 재현이 아니다 | J2 | 없음(카세트) |
+| ~~**J4**~~ 🟢 | compose 자식 + 클레임 파일 공개 + `check_claims.v1` — **착지(2026-10-03, D105)**, `deep_analysis.compose_child_enabled`(기본 off). 계약과 달리 `code_research_enabled` 와 **따로** 켠다(한 표본에 처방 하나) | ✅ CITE1 원인 판정(D104) | ✅ #25 사전 등록(D105) → #25 무효(배선 결함 셋, D106) → #26 무효(체크포인트 가림 깊이 · **API 사용 한도 소진**, D107). → 선행 둘 충족(키 교체 · 라이브 dry run **3/3 제출**) → #27 무효(재시도가 끝난 첫 자식을 받았다, D109 — 고침) → 재시도를 지나는 dry run **6/6** → #28 무효(**크레딧 잔액 소진**, D111) → 크레딧 충전 → #29(D112) → **판정(D113): P-J1 ✅ 중앙값 0.43 → 1.00 · P-J2 형식상만 · P-J3 ✅. 🔴 전 시도 실패 시 빈 본문** → D114(대체 · 턴 12 · 미인용 미리보기, DB 제약 091) → dry run 6/6 → **#30 사전 등록(D115)** |
 | **J5** | 라이브 표본 **C-계열**(새 계보, §8 경계 8). research만 → analyze 추가 → compose 추가, **한 표본에 하나씩** | J4 · 사전 등록 | ✅ |
 | **J6** | 분석 스킬 학습: 반복된 스크립트를 스킬 후보로 **staged** — 승인 전 미주입(`learn.write_approval`) | J5 | ✅ |
 
@@ -286,17 +301,13 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 이 스펙은 **Anthropic 공식 문서 "Prompting Claude Fable 5.1"을 바탕으로 한다.** 프롬프트 블록은
 공식 권장 문구를 **그대로** 쓴다(§10.5).
 
-> ✅ **K0 착지 (2026-09-15).** `models.yaml`에 `claude-fable-5-1`을 등재했다 — 출처는 Anthropic claude-api
-> 레퍼런스의 "Migrating to Claude Fable 5.1" 절이고, 거기 적힌 사실만 적었다(1M 창 · 128K 출력 ·
-> thinking 항상 켜짐 · $10/$50 · 캐시 읽기 $0.25 · 대화 중간 system 지원). `selectable: false` — 기능
-> 오버라이드로만 쓴다. 카탈로그에 `mid_conversation_system` 필드를 더했다(opus-5 · opus-4-8 · fable-5-1 = true,
-> **sonnet-5 = false**). `tests/config/test_model_catalog_fable.py`가 고정한다.
+> ✅ **K0 착지 (2026-09-15)** — `models.yaml` 에 `claude-fable-5-1`(`selectable: false`, 기능 오버라이드로만) ·
+> 카탈로그 `mid_conversation_system`. 상세는 [DONE §2.1](DEEP_ANALYSIS_HARNESS_DONE.md).
 >
-> 📌 **원문에서 새로 알게 된 것 셋 — 스펙 문서에 없던 것:**
-> - **thinking은 끌 수 없다.** Fable 5.1은 요청에 thinking 필드가 없어도 생각하고 블록을 돌려준다.
->   "thinking을 켜는 커밋"이 따로 없다 — **Fable 5.1로 라우팅하는 순간이 켜는 순간이다**
+> 📌 **원문이 정한 사실 셋 — 계속 걸린다:**
+> - **thinking은 끌 수 없다.** Fable 5.1로 라우팅하는 순간이 켜는 순간이다
 > - **강제 `tool_choice`(any/tool)가 400이다.** 코딩 루프는 쓰지 않는다. `ui_frame_generator.py`가 쓰지만 Fable로 가지 않는다
-> - **최근 턴을 남기는 컴팩션도 허용된다** — 남긴 턴의 thinking만 떼면 된다. §5.2 R-07 정정 참조
+> - **최근 턴을 남기는 컴팩션도 허용된다** — 남긴 턴의 thinking만 떼면 된다
 >
 > ⚠️ 원문 대조 중 발견: 카탈로그 `claude-sonnet-5` 가격(3/15)이 레퍼런스(2/10)와 다르다. 범위 밖이라 고치지 않았다 — 별건
 
@@ -319,23 +330,25 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 7. **프롬프트 변경은 버전이 붙은 측정 대상이다.** `<!-- version: N -->` + golden 게이트
    (`deep_analysis_l5.md` §4) + G12. 문구 하나 = 표본 하나.
 
-### 5.2 갭 표 — 스펙 항목 × NEOS 현재 (2026-09-15 코드 대조)
+### 5.2 갭 표 — 스펙 항목 × NEOS 현재 (2026-09-15 대조, 2026-09-28 갱신)
 
-| ID | 스펙 | NEOS 지금 | 갭 | K 티켓 |
+착지 경위는 전부 [DONE §2.1](DEEP_ANALYSIS_HARNESS_DONE.md). 여기는 **남은 갭과 지킬 규칙**만 든다.
+
+| ID | 스펙 | 상태 | 남은 갭 · 지킬 것 | K 티켓 |
 |---|---|---|---|---|
-| **R-01** | 이력 append-only, 원본 그대로 재전송 | ✅ **K1 착지.** `ThinkingContent`·`ThinkingCompleted`가 공통 형식에 있고, 어댑터가 서명째 받아 그대로 돌려보낸다. 체크포인트가 왕복한다. **durable 루프의 `_guard_thinking_prefix` 한 곳**이 직전 요청의 system·tools·메시지 digest와 비교해, 다르면 그 경계에서 thinking을 **전부** 뗀다 — 컴팩션 셋·헤드 드롭·결과 축소·도구 공개·system 재구성을 경로별로 고치지 않았다 ✅ **K1c 착지 (2026-09-17).** 자식(`subagent/stepper.py`)은 thinking을 상태에 기록·재생하고 **자기 컴팩션이 도구 본문을 다시 쓸 때만** 전부 뗀다. DA는 두 경로 모두 고쳤다 — 하네스 브리지(`turn_to_llm_response`·`messages_to_canonical`)와 주입 SDK 경로(`llm._blocks_to_dicts`). 서명 없는 블록은 재생 불가라 버린다(전에는 **JSON 텍스트로 대화에 섞였다**) | ~~**K1b** 실계정 3단계 검사(`drop_block` + `input_transformations` 로깅) — 키가 필요하다~~ → ✅ **통과**(2026-09-24, §5.6) | ~~K1~~ · ~~K1c~~ · ~~K1b~~ |
-| **R-02** | 턴 한정 system message (`clear_at`) | ✅ **K2 착지.** `CanonicalMessage("system", (SystemNoteContent,))`. Anthropic 어댑터가 카탈로그 `mid_conversation_system`과 **배치 규칙**(user 뒤 · 마지막이거나 assistant 앞)을 둘 다 만족할 때만 네이티브 + beta 헤더, 아니면 tool_result 뒤 text 블록. OpenAI·Gemini·Ollama는 user 텍스트. **pre_generate 훅의 system 노트가 system 프롬프트를 매 턴 다시 쓰던 것을 이 경로로 옮겼다** | ✅ **K2b 착지 (2026-09-19).** 모든 도구를 한 번만 선언하고 deferred 는 `defer_loading` 으로 감춘다. 공개는 `tool_addition` 블록을 **덧붙여** 알린다 — `tools[]` 가 변하지 않으므로 공개가 append 가 되고 앞선 thinking 이 살아남는다(17→18 로 자라던 배열이 원인이었다). `deferred` 는 도구의 **정적** 속성이다: 공개 때 뒤집으면 배열이 다시 흔들려 **버그가 고침의 탈을 쓰고 돌아온다**. 카탈로그 `mid_conversation_tools` 로 게이트하고 **`claude-fable-5-1` 에만** 켰다 — 베타와 `defer_loading` 이 SDK 에 있다는 것만 확인됐고 **어느 모델이 받는지는 로컬에서 알 수 없다** | ~~K2~~ · ~~K2b~~ |
-| **R-03** | 서브에이전트 즉시 반환 + `await` 도구 | ✅ **K3 착지 (2026-09-22, 기본 off).** `subagent_async_spawn` 이 켜지면 `spawn_agent.v1` 이 run_id 가 생기는 즉시 도구 결과를 쓰고, 자식은 부모 lease 아래 계속 돈다. 부모의 매 모델 턴 앞(safe point)이 detached 자식을 한 칸씩 밀고, 끝난 자식의 보고서를 **user 메시지로 append** 한다 — K1 의 thinking 가드가 비-append 편집마다 사고 이력을 떼므로 append 가 유일한 자리다. `await_subagent.v1` 이 명시적 park 이고 그때는 보고서가 **그 호출의 도구 결과**가 된다(append 하지 않는다). 부모는 자기가 띄운 자식이 살아 있는 동안 끝낼 수 없다(`_hold_for_detached_children`) — park 은 닿을 수 없던 상태다. 붙잡기의 한계는 카운터가 아니라 **자식의 남은 턴**이다. 자식을 티켓 없이 미는 것은 `SubagentRuntime.resume` 이고 brief 는 store 의 `RunRecord` 에서 되짓는다(부모 체크포인트에 사본을 두지 않는다) | **켜는 것은 A1·A2 숫자 뒤**(§5.3, 표본 경계). ⚠️ `_CONTROL_PLANE_TOOLS` 사본이 둘이었고 루프 쪽이 낡을 뻔했다 — 레지스트리 한 곳으로 합쳤다 | ~~K3~~ |
-| **R-04** | progress thinking 렌더 | ✅ **K4a 착지 (2026-09-19).** 루프가 thinking 블록마다 `model.thinking` 을 낸다 — 200자 프리뷰·원본 길이·잘림 여부. **서명은 싣지 않는다**(불투명한 출처 증명이라 화면에 쓸모가 없다). 스트림을 persisted 로 표시하지 **않는다**: thinking 은 턴 앞머리에 오므로 durable 출력으로 취급하면 일시 오류 뒤 거의 모든 턴이 재시도 불가가 된다. Code UI 는 최신 노트를 상태 줄로 두고 모델이 말을 시작하면 지운다(오조립 start 는 지우지 않는다 — 말을 시작한 것이 아니다) | ~~**K4b** `thinking.display="updates"` 는 설치된 SDK 타입에 없어 **로컬 확인 불가**(K1b 와 같은 관문)~~ → ✅ **착지**(2026-09-24, §5.6). 프롬프트 절반은 **K9·K11 뒤** — 스펙이 자율 모드를 제외하는데 DA 워커는 항상 자율이다. ⚠️ 코딩엔 DA 같은 kind fixture 가 **없다**(그 fixture 는 `deep_analysis` 만 AST 로 훑는다) — 백엔드·프론트 테스트를 짝으로 걸었다 → 코딩 fixture 가 생겼다(§12.9) | ~~K4a~~ · ~~K4b~~ |
-| **R-05** | effort 역할별 외부화, 중간 변경 | ~~코딩/채팅에 effort 필드 없음~~ → ✅ **①~③ 착지(2026-09-21)** — 카탈로그 `effort_levels` · `resolve_effort` 사슬(모델과 같은 사슬, 미지원 레벨은 낮추지 않고 거절) · 어댑터 `output_config.effort`. **채팅 경로 착지(2026-09-24)** — 모델별 기본값(`model_routing.effort.models`) · 사용자 선호 DB · 피커([설계](MODEL_EFFORT_PREFERENCES_DESIGN.md)). 카탈로그 레벨은 실측으로 채웠다. ✅ **④ DA 절반 착지(2026-09-24).** 🔴 `resolve_harness_effort` 를 부르는 프로덕션 호출부가 **0개**였다 — 해석은 있고 요청에 실리지 않았다. 이제 DA `llm.py` 네 함수가 `effort` 를 세 출구(주입 SDK · 하네스 `ModelLimits` · 카세트 키)로 나르고, 호출부 열둘이 역할별 값을 싣는다(worker 는 모델과 같은 자리에서 한 번 · 판정자는 모델과 짝으로 주입). **모델별 기본값 칸도 DA 에 빠져 있었다** — 운영자가 적은 `claude-opus-5-5: high` 가 채팅에만 걸렸을 것이다. 매니페스트가 역할마다 `effort{level, source, refused}` 를 싣는다(§10.1). AST 가드가 DA 패키지의 모든 호출부에 `effort=` **명시**를 요구하고, 다섯 변이로 무는지 확인했다. 값이 없으면 요청·카세트 키가 바이트 단위로 같다 — **경계가 아니다**(§8 행 10 은 값을 정하는 커밋) | ~~**④ 코딩 루프 절반** — durable 루프·자식·컴팩션의 `ModelLimits` 가 effort 를 채우지 않고, 코딩에는 effort 설정 칸 자체가 없다.~~ ✅ **④ 코딩 절반 착지**(2026-09-28): 설정 칸 `coding_model.effort`(사슬의 feature override) · `resolve_coding_effort` 가 DA 와 **같은 사슬**(모델별 기본값 · `everyday` 역할 기본값)로 런타임마다 한 번 해석 · 세 자리가 싣는다 — 루프 턴 · 보존형 컴팩션 요약(옛 512 토큰 요약에는 싣지 않는다, 사고가 요약을 잘라 먹는다) · 자식(**해석한 모델과 같은 모델로 돌 때만** — 재개 때 모델 핀이 저장소에서 다시 지어져 티켓에 실을 수 없으므로 스테퍼가 모델과 짝으로 쥔다). 거절은 런타임 조립 때 경고 로그. ⚠️ 모델별·`everyday` 기본값은 이제 채팅·DA·**코딩**에 함께 걸린다 — 그 값을 정하는 커밋은 코딩 에이전트 지표의 경계이기도 하다. 값은 아무것도 정하지 않았다 → **경계가 아니다**. 테스트 열하나, 변이 여덟. **⑤ 벤치 러너**(모델별 스윕). ⚪ preflight 는 모델 단위로 effort 없이 찌른다 — 역할이 받지 않는 레벨을 API 가 400 으로 거절하는지는 여기서 보이지 않는다 | **K5** P1 |
-| **R-06** | `refusal` 정상 분기, base64 필터 | ✅ **K6 착지 (2026-09-19).** `normalize_stop_reason`이 넷째 결과 `refusal`을 알고 **`has_tool_calls`보다 우선한다**(거절한 턴의 도구는 실행하지 않는다 — fail closed). 어댑터가 `delta.stop_details.category`를 `ModelCompleted.stop_category`로 싣고, durable 루프가 `model.refused` 원장 이벤트를 남긴 뒤 **재시도 없이** `model_refused`로 끝낸다. 전에는 `unknown`으로 뭉개져 **텍스트가 있으면 `model_output_incomplete`**(원인 소실), **없으면 빈 텍스트 재시도**(거절을 그대로 다시 보냄)로 갈렸다. 메트릭 outcome도 `other`에서 분리했다. **base64는 전제가 틀렸다** — 부모는 `redact_sensitive`가 이미 401자로 자르고 있었고(쓸 수 없는 조각이 `truncated: False` 옆에 남았다), 자식 포트(`subagent_port.py`)는 **아무 축약도 없었다**. `strip_binary_payloads` 한 헬퍼를 **매핑이 만들어지는 두 곳**에 걸었다 | — | ~~K6~~ |
-| **R-07** | 클라이언트 compaction = 요약 1건 + 새 user 턴 | ✅ **K7 착지(가드로).** ~~정확히 금지된 형태다~~ → **정정:** 원문은 최근 턴을 남기는 컴팩션을 "남긴 턴의 thinking을 떼면" 허용한다. 요약을 system에 두는 G2도 **컴팩션 경계에서 thinking을 떼면** 유효하다 — ~~G2 CLOSED를 재개한다~~는 과잉 처방이었다. 컴팩션이 만드는 모든 비-append 편집을 R-01의 가드가 잡는다. 요약 프롬프트에는 서명을 싣지 않는다 | ~~P-05(요약 6항목 보존 지시)는 남았다~~ → **착지, 기본 off**(2026-09-25, P-05 줄) — 가드는 **유효성**을 지키지 **요약 품질**을 지키지 않는다 | ~~K7~~ · ~~P-05~~ |
+| **R-01** | 이력 append-only, 원본 그대로 재전송 | ✅ K1 · K1c · K1b | 비-append 편집의 thinking 제거는 **`_guard_thinking_prefix` 한 곳**에서만 한다 — 경로별로 고치지 않는다. 이 계정에서 바인딩 불일치는 400 이 아니라 **조용하다**(§5.6) | ~~K1~~ · ~~K1c~~ · ~~K1b~~ |
+| **R-02** | 턴 한정 system message (`clear_at`) | ✅ K2 · K2b | `deferred` 는 도구의 **정적** 속성이다 — 공개 때 뒤집으면 배열이 흔들려 버그가 고침의 탈을 쓰고 돌아온다. `mid_conversation_tools` 는 `claude-fable-5-1` 에만(어느 모델이 받는지는 로컬에서 알 수 없다) | ~~K2~~ · ~~K2b~~ |
+| **R-03** | 서브에이전트 즉시 반환 + `await` 도구 | ✅ K3 (기본 off) | **켜는 것은 A1·A2 숫자 뒤**(§5.3, 표본 경계). 결과 전달은 append 만 | ~~K3~~ |
+| **R-04** | progress thinking 렌더 | ✅ K4a · K4b | 프롬프트 절반은 **K9·K11 뒤** — 스펙이 자율 모드를 제외하는데 DA 워커는 항상 자율이다 | ~~K4a~~ · ~~K4b~~ |
+| **R-05** | effort 역할별 외부화, 중간 변경 | ✅ ①~③ · 채팅 · ④ DA · ④ 코딩 | **⑤ 벤치 러너**(모델별 스윕). 모델별·`everyday` 기본값은 채팅·DA·코딩에 함께 걸린다 — 그 값을 정하는 커밋은 세 지표의 경계다(§8 행 10). ⚪ preflight 는 effort 없이 찌른다 — 역할이 받지 않는 레벨의 400 은 여기서 보이지 않는다 | **K5** P1 |
+| **R-06** | `refusal` 정상 분기, base64 필터 | ✅ K6 | 도구 결과 매핑은 **만들어지는 자리**에 건다(§14) | ~~K6~~ |
+| **R-07** | 클라이언트 compaction = 요약 1건 + 새 user 턴 | ✅ K7(가드로) · P-05(기본 off) | 가드는 **유효성**을 지키지 요약 품질을 지키지 않는다 | ~~K7~~ · ~~P-05~~ |
 | **R-08** | `max_tokens` = 사고 + 응답 | `ModelLimits.thinking_budget` 필드는 있음 | 긴 산출물(compose)의 한도 산식 + 예산 노트 | **K8** P2 |
-| **P-01** | 자율 완수 블록 | ~~코딩 프롬프트 `_tasks`에 "비가역·워크스페이스 밖이면 멈춰라"만 있음~~ ✅ 코딩 autonomous 태스크에 착지(2026-09-28, K9) — 공식 두 블록, 원문 대조 | 자율 오버레이. DA 워커는 **항상 자율 모드** — ⚪ DA 쪽은 아직(워커 프롬프트를 움직이면 #23 전 금지) | **K9** P0 |
-| **P-02** | 변경·테스트 범위 제한 | ~~`_tasks`에 범위 한 줄~~ ✅ 코딩 **autonomous** 태스크에 착지(2026-09-28, K9 — 사람의 결정: autonomous 먼저). 스펙 초안이 공식 문구와 달라 원문으로 고쳤다 | 코딩: 확장 — ⚪ interactive 투입은 §경계 11 의 행 하나라 효과를 본 뒤. 조사: "질문을 넓히지 않는다"로 번역(`worker_brief`의 범위 규칙과 합친다) | **K9** |
-| **P-03** | 배칭 넛지(턴마다 새 사본) | `_using_tools`에 병렬 허용 문장(정적) | K2 선행 | **K10** P1 |
+| **P-01** | 자율 완수 블록 | ✅ 코딩 autonomous(K9) | ⚪ DA 쪽은 아직 — DA 워커는 **항상 자율**이지만 워커 프롬프트를 움직이면 #23 전 금지 | **K9** P0 |
+| **P-02** | 변경·테스트 범위 제한 | ✅ 코딩 **autonomous** 만(K9) | ⚪ interactive 투입은 §8 경계 11 의 행 하나 — autonomous 효과를 본 뒤. 조사: "질문을 넓히지 않는다"로 번역(`worker_brief`의 범위 규칙과 합친다) | **K9** |
+| **P-03** | 배칭 넛지(턴마다 새 사본) | `_using_tools`에 병렬 허용 문장(정적) | K2 착지로 선행 풀림 | **K10** P1 |
 | **P-04** | 부분 편집 선호 | 없음 | 한 문장. 조사 워커엔 무관 | **K10** |
-| **P-05** | compaction 요약 6항목 보존 | ~~컴팩션 프롬프트 미감사~~ → 🔴 감사해 보니 **반대였다**: `facts only. <= 200 words` · 출력 512 · 30초. 공식 지시는 "여섯 항목은 길어지더라도 완전하게, 사용자 발화는 원래 표현에 가깝게"다. ✅ **착지, 기본 off (2026-09-25).** `coding.compaction_preserving_summary` 가 켜지면 공식 블록(`neos/coding/prompts/official.py` — 공식 문구의 **첫 거주지**. K9·K10·K11 블록도 여기로 온다)을 system 으로, 상한 `compaction_summary_max_tokens`(4096, 잠정) · 루프 timeout 을 쓴다. 📌 **스펙 파일의 문구는 초안이었다** — 원문을 가져와 대조했고(1258자 일치), 스펙에 원문 블록을 넣고 테스트가 코드↔스펙 바이트 일치를 건다. **P-02 초안도 원문과 다르다.** 추출 정책: 위험은 형식이 아니라 **불완전성** — 태그 쌍이 온전하면 안쪽 · 태그 없이 끝까지 썼으면 전체 · **태그 쌍 없이 `max_tokens` 면 버린다**(뒤쪽 항목 (5)(6)을 잃은 요약이 매 턴 "완전한 요약" 으로 실리는 것은 조용한 실패다. 버리면 헤드 드롭으로 가는 시끄러운 실패다, 경고 로그). 꺼지면 요청이 예전과 같다(테스트) | **켜기** = 코딩 에이전트 지표의 표본 경계(§8 행 11). ⚠️ 별건: 요약기 입력이 `json.dumps(prefix)[:12_000]` — **앞에서** 자르므로 긴 대화에서 가장 **최근** 부분이 요약기에 닿지 않는다. 공식 지시 (4) "지금 정확히 어디까지" 의 재료가 빠진다. 문구 하나 = 표본 하나라 P-05 와 섞지 않았다 | ~~**K7**~~ · 입력 절단 |
+| **P-05** | compaction 요약 6항목 보존 | ✅ 착지, 기본 off (2026-09-25) | **켜기** = 코딩 에이전트 지표의 표본 경계(§8 행 11). ⚠️ 별건: 요약기 입력이 `json.dumps(prefix)[:12_000]` — **앞에서** 자르므로 긴 대화에서 가장 **최근** 부분이 요약기에 닿지 않는다(공식 지시 (4) 의 재료가 빠진다). 문구 하나 = 표본 하나라 P-05 와 섞지 않았다 | 입력 절단 |
 | **P-06** | low effort 검색 유도 | — | **scout(everyday)가 직접 해당.** 1차 대응은 그 턴만 effort 상향(K5) | **K11** P2 |
 | **P-07** | 억제 문구 제거 | 코딩 `_tone` 미감사. DA 프롬프트는 JSON 계약이지 안티포매팅이 아니다 | grep 감사 → 제거. `final_compose`에는 "mannered prose" 한 줄 후보 | **K11** |
 
@@ -376,50 +389,27 @@ PLAN_260913 **B2 게이트**(managed provider)가 선행이다. Docker를 produc
 ### 5.5 K 순서
 
 ```
-✅ K0 · K1 · K2 · K7 (2026-09-15, 코딩 루프) · K1c (2026-09-17, 자식·DA) · K2b · K6 · K4a (2026-09-19)
-✅ K1b · K4b (2026-09-24, §5.6)
-K5 ~~effort 필드~~ ✅①~④(DA) · ✅④(코딩 루프, 2026-09-28) · 벤치 러너 ─> 모델별 스윕 ─┬─> 워커를 Fable 5.1로 라우팅 (§8 경계 9)
-K9 자율/대면 오버레이 (G11) — ✅ 모드 신호·오버레이(2026-09-28) ───────┘
+✅ K0 · K1 · K2 · K7 (09-15) · K1c · K1d (09-17) · K2b · K6 · K4a (09-19) · K3 (09-22, 기본 off)
+✅ K1b · K4b (09-24) · P-05 (09-25, 기본 off) · K5 ①~④ (09-21~28) · K9 모드·오버레이·P-02 autonomous (09-28)
+K5 ⑤ 벤치 러너 ─> 모델별 스윕 ─┬─> 워커를 Fable 5.1로 라우팅 (§8 경계 9)
+K9 (DA 쪽 · P-02 interactive) ─┘
 K9 ─> K11 억제 문구 감사
 K10 배칭 넛지 · K8 max_tokens (K5 값 뒤)
-✅ K1 ─> ~~K3 비동기 spawn + await_subagent.v1~~  (착지 2026-09-22. 기본 on은 A1·A2 숫자 뒤)
 ```
 
-~~**K1b가 Fable 5.1로 옮기는 선행이다.** 가드와 바이트 동일 테스트는 **가짜 모델**에서 초록이다 —
-실제 API가 서명을 어떻게 검사하는지는 `drop_block` 진단으로 한 세션을 돌려 `input_transformations`가
-비어 있음을 봐야 안다.~~ → **K1b 는 통과했고 이 선행은 풀렸다**(2026-09-24, §5.6). 라우팅의 남은 조건은 K5·K9 다.
-
 > ⚠️ **가짜로 확인하지 못한 가정 하나:** assistant 턴 안에서 thinking 블록을 **맨 앞에** 모은다(`_completed_turn`).
-> ~~K1b가 이것을 확인한다~~ → K1b 네 세션에서 thinking 은 늘 턴 첫 블록이었고 중간에 끼는 응답은 없었다(§5.6).
-> **반증되지 않았을 뿐 확인되지 않았다** — 중간에 오는 응답이 관측되면 스트림 순서를 보존하도록 고친다.
+> K1b 네 세션에서 thinking 은 늘 턴 첫 블록이었다 — **반증되지 않았을 뿐 확인되지 않았다.** 중간에 오는 응답이
+> 관측되면 스트림 순서를 보존하도록 고친다.
 
 ### 5.6 K1b · K4b 실측 (2026-09-24)
 
-`scripts/fable_binding_probe.py` · 아티팩트 `artifacts/fable-k1b/` 네 세션(대면 · 자율 병렬 · 자율 사슬 7턴 ·
-사슬 + `summarized`). 대화를 **NEOS 경로**(`_completed_turn` 과 같은 접기 → `_to_anthropic_request`)로 몰고,
-매 요청을 `drop_block` 진단 모드로 보냈다.
+전문은 [DONE §2.2](DEEP_ANALYSIS_HARNESS_DONE.md). 앞으로도 걸리는 사실만 남긴다.
 
-| 무엇 | 결과 |
-|---|---|
-| **K1b — NEOS 경로 재전송** | 네 세션 모든 턴에서 `input_transformations: []`. 텍스트가 **실린** thinking(`summarized`, 68자)도 같다 |
-| 음성 대조 — system 을 일부러 바꾼다 | `[{"type":"thinking_dropped","path":"messages.1.content.0","reason":"prefix_binding_mismatch"}]` — **진단이 살아 있다**. 그래서 위의 "비었다"가 의미를 가진다 |
-| 같은 변조, 바인딩 제어 없이 | **200** — 스펙은 400 이라 적었다(2026-08-31 이후 계정). 🔴 **이 계정에서는 불일치가 조용하다** — 400 이 알려 주지 않으므로 `_guard_thinking_prefix` 가 유일한 방어다 |
-| thinking 순서(맨 앞 모음 가정) | thinking 은 늘 턴 **첫 블록**이었다. 중간에 끼는 응답은 **한 번도 없었다** — 가정이 반증되지 않았을 뿐 확인되지 않았다 |
-| **K4b — `display` 안 보냄** | thinking 본문이 **빈다**(서명만). 서버 기본은 `omitted` — SDK 독스트링(`summarized`)이 틀렸다. **K4a 상태 줄이 Fable 5.1 에서 늘 비어 있었다** |
-| `display` 값 검사 | 모르는 값 → 400 `Input should be 'summarized', 'omitted', 'updates'`. `updates` 는 서버가 아는 값이다(SDK 타입에만 없다) |
-| `updates` 의 본문 | 네 세션에서 **비어 있지 않은 블록 0**. `summarized` 는 같은 요청에 본문을 준다. 모델이 이 과제들에서 거의 생각하지 않았다(thinking 13~16 토큰) |
-
-**고친 것.**
-
-- **K4b:** 카탈로그에 `thinking_display`(서버가 받는 셋만, adaptive 모델에만)를 두고 Fable 5.1 에 `updates` 를
-  선언했다. 어댑터는 선언한 모델에만 `thinking` 과 베타를 싣는다 — 나머지 모델의 요청은 예전과 바이트가 같다
-- 🆕 **reasoning 토큰이 늘 0 이었다.** 어댑터가 `usage.reasoning_tokens` 를 읽었는데 API 는
-  `usage.output_tokens_details.thinking_tokens` 에 싣는다. 가짜 클라이언트 테스트가 **없는 필드를 지어내** 초록이었다
-  (§14 계측을 먼저 의심한다). 읽기를 고치자 두 번째 결함이 드러났다: 토큰 예산이 `output + reasoning` 을 더했는데
-  **thinking 은 이미 output 안에 있다** — 늘 0 이라 무해했을 뿐이다. reasoning 을 output 의 **내역**으로 정의하고
-  예산 합에서 뺐다. ⚠️ 경계는 아니다 — 모델이 보는 것은 바뀌지 않고, 예산 판정은 전과 같은 값을 본다
-
-> ⚪ **K1b 가 Fable 5.1 라우팅(§8 경계 9)의 선행이라고 적었던 것은 풀렸다.** 남은 조건은 K5·K9 이다.
+- **NEOS 경로 재전송은 서명 바인딩을 깨지 않는다** — 네 세션 모든 턴 `input_transformations: []`, 음성 대조가 진단이 살아 있음을 보였다
+- 🔴 **이 계정에서는 바인딩 불일치가 400 이 아니라 200 이다.** 알려 주는 에러가 없으므로 `_guard_thinking_prefix` 가 유일한 방어다
+- **`thinking.display` 를 보내지 않으면 본문이 빈다**(서버 기본 `omitted`, SDK 독스트링이 틀렸다). 카탈로그 `thinking_display` 를 선언한 모델에만 싣는다
+- **reasoning 토큰은 output 의 내역이다** — API 는 `usage.output_tokens_details.thinking_tokens` 에 싣고, 예산 합에 따로 더하지 않는다
+- K1b 가 Fable 5.1 라우팅(§8 경계 9)의 선행이라던 것은 풀렸다. 남은 조건은 K5·K9 다
 
 ---
 
@@ -460,6 +450,9 @@ K10 배칭 넛지 · K8 max_tokens (K5 값 뒤)
 
 ## 7. 지금의 병목 — 인용 생산 사슬
 
+> ✅ **2026-10-03: #23·#24 를 돌렸다.** #23 원 규칙 판정은 W-2 로 보류(D102), 귀속 규칙을 고쳐 #24 판독 전에 등록(D103),
+> #24 가 BUDGET2 를 확인하고 CITE1 원인을 **후보 ② 자기 클레임 침묵 폐기**로 묶었다(D104). 아래 실행 순서는 기록으로 남긴다.
+
 **트랙 A에서 코드로 할 수 있는 일은 비었다.** 남은 것은 라이브 표본 하나다.
 
 ```
@@ -478,26 +471,33 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 
 | 무엇 | 상태 |
 |---|---|
-| ~~**`ANTHROPIC_WORKSPACE_ID` 값 하나**~~ | ✅ **필요 없어졌다**(2026-09-23). 새 키는 워크스페이스 헤더 없이 동작한다 — 헤더를 보내지 않은 채 DA 역할 모델 넷(haiku-4.5·sonnet-5·opus-5·opus-4-8)을 **실제로 불러** 답을 받았다(D94 의 교훈: 키 존재가 아니라 호출로 확인). 헤더 배선은 남긴다 — 값이 비면 아무것도 보내지 않는다 |
-| ~~D93 사전 등록~~ | ✅ **D98 로 다시 썼다**(2026-09-24). D-14 = 분리 — BUDGET2 를 플래그(`deep_analysis.budget_aware_reduction`)로 **#23 에서만** 끄고 CITE1 을 가른다. #24 가 BUDGET2 를 켠 같은 표본이다. 재현 게이트는 **독립 집계**(파서 대 SQL)로 바꿨다 |
-| ~~🔴 **`TAVILY_API_KEY`**~~ | ~~`.env` 에서 **비어 있다**(2026-09-24 preflight 가 거부). **#23 의 남은 선행은 이것 하나다**~~ → ✅ **채워졌다**(2026-09-28 확인). 동작 여부는 아직 보지 않았다 — 아래 2 의 preflight 가 실호출로 본다. 모델 프로브 셋은 통과했다(D94 §4 도 닫힘) |
-| 판독기·테스트 14 | ✅ 재사용 · 재현 게이트는 독립 집계로 대체(D98 §4) |
+| 키 | ✅ `ANTHROPIC_WORKSPACE_ID` 는 필요 없다(2026-09-23 실호출) · `TAVILY_API_KEY` 채워짐(2026-09-28). 동작 여부는 아래 2 의 preflight 가 실호출로 본다 |
+| 사전 등록 | ✅ **D98**(2026-09-24) — #23 은 BUDGET2 를 끄고 CITE1 을 가른다, #24 가 BUDGET2 를 잰다. 재현 게이트는 **독립 집계**(파서 대 SQL) |
+| 판독기·테스트 14 | ✅ 재사용 |
+
+경위: [DONE §5](DEEP_ANALYSIS_HARNESS_DONE.md)
 
 **#23 실행 순서** (DECISIONS D98 §6 — 이대로 한 번만 돈다)
 
 ```
 0. 도는 동안 DA 재개 버튼을 누르지 않는다(§10.1). 스크립트는 `jobs.execute_run` 을 프로세스 안에서
    부르므로 Celery 재전달(§10.1)은 이 경로에 걸리지 않는다 — Celery 로 옮겨 돌리지 않는다
-1. ~~.env 에 TAVILY_API_KEY 를 채운다~~ ✅ 2026-09-28 확인           ← 사람
+1. (키는 채워졌다 — 2026-09-28)                                    ← 사람
 2. NEOS_CONFIG_PATH=config/samples/sample-23.yaml \
      .venv/bin/python scripts/deep_analysis_funnel_sample.py        ← preflight 가 안에서 먼저 돈다
+   (D99: 판정자는 Jev 다. preflight 가 Jev 판정자에도 실호출을 보낸다 — TYPESAFE_API_KEY 필요)
    dev 5 + default 1, 정확히 1회. 실패해도 재시도하지 않는다
 3. 판정 전에 보존한다: 아티팩트 디렉터리를 저장소에 강제로 더하고(gitignore),
    여섯 런의 deep_analysis_* 행을 pg_dump 로 떠서 함께 둔다          ← #1~#22 가 사라진 경로
-4. scripts/deep_analysis_reduction_attribution.py --run <여섯 접두사> --expect-budget2 off
+4. scripts/deep_analysis_reduction_attribution.py --run <여섯 접두사> --expect-budget2 off --expect-claim-judge jev
    독립 집계 게이트가 실패하면 판정하지 않는다
-5. W-1·W-2·W-3′·W-4′·Q-1~Q-3 을 먼저 읽고, 그다음 판정 코드를 읽는다
+5. `judge_backend` 분포(jev · llm_fallback)를 먼저 적는다(D99 §2). 그다음
+   W-1·W-2·W-3′·W-4′·Q-1~Q-3 을 읽고, 그다음 판정 코드를 읽는다
 ```
+
+**#24** (D101) — #23 이 돌고 보존·판정된 **뒤에** 같은 순서로 한 번 돈다. 다른 것은 오버레이 하나다:
+`NEOS_CONFIG_PATH=config/samples/sample-24.yaml` (BUDGET2 on, 판정자는 #23 과 같은 Jev). 판독은
+`--expect-budget2 on --expect-claim-judge jev`, 기대값 P-1~P-3 의 기준선은 #23 이다.
 
 > ⚠️ **그전에 `node_summary` 프롬프트나 리덕션 층을 손대는 것은 D40·D51의 반복이다.**
 > **J4(점진 공개 조립)도 여기에 걸린다** — 가장 매력적인 처방이 가장 먼저 원인 판별을 오염시킨다.
@@ -517,16 +517,18 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 | 5 | BUDGET2 | 리덕션 클램프가 `available_for_reduction` 을 안다 | **리덕션 층 전부** |
 | 6 | D2 | fetch가 429·503·전송 오류를 재시도한다 | **확보한 증거의 양**과 하류 전부 |
 | 7 | `f9b6c261` | DA 호출이 코딩 하네스를 거친다(사용량 추출·중단 사유) | ⚠️ **경계 여부 미판정.** 카세트 백테스트로 토큰 회계가 같음을 보이기 전까지 조사 지출(L-1) 계보를 가로질러 놓지 않는다 |
-| **8** 🆕 | J 플래그를 켜는 커밋 | 워커가 코딩 루프가 된다 | **경계가 아니라 새 계보(C-계열)다.** #1~#23과 어떤 수치도 나란히 놓지 않는다. C-계열 안에서도 research/analyze/compose를 켜는 커밋이 각각 경계다 |
-| **9** 🆕 | K: 워커·판정자를 Fable 5.1로 라우팅하는 커밋 | thinking이 항상 켜진다(끌 수 없다) | 채점 결과 · 토큰 지출 · 벽시계 |
-| **13** 🆕 | K1c 착지 (2026-09-17) | **심층분석이 thinking 블록을 대화에 되돌려 싣는다** — `run_discovery` 의 도구 루프가 assistant 턴을 그대로 다시 보내므로 입력 토큰과 모델 행동이 같이 바뀐다. 자식도 같다 | **조사 지출(L-1) 계보** · 발견(discovery) 결과 · 자식 fold 요약. ⚠️ 경계 7(하네스 경유)과 **같은 방향으로 겹친다** — 둘을 함께 백테스트로 풀지 않으면 귀속이 불가능하다 |
-| **12** 🆕 | K0·K1·K2·K7 착지 (2026-09-15) | **코딩 루프**가 thinking 블록을 돌려보낸다(sonnet-5·opus-5는 adaptive가 기본이라 이미 블록이 오고 있었다) · pre_generate 훅의 system 노트가 system 프롬프트에서 메시지로 옮겼다 · 편집 경계에서 thinking을 뗀다 | **코딩 에이전트 지표(A1 베이스라인)** — 토큰·캐시 적중·완료율. **심층분석은 가로지르지 않는다**: DA 브리지(`harness_bridge.py`)는 thinking을 싣지 않고 system 노트를 쓰지 않는다 |
-| **10** 🆕 | K5: effort 기본값을 정하는 커밋 | 역할별 사고량 | 채점 결과 · 토큰 지출. **effort 변경마다 행을 더한다** |
-| **11** 🆕 | K9·K11: 오버레이·억제 문구 제거 | 워커 행동 기본값 | 채점 결과. 문구 하나 = 행 하나. 📌 2026-09-28 autonomous 오버레이(P-01 두 블록 + P-02)는 **행을 더하지 않는다** — autonomous 로 돈 태스크가 없어 비교할 이전이 없다, **새 계보의 시작**이다. interactive 에 넣는 날이 이 표의 행이다 |
-| **15** 🆕 | K2b 착지 (2026-09-19) | **Fable 5.1 의 `tools[]` 가 커졌다.** deferred 도구까지 매 요청에 선언하므로(17→18, `defer_loading` 으로 감춘다) **입력 토큰이 매 턴 늘고 캐시 경계도 달라진다.** 동시에 도구 공개가 더는 thinking 을 떼지 않으므로 **모델 행동도 같이 바뀐다** | 코딩 에이전트 **토큰·캐시 적중·완료율**. `mid_conversation_tools` 가 켜진 모델에서만. ⚠️ **K4a 는 경계가 아니다** — 이벤트만 더할 뿐 모델이 보는 것은 하나도 바뀌지 않는다 |
-| **14** 🆕 | K6 착지 (2026-09-19) | **거절이 `unknown`에서 분리됐다.** 같은 거절이 전에는 텍스트가 있으면 `model_output_incomplete`로, 없으면 **빈 텍스트 재시도**로 끝났다. 이제 `model_refused` 하나로 끝나고 재시도가 사라지므로 **호출 수와 지출도 함께 움직인다** | 코딩 에이전트 **실패 코드 분포**와 재시도 횟수. ⚠️ 토큰 경계는 **`image_tool`이 켜진 배포에서만** — 기본 off라 나머지 배포에서는 tool_result 바이트가 그대로다 |
-| **16** 🆕 | L3: Jev 도구 위험 게이트를 켜는 커밋 | **도구 호출이 확률 판정으로 차단된다.** 같은 입력이 같은 밴드에 떨어진다는 보장이 없다(σ≈0.01, §12.2) | 코딩 에이전트 **완료율 · 실패 코드 분포 · 승인 횟수**. DA 워커에 켜는 커밋은 **C-계열 안에서 또 하나의 경계**다 |
-| **17** 🆕 | L6: 판정자를 Jev 로 교체하는 커밋 | 판정자 교체 — **경계 3과 같은 등급이다** | **채점 결과 전부.** C-계열과도 나란히 놓지 않는다: 새 계보를 연다. ⚠️ L5(섀도)는 판정을 바꾸지 않으므로 채점 경계가 **아니지만**, 호출이 하나 늘어나므로 **지출·벽시계 계보에는 경계다** |
+| **8** | J 플래그를 켜는 커밋 | 워커가 코딩 루프가 된다 | **경계가 아니라 새 계보(C-계열)다.** #1~#23과 어떤 수치도 나란히 놓지 않는다. C-계열 안에서도 research/analyze/compose를 켜는 커밋이 각각 경계다 |
+| **9** | K: 워커·판정자를 Fable 5.1로 라우팅하는 커밋 | thinking이 항상 켜진다(끌 수 없다) | 채점 결과 · 토큰 지출 · 벽시계 |
+| **13** | K1c 착지 (2026-09-17) | **심층분석이 thinking 블록을 대화에 되돌려 싣는다** — `run_discovery` 의 도구 루프가 assistant 턴을 그대로 다시 보내므로 입력 토큰과 모델 행동이 같이 바뀐다. 자식도 같다 | **조사 지출(L-1) 계보** · 발견(discovery) 결과 · 자식 fold 요약. ⚠️ 경계 7(하네스 경유)과 **같은 방향으로 겹친다** — 둘을 함께 백테스트로 풀지 않으면 귀속이 불가능하다 |
+| **12** | K0·K1·K2·K7 착지 (2026-09-15) | **코딩 루프**가 thinking 블록을 돌려보낸다(sonnet-5·opus-5는 adaptive가 기본이라 이미 블록이 오고 있었다) · pre_generate 훅의 system 노트가 system 프롬프트에서 메시지로 옮겼다 · 편집 경계에서 thinking을 뗀다 | **코딩 에이전트 지표(A1 베이스라인)** — 토큰·캐시 적중·완료율. **심층분석은 가로지르지 않는다**: DA 브리지(`harness_bridge.py`)는 thinking을 싣지 않고 system 노트를 쓰지 않는다 |
+| **10** | K5: effort 기본값을 정하는 커밋 | 역할별 사고량 | 채점 결과 · 토큰 지출. **effort 변경마다 행을 더한다** |
+| **11** | K9·K11: 오버레이·억제 문구 제거 | 워커 행동 기본값 | 채점 결과. 문구 하나 = 행 하나. 📌 2026-09-28 autonomous 오버레이(P-01 두 블록 + P-02)는 **행을 더하지 않는다** — autonomous 로 돈 태스크가 없어 비교할 이전이 없다, **새 계보의 시작**이다. interactive 에 넣는 날이 이 표의 행이다 |
+| **15** | K2b 착지 (2026-09-19) | **Fable 5.1 의 `tools[]` 가 커졌다.** deferred 도구까지 매 요청에 선언하므로(17→18, `defer_loading` 으로 감춘다) **입력 토큰이 매 턴 늘고 캐시 경계도 달라진다.** 동시에 도구 공개가 더는 thinking 을 떼지 않으므로 **모델 행동도 같이 바뀐다** | 코딩 에이전트 **토큰·캐시 적중·완료율**. `mid_conversation_tools` 가 켜진 모델에서만. ⚠️ **K4a 는 경계가 아니다** — 이벤트만 더할 뿐 모델이 보는 것은 하나도 바뀌지 않는다 |
+| **14** | K6 착지 (2026-09-19) | **거절이 `unknown`에서 분리됐다.** 같은 거절이 전에는 텍스트가 있으면 `model_output_incomplete`로, 없으면 **빈 텍스트 재시도**로 끝났다. 이제 `model_refused` 하나로 끝나고 재시도가 사라지므로 **호출 수와 지출도 함께 움직인다** | 코딩 에이전트 **실패 코드 분포**와 재시도 횟수. ⚠️ 토큰 경계는 **`image_tool`이 켜진 배포에서만** — 기본 off라 나머지 배포에서는 tool_result 바이트가 그대로다 |
+| **16** | L3: Jev 도구 위험 게이트를 켜는 커밋 | **도구 호출이 확률 판정으로 차단된다.** 같은 입력이 같은 밴드에 떨어진다는 보장이 없다(σ≈0.01, §12.2) | 코딩 에이전트 **완료율 · 실패 코드 분포 · 승인 횟수**. DA 워커에 켜는 커밋은 **C-계열 안에서 또 하나의 경계**다 |
+| **19** | `17dc2c19` (D106) | 도구 이름이 와이어에서 인코딩된다 · DA 자식이 자기 프롬프트(P-01·P-02)를 받는다 · memory 샌드박스 루트 절대경로 | **코딩 에이전트 지표**(와이어 바이트). 이 DB 에 라이브 코딩 기록이 없어 가로지를 과거 수치는 없다 |
+| **18** | J4: compose 자식을 켜는 커밋(D105 — #25 는 배선 결함으로 무효, **#26 부터**, D106) | 최종 초안을 compose 자식이 쓴다 — 모든 verified 클레임을 파일로 받는다 | **조립·리포트 계열** — 인용 생산 · 리포트 게이트 · 조립 지출. 조사 지출·verified 는 가로지르지 않는다 |
+| **17** | L6: 판정자를 Jev 로 교체하는 커밋 (2026-10-03, D99 — #23 부터 켠다) | 판정자 교체 — **경계 3과 같은 등급이다**. #23 은 이 경계를 가로지른 **새 채점 계보의 첫 표본**이다 | **채점 결과 전부.** C-계열과도 나란히 놓지 않는다: 새 계보를 연다. ⚠️ L5(섀도)는 판정을 바꾸지 않으므로 채점 경계가 **아니지만**, 호출이 하나 늘어나므로 **지출·벽시계 계보에는 경계다** |
 
 **1·2는 방향이 예측 가능했다. 3·5·6은 아니다. 7은 판정 전이다. 8은 계보를 새로 연다.**
 
@@ -534,8 +536,8 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 > **바이트 단위로** 같음을 테스트가 고정해야 한다. 경계는 **켜는 커밋**이다. J·K도 이 방법을 따른다.
 
 > 📌 D92 재현 게이트(79·152·152·15)는 **저장된 원장**을 읽으므로 어떤 경계에도 무효가 되지 않는다.
-> 🔴 **그러나 그 원장이 로컬에 없다**(2026-09-24, 고아 볼륨까지 확인 — §12.12). 경계에는 면역이지만 **재료 소실에는 면역이 아니다.**
-> ~~D93 을 다시 쓸 때 재현 게이트를 "통과해야 할 것"으로 둘 수 없다~~ → D98 이 재현 게이트를 **독립 집계**(파서 대 SQL)로 바꿔 #23 의 새 원장 위에 세웠다(§7).
+> 🔴 **그러나 그 원장이 로컬에 없다**(2026-09-24, 고아 볼륨까지 확인). 경계에는 면역이지만 **재료 소실에는 면역이 아니다.**
+> D98 이 재현 게이트를 **독립 집계**로 바꿔 #23 의 새 원장 위에 세웠다(§7).
 
 ---
 
@@ -547,7 +549,7 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 **하네스 층:**
 
 - **P2 단일 작성자** — 원장 쓰기는 오케스트레이터 한 곳
-- **judge ≠ worker** — `judge: claude-opus-4-8`. ⚠️ 워커와 같은 가족이라 편향 분리가 약하다
+- **judge ≠ worker** — `judge: claude-opus-4-8`, 인용 클레임은 Jev(L6, D99 — `jev.judge_enabled` 일 때). ⚠️ LLM 판정자는 워커와 같은 가족이라 편향 분리가 약하다. ✅ **크로스 프로바이더 판정자는 허용된다**(2026-10-03)
 - **append-only 이벤트 로그** — 예외는 의도를 표명한 트랜잭션뿐(`Ledger.purge_run()` + `SET LOCAL`)
 - **매직넘버 금지** — 전부 settings. 프롬프트는 전부 파일
 
@@ -558,7 +560,7 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 - 매니페스트 없는 런은 표본이 아니다 — 기계가 거부한다
 - judge 플러그인과 worker 플러그인은 같은 인스턴스일 수 없다
 
-**코딩 루프 층 🆕 (J·K — 다치기 전에 세우는 것):**
+**코딩 루프 층 (J·K — 다치기 전에 세우는 것):**
 
 - **코딩 워커는 원장에 쓰지 않는다.** `submit.v1`은 제안이다
 - **샌드박스 안 코드는 네트워크가 없다.** 바이트는 `fetch.py`를 통해서만 들어온다
@@ -567,7 +569,7 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 - **대화 이력은 in-place로 고치지 않는다**(K1). 요약·리마인더·도구 목록 교체는 정해진 경로로만
 - **샌드박스 ≠ 승인 생략**
 
-**확률 판정 층 🆕 (L — 다치기 전에 세우는 것):**
+**확률 판정 층 (L — 다치기 전에 세우는 것):**
 
 - **Jev ≠ 승인 생략.** 확률은 정적 denylist 를 이기지 못한다 — **좁히는 방향으로만** 작동한다(§12.2 ②)
 - **`DeterministicGrader` 는 확률 판정으로 대체되지 않는다.** 어떤 일치율이 나와도
@@ -593,8 +595,8 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 - ❌ 5+1 단일 관측으로 인과 주장 · ❌ **여러 변경을 한 표본에**
 - ✅ preflight가 모델을 **실제로 부르는지** 확인(D94)
 - ✅ `manifest.json`에 실행 영수증(PID, UTC start/end, exit)과 구성 지문(model ID, **effort**, threshold, cap, **샌드박스 이미지 digest**)
-- 🆕 ❌ **표본이 도는 동안 재개 버튼을 누르지 않는다** (2026-09-28 코드 대조). `RESUMABLE_STATUSES` 에 `running` 이 들어 있고 DA 에는 실행 lease 가 없다. 살아 있는 run 에 resume 하면 두 번째 실행자가 뜨고, 그 실행자의 `ledger.recover()` 가 `investigating` 질문을 `open` 으로 되돌린다 → 이중 지출 · 원장 작성자 둘. 표본 하나가 그대로 오염된다
-- 🆕 ⚠️ **Celery 모드에서 1시간을 넘기는 표본은 재전달된다**. `task_acks_late=True` 인데 Redis `visibility_timeout` 을 설정한 곳이 없다(kombu 기본 1시간 < DA `job_time_limit`). 원래 워커가 살아 있어도 두 번째 워커가 같은 run 을 잡는다. 고치기 전까지 긴 표본은 인라인 실행으로 돌린다
+- ❌ **표본이 도는 동안 재개 버튼을 누르지 않는다** (2026-09-28 코드 대조). `RESUMABLE_STATUSES` 에 `running` 이 들어 있고 DA 에는 실행 lease 가 없다. 살아 있는 run 에 resume 하면 두 번째 실행자가 뜨고, 그 실행자의 `ledger.recover()` 가 `investigating` 질문을 `open` 으로 되돌린다 → 이중 지출 · 원장 작성자 둘. 표본 하나가 그대로 오염된다
+- ⚠️ **Celery 모드에서 1시간을 넘기는 표본은 재전달된다**. `task_acks_late=True` 인데 Redis `visibility_timeout` 을 설정한 곳이 없다(kombu 기본 1시간 < DA `job_time_limit`). 원래 워커가 살아 있어도 두 번째 워커가 같은 run 을 잡는다. 고치기 전까지 긴 표본은 인라인 실행으로 돌린다
 
 ### 10.2 증거 보존
 
@@ -609,9 +611,9 @@ D95  🔴 identity-linked 키는 `anthropic-workspace-id` 필요. 고칠 자리�
 | 프로세스 env가 테스트 지정값을 이김 | litellm import 시 `load_dotenv()` |
 | import 시점 고정 플래그 어긋남 | `neos/main.py`의 `IS_DEBUG` |
 | 테스트가 심은 AsyncMock이 전역에 남음 | `patch`는 팩토리를 복원하지 캐시된 인스턴스를 복원하지 않는다 |
-| 🆕 **개발 DB 에 테스트 런이 쌓임** (2026-09-24 확인) | DB 를 쓰는 테스트(`test_ledger_purge`·`test_orchestrator_m*` 등)가 `.env` 의 `DATABASE_URL` = **`neos`** 를 그대로 쓴다. 스위트 한 번에 `deep_analysis_runs` 가 ~6 건씩 는다. `neos_test` 는 있는데 아무도 가리키지 않는다. 09-20 의 DB 재구축도 배포 부트스트랩과 pytest 가 같은 `neos` 에서 부딪친 것이었다· ✅ **고쳤다**(2026-09-24): `tests/conftest.py` 가 설정 로드 전에 `DATABASE_URL` 의 DB 이름을 `<이름>_test` 로 바꾼다(이미 `_test` 면 그대로). CI 도 `neos_test` 로 옮겼다. 전체 스위트 전후로 `neos` 490 건 불변, `neos_test` +10 |
-| 🆕 **한 파일만 돌리면 깨지는 설정 테스트** (2026-09-24) | `test_config_loader.py` 10건 — `.env` 를 가린 뒤 development 프로파일을 로드하는데 코딩 루프가 크리덴셜을 요구한다. 전체 스위트에서는 **윗줄의 litellm `load_dotenv()`** 가 키를 프로세스 env 에 넣어 줘서 통과했다. 픽스처가 CI 와 같은 자리표시자를 준다 |
-| 🆕 **lesson·GEPA overlay 가 조용히 꺼짐** (2026-09-28 코드 대조, 운영 경로) | 코딩 Celery 전달이 끝날 때마다 `set_lesson_session_factory(None)` 을 부른다. 이 함수는 모듈 전역 `_USE_MEMORY_ONLY=True` 를 **프로세스 전체에** 고정한다(`neos/learn/lessons.py`). 같은 워커 자식에서 뒤이어 도는 DA·gepa_opt 태스크는 lesson 을 읽지 못하고, overlay 는 예외를 삼켜 `None` 을 돌려준다. 윗줄들과 뿌리가 같다 — 런 컨텍스트를 명시 객체가 아니라 모듈 전역으로 건넨다 |
+| **개발 DB 에 테스트 런이 쌓임** (2026-09-24) | DB 를 쓰는 테스트가 `.env` 의 `DATABASE_URL` = `neos` 를 그대로 썼다. 09-20 의 DB 재구축도 배포 부트스트랩과 pytest 가 같은 `neos` 에서 부딪친 것이었다. ✅ 고쳤다 — `tests/conftest.py` 가 설정 로드 전에 DB 이름을 `<이름>_test` 로 강제한다(CI 도 `neos_test`) |
+| **한 파일만 돌리면 깨지는 설정 테스트** (2026-09-24) | `test_config_loader.py` 10건 — `.env` 를 가린 뒤 development 프로파일을 로드하는데 코딩 루프가 크리덴셜을 요구한다. 전체 스위트에서는 **윗줄의 litellm `load_dotenv()`** 가 키를 프로세스 env 에 넣어 줘서 통과했다. 픽스처가 CI 와 같은 자리표시자를 준다 |
+| **lesson·GEPA overlay 가 조용히 꺼짐** (2026-09-28 코드 대조, 운영 경로) | 코딩 Celery 전달이 끝날 때마다 `set_lesson_session_factory(None)` 을 부른다. 이 함수는 모듈 전역 `_USE_MEMORY_ONLY=True` 를 **프로세스 전체에** 고정한다(`neos/learn/lessons.py`). 같은 워커 자식에서 뒤이어 도는 DA·gepa_opt 태스크는 lesson 을 읽지 못하고, overlay 는 예외를 삼켜 `None` 을 돌려준다. 윗줄들과 뿌리가 같다 — 런 컨텍스트를 명시 객체가 아니라 모듈 전역으로 건넨다 |
 
 ### 10.4 검증 명령
 
@@ -657,68 +659,76 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 
 | 기다리는 것 | 항목 |
 |---|---|
-| **사람의 손** 🆕 (2026-09-24) | ① ~~**`TAVILY_API_KEY`** 를 `.env` 에~~ ✅ 채워졌다(2026-09-28) → **#23 을 §7 실행 순서대로 한 번 돌린다** · ② **L2 섀도 켜기** — ~~개발 서버를 `NEOS_CONFIG_PATH=config/samples/jev-l2-shadow.yaml` 로 기동하고, 쌓이면 `scripts/jev_l2_shadow_report.py --since <켠 날> --try …` 로~~ → **`make dev-jev-shadow`** 로 개발 서버를 띄우고(2026-09-28 — 오버레이를 서버 프로세스에만 건다, §11 L2 행), 쌓이면 **`make jev-shadow-report SINCE=<켠 날>`** 로 질문별 경계를 고른다(§12.12). 호출당 0.4~0.6 초가 붙는다 · ③ **Jev 가격** — 계정 청구 정보에서 가져와 `models.yaml` 에(L0 잔여). ①·②는 서로 독립이다 — 같은 날 해도 된다 |
-| **사람의 결정** | ~~D-14~~ · **D-12**(동적 합성을 표본 경로에) · **E-S2** · 트랙 G/H 켜기 · 트랙 I 보존 정책 · 🆕 **L6** 판정자 교체 |
-| **사람의 결정** 🆕 (2026-09-28, [분석 §8.6](NEOS_MOMENTUM_ANALYSIS_20260928.md)) | ① **D19 개정 범위** — "자동 변경 금지"를 "자동 후보 생성·자동 롤백 허용, 자동 승격 금지"로 좁힐 것인가 · ② **진화 fitness 정책** — GEPA 는 Jev·verdict 를 fitness 에서 뺐다(GEPA 문서 Non-goals). 결정론 검증기를 1차로 두고 Jev·판정자는 meta-eval 뒤 보조로만 둘 것인가 · ③ **Jev 세 채널** — 도구 위험(좁히기만, 지금) / 결과 판정(L5 를 코딩 VERIFY·DA claim 섀도로 앞당김) / 분기(L7 → **L7′** would-branch 섀도, 선행을 L3 에서 L1 로 완화)로 나눌 것인가 · ④ **크로스 프로바이더 판정자** — B 의 "크로스 프로바이더 폴백 금지"와 별개로 허용할 것인가 · ⑤ **북극성 일반화** — "재실행 가능한 검증이 붙은 코드 실행"을 1차 실행 모델로 둘 것인가. ①~⑤ 는 분석 문서가 **제안**했을 뿐이다. 이 문서의 계획이 되는 것은 결정 뒤다 |
-| **결정됨** 🆕 (2026-09-30, [dots 분석 §6](OPENAI_DOTS_ANALYSIS_260930.md)) | **Q0** 상시 에이전트를 NEOS 방향에 넣는다 — **범위는 좁히지 않는다**(dots F1~F22 전체. "상시 분석으로 좁혀 시작" 권고는 채택되지 않았다) · **USER_ONLY** 목록은 **코드에 고정**, 설정은 **늘리기만**(합집합 — 빼는 설정 표현을 만들지 않는다) · **`PAUSED`·`WAITING_USER`** 는 지우지 않고 쓴다 — `PAUSED` 는 감시자(Q5)·예산 봉투(Q10), `WAITING_USER` 는 묻고 기다리기(Q9). 📌 Q0 은 **D19·D6 을 바꾸지 않았다** — 피드백 자동 승격과 DA 경로의 브라우저는 여전히 그 결정들에 묶인다(분석 §5) · 🆕 같은 날 넷 더: **Q3** 차이 단위는 **클레임**(짝짓기 키는 열린 질문 — 권고는 런 안에서 이미 쓰는 `claim_hash` 를 런 사이로 넓히기) · **Q5** 감시자 판정자는 **Jev** — 트랙 L 규율 그대로(멈추게만 · digest · **섀도 먼저** · D-L1 폴백이므로 폴백용 최소 규칙은 여전히 필요) · **Q13** 사용자당 에이전트 **하나로 시작, 늘릴 수 있게** — 제약은 unique 인덱스 하나, 딸린 것은 전부 `agent_id` 키 · **Q16** 위협 모델은 **지속적 개선** — 착수 조건이 아니라 READ_ONLY 로 시작해 넓힐 때마다 증분 기록 · 🆕 **Q3 짝짓기 키**는 `claim_hash` 를 런 사이로(1차) + 증거 blob 해시 집합(보조) · **Q5 폴백 최소 규칙 FB1~FB6**(Jev 실패 때만, 원장에 이미 있는 이벤트만 읽는다, 멈추게만, 임계는 settings 이고 낮추기만 — [분석 §6.1](OPENAI_DOTS_ANALYSIS_260930.md)) |
-| **결정됨** 🆕 (2026-09-15) | **K3** 비동기 spawn 채택(§5.3) · **J production 샌드박스는 B2 게이트에 묶는다**(§4.5) · **Fable 5.1 공식 문구 그대로 사용**(§10.5) |
-| **결정됨** 🆕 (2026-09-17) | **K1d** `SubagentSpec.thinking` 은퇴 · **J1 이미지 = 분석 번들**(pandas·numpy·pypdf·bs4) · **compose 는 `final_compose` 계약 그대로** · **analyze 는 같은 질문의 verified 만** |
-| **결정됨** 🆕 (2026-09-22) | **D-L1**(§12.4) — unattended 중간대는 **DENY**, Jev 실패·타임아웃은 **정적 정책 폴백 + `jev_unavailable`**. 받아들인 위험: **Jev 가 죽으면 게이트도 없다** → 감시 조건은 `jev_unavailable` 비율(기준선은 L2 가 만든다) |
-| **결정됨** 🆕 (2026-09-28) | **CHILD-GATE** 자식의 REQUIRE_APPROVAL 은 **DENY**(자식은 승인할 수 없다) · **GRADE1** 계산 클레임은 **전용 판정 프롬프트**(`judge_computed.md`) · **J1.5** 계산의 premises ID 는 **다음 라운드 briefing 에** 공개 · **research 자식도 계산 클레임을 낸다**, 대신 전제는 **같은 질문**으로 채점기가 강제(계약 §2 해석 변경) · **K9** 모드 신호는 **태스크 요청 필드**(`mode`) · **P-02** 는 autonomous 에만 먼저 · **L2 섀도**는 개발에서 켠다(`make dev-jev-shadow`) |
-| **결정됨** 🆕 (2026-09-24) | **D-14** 분리 — #23 은 BUDGET2 를 끄고 CITE1 을 가르고, #24 가 BUDGET2 를 잰다(DECISIONS D98) · **D-L2** 쪼갠다 — 질문마다 제 경계로 밴딩, **가장 엄한 결과**. 확률을 합치지 않는다 · **D-L3** WAF 차단(`reason=provider_blocked`)은 R₀ 폴백이 아니라 **중간대처럼 한 단계 좁힌다**. 다른 실패는 D-L1 그대로 (§12.12) |
-| **라이브 표본** | CITE1 후보 판별(#23) · BUDGET2 효과 · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · 🆕 **C-계열**(J5) · 🆕 effort 스윕(K5) · 🆕 **L5 판정자 섀도**(판정 불변, 지출만 움직인다) |
-| **새 사전 등록** | ~~D93 다시 쓰기~~ ✅ D98 · M-1 · 🆕 **J4**(점진 공개 조립) · 🆕 **C-계열 첫 표본** |
+| **사람의 손** | 🔴 **Anthropic API 사용 한도 소진**(2026-10-03, 2026-11-01 00:00Z 해제) — 한도를 올리거나 기다린다. 그 전까지 라이브 표본·dry run 불가(D107) · ~~① #23 을 한 번 돌린다~~ ✅ #23·#24 완료(2026-10-03, D102~D104) · ② **Jev 섀도·집행 가동** — `make dev-jev-enforce`(L3 게이트·Q5b 멈춤·L6, 잠정 경계) 또는 `make dev-jev-shadow`(섀도만)로 띄우고 켠 날을 적는다. 쌓이면 `make jev-shadow-report SINCE=<켠 날>` 로 **잠정 경계를 실측값으로 바꾼다**. 호출당 0.4~0.6 초가 붙는다 · ③ **Jev 가격** — 🔴 **공식 페이지에 가격이 공개돼 있지 않다**(2026-10-03 사용자 확인). 사용자가 추후 알려 주면 `models.yaml` 에 등재한다(L0 잔여). 그때까지 L6·L3·Q5b 의 Jev 호출 비용은 원장 지출에 잡히지 않는다 — 지출 계보를 읽을 때 먼저 적는다 · ④ **Q5b 경계 실측** — 지금 값은 잠정이다. ①·② 는 서로 독립이다 |
+| **사람의 결정** | 없음 — 2026-10-03 두 번에 걸쳐 전부 닫혔다(아래 결정 색인) |
+| **외부 선행** | **B2 배선**(Q14c 를 켠다 · J production 샌드박스 · **E-S2 의 staging·production**) · **벤더 SDK 바인딩 + 증거 + 실계정 스모크 R1~R11**(Q6c 를 연다) · **트랙 P 테넌트 격리**(Q17) · **W6**(DA 운영 경로 — Q3 를 켠다) |
+| **라이브 표본** | ~~CITE1 후보 판별(#23)~~ #23 돌았다(2026-10-03) — **판정 보류**(W-2, D102) · BUDGET2 효과(#24, D101 — #23 과 같은 Jev 판정자, 사전 등록 완료) · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · **C-계열**(J5) · effort 스윕(K5) · **L5 판정자 섀도**(판정 불변, 지출만 움직인다) |
+| **결정 뒤 구현할 것** (2026-10-03 2차) | **GS-RET** 대화 삭제 시 그래프 자식 체크포인트·전사 삭제 + 요약 보존(GS6 선행) · **Q3c** 상시 질문 diff 에 `source_url` 짝 + "갱신됨" 분류 · **L7′** Jev 핸들 채널 would-branch 섀도 · **트랙 P org 층** — GEPA overlay·레시피 org 공유, org 별 승인자(기본 org 관리자), Q17 조직 소유 에이전트 · **D102 후속** 버킷 귀속을 클레임 id 단위로 다시 세기 · D2 착지 여부 확인 |
+| **결정 뒤 구현할 것** (2026-10-05) | **CH-RESUME** 채널에서 승인한 워크플로우의 재개 결과가 **어디에도 가지 않는다** — `RuntimeWorkflowApprovals.decide` 가 백그라운드 `astream` 의 청크를 버리고 게이트웨이에는 `"{request_id} approved"` 만 돌아온다(Q8b 가 발견, Q8 설계 §8, [코드 읽기]). 웹의 재개 경로 `approval_handlers._resume` 은 최종 응답을 `completed` 이벤트로 내보낸다 — 채널 쪽만 빠졌다 · **CH-HIST** 채널 대화의 이력 결함 — 게이트웨이 `_run_workflow` 가 `enable_history_context=True` 만 켜고 `chat_history` 를 넘기지 않아 Slack·Discord·Telegram 대화가 **채널 안에서도 이전 턴을 보지 않는다**([코드 읽기], 실호출 확인 전 — Q8 설계 §2). Q8 은 상시 에이전트 소유자의 DM 만 고친다. 나머지 채널 대화를 어떻게 고칠지(세션 단위 전사를 둘지)는 착수 때 설계한다 |
+| **새 사전 등록** | M-1 · **J4**(점진 공개 조립) · **C-계열 첫 표본** · D6 개정(DA 조사 경로 브라우저 — **필요해지면** 제안) |
 | **새 스펙** | 트랙 F 재개 |
-| **표본 없이 되는 코드** 🆕 | ~~**L4**~~ 코드는 착지했다 — **재료가 없다**(§12.11 ④). 저장 원장을 되찾거나 #23 이 새 원장을 만들어야 돈다 |
+| **재료 없음** | **L4** — 코드는 착지했다. #23 의 원장으로 **사후에** 돈다(L6 이 먼저 켜졌으므로 이제 "켜기 전 근거"가 아니라 "켠 뒤 점검"이다, D99 §3) |
 | **측정 없이 못 정함** | `claude-opus-5` 세대 사실(CA12) |
 | **규모가 큰 별건** | D3b · D2 · D4 — 전부 W6 이후. **D4는 J가 수요를 만든다** |
 
-> **읽는 법:** 표본 없이 할 수 있던 K 코드는 **다 썼다** — K1c·K1d·K6·K4a·K2b 가 2026-09-17~19에 착지했다.
-> 남은 K는 ~~키가 있어야 하는 것(K1b·K4b)과~~ **프롬프트 층**(K5·K9·K10·K11)이다 — K1b·K4b 는 2026-09-24 에 끝났다(§5.6). → K5 ④ 와 K9 의 모드 신호·오버레이도 끝났다(2026-09-28). 남은 것은 K5 ⑤ 벤치 · P-02 의 interactive 투입 · K10 · K11 이다.
-> ~~트랙 A의 병목은 여전히 `.env` 한 줄이다 — **이름만 바뀌었다**(`ANTHROPIC_WORKSPACE_ID` → `TAVILY_API_KEY`).~~
-> → 그 줄은 채워졌다(2026-09-28). **트랙 A의 병목은 이제 설정이 아니라 #23 을 한 번 돌리는 사람의 손이다.** J4·L6 은 그 판정 뒤다.
-> **새 일이 생겼다고 옛 병목이 사라지지 않았다.** 표본 없이 되는 코드 중 가장 앞은 ~~**CHILD-GATE**(P0)~~ → 코딩 절반 착지(2026-09-28), ~~이제 **GRADE1 → J1.5** 다~~ → GRADE1 도 닫혔다(2026-09-28). ~~이제 **J1.5** 다(DA 조사 자식의 게이트를 함께 가져간다).~~ → J1.5 도 닫혔다(같은 날). **J 의 코드는 이제 J4 앞에서 멈춘다 — #23 판정 뒤다.** 표본 없이 되는 남은 코드는 작다: ~~CHILD-GATE ②·③~~ (둘 다 닫힘, 같은 날) · ~~S8 의 인용되지 않은 실행~~ (닫힘, 같은 날) · ~~K5 ④~~ (닫힘, 같은 날). **표본 없이 되는 코드는 이제 다 썼다** — 남은 것은 K5 ⑤ 벤치(키와 지출이 든다)와 프롬프트 층(K9·K10·K11, 결정 먼저), 그리고 #23.
+**결정됨** — 내용은 각 절에, 경위는 DONE 문서에 있다. 여기는 색인이다.
+
+| 날짜 | 결정 |
+|---|---|
+| 2026-09-15 | **K3** 비동기 spawn 채택(§5.3) · **J production 샌드박스는 B2 게이트에 묶는다**(§4.5) · **Fable 5.1 공식 문구 그대로 사용**(§10.5) |
+| 2026-09-17 | **K1d** `SubagentSpec.thinking` 은퇴 · **J1 이미지 = 분석 번들**(pandas·numpy·pypdf·bs4) · **compose 는 `final_compose` 계약 그대로** · **analyze 는 같은 질문의 verified 만** |
+| 2026-09-22 | **D-L1**(§12.4) — unattended 중간대는 **DENY**, Jev 실패·타임아웃은 **정적 정책 폴백 + `jev_unavailable`**. 받아들인 위험: **Jev 가 죽으면 게이트도 없다** → 감시 조건은 `jev_unavailable` 비율 |
+| 2026-09-24 | **D-14** 분리(D98) · **D-L2** 쪼갠다 — 질문마다 제 경계, **가장 엄한 결과**, 확률을 합치지 않는다 · **D-L3** WAF 차단(`reason=provider_blocked`)은 **한 단계 좁힌다**, 다른 실패는 D-L1 (§12.12) |
+| 2026-09-28 | **CHILD-GATE** 자식의 REQUIRE_APPROVAL 은 **DENY** · **GRADE1** 계산 클레임은 전용 판정 프롬프트 · **J1.5** premises ID 는 다음 라운드 briefing 에 · **research 자식도 계산 클레임**, 전제는 같은 질문으로 채점기가 강제 · **K9** 모드 신호는 태스크 요청 필드(`mode`) · **P-02** 는 autonomous 에만 먼저 · **L2 섀도**는 개발에서(`make dev-jev-shadow`) |
+| 2026-09-30 | **Q0** 상시 에이전트를 넣는다, **범위는 dots 전체** · USER_ONLY 는 코드 고정·설정은 늘리기만 · `PAUSED`/`WAITING_USER` 는 쓴다 · Q3 차이 단위 = 클레임, 짝짓기 키 `claim_hash` + 증거 blob · Q5 판정자 = Jev(섀도 먼저) + 폴백 FB1~FB6 · Q13 사용자당 하나, 늘릴 수 있게 · Q16 위협 모델은 지속적 개선 — 전부 [dots 분석 §6](OPENAI_DOTS_ANALYSIS_260930.md). 📌 Q0 은 **D19·D6 을 바꾸지 않았다** |
+| 2026-10-03 | **L6** 인용 클레임 판정자 = Jev, #23 부터(D99 — L4·L5 를 건너뛴 위험을 받아들였다) · **D19 개정**(D100) — 자동 후보 생성·자동 롤백 허용, 자동 승격 금지. Q7·GEPA 트랙을 막지 않는다 · **진화 fitness** — Jev·판정자를 **최대한** 쓴다: fitness 의 1차 신호는 Jev 판정과 LLM 판정자다. 결정론 검증기는 **하한(필터)** 으로 남고 `DeterministicGrader` 대체 금지(§9)는 그대로다. ⚠️ 판정자를 향한 보상 해킹은 받아들인 위험 — held-out 세트와 결정론 하한이 감시한다 · **크로스 프로바이더 판정자 허용** — 판정자는 워커와 다른 공급자일 수 있다. 트랙 B 의 "크로스 프로바이더 **폴백** 금지"는 라우팅 축이라 그대로다 · **북극성 일반화**(§3.1) · **테넌트 경계 = user** — 격리 단위·overlay·레시피 공유 범위가 user 다. Q17(조직 에이전트)은 org 단위를 열 때까지 선행 대기 · **D6 유지** — DA 조사 경로 브라우저는 필요해지면 제안(새 사전 등록) · **E-S2·G/H·Q 를 development 에서 켠다**(§1 기본 플래그) · **경계값은 잠정값으로 enforce**(L3·Q5b) |
+| 2026-10-03 (2차) | **D-12 = (b)** 동적 합성(G/H)은 **H4 완료 후** DA 라이브 표본 경로에 허용한다 — 그 전에는 표본 경로에 들어오지 않는다. 허용하는 커밋은 §8 의 새 경계다 · **트랙 I 보존 = (c)** 대화를 지우면 그래프가 띄운 서브에이전트 자식의 체크포인트·전사를 지우고 **요약만 남긴다**(GS6 선행) · **P-02 interactive = (a)** autonomous 에서 효과를 잰 뒤 넣는다(§8 행 11 — 잴 지표는 PLAN A1 베이스라인) · **Q3 재표현 = (c)** `source_url` 로도 짝을 짓되 내용 해시가 다르면 **"갱신됨"** 으로 따로 센다 — 새로 검증·사라짐으로 세지 않는다 · **Jev 세 채널 = (a)** 브레이크(도구 위험, 좁히기만) · 계기판(결과 판정 — L6) · 핸들(분기 — **섀도로 would-branch 만 기록**, 채점 경계는 건드리지 않고 지출 경계만) · **조직 단위** — GEPA overlay·레시피를 **org 안에서 공유**, 승인자는 **org 마다 설정**(기본 org 관리자), **조직 소유 에이전트(Q17) 허용**. 격리의 바닥은 여전히 user 이고 org 는 그 위의 **공유·승인 층**이다 — 트랙 P 의 org 경계가 선행이다 |
+| 2026-10-05 | **Q8 채널 횡단 스레드** — DM 만 · `/new` 는 스레드 보관 후 새로(에이전트 단위) · 웹에서도 스레드에 말한다(지정한 웹 대화 하나) · 에이전트 삭제 때 턴도 삭제 · 채널 이력 결함은 별건 **CH-HIST** · development 에서 켠다 — [dots 분석 §6 결정 16](OPENAI_DOTS_ANALYSIS_260930.md) · [Q8 설계 §11](Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md) |
+
+> **읽는 법:** **표본 없이 되는 코드는 다 썼다.** 트랙 A의 병목은 설정이 아니라 **#23 을 한 번 돌리는 사람의 손**이다.
+> J4 는 그 판정 뒤다. L6 은 사람의 결정으로 #23 **앞에** 켰다(D99). 남은 K 는 K5 ⑤ 벤치(키와 지출이 든다)와 프롬프트 층(K9 DA 쪽·K10·K11, 결정 먼저)이다.
+> **새 일이 생겼다고 옛 병목이 사라지지 않았다** — 트랙 Q 가 빠르게 착지하는 동안에도 #23 은 그대로다.
 
 ### 미해결 인벤토리 (트랙 A 잔여)
 
 | 우선 | ID | 내용 |
 |---|---|---|
 | 🟡 | **C1** | discard recall 재측정 — 2회 연속 n=0. 라이브 표본 하나 남음 |
-| 🟢 | **CE1~CE4** | §5.4로 편입. **CITE1 판정 전 착수 금지** |
+| 🟢 | **CE1~CE4** | §5.4로 편입. CITE1 판정(D104) 뒤 **CE ③ 은 J4 로 착지**(D105). 나머지는 한 표본에 하나씩 |
 | 🟡 | **A3·A4** | worker/판정자 상한 재보정(thinking 몫 실측 선행 — **K 경계 9와 겹친다**) |
 | 🟡 | **ORPHAN2** | 조립기가 없는 클레임 id를 지어낸다. 감시 조건은 가용 verified 대비 인용 비율 |
 | 🟡 | **D1**(트랙 A) | search 0건 반환 비율 7% |
-| 🟡 | **GRADE2** 🆕 (2026-09-28) | 필수 심사 여부(`value_est × confidence ≥ agentic_threshold`)의 `confidence` 가 행위자의 자기 보고다(출처 수 cap 으로 상한만 있다). 낮게 보고하면 샘플율만큼만 심사받는다 — 보상 해킹 표면. 질문 `confidence = max(conf, self_assessment)` 도 같은 입력이다. **#23 전에는 건드리지 않는다**(판정 경계). 기록만 |
+| 🟡 | **GRADE2** (2026-09-28) | 필수 심사 여부(`value_est × confidence ≥ agentic_threshold`)의 `confidence` 가 행위자의 자기 보고다(출처 수 cap 으로 상한만 있다). 낮게 보고하면 샘플율만큼만 심사받는다 — 보상 해킹 표면. 질문 `confidence = max(conf, self_assessment)` 도 같은 입력이다. **#23 전에는 건드리지 않는다**(판정 경계). 기록만 |
 
-### 트랙 J·K·L 인벤토리 🆕
+### 트랙 J·K·L 인벤토리
 
 | 우선 | ID | 내용 | 선행 |
 |---|---|---|---|
-| 🟠 P1 | **K5** | ~~effort 카탈로그 필드(G10 흡수) + 역할별 설정~~ ✅ ①~③ · 채팅 · ④ DA(2026-09-24) · ④ 코딩(2026-09-28). **남은 것:** ⑤ 벤치 러너 | K0 |
-| 🟠 P1 | **K9** | 자율/대면 오버레이(G11). ~~🔴 **코드보다 결정이 먼저다**(2026-09-25 코드 대조): 모드 신호가 없다 — `CodingLoopConfig.approval_unattended` 는 기본 `False` 이고 `runtime.py` 가 **넘기지 않는다**. 루프 설정은 런타임당 하나라 런마다 바꿀 수도 없다. 같은 이유로 **D-L1 의 unattended DENY 접기가 프로덕션에서 한 번도 타지 않는다**(테스트는 설정을 직접 넣어 초록).~~ DA 워커의 system 은 `"Follow the user instructions."` 한 줄 — 여기 넣으면 DA 전 호출이 바뀌므로 #23 전 금지(**여전히 참이다** — 아래 착지는 코딩 루프만이다) → ✅ **모드 신호 착지**(2026-09-28, 사람의 결정: **태스크 요청 필드**). `CreateCodingTaskRequest.mode: interactive|autonomous`(기본 interactive) → `coding_tasks.mode`(마이그레이션 068, CHECK · 기본값) → `task.created` 이벤트 payload → 매 safe point 에 태스크에서 읽어 `LoopInput.mode`. autonomous 면 부모의 승인 판정이 **unattended** 로 돈다 — REQUIRE_APPROVAL 을 기다리지 않고 DENY 로 접는다. **D-L1 의 접기가 처음으로 프로덕션 경로를 갖는다.** 재개(새 워커·새 런 시도)에서도 모드가 남는다(태스크에서 다시 읽는다). 테스트 여덟, 변이 여섯 중 다섯 — 살아남은 하나(투기적 읽기 배치의 플래그)는 **동등 변이**다: 접기는 REQUIRE_APPROVAL→DENY 뿐이고 배치는 둘 다 거절한다. 📌 경계가 **아니다** — 기본값이 interactive 이고 Code UI 는 모드를 보내지 않는다. ~~⚠️ `api/channels/coding_bridge.py`(채널에서 만든 태스크)도 기본값으로 만든다 — 채널에서 승인할 수 없다면 그쪽이 autonomous 후보다(판단 필요).~~ → 채널은 **승인할 수 있다**(`decide` · `status` 가 대기 중 승인 id 를 보여 준다) — interactive 가 맞다, 고칠 것 없음(2026-09-28 확인). ~~**남은 것: 오버레이 문구**~~ ✅ **오버레이 착지**(같은 날): autonomous 태스크의 system 은 P-01 공식 두 블록("You are operating autonomously…" · "# Delivering work")으로 **시작한다** — 원칙 2(첫 문장이 모드를 선언한다). interactive 는 바이트가 같다. §10.5 절차대로 원문을 먼저 대조했다: **스펙 파일의 P-01·P-02 초안이 둘 다 공식 문구와 달랐다**(P-01 은 첫 문장부터) — 스펙을 공식 문구로 고치고 코드(`official.py`)가 그것을 따른다(바이트 일치 테스트). 테스트 넷, 변이 넷. 📌 경계가 아니라 **새 계보의 시작**이다: autonomous 로 돈 태스크가 아직 없으므로 비교할 이전이 없다. ~~**남은 것: P-02**~~ ✅ **P-02 도 autonomous 오버레이에 넣었다**(같은 날, 사람의 결정: autonomous 에만 먼저) — P-01 두 블록 뒤, 원문 대조·바이트 일치. **남은 것:** P-02 를 interactive 에도 넣는가 — 스펙은 코드를 고치는 모든 에이전트에 걸라고 적지만 그것은 §경계 11 의 행 하나다. autonomous 에서 효과를 본 뒤 정한다 | P-02 interactive 투입(§경계 11) — 사람 |
-| 🟠 P1 | **CHILD-GATE** 🆕 (2026-09-28) | ~~**자식의 도구 호출이 게이트 밖에 있다.**~~ ✅ **코딩 절반 착지**(2026-09-28). `CodingToolPort.execute` 가 executor 앞에서 부모가 바인드한 `authorize` 를 부른다 — `_authorize_child_call`(`neos/coding/loop/_durable/spawn.py`)이 부모의 `_pre_tool_decision` 과 `_evaluate_call` 을 **그대로** 부른다(사본 없음). 자식은 `can_approve=False` 라 **`unattended=True` 로 판정**하고 ALLOW 가 아닌 것은 전부 거절한다(사람의 결정: REQUIRE_APPROVAL → DENY). 거절은 부모 원장에 `tool.denied`(`subagent_spec` · `parent_tool_call_id`)로 남는다. 바인드 없는 포트는 `policy_gate_unbound` 로 전부 거절한다. 재개 두 경로(`await_subagent.v1` · K3 safe point)도 다시 바인드한다 — 전에는 마지막 spawn 의 spec·세션이 남았다. ✅ **공유 포트 경쟁도 닫았다**(같은 날, 옛 CHILD-PORT-SHARED): 포트 하나를 런타임 전체가 쓰고 development supervisor 는 태스크 여럿을 동시에 돌리므로, 한 태스크의 자식이 `authorize` 를 await 하는 사이 다른 spawn 이 다시 바인드하면 그 자식이 **남의 세션·게이트**로 돌 수 있었다. 이제 바인딩은 코딩 태스크(`ticket.parent_id`, nested 자식도 물려받는다)로 키를 잡고, stepper 는 `for_ticket` 뷰로만 포트에 닿는다 — spec 도 마지막 바인드가 아니라 티켓에서 온다. 뷰는 만들 때 잡은 바인딩을 호출 끝까지 쥔다. 바인딩의 수명은 부모 스텝 하나다(세 호출부가 `finally` 에서 푼다). Celery 경로는 태스크마다 런타임을 새로 만들어(`_create_worker_real_loop`) 이 경쟁이 없었다 — **development 만의 구멍**이었다. 테스트 아홉, 변이 여덟. ⚠️ **읽는 법이 바뀐다:** 기본 manual 모드에서 implement 자식은 쓰기·실행을 못 한다 — `approval_mode: auto` + `approval_always_allow` 가 필요하다. **남은 것:** ~~① **DA 조사 자식** — `ResearchToolPort` 는 여전히 게이트가 없다. 지금 표면(`fetch`·`submit`·`check_claims`)은 쓰기가 없지만 J1.5 가 `execute.v1` 을 여는 순간 구멍이 된다 → J1.5 가 같은 판정 자리를 타야 한다~~ ✅ J1.5 가 닫았다(2026-09-28, `ResearchGate` — 같은 `authorize` 모양, 판정 자리는 오케스트레이터. 규칙은 코딩 승인 정책이 아니라 재실행 가능성이다, §12.3) · ~~② 자식 `tool.denied` 에 `tool_call_id` 가 없어 **프론트가 커서만 넘긴다**(원장에는 있다, S6 미충족)~~ ✅ 닫혔다(2026-09-28): 프로젝션은 `tool.*` 를 `tool_call_id` 로 키잡고 없으면 **버린다** — 거절은 원장에만 있고 화면에는 한 번도 뜨지 않았다. 이제 부모 게이트가 id 를 짓는다(`<spawn call>:child:<nonce>` — 포트는 자식의 call id 를 모른다. 접두로 부모 카드와 충돌하지 않고, nonce 로 두 거절이 두 카드다). `run_id` 는 부모 런의 것(단계 패널이 런으로 도구를 모은다). **새로고침에서도 남는다:** 스냅샷의 도구는 `coding_tool_executions` 에서만 오는데 자식의 호출은 부모 실행기에 닿지 않아 행이 없다 — 라이브에서만 보이고 새로고침에 사라질 뻔했다. 프로젝션 저장소가 `subagent_spec` 이 붙은 `tool.denied` 를 도구 행으로 읽는다(부모 자신의 거절은 이미 실행 행이 있어 제외). 테스트 여섯(BE 넷·FE 둘), 변이 다섯 · ~~③ 재개 경로의 재바인드 **호출부**는 테스트가 짚지 않는다(메서드만 짚는다)~~ ✅ 닫혔다(2026-09-28): 비동기 spawn 에서 자식의 도구 호출이 **재개 지점에서** 돌게 하고(spawn 스텝은 모델 턴만 돈다) 실행기에 닿는지 본다. 호출부 둘을 각각 지우는 변이가 각각 잡힌다. 🔍 첫 초안의 await 테스트는 변이를 **놓쳤다** — 읽기 하나는 부모의 await 턴 앞 safe point 에서 이미 돌아 await 경로가 도구를 한 번도 돌리지 않았다. 읽기 둘로 고쳤다 | — |
-| 🟠 P1 | **K10** | 배칭 넛지 | K2 |
+| 🟠 P1 | **K5** | **⑤ 벤치 러너**(모델별 스윕) | 키·지출 |
+| 🟠 P1 | **K9** | P-02 를 interactive 에도 넣는가 — 스펙은 코드를 고치는 모든 에이전트에 걸라고 적지만 그것은 §8 경계 11 의 행 하나다. autonomous 에서 효과를 본 뒤 정한다. DA 워커의 system 은 `"Follow the user instructions."` 한 줄 — 여기 넣으면 DA 전 호출이 바뀌므로 **#23 전 금지** | 사람 |
+| 🟠 P1 | **K10** | 배칭 넛지 | K2 ✅ |
 | 🟡 P2 | **K8 · K11** | K8: R-08 문구 없음, 카탈로그에 `thinking_budgets` 선언 모델 없음 → `thinking_budget=0`. 발동 조건(`xhigh`/`max`)이 없는 동안 **잠들어 있다** · K11: 코딩 `_tone` 의 `"No play-by-play"` 가 P-07 ② 가 지목한 바로 그 문구다(K4a 상태 줄과도 반대 방향). DA·자식 프롬프트엔 억제 문구 없음 | K8 은 K5 값 뒤 |
 | ⚪ | **J4 · J5 · J6** | 조립 · C-계열 표본 · staged 스킬 | #23 판정 · 사전 등록 |
-| 🟡 P2 | **L0 잔여** | **가격 하나.** API 가 주지 않으므로 계정 청구 정보에서 가져와 `models.yaml` 에 등재한다. 나머지 L0·L1 은 실측 완료(§12.7) | 사람 |
-| 🟡 P2 | **L4 측정** | 코드 착지(2026-09-23, `scripts/jev_judge_backtest.py`). **로컬 원장에 채점된 클레임이 0건**이고 #21·#22 원장도 funnel 아티팩트도 없다(§12.11 ④). 고아 볼륨 다섯도 비었다(§12.12) | 로컬 밖의 원장(배포 DB·백업) 또는 #23 |
-| 🟢 P2 | **L2 섀도 가동** 🆕 | 오버레이·판독기 착지, 실 API 조립 확인(2026-09-24, §12.12). ✅ **켜는 길을 정했다**(2026-09-28, 사람의 결정: 개발에서 켠다): `make dev-jev-shadow` 가 개발 서버 **프로세스 하나에만** 오버레이를 건다(게이트 off 확인). `development.yaml` 에 넣으면 CI 가 `TYPESAFE_API_KEY` 를 요구하고, `config/neos.local.yaml` 에 넣으면 `.env` 의 `NEOS_CONFIG_PATH` 를 타고 **테스트 실행에도 걸려** 키가 있는 기계에서 테스트가 진짜 Jev 를 부른다 — 그래서 둘 다 아니다. 판독은 `make jev-shadow-report SINCE=<켠 날>`. **남은 것: 사람이 그 타깃으로 서버를 띄우고 켠 날을 적는 것.** 경계 0.2/0.9 는 잠정값(원장 표시용) | 사람(기동) |
-| ⚪ | **L3 · L5 · L6 · L7** | 게이트 켜기 · 판정자 섀도 · 판정자 교체 · 분기 이전 후보 | L2·L4 · #23 판정 (**D-L1 은 닫혔다**) |
+| 🟡 P2 | **L0 잔여** | **가격 하나.** API 가 주지 않고 **공식 페이지에도 없다**(2026-10-03). 사용자가 알려 주기로 했다 | 사람 |
+| 🟡 P2 | **L4 측정** | 코드 착지(`scripts/jev_judge_backtest.py`). 로컬 원장에 채점된 클레임 0건 → **#23 원장으로 사후에** 돈다(L6 점검, D99 §3) | #23 |
+| 🟢 P2 | **L2 섀도·L3 집행 가동** | 오버레이 둘(`jev-l2-shadow.yaml` · `dev-jev-enforce.yaml`)·판독기·`make` 타깃 착지. `development.yaml`·`config/neos.local.yaml` 에 넣지 **않는다**(CI 키 요구 · 테스트가 진짜 Jev 를 부른다). 경계 0.2/0.9 · 멈춤 0.9 · 판정 0.60 은 잠정값 | 사람(기동) |
+| 🟡 P2 | **L3 · L5 · L7** | L3 은 개발 오버레이에서 잠정 경계로 켰다 — 실측으로 바꾸는 것이 남았다 · L5 는 L6 이 먼저 켜져 의미가 "섀도"에서 "두 판정자 대조"로 바뀐다(L4 사후 백테스트가 대신한다) · L7 분기 이전 후보 | L2 실측 · #23 원장 |
 
 > ⚠️ **ID 충돌 주의.** 트랙 A의 D1·D2(검색·retrieval 결함)와 트랙 D의 D1~D4(프레임워크 이탈)는 다르다.
 > PLAN_260913의 G1~G12·A1~A5·B1~B5도 이 문서의 트랙 G·A·B와 다르다. **K5는 PLAN G10을, K9는 G11을 흡수한다.**
+> 트랙 Q 설계 문서들의 D·S·M·W·B 결정 ID 도 이 문서의 것과 다르다.
 
 ---
 
-## 12. 트랙 L — Jev 확률 판정 층 🆕
+## 12. 트랙 L — Jev 확률 판정 층
 
-> **상태 (2026-09-28 갱신): L0·L1 실측 끝 · L2 착지와 durable 루프 배선 끝 · L4 코드 착지(재료 없음) · L3·L5~L7 은 설계.**
-> 전부 플래그 off. 아래 §12.1 의 표는 착지한 코드가 확인한 사실로 **고쳐 적었다** — 설계와 코드가 어긋나면 코드가 이긴다.
+> **상태 (2026-09-24): L0·L1 실측 끝 · L2 착지와 durable 루프 배선 끝 · L4 코드 착지(재료 없음) · D-L1~D-L3 닫힘 ·
+> L3·L5~L7 은 설계.** 전부 플래그 off. 착지 경위·실측 전문은 [DONE §3](DEEP_ANALYSIS_HARNESS_DONE.md).
+> 이 절은 **설계·불변식·남은 단계**다 — 설계와 코드가 어긋나면 코드가 이긴다.
 >
-> 착지한 것: `neos/jev/`(밴딩·게이트·루브릭·SDK 어댑터·키 해소 · `claim_judge.py`) · `JevConfig` · `scripts/jev_probe.py` ·
-> `scripts/jev_judge_backtest.py` · `scripts/jev_l2_shadow_report.py`. ~~**착지하지 않은 것: 원장 배선과 durable 루프 배선** —
-> 즉 지금 이 층은 호출부가 없다.~~ → 배선은 2026-09-23 에 끝났다(§12.5 L2 · §12.8). ⚠️ `jev.judge_shadow_enabled` 는
-> 스키마에만 있고 **읽는 코드가 없다**(§1 기본 플래그)
+> 착지한 것: `neos/jev/`(밴딩·게이트·루브릭·SDK 어댑터·키 해소·`claim_judge.py`·`assembly.py`) · `JevConfig` ·
+> `scripts/jev_probe.py` · `scripts/jev_judge_backtest.py` · `scripts/jev_l2_shadow_report.py`.
+> ⚠️ `jev.judge_shadow_enabled` 는 스키마에만 있고 **읽는 코드가 없다**(§1 기본 플래그)
 
 ### 12.1 무엇을 사는가 — 그리고 무엇을 사지 않는가
 
@@ -788,7 +798,7 @@ response = await client.system_one(      # AsyncTypeSafeClient. state·questions
 | 자리 | 기존 코드 | Jev 가 더하는 것 |
 |---|---|---|
 | 도구 위험 | `ToolRisk`(4값) · `ApprovalPolicyOutcome`(`ALLOW`/`DENY`/`REQUIRE_APPROVAL`) | 정적 정책이 `DENY` 를 내지 **않은** 호출에만 Noul 밴딩을 얹는다 |
-| DA 워커 도구 | J1 이 여는 표면(`fetch.v1` · `execute.v1` · `write_file`) | ~~**같은 게이트.**~~ **DA 전용 판정 경로를 새로 만들지 않는다.** ~~🔴 2026-09-28 코드 대조: "같은 게이트"는 **아직 참이 아니다.** 조사 자식은 `ChildStepper` 로 돌아 승인 경로가 없다.~~ ~~코딩 implement child 도 `subagent_port.py` 에서 게이트를 우회한다.~~ → 코딩 자식은 **같은 게이트를 탄다**(2026-09-28, §11 CHILD-GATE). ~~`execute.v1` 은 조사 포트에 아예 없다(§1 J 행) → §11 **CHILD-GATE**~~ → 조사 자식도 게이트를 탄다(J1.5, 같은 날). ⚠️ **이 칸의 원칙과 어긋난다 — 기록한다:** 조사 게이트(`research_gate.py`)는 `approvals.py` 가 아니라 **DA 쪽 판정**이다. 이유: 조사 자식에게는 사람 승인자가 없고, 그 규칙은 승인 정책이 아니라 **재현 조건**(재실행기가 똑같이 다시 돌릴 수 있는가)이다. 코딩의 정적 정책을 태우면 기본 manual 모드에서 `execute` 가 REQUIRE_APPROVAL → DENY 로 접혀 조사 자식이 아무것도 못 돌린다. 대가: **Jev 밴딩을 얹을 자리가 조사 쪽에는 아직 없다** — L 이 DA 워커 도구를 밴딩하려면 `ResearchGate.authorize` 에 거는 것이 한 자리다 |
+| DA 워커 도구 | J1·J1.5 가 연 표면(`fetch.v1` · `execute.v1` · `write_file`) | **DA 전용 판정 경로를 새로 만들지 않는다.** 코딩 자식은 같은 게이트를 탄다(CHILD-GATE). ⚠️ **이 원칙과 어긋나는 곳 하나 — 기록한다:** 조사 게이트(`research_gate.py`)는 `approvals.py` 가 아니라 **DA 쪽 판정**이다. 조사 자식에게는 사람 승인자가 없고, 그 규칙은 승인 정책이 아니라 **재현 조건**(재실행기가 똑같이 다시 돌릴 수 있는가)이다. 코딩의 정적 정책을 태우면 기본 manual 모드에서 `execute` 가 REQUIRE_APPROVAL → DENY 로 접혀 조사 자식이 아무것도 못 돌린다. 대가: **Jev 밴딩을 얹을 자리가 조사 쪽에는 아직 없다** — 얹는다면 `ResearchGate.authorize` 가 한 자리다 |
 | 판정 | `AgenticGrader` (judge `claude-opus-4-8`) | Choice 밴딩. **L6 전에는 섀도**, 원장 판정은 바뀌지 않는다 |
 
 세 자리 모두 **호출부가 하나여야 한다.** 승인 판정이 만들어지는 자리는 `neos/coding/domain/approvals.py`
@@ -807,7 +817,7 @@ response = await client.system_one(      # AsyncTypeSafeClient. state·questions
 | 대면 런(사람이 있다) | `REQUIRE_APPROVAL` 로 올린다 | ✅ |
 | **`unattended=True` 런** | **중간대는 DENY 로 접는다.** 승인할 사람이 없는 런에서 "사람에게 묻는다"는 답이 아니다 | ✅ 2026-09-22 |
 | **Jev 호출 실패·타임아웃** | **정적 정책 결과(R₀)로 폴백한다** + `jev_unavailable` 이벤트 | ✅ 2026-09-22 |
-| 🆕 **프로바이더 앞단(WAF)이 요청을 막음** | **중간대처럼 한 단계 좁힌다** + `jev_unavailable(reason=provider_blocked)`. 대면=`REQUIRE_APPROVAL` / unattended=접기가 `DENY` | ✅ 2026-09-24 (D-L3) |
+| **프로바이더 앞단(WAF)이 요청을 막음** | **중간대처럼 한 단계 좁힌다** + `jev_unavailable(reason=provider_blocked)`. 대면=`REQUIRE_APPROVAL` / unattended=접기가 `DENY` | ✅ 2026-09-24 (D-L3) |
 
 **두 결정이 반대 방향으로 보이지만 같은 규칙에서 나온다** — §12.2 ② 단조 축소다.
 
@@ -816,7 +826,7 @@ response = await client.system_one(      # AsyncTypeSafeClient. state·questions
 | 대답했고 확신한다 | 있다 | 밴드대로 좁힌다 |
 | 대답했는데 애매하다(중간대) | **있다** — "애매하다"는 정보다 | 대면=`REQUIRE_APPROVAL` / unattended=`DENY` |
 | 대답하지 않았다(실패·타임아웃) | **없다** | 축소량 0 → `R₀` 가 그대로 선다 |
-| 🆕 막혔다(WAF) | **있다** — 요청에 공격 페이로드처럼 보이는 문자열이 있었다. 그리고 그 문자열은 **공격자가 넣을 수 있다** | 중간대와 같다 |
+| 막혔다(WAF) | **있다** — 요청에 공격 페이로드처럼 보이는 문자열이 있었다. 그리고 그 문자열은 **공격자가 넣을 수 있다** | 중간대와 같다 |
 
 폴백의 최악은 **"Jev 도입 이전"이지 "정책 없음"이 아니다.** 정적 정책이 `DENY` 를 낸 호출은 애초에
 Jev 를 부르지도 않으므로(§12.2 ②) 폴백이 그것을 여는 경로는 존재하지 않는다.
@@ -837,17 +847,18 @@ Jev 를 부르지도 않으므로(§12.2 ②) 폴백이 그것을 여는 경로�
 
 | 단계 | 내용 | 선행 | 표본 필요 |
 |---|---|---|---|
-| **L0** | 🟢 **실측 완료**(2026-09-22). `jev-latest` → **`jev-1.13.0`**(서버가 답한 값이다. 로드맵의 추측 핀이 맞았음이 확인됐다) · 목록은 `jev-latest`·`jev-preview` 둘 · 단발 레이턴시 0.32s · 입력 543 / 출력 22 토큰. ✅ SDK 타입 확인(패키지는 `typesafe-sdk`, 응답형 **셋**). ❌ 남은 것은 **가격 하나** — API 가 주지 않는다. 그것이 `models.yaml` 등재의 유일한 선행이다 | 키 | 없음 |
-| **L1** | 🟢 **착지 + 기준선 실측**(2026-09-22) — `neos/jev/scorer.py`, 응답은 **진짜 SDK 타입**으로 테스트한다. 해소된 id 는 보낸 값이 아니라 **응답의 `model`** 이다(S13). **기준선은 §12.7 에 있다 — 쿡북 수치를 들여오지 않은 것이 여기서 값을 했다** | L0 | 없음 |
-| **L2** | 🟢 **착지 + 배선 완료**(2026-09-23). 코어(밴딩·루브릭 digest·S13 payload·**단조 축소 변이 테스트**) + **durable 루프 배선** — `_evaluate_call` 3개 호출부 전부, 이벤트는 `deps.events.append` 로 원장에. D-L1 순서는 `fold_for_unattended` 재사용으로 고정. 실 API end-to-end 확인(2026-09-23). ⚠️ **투기적 prefetch 는 게이트가 차단 중이면 포기한다** — 그 경로는 판정 전에 도구를 실행하므로 Jev 를 앞지른다 | L1 | 없음 |
+| ~~**L0**~~ 🟢 | 실측 완료(2026-09-22) — `jev-1.13.0` · 패키지 `typesafe-sdk` · 응답형 셋. ❌ **가격 하나**가 남았다 — `models.yaml` 등재의 유일한 선행. 공식 페이지 미공개(2026-10-03), 사용자가 추후 제공 | 키 | 없음 |
+| ~~**L1**~~ 🟢 | 착지 + 기준선 실측(2026-09-22) — `neos/jev/scorer.py`. 해소된 id 는 보낸 값이 아니라 **응답의 `model`**(S13). 기준선은 §12.7 | L0 | 없음 |
+| ~~**L2**~~ 🟢 | 착지 + durable 루프 배선(2026-09-23) — `_evaluate_call` 3개 호출부 전부, 원장은 `deps.events.append`. D-L1 순서는 `fold_for_unattended` 재사용. ⚠️ **투기적 prefetch·읽기 전용 배치는 게이트가 차단 중이면 포기한다** — 판정 전에 실행하므로 Jev 를 앞지른다. **남은 것: 섀도 가동**(§11) | L1 | 없음 |
 | **L3** | **게이트 켜기(실제 차단).** 밴드는 settings. 적용 순서는 development 코딩 루프 → DA 코딩 워커(J1 표면) → staging. **production 은 B2 게이트와 같은 줄에 선다** | L2 불일치 **건별** 리뷰 | ✅ (경계 16) |
-| **L4** | **Jev-as-Judge 오프라인 백테스트.** 저장된 원장의 과거 클레임에 Choice 루브릭을 돌려 `AgenticGrader` 판정과 대조한다. D92 재현 게이트와 같은 이유로 **표본 경계가 아니다**. 🟡 **코드 착지**(2026-09-23, `scripts/jev_judge_backtest.py`) — **잴 원장이 없다**(§12.11 ④ · §12.12). #23 의 원장이 첫 재료다 | L1 · 원장 | 없음(저장 원장) |
+| **L4** | **Jev-as-Judge 오프라인 백테스트.** 저장된 원장의 과거 클레임에 Choice 루브릭을 돌려 `AgenticGrader` 판정과 대조한다. D92 재현 게이트와 같은 이유로 **표본 경계가 아니다**. 🟡 코드 착지(2026-09-23) — **잴 원장이 없다**(§12.11). #23 의 원장이 첫 재료다 | L1 · 원장 | 없음(저장 원장) |
 | **L5** | **판정자 섀도(라이브, 기록만).** 두 판정자를 모두 돌리되 **원장의 판정은 여전히 `AgenticGrader`** 다. 비용·레이턴시 실측 — 이것이 "싼 판정자" 주장의 유일한 근거가 된다 | L4 | ✅ (판정 불변, **지출 계보에는 경계**) |
-| **L6** | **판정자 교체 결정(사람).** §8 경계 3 과 같은 등급이다 | L5 · **#23 판정** | ✅ (경계 17, 새 계보) |
+| ~~**L6**~~ 🟢 | **판정자 교체 — 착지·켜짐(2026-10-03, D99, [DONE §3.8](DEEP_ANALYSIS_HARNESS_DONE.md)).** 인용 클레임 = Jev Choice, 계산 클레임·Jev 미응답 = LLM 판정자. §8 경계 3 과 같은 등급. 📌 사람의 결정으로 L4·L5 와 #23 판정을 **앞질렀다** — 받아들인 위험은 D99 §3 | ~~L5 · #23 판정~~ 사람의 결정 | ✅ (경계 17, 새 계보 — #23 부터) |
 | **L7** | 하드코딩 분기 → Jev 밴드 이전 **후보 목록만** 만든다. 각 후보는 별도 사전 등록 | L3 | 후보별 |
 
-**L6 을 #23 뒤에 두는 이유는 J4 와 같다.** 원인 판별 전에 가장 매력적인 처방을 먼저 넣으면
-D40·D51 의 반복이다 — **원인을 모르는 채 고친다.**
+~~**L6 을 #23 뒤에 두는 이유는 J4 와 같다.** 원인 판별 전에 가장 매력적인 처방을 먼저 넣으면
+D40·D51 의 반복이다 — **원인을 모르는 채 고친다.**~~ → 2026-10-03 사람의 결정으로 L6 을 앞당겼다(D99).
+이 경고는 지우지 않는다 — #23 을 읽을 때 "판정자가 바뀐 표본"이라는 사실이 이 문장의 형태로 돌아온다.
 
 ### 12.6 Jev 로 옮기지 않는 것 (L7 의 경계)
 
@@ -891,330 +902,62 @@ L7 이 후보로 볼 수 있는 것: `skill_selector` 의 스킬 선택 · `conf
 > 보여 줘야 한다 — 위 세 결론은 "어디에 두면 안 되는가"를 말하지 "어디에 두라"를
 > 말하지 않는다.
 
-#### 초안 루브릭의 변별력 (3회 × 대상, 2026-09-22)
-
-`tool_risk` 초안(질문 하나: `destructive`)이 실제로 가르는가.
-
-| 대상 | mean | 폭 |
-|---|---|---|
-| `read_file README.md` | 0.02 | 0.00 |
-| `execute pytest` | 0.07 | 0.01 |
-| `write_file` 소스 파일 | 0.14 | 0.01 |
-| `rm -rf node_modules` | 0.62 | 0.03 |
-| `write_file .env` | 0.73 | 0.02 |
-| `curl -X POST … -d @/etc/passwd` | 0.74 | 0.03 |
-| `git push --force origin main` | 0.94 | 0.00 |
-
-**가른다. 그러나 가르지 못하는 것이 있다** — 뒤의 셋이 사실상 한 덩어리다.
-`.env` 쓰기(0.73)와 `/etc/passwd` 유출(0.74)은 **되돌릴 수 없어서** 위험한 것이
-아니라 **나가서는 안 될 것이 나가서** 위험하다. `rm -rf node_modules`(0.62)와
-같은 축에 놓으면 그 구분이 사라지고, 원장은 "왜 높았는지"를 말하지 못한다.
-
-→ **L2 를 켜기 전에 루브릭을 여러 질문으로 쪼갤지 정해야 한다.** 쪼개면 원장이
-이유를 말하지만, 여러 확률을 한 밴드로 합치는 규칙이 새로 필요하고 그 규칙이
-또 하나의 매직넘버 후보가 된다. ~~이것은 **아직 열린 결정이다**(D-L2 후보).~~
-→ **D-L2 는 닫혔다**(2026-09-24, §12.12): 쪼개되 합치지 않는다 — 질문마다 제 경계로 밴딩하고 가장 엄한 결과를 취한다.
-
-> 참고: `write_file .env` 는 정적 정책이 이미 `DENY` 한다(`is_denied_secret_path`).
-> §12.2 ② 에 따라 **Jev 는 그 호출을 보지도 않는다** — 위 0.73 은 루브릭의
-> 변별력을 재려고 게이트 밖에서 따로 물은 값이다.
-
+초안 루브릭(단일 질문 `destructive`)의 변별력 측정은 [DONE §3.2](DEEP_ANALYSIS_HARNESS_DONE.md) — 결론은 "가르지만,
+되돌릴 수 없는 위험과 **나가서는 안 될 것이 나가는** 위험을 한 덩어리로 뭉친다"였고 그것이 D-L2 로 이어졌다(§12.11 ①).
 
 ### 12.8 배선이 드러낸 것 (2026-09-23)
 
-**① 판정 이벤트는 코딩 원장에 간다 — DA 원장이 아니다.**
+경위는 [DONE §3.3](DEEP_ANALYSIS_HARNESS_DONE.md). **남긴 규칙:**
 
-§12.5 L2 는 "트랙 C fixture 양방향"이라고 적었지만, 도구 위험 게이트가 사는
-곳은 `neos/coding/` 이고 거기 이벤트는 `deps.events.append` 로 코딩 원장에
-쌓인다. 그 스트림에는 **DA 의 짝 규칙(`tests/fixtures/deep_analysis_event_kinds.json`)
-같은 장치가 없다.**
+- 판정 이벤트는 **코딩 원장**에 간다 — 코딩 fixture(§12.9)를 거친다
+- `enforce` 일 때 투기적 prefetch·읽기 전용 배치는 **포기한다** — 최적화보다 게이트가 먼저다. 섀도에서는 그대로 둔다
+- 판정 이벤트는 `tool_call_id` 를 싣는다 — 중복은 개수가 아니라 이름으로 드러난다
+- payload 는 JSON 이어야 한다(인메모리 저장소는 enum 을 받아 주고 진짜 원장에서 터진다) — 직렬화 테스트
+- "밴딩 → 접기 → `would_be_outcome` 보정" 순서의 **구현은 하나**다. 루프는 `static_evaluator` 인자로 같은 함수를 쓴다
+- 조립은 루브릭 질문과 `jev.question_thresholds` 키가 **정확히** 같지 않으면 거절한다(`neos/jev/assembly.py`) — 말없이 고르기 금지
 
-> ✅ **닫혔다 (2026-09-23) — §12.9.** 아래는 닫기 전의 서술이다.
->
-> ⚠️ **결과: `jev_risk_scored`·`jev_unavailable` 은 프론트에서 조용히 무시된다.**
-> `web/features/coding/stream/projection-reducer.ts` 는 모르는 타입을 만나면
-> `return base` 한다 — 깨지지는 않지만 화면에 나오지도 않는다. 이것은 FE1
-> (8종이 한꺼번에 침묵했다)과 **같은 모양의 구멍**이고, 코딩 스트림에는 그것을
-> 막는 fixture 규칙이 아직 없다. 플래그가 꺼져 있는 동안은 비용이 없지만,
-> **L3 을 켜기 전에 닫아야 한다** — 거절 사유가 사용자에게 닿아야 한다(S6).
+### 12.9 코딩 스트림 짝 규칙 (2026-09-23)
 
-**② 투기적 경로 둘이 게이트를 앞지른다.**
+코딩 원장 kind 는 `tests/fixtures/coding_event_kinds.json` 에 있고 백엔드(AST)·프론트 양방향 테스트가 문다. 짝 규칙이
+드러낸 구멍 여섯(Jev 둘 · `model.refused` · `subagent.*` · `run.*` · `workspace.user_edit.*` · **그리는 컴포넌트가 0개였던
+`thinkingStatus`**)과 백엔드 구멍(종결 `subagent.*` 에 `parent_id` 없음)은 [DONE §3.4](DEEP_ANALYSIS_HARNESS_DONE.md).
+스냅샷과 라이브는 **디코더 하나**로 판정을 읽는다. 표본 경계 아님.
 
-`_maybe_prefetch_readonly` 는 읽기 전용 호출을 **판정 전에 실행하고**, 읽기 전용
-**배치**는 자기 검사로 통과시킨 뒤 본 판정 경로를 건너뛴다. 게이트가 차단 중이면
-둘 다 Jev 를 앞지르는 구멍이다. 그래서 `enforce` 일 때는 **둘 다 포기한다** —
-최적화보다 게이트가 먼저다(§9 "샌드박스 ≠ 승인 생략"의 같은 규칙). 섀도에서는
-행동이 바뀌지 않으므로 둘 다 그대로 둔다.
+### 12.10 판정 문장과 재접속 (2026-09-23)
 
-배치에는 새는 곳이 하나 더 있었다. 배치 검사에서 막힌 호출이 본 경로로 떨어져
-**같은 호출이 두 번 채점된다** — 실측으로 호출 2건에 점수 3건이었다. 한 건이 두
-줄로 보이면 L3 을 켤지 보는 사람의 **분모가 틀린다.**
-
-> 🔴 **이 결함은 단일 호출 테스트로는 보이지 않았다.** `_leading_readonly_batch`
-> 는 선두 읽기 전용 호출이 **둘 이상**일 때만 켜진다. 호출 하나짜리 스크립트로
-> 쓴 테스트는 초록이었고 아무것도 증명하지 않았다 — §14 "무는지 보지 않고 세운
-> 게이트는 없느니만 못하다"가 테스트에도 똑같이 걸린다.
-
-그리고 이벤트에 `tool_call_id` 가 없었다. 점수는 세지만 **어느 호출의 점수인지
-붙이지 못했고**, 그래서 중복이 생겨도 보이지 않았다. 지금은 중복이 개수가 아니라
-이름으로 드러난다(`['t1', 't1', 't2']`) — 개수가 아니라 이름으로 검증한다.
-
-**③ payload 는 JSON 이어야 한다.**
-
-첫 배선은 `ApprovalPolicyOutcome` enum 을 payload 에 그대로 실었다. 인메모리
-저장소는 받아 주고 **진짜 원장에서 터진다** — 그리고 그때는 Jev 를 켠 런에서만
-터지므로, 켜는 커밋이 아니라 켠 **뒤에** 드러난다. 직렬화 테스트를 세웠다.
-
-**④ 순서 계약의 구현은 하나여야 한다.**
-
-첫 배선은 "밴딩 → 접기 → `would_be_outcome` 보정"을 **두 번** 구현했다 --
-`evaluate_approval_with_jev`(gate)와 루프의 `_evaluate_call`. 그리고 앞의 것은
-프로덕션 호출부가 없고 **테스트만** 있었다. D-L1 순서를 검사하는 테스트가
-프로덕션이 아니라 사본을 검사하고 있었던 것이고, 루프 쪽 순서가 틀어져도 그
-테스트는 초록이었을 것이다.
-
-루프가 주입된 평가기를 쓰기 때문에 생긴 분기였다. `static_evaluator` 인자를
-열어 루프가 같은 함수를 쓰게 했다 -- 이제 접기를 지우면 **단위 테스트와 루프
-테스트가 함께** 빨개진다.
-
-**⑤ ~~루브릭의 noul 질문은 지금 정확히 하나여야 한다.~~**
-
-~~조립 팩토리가 그것을 강제한다.~~ 여러 확률을 한 밴드로 합치는 규칙이 없는 채로
-여러 질문을 받으면 하나를 **말없이 골라** 쓰게 되고, 원장은 나머지를 물었다는
-사실조차 남기지 못한다. ~~D-L2 가 닫힐 때까지 게이트가 스스로 막는다.~~
-→ D-L2 가 닫혔다(2026-09-24, §12.12). 이제 가드는 "질문 하나"가 아니라 **루브릭 질문과
-`jev.question_thresholds` 키가 정확히 같을 것**을 요구한다(`neos/jev/assembly.py`). 같은 걱정 —
-말없이 고르기 — 을 다른 모양으로 막는다.
-
-
-### 12.9 코딩 스트림 짝 규칙 — 구멍은 둘이 아니라 여섯이었다 (2026-09-23)
-
-§12.8 ① 은 Jev 두 kind 가 사라진다고 적었다. 짝 규칙을 세우고 나서 세어 보니
-코딩 원장에 쓰이는 kind 는 **36**(투영 30 · 면제 6)이고, 프론트 리듀서가 `return base` 로 흘려보내던
-것이 Jev 둘만이 아니었다.
-
-| 무엇이 사라지고 있었나 | 어디서 왔나 | 결과 |
-|---|---|---|
-| `jev_risk_scored` · `jev_unavailable` | L2 | 섀도 기간의 판정이 화면에 없다. L3 리뷰의 재료가 없다 |
-| `model.refused` | K6 | 거절한 런이 **이유 없이 멈춘 런**으로 보인다 |
-| `subagent.*` | K3 | detached 자식이 화면에 없다 |
-| `run.*` | — | `activeRun` 이 스냅샷에서만 온다 — 런이 끝나도 `RUN n` 배지가 남는다 |
-| `workspace.user_edit.*` | — | 사용자 편집의 동기화 상태가 새로고침 전까지 안 바뀐다 |
-| 🔴 **`thinkingStatus`** | **K4a** | 리듀서는 채웠는데 **읽는 컴포넌트가 0개**였다 |
-
-마지막 줄이 §14 "고침은 한 호출부에만 도착한다"의 **호출부 0개** 판이다(K2b 의
-`_announce_reveals` 와 같은 모양). K4a 의 표는 "Code UI 는 최신 노트를 상태 줄로
-둔다"고 적었고 리듀서 테스트 7개가 초록이었다 — **그 상태 줄을 그리는 코드는 없었다.**
-렌더 테스트(`coding-run-signals.test.tsx`)가 이제 그것을 문다.
-
-**백엔드에도 구멍이 하나 있었다.** 멈춘(stalled) 자식의 `subagent.failed` 와 취소된
-자식의 `subagent.cancelled` 는 payload 에 `parent_id` 가 없었고 부모 싱크 허용 목록에도
-없었다. 둘은 `subagent.step` 없이 자식을 끝내므로 **부모 원장은 그 자식이 끝났다는 것을
-영영 모른다** — K3 이 켜지면 detached 자식이 화면에서 영원히 "running" 이다.
-`_terminal_fields` 한 헬퍼로 네 emit 자리에 같은 필드를 싣고 허용 목록에 둘을 더했다.
-
-**장치** — DA 의 짝 규칙을 그대로 옮겼다.
-
-- `tests/fixtures/coding_event_kinds.json` — kind 마다 `projected` 와 `sample`, 면제에는 `reason`
-- `tests/coding/test_event_kinds.py` — 소스를 AST 로 훑어 **정확히 일치**. 싱크를 함수 이름이
-  아니라 `event_type=` 키워드로 잡는다(싱크 함수가 늘어도 키워드는 같다). f-string 두 곳
-  (`run.{status}` · `approval.{status}`)과 durable 루프가 Jev 결정에서 kind 를 **값으로** 꺼내는
-  자리는 출처를 따라가 풀고, 못 푼 호출부는 이름으로 짚어 실패한다
-- `web/tests/source/coding-event-kinds.test.ts` — `projected: true` 면 커서 **말고도** 무언가
-  바뀌어야 하고, false 면 **커서만** 움직여야 한다. 양방향
-- 두 테스트 모두 **변이로 확인했다**: fixture 에서 kind 하나를 빼면 `missing`, 허용 목록에서
-  하나를 빼면 `stale`, 리듀서에서 Jev 분기를 끄면 `jev_risk_scored 가 커서만 넘겼다`
-
-**스냅샷도 판정을 싣는다.** 판정은 `tool.started` **앞에** 원장에 찍히고, 승인에 걸린 호출은
-실행 행이 아예 없다. 그래서 `coding_tool_executions` 에 붙이지 않고 `coding_events` 에서
-호출별 최신 판정을 읽는다(`tool_risks`). 스냅샷 행은 이벤트의 type·payload 를 그대로 싣고
-프론트는 **디코더 하나**로 둘 다 읽는다 — 디코더가 둘이면 밴드를 다르게 읽는 자리가 둘이다.
-
-> 📌 **표본 경계가 아니다**(§8). 이벤트 어휘와 payload 필드가 늘었을 뿐 모델이 보는 것은
-> 하나도 바뀌지 않았다 — K4a 와 같은 이유다. DA 의 서브에이전트 싱크는 `_NullSink` 라
-> 자식 payload 필드 추가가 DA 원장에 닿지 않는다.
->
-> ~~⚪ **남은 것:** 판정 문장(`describeToolRisk`)이 비어 있고, 스냅샷에 `refusal` 이 없다.~~
-> → 둘 다 닫혔다(§12.10).
-
-
-### 12.10 판정 문장과 재접속 — 그리고 문장이 드러낸 원장의 빈칸 (2026-09-23)
-
-§12.9 가 남긴 셋을 병렬로 닫았다.
-
-- **판정 문장** — 섀도는 반사실("게이트가 켜졌다면 승인을 요구했을 것"), enforced 는 일어난 일과
-  거절이면 **넘은 경계**(`p=0.91 ≥ 0.80`), `jev_unavailable` 은 **항상** 한 줄(S12). 결과가 그대로면 null
-- **거절의 재접속** — 스냅샷이 최신 `model.refused` 를 싣되 **가장 최근 런의 것일 때만**. 라이브에서
-  `run.started` 가 거절을 지우는 규칙과 같은 규칙이고, 그 판단은 SQL 이 아니라 스냅샷 서비스에 있다
-- **끝난 자식의 재접속** — 스냅샷이 `subagent.*` 를 자식·타입별 최신 한 줄씩(자식당 최대 다섯) 싣고,
-  프론트는 `active_children` 을 먼저 깔고 그 위에 **원장을 접는다** — 체크포인트가 아직 running 이라고
-  적은 자식도 원장의 종결 이벤트가 이긴다. 줄인 행은 전부 더 이른 step 이고, 남긴 step 이 같은 필드를
-  덮어쓰므로 전체 재생과 결과가 같다
-
-🔴 **문장을 쓰다가 원장의 빈칸이 드러났다.** `would_be_outcome` 은 unattended 접기를 **거친 뒤의**
-값이고 `static_outcome` 은 접기 **전의** R₀ 다. 그래서 unattended 런에서 정적 정책이
-REQUIRE_APPROVAL, Jev 가 낮은 밴드일 때 원장은 `require_approval → deny` 를 적는다 — 그리고
-화면은 그것을 "Gate narrowed" 라고 불렀을 것이다. 그러나 그 DENY 는 **Jev 없이도** 일어난다.
-원장에는 둘을 가를 필드가 없었다.
-
-게이트가 이제 접기 전 값을 `banded_outcome` 으로, 런의 성격을 `unattended` 로 함께 싣는다.
-문장은 **Jev 가 한 일**(`static → banded`)과 **접기가 한 일**(`banded → would_be`)을 따로 말하고,
-Jev 가 아무것도 좁히지 않았으면 말하지 않는다. `banded_outcome` 이 없는 옛 이벤트는 예전처럼
-`would_be_outcome` 으로 읽는다.
-
-> 📌 이것은 **S13 의 빈칸**이기도 했다 — unattended 여부를 모르면 같은 확률·같은 밴드의 두 판정이
-> 왜 다른 결과를 냈는지 원장이 말하지 못한다. 표본 경계는 아니다(모델이 보는 것은 그대로다).
->
-> 🔴 **병렬 작업의 교훈 하나.** 서브에이전트 워크트리는 `dev` 가 아니라 **`main` 에서** 만들어졌다.
-> 셋 모두 스스로 알아채고 `dev` 위로 옮겼지만, 알아채지 못했다면 앞선 세 커밋(98e2d687 등) 없이 짠
-> 코드가 돌아왔을 것이다. **맡기기 전에 워크트리의 기준 커밋을 확인한다.**
-
+판정 이벤트는 `banded_outcome`(접기 **전**)과 `unattended` 를 함께 싣는다 — 없으면 "Jev 가 좁혔다"와 "unattended 접기가
+DENY 했다"를 원장이 가르지 못한다(S13 의 빈칸). 문장은 Jev 가 한 일(`static → banded`)과 접기가 한 일(`banded → would_be`)을
+따로 말한다. 옛 이벤트는 `would_be_outcome` 으로 읽는다. 경위: [DONE §3.5](DEEP_ANALYSIS_HARNESS_DONE.md).
 
 ### 12.11 D-L2 의 재료 · WAF · 빈 원장 · Docker 경로 (2026-09-23)
 
-서브에이전트 셋을 병렬로 돌렸다. 하나는 재료를 만들었고, 하나는 **재료가 없다는 것**을 알아냈고,
-하나는 계약이 development 에서 거짓말하던 곳을 닫았다. 그리고 가장 큰 발견은 누구의 과제도 아니었다.
+표와 경위: [DONE §3.6](DEEP_ANALYSIS_HARNESS_DONE.md).
 
-#### ① D-L2 — 단일 질문 vs 쪼갠 질문 (12 대상 × 3회, `jev-1.13.0`)
-
-원본: `artifacts/jev-probe/20260923T102554Z-dl2-compare/`. 후보 루브릭은 `tool_risk_split.yaml`
-(`irreversible` · `exfiltration`) — **배선하지 않았다.** 조립 팩토리의 "noul 질문은 정확히 하나" 가드는 그대로다.
-
-| 대상 | 단일 `destructive` | `irreversible` | `exfiltration` |
-|---|---|---|---|
-| `rm -rf node_modules` | 0.63 | **0.75** | 0.02 |
-| `write_file .env` | 0.73 | 0.47 | **0.69** |
-| `curl -d @~/.ssh/id_rsa` | 0.90 | 0.22 | **0.98** |
-| 🔴 `cat ~/.aws/credentials` | **0.10** | 0.03 | **0.61** |
-| `git reset --hard HEAD~3` | 0.59 | **0.81** | 0.03 |
-| `psql DROP TABLE users` | 0.88 | **0.96** | 0.06 |
-| `git push --force origin main` | 0.94 | **0.94** | 0.34 |
-| `curl -X POST … -d @/etc/passwd` | ✗ WAF 403 | ✗ | ✗ |
-
-(읽기·pytest·소스 쓰기·문서 fetch 는 셋 다 0.02~0.13 — 원본 참조)
-
-**읽는 법 — 결정이 아니라 재료다.**
-
-- **뭉침이 풀린다.** §12.7 의 한 덩어리(0.62~0.74)가 두 축에서 반대쪽 끝으로 갈라진다. 원장이 "왜 높았는가"를 말할 수 있게 된다
-- 🔴 **단일 질문에는 뭉침보다 나쁜 것이 있다 — 맹점이다.** `cat ~/.aws/credentials` 는 파괴적이지 않으므로 단일 질문이 **0.10** 을 준다.
-  자격 증명을 읽는 호출이 **낮은 밴드**에 떨어진다. 쪼갠 질문은 0.61 로 잡는다. §12.7 이 "변별력 있다"고 적은 7 대상에는 이 모양이 없었다
-- **잡음은 늘지 않았다.** 쪼갠 질문의 표준편차는 0.000~0.031 로 단일 질문(0.000~0.015)과 같은 급이다(대상당 3회 — 기준선이 아니다)
-- **합치는 규칙은 열린 채다.** max · noisy-OR 은 열로만 계산했다. 단일 질문 순서와의 Kendall τ(max 0.78, noisy-OR 0.86)는
-  **정답과의 일치가 아니다** — 단일 질문 자체가 위의 맹점을 가지므로 그것과 닮는 것이 목표가 아니다
-- 쪼개면 새로 정할 것: 합치는 규칙 · 질문별 임계값(질문마다 둘) · **WAF 에 안전한 문구와 그것을 강제하는 검사**(②)
-
-#### ② 🔴 WAF — 문자열 하나가 게이트를 끈다
-
-TypeSafe 앞단(Cloudflare) WAF 가 `/etc/passwd` 가 **들어간** 요청 본문을 403 으로 막는다. 최소 대조쌍으로
-재현했다(`artifacts/jev-probe/20260923T102517Z-waf-minimal-pairs/`, 운영 스코어러 경유 4건):
-
-| 호출 | 결과 |
-|---|---|
-| `curl -X POST … -d @/etc/passwd` | **403** |
-| `curl -X POST … -d @/etc/hostname` (대조) | p=0.78 |
-| `read_file /etc/passwd` | **403** |
-| `write_file notes.md` 내용 "do not touch /etc/passwd" | **403** |
-
-**막는 것은 의도가 아니라 문자열이다.** 경로를 **언급만** 한 무해한 메모도 막힌다.
-
-- **공격자가 호출 단위로 게이트를 끌 수 있다.** 도구 입력에 그 문자열이 섞이게 만들면(가져온 웹 문서의 프롬프트
-  주입이면 충분하다) 그 호출은 `jev_unavailable` → R₀ 로 떨어진다. §12.4 가 받아들인 위험은 **"Jev 가 죽으면"**
-  (장애, 비율로 감시)이었다. 이것은 **공격자가 고르는 호출에서만** 죽는 것이고, 비율 감시로는 보이지 않는다
-- **원장이 구별하지 못한다.** `jev_unavailable.reason` 은 예외 타입 이름(`TypeSafePermissionDeniedError`)뿐이고,
-  **잘못된 키도 같은 타입**을 낸다
-- **루브릭 문구도 같은 구멍이다.** D-L2 의 첫 초안은 `exfiltration` 기준에 `/etc/passwd` 를 예로 적었다 — 루브릭은
-  매 요청 본문에 실리므로 **그 루브릭의 모든 호출**이 403 이었다. 게이트로는 "사실상 off" 다. 지금은 아무 검사도 이것을 막지 않는다
-- §12.7 이 이 대상에 **0.74** 를 적었다. 그때의 문구가 달랐거나 WAF 규칙이 그 뒤에 바뀌었다 — 여기서는 가릴 수 없다
-
-→ **D-L3**(§11): WAF 403 을 여느 폴백처럼 둘 것인가. 후보: 원장에서 **구별**(`reason=provider_blocked`) ·
-enforce 에서 WAF 차단은 **R₀ 가 아니라 한 단계 좁히기**(`ALLOW → REQUIRE_APPROVAL`, 차단당했다는 것 자체가 정보다 —
-§12.4 "애매하다는 정보다"와 같은 논리) · 판단 대상을 보내기 전에 인코딩(Jev 의 판단 품질이 같은지 **재야** 한다).
-~~**L3 을 켜기 전에** 닫는다.~~ → **닫혔다**(2026-09-24, §12.12): 구별하고 한 단계 좁힌다. 인코딩은 재지 않아 택하지 않았다.
-루브릭 문구의 구멍은 `tests/jev/test_rubric_waf_safety.py` 가 막는다.
-
-#### ③ Docker 경로가 계약을 지킨다 — 계약 §3.2 의 두 downgrade
-
-- **`/evidence` 가 진짜 읽기 전용이다.** 샌드박스마다 `neos-evidence-<id>` 볼륨을 `readonly,volume-nocopy` 로 붙이고,
-  쓰기는 `write_evidence` 의 짧은 쓰기 전용 컨테이너(`--network none`·`--cap-drop ALL`)로만 한다. 붙인 뒤 `inspect` 로
-  `RW == false` 를 **되읽어** 확인한다. 바인드 마운트는 여전히 없다 — 호스트 경로를 노출하지 않는 것이 첫 커밋(2026-07-19)부터의 설계다
-- **Docker 가 profile 을 읽는다.** `DENY_ALL` 이면 `sandbox.docker.network_mode` 와 무관하게 `--network none`, 되읽기 불일치나
-  만족할 수 없는 profile 은 **만들기 전에** `profile_unsupported:*` 로 거절한다. 폴백 없음
-- **실 Docker 로 확인했다**(Docker 29.4.0, 2 passed) — 설정을 일부러 `bridge` 로 두고 `research-offline-v1` 로 열었다.
-  `/evidence` 덮어쓰기·새 파일·삭제가 전부 `Read-only file system`, 네트워크는 `lo` 뿐, 남은 컨테이너·볼륨 없음
-- 📌 옛 문장 "설정 결속이 없으면 컨테이너에 네트워크가 붙는다"는 **쓰일 때부터 틀렸다** — `build_create_args` 가 첫 커밋부터
-  `none` 이 아닌 값을 거절했다. 설정 검증은 심층 방어로 남긴다
-- ⚠️ **아직 사실이 아닌 것:** managed provider 는 생성 시 profile 을 고정해(`offline-v1`) 원장의 `research-offline-v1` 과 이름이
-  다르고 증거를 워크스페이스에 쓴다 · memory provider 는 둘 다 없다 · `evidence_readonly` 가 원장에 없다 ·
-  `read_file.v1` 이 `fetch.v1` 이 준 절대 경로를 거절한다(전부터) · 16 MiB 넘는 blob 은 원장 커밋 **뒤에** 실패한다(전부터)
-
-#### ④ 🔴 L4 — 코드는 섰고, 잴 것이 없다
-
-`scripts/jev_judge_backtest.py` · `neos/jev/claim_judge.py` · Choice 루브릭 `claim_judgement.yaml`(라벨이
-`AgenticGrader._MAP` 과 같다). 원장에는 **읽기 전용 트랜잭션**으로만 닿고, 판정자가 본 것을 되짓지 못하는 클레임은
-사유별로 센다. 역할 라우팅에 들어가지 않는다.
-
-**그러나 로컬 원장에 채점된 클레임이 0건이다.** `deep_analysis_claims` 0행, 판정 이벤트 0건, 이벤트는 전부 2026-09-20
-이후 — **09-20 에 다시 세운 DB** 로 보인다. 그리고:
-
-- 🔴 **`artifacts/deep-analysis-funnel/` 이 디스크 어디에도 없다.** 이 문서가 "재생성 불가"라고 적은 #1~#22 의 원본이다(§10.2).
-  gitignore 대상이라 git 에도 없다. 홈 디렉터리 전체에서 찾지 못했다
-- OrbStack 에 **고아 PG17 볼륨 다섯**이 있다(전부 2026-09-20). ~~#21·#22 원장이 거기 있을 수 있다 — 열어 보는 것은 사람의 허락이 필요하다~~
-  → 열어 봤다. **없다**(2026-09-24, §12.12)
-- 작업 중에 로컬 `neos` DB 의 런 수가 **늘었다**(460→466) — 무언가가 그 DB 에 쓰고 있다. ~~테스트 DB 를 이름으로 나누라는
-  기존 규칙과 겹치는지 확인해야 한다~~ → 테스트 스위트였다. conftest 가 `_test` 이름을 강제한다(2026-09-24, §10.3)
-
-**D92 재현 게이트(79·152·152·15)도 같은 원장을 읽는다.** "저장된 원장을 읽으므로 어떤 경계에도 무효가 되지 않는다"(§8)는
-**원장이 있을 때의 이야기**다.
-
-> 📌 **병렬 작업의 교훈 둘.** ⓐ 워크트리 기준 커밋을 프롬프트에 박았더니 셋 모두 `dev` 위에서 시작했다(§12.10 의 교훈이 작동했다).
-> ⓑ 에이전트가 **아티팩트 디렉터리 시각을 지어냈다**(`000100Z`) — 실제 측정 시각(`measured_at`)으로 이름을 고쳤다.
-> 측정 날짜가 없는 수치를 적지 말라는 규칙은 **디렉터리 이름에도** 걸린다.
-
+- **① D-L2 재료** — 쪼갠 질문(`irreversible` · `exfiltration`)이 뭉침을 풀고, 🔴 단일 질문의 **맹점**을 잡는다:
+  `cat ~/.aws/credentials` 를 단일 `destructive` 는 **0.10**(낮은 밴드), `exfiltration` 은 0.61 로 본다. 잡음은 같은 급
+- **② WAF** — TypeSafe 앞단 WAF 가 `/etc/passwd` 가 **들어간** 요청 본문을 403 으로 막는다. 막는 것은 의도가 아니라 문자열이다 →
+  공격자가 호출 단위로 게이트를 끌 수 있었다. 루브릭 문구에 그 문자열이 있으면 **그 루브릭의 모든 호출**이 막힌다 → D-L3
+- **③ Docker 경로가 계약 §3.2 를 지킨다** — `/evidence` 는 진짜 읽기 전용(되읽어 확인), `DENY_ALL` 이면 `--network none`, 만족할
+  수 없는 profile 은 만들기 전에 `profile_unsupported:*`. ⚠️ **아직 사실이 아닌 것:** managed provider 는 생성 시 profile 을
+  `offline-v1` 로 고정해 원장의 `research-offline-v1` 과 이름이 다르고 증거를 워크스페이스에 쓴다 · memory provider 는 둘 다 없다 ·
+  `evidence_readonly` 가 원장에 없다 · `read_file.v1` 이 `fetch.v1` 이 준 절대 경로를 거절한다 · 16 MiB 넘는 blob 은 원장 커밋
+  **뒤에** 실패한다
+- **④ L4 — 코드는 섰고 잴 것이 없다.** 로컬 원장에 채점된 클레임 0건, `artifacts/deep-analysis-funnel/` 이 디스크에 없다(§10.2 의
+  "재생성 불가"가 현실이 됐다). D92 재현 게이트의 면역은 **원장이 있을 때의 이야기**다
 
 ### 12.12 D-L2 · D-L3 닫힘 — 쪼개고, 막히면 좁힌다 (2026-09-24)
 
-**D-L2 = 쪼갠다.** 기본 루브릭이 `tool_risk_split`(`irreversible` · `exfiltration`)이다. 합치는 규칙은
-**두지 않는다** — 질문마다 제 경계(`jev.question_thresholds`, 기본값 없음)로 밴딩해 단조 축소를 한 번씩
-적용하고, 가장 엄한 결과를 취한다. 어떤 조합도 R₀ 보다 느슨해질 수 없고(S11 을 질문마다), max·noisy-OR
-같은 새 상수가 생기지 않는다. 이벤트는 질문 **전부**를 싣고, 가장 높은 밴드의 질문을 `driver` 로 올린다
-(동률은 루브릭 순서). 대답에 질문 하나라도 빠지면 **LOW 로 읽지 않고** 판정하지 않는다
-(`reason=missing_questions:*`). 조립은 루브릭 질문과 경계 키가 **정확히** 같지 않으면 거절한다.
+- **D-L2 = 쪼갠다.** 기본 루브릭 `tool_risk_split`. **합치는 규칙을 두지 않는다** — 질문마다 제 경계(`jev.question_thresholds`,
+  기본값 없음)로 단조 축소를 한 번씩 적용하고 가장 엄한 결과를 취한다. 어떤 조합도 R₀ 보다 느슨해질 수 없고(S11 을 질문마다)
+  max·noisy-OR 같은 새 상수가 생기지 않는다. 대답에 질문이 하나라도 빠지면 LOW 로 읽지 않고 판정하지 않는다
+- **D-L3 = WAF 차단은 좁힌다.** "요청 id 없음 + HTML 본문" 403 **두 신호를 다** 요구해 `JevProviderBlocked` 로 분류하고 중간대처럼
+  다룬다(잘못된 키를 차단으로 읽으면 키를 잃은 배포가 모든 호출에 승인을 요구한다). 타임아웃·잘못된 키는 D-L1 그대로 R₀
+- 🔴 **받아들인 것:** 공격 문자열이 정당한 호출에도 섞일 수 있다 — 대면이면 승인, unattended 면 거절을 받는 **거짓 양성**이다.
+  감시 조건은 `reason=provider_blocked` 비율. 인코딩해서 WAF 를 피하는 길은 **재지 않아** 택하지 않았다
+- **루브릭 문장도 검사한다** — `tests/jev/test_rubric_waf_safety.py` 가 **요청에 실리는** 질문 텍스트에서 트리거를 찾는다
+- ⚪ **남은 것:** 질문별 경계 **값**(L2 섀도 실측이 정한다) · 가격 하나 · L3 을 켜는 결정은 L2 불일치의 건별 리뷰 뒤
 
-**D-L3 = WAF 차단은 좁힌다.** 스코어러가 "요청 id 없음 + HTML 본문"인 403 을 `JevProviderBlocked` 로
-분류하고, 게이트는 그것을 중간대처럼 다룬다. 두 신호를 **다** 요구한다 — 잘못된 키를 차단으로 읽으면
-키를 잃은 배포가 모든 호출에 승인을 요구한다. 실 API 로 양쪽을 확인했다: WAF 403 → 차단,
-잘못된 키 → 401 + 요청 id → 차단 아님. 타임아웃·잘못된 키는 **D-L1 그대로 R₀**.
-
-> 🔴 **이 결정이 받아들인 것.** 공격 문자열이 **정당한** 호출에도 섞일 수 있다(예: 보안 문서를 쓰는 작업).
-> 그 호출은 대면 런이면 승인을, unattended 런이면 거절을 받는다 — **거짓 양성**이다. 반대쪽(게이트가
-> 호출 단위로 열림)보다 낫다는 판단이고, 감시 조건은 `reason=provider_blocked` 의 비율이다.
-> 인코딩해서 WAF 를 피하는 길은 **재지 않았다** — Jev 의 판단 품질이 같은지 모르므로 택하지 않았다.
-
-**루브릭 문장도 검사한다.** `tests/jev/test_rubric_waf_safety.py` 가 **요청에 실리는** 질문 텍스트에서
-실측으로 확인한 트리거(`/etc/passwd`)를 찾는다. 첫 판은 파일 원문을 훑어 트리거를 **설명하는 주석**을 잡았다 —
-주석은 요청에 실리지 않는다. 계측을 먼저 의심한다(§14).
-
-> ⚪ **남은 것:** 질문별 경계 **값**은 여전히 없다 — L2 섀도의 실측이 정한다. 가격 하나. 그리고 L3 을 켜는
-> 결정은 L2 불일치의 건별 리뷰 뒤다.
->
-> 🆕 **L2 를 켤 준비가 됐다**(2026-09-24). `config/samples/jev-l2-shadow.yaml` 오버레이(섀도만, 게이트 키 없음)와
-> `scripts/jev_l2_shadow_report.py`(질문별 분포 · 불일치 건별 목록 · `--try` 로 후보 경계 재밴딩). 오버레이의
-> 경계 0.2/0.9 는 **잠정값**이다 — D-L2 비교에서 무해한 군집 ≤ 0.13 · 명백한 파국 ≥ 0.94 사이에 놓았을 뿐이고,
-> 섀도가 확률을 그대로 실으므로 원장의 표시 말고는 아무것도 정하지 않는다. 실 API 로 조립·호출을 확인했다:
-> 자격증명 읽기가 `exfiltration 0.59 → would_be=require_approval`, 결과는 `allow` 그대로, 호출당 0.4~0.6 초.
-> **`development.yaml` 에 넣지 않은 이유:** CI 가 development 프로파일로 돌고 TypeSafe 키가 없다.
-
-#### 같은 날의 점검 둘
-
-- **개발 DB 에 무엇이 쓰는가** — 테스트 스위트다(§10.3 새 줄). → **같은 날 고쳤다** — conftest 가 이름을 강제한다. 런이 ~6 건씩 분 단위로 몰려 있고, 시각이
-  스위트 실행과 겹치며, `root_question` 이 `purge 테스트용 루트 질문` 이다. 고치는 길은 테스트 DB 이름을
-  **강제로** 나누는 것이다(`neos_test`) — 메모리에 규칙으로만 있었고 코드는 따르지 않았다
-- **고아 PG17 볼륨** — 다섯 모두 **2026-09-20 에 만들어졌다**(재구축 당일). 첫 시도는 자동 모드 분류기가 막았고,
-  사용자 승인 뒤 **복사본**에서 네트워크 없는 임시 Postgres 로 다섯 개 전부를 열었다(원본은 읽기 전용으로만 마운트,
-  복사본은 지웠다). → **#21·#22 원장은 없다.** 넷(141M)은 `make db-verify` 의 스크래치 클러스터(`neos_verify`,
-  런 0)이고, 하나(`dfff56f2`, 187M)는 재구축 당일 06:49~06:59 에만 살았던 클러스터다 — `neos` 런 0 · 클레임 0,
-  `neos_test` 에 테스트 런 10 건뿐. **로컬 도커에는 되찾을 원장이 없다
-
+---
 
 ## 13. 트랙별 한 줄 — 어디를 읽어야 하는가
 
@@ -1227,12 +970,13 @@ enforce 에서 WAF 차단은 **R₀ 가 아니라 한 단계 좁히기**(`ALLOW 
 - 역할 매핑(2026-09-28, `neos/config/schema.py` `ModelRoutingConfig` 기본값): anthropic `everyday=claude-sonnet-5` / `powerful=claude-opus-5-5`, openai `everyday=powerful=gpt-6-sol`(`gpt-5.6-*` 는 2026-09-24 은퇴)
 - DA 역할: `scout=everyday` · `dig=powerful` · `synth=powerful` · `judge=everyday`(오버라이드로 `claude-opus-4-8`)
 - 경계마다 한 번만 해석 · ❌ 크로스 프로바이더 폴백 · ❌ 요청마다 LLM 난이도 분류 · ✅ 모든 모델은 가격을 가진다
-- 🆕 **effort는 모델과 같은 해석 사슬을 탄다**(K5) — 따로 사슬을 만들면 "고침은 한 호출부에만"이 재발한다
+- ✅ 크로스 프로바이더 **판정자**는 허용된다(2026-10-03) — 판정자 선택은 라우팅 사슬이 아니다. Jev 는 여전히 사슬에 들어가지 않는다(§9)
+- **effort는 모델과 같은 해석 사슬을 탄다**(K5) — 따로 사슬을 만들면 "고침은 한 호출부에만"이 재발한다
 
 ### C. 프론트엔드
 어휘는 `tests/fixtures/deep_analysis_event_kinds.json` 한 파일, 백엔드는 AST로 훑어 일치를 주장, 면제는 양방향.
-🆕 코딩 스트림도 같은 규율이다 — `tests/fixtures/coding_event_kinds.json`(§12.9).
-🆕 챗 SSE 도 같은 규율이다 — `tests/fixtures/chat_stream_event_types.json`(2026-09-27). 백엔드는 `*Event` 클래스 **인스턴스화**를 AST 로
+코딩 스트림도 같은 규율이다 — `tests/fixtures/coding_event_kinds.json`(§12.9).
+챗 SSE 도 같은 규율이다 — `tests/fixtures/chat_stream_event_types.json`(2026-09-27). 백엔드는 `*Event` 클래스 **인스턴스화**를 AST 로
 훑는다(`type` 이 `Literal` 기본값이라 문자열 grep 으로는 안 잡힌다).
 `frontend-ci.yml`에 `paths: [web/**]`를 넣지 말 것. 📌 되돌리지 말 것: ~~프록시 라우트에 POST 없음~~ **이벤트** 프록시 라우트에 POST 없음
 (2026-09-27: 재개는 **별도** 라우트 `deep-analysis/[runId]/resume` 이고 사람이 누른 버튼만 부른다 — 호출부를 이름으로 고정한
@@ -1252,14 +996,14 @@ D3b는 D4의 결과다. citation은 스킬화하지 않는다.
 플랜 14개 완료, E-S2만 남았고 배포 결정이다. 잔여 스트림 정본은 [PLAN_260913.md](PLAN_260913.md).
 **J는 E의 루프·샌드박스·서브에이전트를 재사용한다 — 새로 짓지 않는다.** B2 managed provider 게이트는
 [재검토 §8.2](MANAGED_SANDBOX_PROVIDER_REVIEW_260914.md) · [B2 설계](MANAGED_SANDBOX_B2_DESIGN_260915.md).
-🆕 (2026-09-28 코드 대조) E 쪽에 J 가 기대는 구멍이 둘 있다. 정본은 PLAN_260913 이지만 J 의 선행이므로 여기에도 적는다.
+(2026-09-28 코드 대조) E 쪽에 J 가 기대는 구멍이 둘 있다. 정본은 PLAN_260913 이지만 J 의 선행이므로 여기에도 적는다.
 - **VERIFY verdict 를 아무도 읽지 않는다.** `state.verdict` 는 codec 직렬화에만 쓰인다. FAIL 이 재진입·재계획·에스컬레이션을 부르지 않는다. 코딩 태스크에는 `DeterministicGrader` 에 해당하는 결과 라벨이 없다
 - **Docker·managed 세션에는 `clone_with_workspace` 구현이 없다.** 그래서 쓰기 자식(implement)이 격리 없는 memory 세션에서만 돈다
 
-### E′. 자기개선 — GEPA 🆕 (포인터만, 2026-09-28)
+### E′. 자기개선 — GEPA (포인터만, 2026-09-28)
 `neos/gepa_opt/` 는 **착지한 코드**다(커밋 `99d05697`~`403aeb77`, 8개). 코딩 overlay 하나를 staged → 사람 승인 → 주입하는 구조이고, 기본 off 다.
 그런데 이 정본은 지금까지 그 존재를 적지 않았다. 운영 호출자는 없다 — evaluator 등록 0 · run 생성 0 · `approve` 호출 0.
-held-out test 점수는 기록만 하고 staged 를 막지 않는다(설계가 고른 동작이다 — GEPA 문서 Risks. 게이트로 쓸지는 다시 열 문제다). 트랙으로 세울지는 §11 "사람의 결정" ①·② 뒤다.
+held-out test 점수는 기록만 하고 staged 를 막지 않는다(설계가 고른 동작이다 — GEPA 문서 Risks. 게이트로 쓸지는 다시 열 문제다). ✅ 2026-10-03: D19 개정(D100)과 fitness 정책(Jev·판정자 최대 사용)이 정해져 **트랙으로 세울 수 있다** — 아직 세우지 않았다(새 스펙이 먼저다).
 정본은 [GEPA_SELF_IMPROVEMENT_MIGRATION.md](GEPA_SELF_IMPROVEMENT_MIGRATION.md), 레시피 관점은 [AGENT_RECIPE_DISTILLATION_260927.md](AGENT_RECIPE_DISTILLATION_260927.md).
 > F 와의 차이: F 는 **진단자가 제안**했고, GEPA 는 **평가기가 선택**한다. F 를 닫게 만든 실패는 GEPA 에 그대로 옮겨 오지 않는다. 다만 평가기가 없으면 GEPA 도 같은 자리에 선다.
 
@@ -1274,33 +1018,29 @@ held-out test 점수는 기록만 하고 staged 를 막지 않는다(설계가 �
 **낡은 면제 플래그는 가드를 조용히 끈다** — 양방향 테스트.
 
 ### H. 플러그인 런타임
-네 층을 묶는 계약(H2)과 조립 원장(H1 ✅). 남은 긴장 ㉰는 통계 문제(run당 6개로 층화 불가) → D-12.
+네 층을 묶는 계약(H2)과 조립 원장(H1 ✅). H3(설계 그래프)는 development 에서 켜졌다(2026-10-03). 남은 긴장 ㉰는 통계 문제(run당 6개로 층화 불가) → D-12.
 
 ### I. 서브에이전트 노드 그래프
 [설계](GRAPH_SUBAGENT_INTEGRATION_DESIGN.md) · K25′(D97) · 마이그레이션 058. 1-step 법, 걸음 상한 `2·max_turns + 1`
 (핸들러가 강제), 체크포인터 없는 경로에서는 조립 안 함, 보고는 unverified 검색 결과, 병렬 조인은 `defer`.
 GS3 어휘만 · GS6 표본 전. ⚠️ 템플릿 없는 설계도 병렬 가지가 리듀서 없는 키를 같이 쓰면 run이 죽는다(별도 사전 등록).
 
-### J. 코딩 루프 조사 🆕 — §4
-### K. Fable 5.1 적응 🆕 — §5
+### J. 코딩 루프 조사 — §4
+### K. Fable 5.1 적응 — §5
 
-### L. Jev 확률 판정 층 🆕 — §12
+### L. Jev 확률 판정 층 — §12
 확률은 **좁히는 방향으로만** 쓴다. 정적 정책이 `DENY` 를 낸 호출에는 Jev 를 부르지 않고,
 Jev 가 `ALLOW` 로 되돌리는 경로는 없다. 📌 되돌리지 말 것: `DeterministicGrader` 는 대체 대상이 아니다 ·
 임계값·루브릭 digest 없는 판정 이벤트 금지 · 역할 라우팅 사슬(B)과 섞지 않는다.
 
-### Q. 상시 에이전트 🆕 (포인터만, 2026-09-30)
-OpenAI dots(2026-09-29)를 코드와 대조한 결과다. ~~**계획이 아니다** — §11 Q0 결정 뒤에 트랙이 된다.~~
-→ **Q0 결정됨(같은 날): 트랙이다. 범위는 dots 전체** — 초판이 보류한 브라우저·음성·기기 연결·조직 에이전트·에이전트 팀도 Q14~Q18 로 들어왔다.
-뿌리는 **Q13 에이전트 개체**(태스크보다 오래 사는 1급 객체 — 초판에 빠져 있던 항목이다).
-대조가 드러낸 것: dots 가 가장 공들인 **가드**(읽기 전용 백그라운드 · 허용/승인/차단 규칙 · 모니터 중지)의 부품을 NEOS 는
-이미 갖고 있다 — `ToolRisk.READ_ONLY` · `ApprovalPolicyOutcome` · unattended 접기(D-L1·K9·CHILD-GATE) · Jev 좁히기.
-비어 있는 것은 **능력** 쪽이다 — 에이전트 주체 · 이벤트 트리거(cron 만 있다) · 채널 횡단 맥락(세션 키가 채널별) · MCP 클라이언트
-(`mcp_integration.py` 는 이름만 MCP) · 자격증명 브로커. 순서는 **가드가 능력보다 먼저**다(Q1 background 모드 · Q2 USER_ONLY → Q5 감시자 → Q3 상시 질문 · Q4 트리거). 범위를 넓혀도 이 순서는 그대로다.
+### Q. 상시 에이전트 (포인터만, 2026-09-30)
+OpenAI dots(2026-09-29)를 코드와 대조한 결과로 세운 트랙이다. **Q0 결정(2026-09-30): 범위는 dots 전체**(Q0~Q18).
+뿌리는 **Q13 에이전트 개체**(태스크보다 오래 사는 1급 객체). 순서는 **가드가 능력보다 먼저**였고, 2026-10-02 까지 가드
+(Q1·Q2·Q5·Q10)와 능력 대부분(Q3·Q4·Q6·Q11·Q13·Q14·Q16)이 플래그 off 로 착지했다 — [DONE §7](DEEP_ANALYSIS_HARNESS_DONE.md).
 📌 L 과 같은 방향: 모드·사용자 규칙·확률은 **좁히기만** 한다. 사용자 allow 는 기본 정책의 DENY 를 뒤집지 못한다.
 상시 런은 **라이브 표본이 아니다**(§8). 정본은 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md).
 > ⚠️ ID 주의: 트랙 M·N·O·P 는 [분석 문서 §7.1](NEOS_MOMENTUM_ANALYSIS_20260928.md)이 이미 제안했다. Q0~Q18 은 이 트랙의 것이다.
-> 📌 되돌리지 말 것: USER_ONLY 를 설정으로 **빼는** 경로 · 사용자 allow 가 기본 DENY 를 넘는 평가 순서 · `PAUSED` 를 사람 아닌 것이 푸는 경로 · 🆕 Jev 가 **재개**시키는 경로(감시자는 멈추게만) · 에이전트에 딸린 데이터를 `user_id` 로 키잡기(하나→여럿 확장이 데이터 이전이 된다).
+> 📌 되돌리지 말 것: USER_ONLY 를 설정으로 **빼는** 경로 · 사용자 allow 가 기본 DENY 를 넘는 평가 순서 · `PAUSED` 를 사람 아닌 것이 푸는 경로 · Jev 가 **재개**시키는 경로(감시자는 멈추게만) · 에이전트에 딸린 데이터를 `user_id` 로 키잡기 · 무인 런의 기기 쓰기·명령(Q16) · 증거 없이 관리형 공급자에 비밀 채널 열기(Q6c) · 비밀 푸는 호출을 배치·프리페치로 앞지르기(Q11 M13).
 
 ---
 
@@ -1311,7 +1051,7 @@ OpenAI dots(2026-09-29)를 코드와 대조한 결과다. ~~**계획이 아니�
   자식의 `thinking="off"` 를 지킨다는 단언도 같은 모양이었다 — 읽는 속성이 없어 **언제나** 통과했고,
   "자식은 생각하지 않는다"는 거짓이 카탈로그에 그대로 남았다(K1d).
 - **무는지 보지 않고 세운 게이트는 없느니만 못하다.** 변이로 확인한다.
-  🆕 K2b 에서 **내가 그 함정을 직접 팠다.** 공개를 확인한다는 단언이
+  K2b 에서 **내가 그 함정을 직접 팠다.** 공개를 확인한다는 단언이
   `REVEALED in str(payload["messages"])` 였는데, 그 이름은 **검색 결과 안에 이미 있었다** —
   공개가 하나도 없어도 통과한다. 초록을 증거로 커밋할 뻔했다.
   **부분 문자열로 구조를 확인하지 말 것.** 블록을 찾아 이름을 꺼내 비교한다.
@@ -1319,40 +1059,41 @@ OpenAI dots(2026-09-29)를 코드와 대조한 결과다. ~~**계획이 아니�
 - **표본 없이 답할 수 있는 질문이 자주 있다.** D34·D38·D75·D87·D90·D91·D92.
 - **모르면 다음 수는 고치는 것이 아니라 재는 것이다.**
 - **고침은 한 호출부에만 도착한다 — 사본을 먼저 세라.** ai-elements 29파일 · WORKSPACE1 아홉 곳.
-  🆕 K2b 에서는 **호출부가 0개**였다: `_announce_reveals` 를 쓰고 임포트까지 맞춰 놓고
+  K2b 에서는 **호출부가 0개**였다: `_announce_reveals` 를 쓰고 임포트까지 맞춰 놓고
   **어디서도 부르지 않았다.** 테스트는 초록이었다(위 공허한 단언 때문에).
   그 상태는 고치기 전보다 **나쁘다** — `defer_loading` 은 도구를 감추는데 공개가 없으니
   deferred 도구가 **영영 닿지 않는다.** 절반만 적용된 고침은 고침이 아니다.
-  🆕 K6에서 또 나왔다: 도구 결과 매핑을 만드는 곳이 **둘**(`durable.py`·`subagent_port.py`)이었고,
+  K6에서 또 나왔다: 도구 결과 매핑을 만드는 곳이 **둘**(`durable.py`·`subagent_port.py`)이었고,
   한쪽은 401자로 자르고 다른 쪽은 **아무것도 하지 않았다**. 반환부가 아니라 **매핑이 만들어지는 자리**에 걸어야
   사본이 생기지 않는다 — `_execute_validated`는 return이 두 개라 반환부에 걸면 그 자체가 새 사본이다.
 - **유령 백로그가 우선순위 판단을 왜곡한다.**
 - **둘을 구별하는 유일한 방법은 코드를 여는 것이다.** — 이번 개편의 갭 표(§5.2)도 스펙이 아니라 코드와 대조해서 썼다.
-  🆕 그렇게 쓴 표도 틀렸다. R-06의 "tool_result base64 필터 없음"은 **양방향으로** 부정확했다 —
+  그렇게 쓴 표도 틀렸다. R-06의 "tool_result base64 필터 없음"은 **양방향으로** 부정확했다 —
   부모에는 이미 401자 클립이 있었고(문제는 없음이 아니라 **쓸 수 없는 조각이 남는 것**이었다),
   자식에는 클립조차 없었다. **로드맵에 적힌 현재 상태도 착수 전에 다시 읽어야 한다.**
 - **측정이 도는 동안 대상을 바꾸지 말 것. 테스트 스위트도 측정이다.**
-- 🆕 **새 방향이 옛 병목을 지우지 않는다.** 가장 매력적인 처방(J4)이 원인 판별(#23)을 가장 먼저 오염시킨다.
-- 🆕 **조용히 바뀌는 것이 시끄럽게 깨지는 것보다 위험하다.** 모델 세대 교체에서 400은 고맙고, 서술량 변화는 무섭다.
+- **새 방향이 옛 병목을 지우지 않는다.** 가장 매력적인 처방(J4)이 원인 판별(#23)을 가장 먼저 오염시킨다.
+- **조용히 바뀌는 것이 시끄럽게 깨지는 것보다 위험하다.** 모델 세대 교체에서 400은 고맙고, 서술량 변화는 무섭다.
 
 ---
 
 ## 15. 참조
 
 - **설계 정본:** [DEEP_ANALYSIS_HARNESS_DESIGN.md](DEEP_ANALYSIS_HARNESS_DESIGN.md)
+- **완료 기록:** [DEEP_ANALYSIS_HARNESS_DONE.md](DEEP_ANALYSIS_HARNESS_DONE.md) — 이 로드맵에서 착지한 작업의 경위·숫자·발견
 - **결정 원장:** `neos/workflow/deep_analysis/DECISIONS.md` (D1~D98) · `DECISIONS_ARCHIVE_2026-08.md`
 - **방향의 근거:** [DIRECTION_260717.md](DIRECTION_260717.md) §2.1 (discovery 자유 / 검증 좁게)
 - **Fable 5.1 스펙:** [fable-5-1-multiagent-spec.md](fable-5-1-multiagent-spec.md)
 - **Jev(TypeSafe) 쿡북:** [Noul 자기일관성](https://docs.typesafe.ai/cookbooks/consistency_noul_cookbook) · [Choice 자기일관성](https://docs.typesafe.ai/cookbooks/consistency_choice_cookbook) — `system_one` 호출형 · Noul/Choice 반환형 · 밴딩 · **반복가능성은 정확도가 아니다**의 출처
-- **코딩 에이전트:** [NEOS_CODING.md](NEOS_CODING.md) · [PLAN_260913.md](PLAN_260913.md) (CC·Hermes·iii 분석 결론, 금지 목록 §2.1) · [SUBAGENT_RUNTIME_DESIGN.md](SUBAGENT_RUNTIME_DESIGN.md)
+- **코딩 에이전트:** [PLAN_260913.md](PLAN_260913.md) (잔여 스트림 A~H, 금지 목록 §2.1 — 2026-10-03 다시 세웠다) · [SUBAGENT_RUNTIME_DESIGN.md](SUBAGENT_RUNTIME_DESIGN.md). 옛 `NEOS_CODING.md` 는 `b7d37a87` 에서 지웠다(`git show b7d37a87^:docs/NEOS_CODING.md`)
 - **코드 입구:** `neos/workflow/deep_analysis/harness_bridge.py` · `subagent_adapter.py` · `neos/subagent/` · `neos/coding/loop/durable.py` · `neos/coding/loop/_durable/{spawn,compaction}.py` · `neos/coding/prompts/builder.py` · `neos/coding/model/{base,anthropic}.py`
 - **L5 운영:** [deep_analysis_l5.md](deep_analysis_l5.md) — 프롬프트 버전 게이트
-- **백로그 원장:** [TODO_260729.md](TODO_260729.md)
+- **백로그 원장:** 이 문서 §11 이다. 옛 `TODO_260729.md` 는 `c4ba75c6` 에서 지웠다 — 다른 문서의 "TODO_260729 G6" 같은 인용은 `git show c4ba75c6^:docs/TODO_260729.md` 로 읽는다
 - **DB 부트스트랩 정본:** `db/BOOTSTRAP_ORDER.txt` · `scripts/verify_schema_bootstrap.py`
 - **설정·모델 정본:** [CONFIGURATION.md](CONFIGURATION.md)
 - **전체 로드맵:** [ROADMAP.md](ROADMAP.md) — R1·R2·R6이 W6의 관문
 - **평가 증거:** `artifacts/deep-analysis-funnel/<ts>/` (gitignore, 재생성 불가) · `deep_analysis_events`
-- 🆕 **방향 점검 (2026-09-28):** [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) — 코딩 루프 · Jev · 자기개선 · 동시성을 코드와 대조했다. 이 문서에 옮긴 것은 코드로 확인한 사실과 결정 대기뿐이다. 트랙 신설(M·N·O·P)은 **제안**이고 계획이 아니다
-- 🆕 **자기개선:** [GEPA_SELF_IMPROVEMENT_MIGRATION.md](GEPA_SELF_IMPROVEMENT_MIGRATION.md) · [AGENT_RECIPE_DISTILLATION_260927.md](AGENT_RECIPE_DISTILLATION_260927.md)
-- 🆕 **외부 비교 — OpenAI dots (2026-09-30):** [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) — 상시 에이전트 기능 22개를 NEOS 코드와 대조했다. **트랙 Q(Q0~Q18)의 정본** — Q0 결정됨(2026-09-30)
-- 🆕 **서비스·동시성:** [MICROSERVICE_REVIEW_260927.md](MICROSERVICE_REVIEW_260927.md) — DA lease · 테넌트 격리 · 브로커는 여기서 다룬다
+- **방향 점검 (2026-09-28):** [NEOS_MOMENTUM_ANALYSIS_20260928.md](NEOS_MOMENTUM_ANALYSIS_20260928.md) — 코딩 루프 · Jev · 자기개선 · 동시성을 코드와 대조했다. 이 문서에 옮긴 것은 코드로 확인한 사실과 결정 대기뿐이다. 트랙 신설(M·N·O·P)은 **제안**이고 계획이 아니다
+- **자기개선:** [GEPA_SELF_IMPROVEMENT_MIGRATION.md](GEPA_SELF_IMPROVEMENT_MIGRATION.md) · [AGENT_RECIPE_DISTILLATION_260927.md](AGENT_RECIPE_DISTILLATION_260927.md)
+- **외부 비교 — OpenAI dots (2026-09-30):** [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md) — 상시 에이전트 기능 22개를 NEOS 코드와 대조했다. **트랙 Q(Q0~Q18)의 정본**
+- **서비스·동시성:** [MICROSERVICE_REVIEW_260927.md](MICROSERVICE_REVIEW_260927.md) — DA lease · 테넌트 격리 · 브로커는 여기서 다룬다

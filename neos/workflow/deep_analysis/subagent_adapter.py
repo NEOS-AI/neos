@@ -136,6 +136,15 @@ def _model_pin(assignment: Assignment) -> ModelPin:
     return ModelPin(provider=provider, model=resolved.model)
 
 
+def compose_model_pin() -> ModelPin:
+    """J4 (D105). compose 스펙의 역할은 `synth` 다(계약 §2) -- `_model_pin` 과 같은 해석을 탄다."""
+    resolved = resolve_harness_model("synth")
+    provider = da_provider_for_model(resolved.model)
+    if provider not in _PROVIDERS:
+        provider = resolved.provider if resolved.provider in _PROVIDERS else "anthropic"
+    return ModelPin(provider=provider, model=resolved.model)
+
+
 def _build_ticket(
     assignment: Assignment,
     *,
@@ -378,6 +387,19 @@ def build_research_runtime(port, *, session_factory, model=None):
     **질문마다 새로 짓는다.** 포트가 질문마다 다르기 때문에 공유할 수 없고,
     `SubagentRuntime.__init__` 이 순수 대입이라 질문마다 지어도 싸다.
     """
+    return _build_runtime(port, session_factory=session_factory, model=model)
+
+
+def build_compose_runtime(port, *, session_factory, model=None):
+    """J4 (D105). research 런타임과 같은 조립이되 모델이 `synth` 역할이다."""
+    if model is None:
+        from neos.utils.llm_factory import create_coding_model
+
+        from .harness_bridge import da_provider_for_model as _provider_for
+        from .model_roles import resolve_harness_model as _resolve
+
+        resolved = _resolve("synth")
+        model = create_coding_model(provider=_provider_for(resolved.model))
     return _build_runtime(port, session_factory=session_factory, model=model)
 
 

@@ -1,0 +1,15 @@
+# 표본 #30 전용 오버레이 (DECISIONS D115). #29 의 설정에 D114 의 변경 셋이 **코드로** 들어 있다 --
+# compose 턴 상한 12(`compose_max_turns`, 여기 명시), `check_claims.v1` 의 미인용 미리보기, 빈 본문 대체.
+#
+#   NEOS_CONFIG_PATH=config/samples/sample-30.yaml .venv/bin/python scripts/deep_analysis_funnel_sample.py ...
+#
+# 비교 대상은 #29 하나다(compose 경로의 같은 설정). 조사 경로·BUDGET2·판정자(Jev)는 #24 이래 같다.
+deep_analysis:
+  budget_aware_reduction: true
+  compose_child_enabled: true
+  compose_max_turns: 12
+jev:
+  enabled: true
+  model: jev-1.13.0
+  judge_enabled: true
+  judge_min_confidence: 0.60

@@ -11,6 +11,7 @@ from neos.subagent.ports import Clock
 from neos.subagent.stepper import ChildStepper
 from neos.subagent.store import RunRecord, SubagentStore
 from neos.subagent.types import (
+    MAX_TICKET_TURNS,
     FoldedResult,
     ModelPin,
     ParentBriefing,
@@ -23,8 +24,8 @@ from neos.subagent.types import (
     SubagentTicket,
 )
 
-# Conservative default: max_turns=8 * model_timeout=120s + slack.
-DEFAULT_STALE_AFTER_SEC = 8 * 120 + 30
+# Conservative default: the ticket turn ceiling * model_timeout=120s + slack.
+DEFAULT_STALE_AFTER_SEC = MAX_TICKET_TURNS * 120 + 30
 _LIVE = frozenset({SubagentStatus.PENDING, SubagentStatus.RUNNING})
 
 _TERMINAL = frozenset(

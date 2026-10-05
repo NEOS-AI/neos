@@ -56,6 +56,23 @@ async def web_search(query: str, k: int, *, tool_factory=None) -> list[dict]:
         await tool.cleanup()
 
 
+def _claim_judge_manifest(jev_config, jev_judge) -> dict:
+    """매니페스트의 판정자 항목. Jev 가 꺼져 있으면 LLM 판정자 하나다."""
+    if jev_judge is None:
+        return {"backend": "llm"}
+    from neos.jev.rubric import load_rubric
+
+    return {
+        "backend": "jev",
+        "model": jev_config.model,
+        "rubric": jev_config.judge_rubric,
+        "rubric_digest": load_rubric(jev_config.judge_rubric).digest,
+        "min_confidence": jev_config.judge_min_confidence,
+        # 계산 클레임과 Jev 실패는 LLM 판정자가 맡는다 -- 같은 런에 판정자가 둘이다.
+        "fallback": "llm",
+    }
+
+
 async def build_orchestrator(
     session,
     run_id: str,
@@ -83,7 +100,7 @@ async def build_orchestrator(
     # provider without starting sandbox resources") 이므로 앞당겨도 비용이
     # 늘지 않는다.
     sandbox_provider = None
-    if config.code_research_enabled:
+    if config.code_research_enabled or config.compose_child_enabled:
         try:
             from neos.coding.sandbox.factory import create_sandbox_provider
 
@@ -123,6 +140,15 @@ async def build_orchestrator(
             )
         ),
     )
+    # L6 (DECISIONS D99). 켜졌는지는 `build_claim_judge` 한 곳이 정한다. **재생** 카세트
+    # 런만 Jev 를 부르지 않는다 -- 카세트에는 Jev 답이 없다. 녹화 카세트(라이브 표본
+    # 스크립트가 쓴다)는 실제 런이므로 Jev 가 판정한다.
+    jev_config = settings.config.jev
+    jev_judge = None
+    if getattr(cassette, "mode", "off") != "replay":
+        from neos.jev.assembly import build_claim_judge
+
+        jev_judge = build_claim_judge(jev_config)
     agentic_grader = AgenticGrader(
         judge_model=judge_model,
         threshold=config.agentic_threshold,
@@ -131,6 +157,10 @@ async def build_orchestrator(
         llm_client=llm_client,
         cassette=cassette,
         judge_effort=judge_effort,
+        jev_judge=jev_judge,
+        jev_min_confidence=(
+            jev_config.judge_min_confidence if jev_judge is not None else None
+        ),
     )
     report_grader = ReportGrader(
         ledger,
@@ -242,6 +272,10 @@ async def build_orchestrator(
             "claim_retry_cap": config.claim_retry_cap,
             # D-14: #23 은 이것을 끄고 돈다 -- 표본이 어느 코드를 쟀는지 원장이 말한다.
             "budget_aware_reduction": config.budget_aware_reduction,
+            # J4 (D105): 초안을 누가 쓰나. 표본 경계가 이 값으로 갈린다.
+            "compose_child_enabled": config.compose_child_enabled,
+            # L6 (D99): 인용 클레임을 누가 판정했나. 경계 17 이 이 값으로 갈린다.
+            "claim_judge": _claim_judge_manifest(jev_config, jev_judge),
             "decompose_max_tokens": config.decompose_max_tokens,
             "judge_max_output_tokens": config.judge_max_output_tokens,
             "entailment_max_output_tokens": config.entailment_max_output_tokens,
@@ -303,6 +337,16 @@ async def build_orchestrator(
             )
             research_runtime_factory = None
 
+    # 트랙 J4 (D105). compose 자식은 synth 모델로 돈다. 플래그가 꺼져 있으면 짓지 않는다.
+    compose_runtime_factory = None
+    if config.compose_child_enabled and sandbox_provider is not None:
+        from neos.database.connection import db_manager
+
+        from .subagent_adapter import build_compose_runtime
+
+        def compose_runtime_factory(port):
+            return build_compose_runtime(port, session_factory=db_manager.get_session)
+
     return Orchestrator(
         session,
         run_id,
@@ -326,4 +370,5 @@ async def build_orchestrator(
         subagent_runtime=subagent_runtime,
         sandbox_provider=sandbox_provider,
         research_runtime_factory=research_runtime_factory,
+        compose_runtime_factory=compose_runtime_factory,
     )

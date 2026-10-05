@@ -745,3 +745,21 @@ async def test_stop_in_autothread_resolves_bind(
 
     assert coding.stopped == ["ct_channel"]
     assert thread.sent[-1] == "cancel: Stopped ct_channel"
+
+
+@pytest.mark.parametrize(("guild", "expected"), [(None, True), (..., False)])
+async def test_receive_message_carries_the_gates_dm_verdict(
+    monkeypatch: pytest.MonkeyPatch, guild: object, expected: bool
+) -> None:
+    """Q8b: the gateway attaches only DMs to an agent thread; the adapter says which."""
+    from neos.api.channels.adapters.discord import discord_message_is_dm
+
+    install_channel_settings(monkeypatch, allowed_users=[str(USER_ID)])
+    channel = FakeChannel(CHANNEL_ID)
+    adapter = _adapter(FakeGateway(), channel)
+    raw = _message(channel=channel, guild=guild)
+
+    message = await adapter.receive_message(raw)
+
+    assert message.metadata["is_dm"] is expected
+    assert discord_message_is_dm(raw) is expected

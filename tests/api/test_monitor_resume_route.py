@@ -82,6 +82,9 @@ def test_the_app_serves_the_route_with_only_the_monitor_enforcing(tmp_path) -> N
         "jev:\n  enabled: true\n  model: jev-1.13.0\n  monitor:\n"
         + monitor.replace("True", "true")
         + "\n"
+        # "standing agents off" 는 이 테스트의 조건이다 -- 프로파일 기본값에 맡기지 않는다.
+        # development 는 2026-10-03 부터 상시 에이전트를 켠다.
+        + "standing_agents:\n  enabled: false\n"
     )
     probe = textwrap.dedent(
         """

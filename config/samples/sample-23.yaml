@@ -1,10 +1,18 @@
-# 표본 #23 전용 오버레이 (DECISIONS D98 · D-14 = 분리).
+# 표본 #23 전용 오버레이 (DECISIONS D98 · D-14 = 분리 · D99 = 판정자 Jev).
 #
 #   NEOS_CONFIG_PATH=config/samples/sample-23.yaml .venv/bin/python scripts/deep_analysis_funnel_sample.py ...
 #
 # #23 은 CITE1 의 원인을 **BUDGET2 이전 코드로** 가른다. 고친 뒤에 원인을 물으면
-# 무엇을 쟀는지 모른다(D96 §4). 이 한 줄 말고는 아무것도 바꾸지 않는다 -- 줄이
-# 늘면 표본이 무엇을 쟀는지 다시 모르게 된다. 런 매니페스트가 이 값을 싣고,
-# 판독기는 `--expect-budget2 off` 로 그것을 확인한다.
+# 무엇을 쟀는지 모른다(D96 §4). 런 매니페스트가 이 값을 싣고, 판독기는
+# `--expect-budget2 off` 로 그것을 확인한다.
 deep_analysis:
   budget_aware_reduction: false
+# D99 (2026-10-03, 사람의 결정): #23 의 인용 클레임 판정자는 Jev 다(L6, 로드맵 §8 경계 17).
+# #23 은 새 채점 계보의 첫 표본이고 #21·#22 와 채점 결과를 나란히 놓지 않는다.
+# `judge_min_confidence` 0.60 은 **잠정값**이다 -- Choice 쿡북의 top-p 경계를 그대로
+# 들여왔고 NEOS 에서 잰 값이 아니다(D99 §3). 이 블록 말고는 아무것도 더하지 않는다.
+jev:
+  enabled: true
+  model: jev-1.13.0
+  judge_enabled: true
+  judge_min_confidence: 0.60

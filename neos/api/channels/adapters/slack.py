@@ -174,6 +174,8 @@ class SlackAdapter(ChannelAdapterBase):
             "slack_message_ts": raw_ts or "",
             "thread_id": thread_id,
             "idempotency_key": str(raw_ts or ""),
+            # 게이트가 쓰는 판정 그대로(Q8b). 세션 키의 scope 는 팀 id 라 DM 을 말하지 않는다.
+            "is_dm": slack_event_is_dm(raw),
         }
         display = await self._resolve_user_name(slack_user_id, self._team_scope(raw))
         if display:
@@ -612,7 +614,7 @@ class SlackAdapter(ChannelAdapterBase):
             platform_user_id=str(message.get("user") or ""),
             channel_id=channel_id,
             text=text,
-            is_dm=message.get("channel_type") == "im" or channel_id.startswith("D"),
+            is_dm=slack_event_is_dm(message),
             is_bot=_is_slack_bot_sender(message),
             is_self=bool(self._bot_user_id)
             and str(message.get("user")) == self._bot_user_id,
@@ -668,6 +670,13 @@ class SlackAdapter(ChannelAdapterBase):
                 await say("죄송합니다. 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
             except Exception:
                 pass
+
+
+def slack_event_is_dm(event: dict) -> bool:
+    """메시지 이벤트가 DM(im)인가. 게이트(`GateContext.is_dm`)와 `ChannelMessage.metadata`
+    가 이 함수 하나를 쓴다 -- 판정이 두 곳에서 갈라지지 않게."""
+    channel_id = str(event.get("channel") or "")
+    return event.get("channel_type") == "im" or channel_id.startswith("D")
 
 
 def _is_slack_bot_sender(message: dict) -> bool:

@@ -75,13 +75,17 @@ def test_ticket_requires_delegate_lineage() -> None:
         _ticket(lineage_kind=LineageKind.BRANCH)
 
 
-def test_ticket_clamps_max_turns_to_one_through_eight() -> None:
+def test_ticket_clamps_max_turns_to_one_through_the_ceiling() -> None:
+    from neos.subagent.types import MAX_TICKET_TURNS
+
+    assert MAX_TICKET_TURNS == 12  # 8 → 12 (D114, compose 재시도의 turns_exhausted)
     with pytest.raises(ValueError, match="max_turns"):
         _ticket(max_turns=0)
     with pytest.raises(ValueError, match="max_turns"):
-        _ticket(max_turns=9)
+        _ticket(max_turns=MAX_TICKET_TURNS + 1)
     assert _ticket(max_turns=1).max_turns == 1
-    assert _ticket(max_turns=8).max_turns == 8
+    assert _ticket(max_turns=MAX_TICKET_TURNS).max_turns == MAX_TICKET_TURNS
+    assert _ticket().max_turns == 4  # 기본값은 그대로다 -- 다른 스펙은 바뀌지 않는다
 
 
 def test_ticket_has_no_channel_fields() -> None:
@@ -184,3 +188,15 @@ def test_folded_result_accepts_exit_reason_and_full_summary() -> None:
     )
     assert result.exit_reason == "failed"
     assert result.full_summary == "head and tail"
+
+
+def test_the_database_turn_constraint_matches_the_ticket_ceiling() -> None:
+    """DB 없이도 도는 쪽 -- 091 의 상한 숫자가 코드의 상수와 같다. 055 의 8 이 compose 12 턴을 거절했다(D114)."""
+    import re
+    from pathlib import Path
+
+    from neos.subagent.types import MAX_TICKET_TURNS
+
+    sql = Path("db/migrations/091_widen_subagent_max_turns.sql").read_text(encoding="utf-8")
+    statements = "\n".join(line for line in sql.splitlines() if not line.startswith("--"))
+    assert re.findall(r"CHECK \(max_turns BETWEEN 1 AND (\d+)\)", statements) == [str(MAX_TICKET_TURNS)]

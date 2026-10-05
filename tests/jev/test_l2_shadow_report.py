@@ -89,6 +89,8 @@ def test_the_shadow_overlay_loads_as_shadow_only(tmp_path, monkeypatch):
     overlay = Path("config/samples/jev-l2-shadow.yaml")
     monkeypatch.setattr(loader, "DEFAULT_DOTENV_PATH", tmp_path / "missing.env")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "neos-test-placeholder")
+    monkeypatch.setenv("NEOS_TRIGGER_SIGNING_KEY", "neos-test-trigger-signing-key-placeholder")
+    monkeypatch.setenv("NEOS_SECRET_BROKER_KEY", "neos-test-secret-broker-key-placeholder")
     jev = loader.load_app_config(config_path=str(overlay)).jev
     assert jev.enabled and jev.tool_risk_shadow_enabled
     assert jev.tool_risk_gate_enabled is False

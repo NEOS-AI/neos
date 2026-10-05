@@ -347,6 +347,7 @@ class Orchestrator:
         # 쓰인다. 꺼져 있으면 읽히지도 않는다 (I1).
         sandbox_provider=None,
         research_runtime_factory=None,
+        compose_runtime_factory=None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -429,6 +430,8 @@ class Orchestrator:
         self.subagent_runtime = subagent_runtime
         self.sandbox_provider = sandbox_provider
         self.research_runtime_factory = research_runtime_factory
+        # 트랙 J4 (D105). `compose` 스펙은 synth 모델로 돈다 -- research 런타임(dig)과 따로 짓는다.
+        self.compose_runtime_factory = compose_runtime_factory
 
     async def _emit(self, kind: str, payload: dict) -> None:
         if self.event_sink is not None:
@@ -808,6 +811,91 @@ class Orchestrator:
                 expected_checkpoint_id=child_checkpoint_id,
             )
         return await self._run_legacy_worker(assignment)
+
+    async def _compose_draft(
+        self,
+        root_id: str,
+        root_summary: NodeSummary,
+        child_summaries: list[NodeSummary],
+        caveats: list[str],
+        *,
+        revision_hints: list[str],
+        attempt: int,
+    ) -> str | None:
+        """J4 (D105). compose 자식에게 초안을 받는다. 실패면 원장에 이유를 남기고 None."""
+        from .compose_worker import ComposeFailed, run_compose_worker
+        from .subagent_adapter import compose_model_pin
+        from .synthesizer import assembly_child_blocks
+
+        research = settings.config.deep_analysis.code_research
+        missing = (
+            "sandbox_provider_missing"
+            if self.sandbox_provider is None
+            else "compose_runtime_factory_missing"
+            if self.compose_runtime_factory is None
+            else None
+        )
+        await self.ledger.log(
+            "code_worker_started",
+            root_id,
+            {"spec": "compose", "profile": research.sandbox_profile, "run_id": "", "attempt": attempt},
+        )
+        if missing is not None:
+            await self.ledger.log(
+                "code_worker_unsubmitted",
+                root_id,
+                {"reason": missing, "spec": "compose", "attempt": attempt},
+            )
+            return None
+        root = await self.ledger.root_question()
+        try:
+            text, summary = await run_compose_worker(
+                ledger=self.ledger,
+                provider=self.sandbox_provider,
+                root_id=root_id,
+                root_text=str(getattr(root, "text", "") or ""),
+                root_summary=root_summary.answer,
+                child_blocks=assembly_child_blocks(child_summaries),
+                caveats=caveats,
+                revision_hints=revision_hints,
+                runtime_factory=self.compose_runtime_factory,
+                model=compose_model_pin(),
+                parent_id=str(self.ledger.run_id),
+                attempt=attempt,
+                limits=SandboxLimits.safe_defaults(),
+                command_limits=CommandLimits(
+                    timeout_sec=research.reexecution.cpu_sec,
+                    output_bytes=research.reexecution.stdout_bytes,
+                ),
+                max_turns=settings.config.deep_analysis.compose_max_turns,
+                profile=research.sandbox_profile,
+            )
+        except TokenBudgetExhausted:
+            raise
+        except ComposeFailed as exc:
+            reason = exc.reason
+        except Exception as exc:  # noqa: BLE001 -- 이름을 남기고 다음 시도로 간다
+            reason = type(exc).__name__
+        else:
+            await self.ledger.log(
+                "code_worker_submitted",
+                root_id,
+                {
+                    "spec": "compose",
+                    "attempt": attempt,
+                    "claims": 0,
+                    "by_kind": {},
+                    "report_path": True,
+                    **summary,
+                },
+            )
+            return text
+        await self.ledger.log(
+            "code_worker_unsubmitted",
+            root_id,
+            {"reason": reason, "spec": "compose", "attempt": attempt},
+        )
+        return None
 
     async def _log_code_worker_outcome(
         self, question_id: str, result: WorkerResult
@@ -1624,12 +1712,27 @@ class Orchestrator:
         # refused it. Feeds `_best_rejected_draft` once the cap is spent.
         rejected: list[tuple[Verdict, str]] = []
         for attempt in range(cap + 1):
-            draft = await self.synthesizer.assemble(
-                root_summary,
-                child_summaries,
-                caveats,
-                revision_hints=revision_hints,
-            )
+            if settings.config.deep_analysis.compose_child_enabled:
+                # J4 (D105): 초안을 compose 자식이 쓴다. 렌더러·게이트·재시도는 아래 그대로다.
+                draft = await self._compose_draft(
+                    root_id,
+                    root_summary,
+                    child_summaries,
+                    caveats,
+                    revision_hints=revision_hints,
+                    attempt=attempt,
+                )
+                if draft is None:
+                    # 실패는 `_compose_draft` 가 원장에 남겼다. 옛 조립기로 슬쩍 떨어지지 않는다 --
+                    # 그러면 "compose 로 돌았다" 고 믿는 표본이 사실은 섞여 돈다.
+                    continue
+            else:
+                draft = await self.synthesizer.assemble(
+                    root_summary,
+                    child_summaries,
+                    caveats,
+                    revision_hints=revision_hints,
+                )
             last = draft
             # The limits section joins the draft *before* rendering, so its
             # markers are resolved by the same pass as the body's (W3-k).
@@ -1749,6 +1852,29 @@ class Orchestrator:
         # instead of reporting it. So the appendix names them instead.
         chosen = _best_rejected_draft(rejected)
         reason = "조립/채점 재시도 캡 소진."
+        if last is None and settings.config.deep_analysis.compose_child_enabled:
+            # D114: compose 자식이 **모든** 시도에서 초안을 내지 못했다. 그대로면 사용자는 부록 한 줄만
+            # 받는다(#29 `196c9173`, D113). 옛 조립기를 **한 번, 루프 밖에서** 부른다 -- 루프 안의 시도를
+            # 바꾸면 compose 의 재시도 기회가 줄고, 조용히 바꾸면 "compose 로 돌았다" 는 표본이 섞인다.
+            # 그래서 원장에 이름을 남기고, 부록에도 적고, 채점은 하지 않는다(캡은 이미 썼다).
+            await self.ledger.log(
+                "report_assembly_degraded",
+                root_id,
+                {"reason": "compose_all_attempts_failed", "attempts": cap + 1},
+            )
+            last = await self.synthesizer.assemble(
+                root_summary,
+                child_summaries,
+                caveats,
+                revision_hints=revision_hints,
+            )
+            last = _ensure_question_coverage(
+                _ensure_limits_section(last, caveats), child_summaries
+            )
+            reason = (
+                "조립/채점 재시도 캡 소진. compose 자식이 모든 시도에서 리포트를 내지 못해 "
+                "옛 조립기의 초안을 실었다 -- 이 초안은 채점되지 않았다."
+            )
         best = chosen or last_rendered
         if best is None and last:
             best, orphans = await self.citation_renderer.render_best_effort(last)
@@ -1758,8 +1884,9 @@ class Orchestrator:
                     root_id,
                     {"reason": "orphan_citations_delivered", "orphans": orphans},
                 )
-                reason = (
-                    "조립/채점 재시도 캡 소진. 그리고 조립기가 존재하지 않는 "
+                # 앞의 사유(캡 소진 · compose 대체)에 덧붙인다 -- 옛 경로에서는 바이트가 같다.
+                reason += (
+                    " 그리고 조립기가 존재하지 않는 "
                     f"클레임 id 를 인용했다({', '.join(orphans)}) -- 본문에 남은 "
                     "`[C:...]` 표기는 각주로 해소되지 못한 내부 주소이며 "
                     "출처가 아니다."

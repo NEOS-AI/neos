@@ -795,6 +795,55 @@ async def test_preflight_requires_anthropic_tavily_and_database():
     assert probe.asked == ["m-1"]
 
 
+def _jev_settings(judge_enabled: bool):
+    settings_obj = _keyed_settings()
+    settings_obj.config = SimpleNamespace(
+        jev=SimpleNamespace(enabled=True, judge_enabled=judge_enabled, model="jev-1.13.0")
+    )
+    return settings_obj
+
+
+@pytest.mark.asyncio
+async def test_preflight_probes_the_jev_judge_only_when_it_judges():
+    """L6 (D99): 판정자가 Jev 면 Jev 도 실제로 대답해야 한다 -- D94 를 Jev 에도."""
+    asked: list[str] = []
+
+    async def jev_probe(config):
+        asked.append(config.model)
+
+    await preflight(
+        _jev_settings(judge_enabled=False),
+        healthy_session_factory,
+        probe=_Probe(),
+        models=("m-1",),
+        jev_probe=jev_probe,
+    )
+    assert asked == []
+    await preflight(
+        _jev_settings(judge_enabled=True),
+        healthy_session_factory,
+        probe=_Probe(),
+        models=("m-1",),
+        jev_probe=jev_probe,
+    )
+    assert asked == ["jev-1.13.0"]
+
+
+@pytest.mark.asyncio
+async def test_a_jev_judge_that_does_not_answer_fails_preflight():
+    async def jev_probe(config):
+        raise RuntimeError("Error code: 401")
+
+    with pytest.raises(PreflightError, match="jev judge jev-1.13.0"):
+        await preflight(
+            _jev_settings(judge_enabled=True),
+            healthy_session_factory,
+            probe=_Probe(),
+            models=("m-1",),
+            jev_probe=jev_probe,
+        )
+
+
 @pytest.mark.asyncio
 async def test_preflight_lists_missing_names_without_values():
     fake_settings = SimpleNamespace(ANTHROPIC_API_KEY=None, TAVILY_API_KEY=None)

@@ -1,0 +1,50 @@
+# Jev 집행 오버레이 -- development 기동 전용 (결정 2026-10-03, DECISIONS D99).
+#
+#   make dev-jev-enforce        # = NEOS_CONFIG_PATH=config/samples/dev-jev-enforce.yaml uvicorn ...
+#
+# 켜는 것: L3 도구 위험 게이트(실제 차단) · Q5b 궤적 감시자 멈춤 · L6 Jev 클레임 판정자 ·
+# Q14a 호스트 브라우저. 전부 TypeSafe 를 **호출마다 인라인으로** 부른다(timeout 5초).
+#
+# 🔴 **아래 경계는 전부 잠정값이다.** 사람이 "잠정값으로 enforce" 를 골랐다(2026-10-03).
+# 실측이 아니므로 판정이 경계 근처에서 실행마다 뒤집힐 수 있다 -- 중간대 σ≈0.024(§12.7).
+# 경계를 실측으로 바꿀 때는 이 파일의 값을 고치고 날짜를 적는다.
+#
+# development.yaml 에 넣지 않는 이유는 jev-l2-shadow.yaml 과 같다: 테스트와 CI 가
+# development 프로파일을 읽으므로, 거기 넣으면 스위트가 진짜 Jev 를 부르거나(로컬, 과금)
+# 자리표시자 키로 401 폴백 이벤트를 쌓는다(CI).
+jev:
+  enabled: true
+  model: jev-1.13.0
+  # L2 섀도 + L3 게이트. 경계 출처: D-L2 비교(무해 ≤0.13, 파국 ≥0.94, 중간 0.47~0.81).
+  # 중간대가 경계 사이에 들어가므로 대면 런은 승인을, unattended 런은 DENY 를 받는다(D-L1).
+  tool_risk_shadow_enabled: true
+  tool_risk_gate_enabled: true
+  question_thresholds:
+    irreversible: {low_below: 0.2, high_at_or_above: 0.9}
+    exfiltration: {low_below: 0.2, high_at_or_above: 0.9}
+  # L6 클레임 판정자. 0.60 은 Choice 쿡북의 top-p 경계를 들여온 잠정값이다.
+  judge_enabled: true
+  judge_min_confidence: 0.60
+  monitor:
+    # Q5 섀도 + Q5b 멈춤. MP2 가 멈춤 경계 전부의 **명시**를 요구한다 -- 폴백 FB1~FB6 은
+    # 스키마의 첫 값(= 가장 느슨한 경계)을 그대로 적었다. 더 엄하게만 움직일 수 있다.
+    shadow_enabled: true
+    enforce: true
+    pause_at_or_above: 0.9
+    user_only: 1
+    mode_ceiling: 2
+    denial_window: 10
+    denials_in_window: 3
+    repeated_call: 3
+    refusals: 1
+    spend_multiple: 4.0
+    spend_warmup_turns: 5
+coding_model:
+  # Q14a 호스트 브라우저(development 전용). Chromium 이 설치돼 있어야 한다
+  # (`.venv/bin/playwright install chromium`). 허용 호스트는 개발용 표본이다.
+  browser:
+    enabled: true
+  web_fetch_hosts:
+    - en.wikipedia.org
+    - docs.python.org
+    - github.com

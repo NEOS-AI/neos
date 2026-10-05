@@ -784,6 +784,17 @@ class StandingQuestionsConfig(StrictConfigModel):
     settle_timeout_minutes: int = Field(default=720, ge=1)
 
 
+class StandingThreadsConfig(StrictConfigModel):
+    """채널 횡단 스레드 -- 트랙 Q8 (docs/Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md).
+
+    에이전트마다 활성 스레드 하나. 소유자의 DM 채널 세션과 웹 에이전트 대화가 붙고, 다음
+    턴의 맥락을 스레드에서 읽는다. 창의 크기는 새 값이 아니라 `chat.max_history_messages`
+    다(웹 채팅과 같다). 꺼져 있으면 스레드를 읽지도 쓰지도 않는다.
+    """
+
+    enabled: bool = False
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -798,6 +809,7 @@ class StandingAgentsConfig(StrictConfigModel):
         default_factory=StandingNotificationsConfig
     )
     questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
+    threads: StandingThreadsConfig = Field(default_factory=StandingThreadsConfig)
 
 
 class LearnConfig(StrictConfigModel):
@@ -1205,6 +1217,16 @@ class DeepAnalysisConfig(StrictConfigModel):
     # development 밖에서 켜려면 관리형 평면이 필요하다(I7).
     code_research_enabled: bool = False
     code_research: CodeResearchConfig = Field(default_factory=CodeResearchConfig)
+    # 트랙 J4 (DECISIONS D105). 켜면 최종 조립을 `Synthesizer.assemble` 대신 compose 자식이
+    # 한다 -- verified 클레임을 **파일로** 공개하고(점진 공개), 자식이 리포트를 워크스페이스에
+    # 쓰고 `check_claims.v1` 로 인용을 스스로 검사한다. `code_research_enabled` 와 **따로** 둔
+    # 이유: 그것을 켜면 research 워커도 코딩 루프가 되어 한 표본에 처방 둘이 들어간다.
+    # development 밖에서 켜려면 관리형 평면이 필요하다(I7 과 같은 문).
+    compose_child_enabled: bool = False
+    # compose 자식의 턴 상한(D114). 8 에서 재시도 셋이 `turns_exhausted` 로 끝났다(#29, D113).
+    # 상한 12 는 서브에이전트 티켓의 상한(`neos.subagent.types.MAX_TICKET_TURNS`)이다 -- 테스트가 둘을 맞춘다.
+    # compose 의 걸음 상한은 이 값에서 `2·턴 + 1` 로 유도한다(`code_research.max_steps` 를 쓰지 않는다).
+    compose_max_turns: int = Field(default=12, ge=1, le=12)
 
     # Input allowances for the finalization stages, expressed as multiples of
     # `synthesis_max_tokens` so a profile that shrinks its synthesis ceiling
@@ -1797,6 +1819,16 @@ class JevConfig(StrictConfigModel):
     tool_risk_gate_enabled: bool = False
     #: L5. 판정자 섀도. 원장의 판정은 여전히 AgenticGrader 다.
     judge_shadow_enabled: bool = False
+    #: L6 (결정 2026-10-03, DECISIONS D99). 심층분석의 **인용 클레임** 의미 판정을 Jev
+    #: Choice 로 한다 -- 원장의 판정이 바뀐다(로드맵 §8 경계 17). 계산 클레임은 루브릭이
+    #: 다루지 않으므로 LLM 판정자에 남고, Jev 가 대답하지 않으면 LLM 판정자로 폴백하며
+    #: 그 사실을 `claim_graded` 에 싣는다. `DeterministicGrader` 는 대상이 아니다.
+    judge_enabled: bool = False
+    #: L6 판정 루브릭 파일 이름 (`neos/jev/rubrics/<name>.yaml`).
+    judge_rubric: str = "claim_judgement"
+    #: L6. Choice `confidence` 가 이 값보다 낮으면 "애매하다"로 읽고 **좁힌다**(반려).
+    #: 기본값 없음 -- 켜려면 명시한다(§12.4 와 같은 이유).
+    judge_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     #: 해소된 모델 id. 별칭(`jev-latest`)은 받지 않는다 -- §12.5 L0.
     model: str | None = None
@@ -1854,8 +1886,16 @@ class JevConfig(StrictConfigModel):
                 "궤적 감시자(jev.monitor)를 켜려면 jev.monitor.pause_at_or_above 를 "
                 "명시해야 한다. 기본값은 없다 -- 섀도 실측이 정한다."
             )
+        if self.judge_enabled and self.judge_min_confidence is None:
+            raise ValueError(
+                "Jev 판정자(jev.judge_enabled)를 켜려면 jev.judge_min_confidence 를 "
+                "명시해야 한다. 기본값은 없다 -- 애매함의 경계는 실측이 정한다."
+            )
         if not self.enabled and (
-            banding_on or self.judge_shadow_enabled or self.monitor.shadow_enabled
+            banding_on
+            or self.judge_shadow_enabled
+            or self.judge_enabled
+            or self.monitor.shadow_enabled
         ):
             raise ValueError(
                 "jev.enabled 가 false 인데 하위 플래그가 켜져 있다. 켤 수 없는 "
@@ -2701,7 +2741,10 @@ class AppConfig(StrictConfigModel):
         바로 위 "production + docker 거절" 과 같은 판단이고, 같은 fail-closed
         형태로 둔다.
         """
-        if not self.deep_analysis.code_research_enabled:
+        if not (
+            self.deep_analysis.code_research_enabled
+            or self.deep_analysis.compose_child_enabled
+        ):
             return self
         # 심층 방어. 2026-09-23 부터 Docker provider 는 조사 샌드박스를
         # `profile` 과 함께 열고 그 네트워크 정책을 **스스로** 강제한다

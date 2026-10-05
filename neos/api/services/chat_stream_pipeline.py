@@ -172,6 +172,7 @@ class ChatStreamPipeline:
         multi_agent_workflow,
         workflow_callback_cls,
         map_node_to_agent_fn: Callable[[str], str],
+        agent_threads: Any | None = None,
     ) -> None:
         self._llm_svc = chat_llm_service
         self._cost_calc = cost_calculator
@@ -181,6 +182,9 @@ class ChatStreamPipeline:
         self._workflow = multi_agent_workflow
         self._WorkflowCallback = workflow_callback_cls
         self._map_node = map_node_to_agent_fn
+        # Q8d: 상시 에이전트 스레드(`neos.standing.channel_threads.ChannelAgentThreads`).
+        # 없으면 스레드가 없다. 플래그는 그쪽이 호출 때마다 읽는다.
+        self._agent_threads = agent_threads
 
     async def run(
         self,
@@ -239,7 +243,7 @@ class ChatStreamPipeline:
         try:
             request_metadata = request.metadata or {}
             # ── Step 1: 사용자 메시지 저장 ─────────────────────────────
-            await self._ChatService.add_message(
+            user_message = await self._ChatService.add_message(
                 conversation_id=conversation_id,
                 role=request.role.value,
                 content=request.content,
@@ -262,6 +266,12 @@ class ChatStreamPipeline:
             history_messages = await self._ChatService.get_conversation_messages(
                 conversation_id=conversation_id,
                 limit=20,
+            )
+            # Q8d: 에이전트 대화로 지정된 웹 대화면 이력을 **스레드 창**으로 바꾼다 -- 워크플로우
+            # (Step 4)와 LLM(Step 6) 둘 다. 이번 턴은 방금 저장한 사용자 메시지 그대로 끝에 둔다.
+            agent_turn, history_messages = await self._join_agent_thread(
+                conversation_id, current_user.user_id, request.content, user_message,
+                history_messages,
             )
 
             # ── Step 4: 워크플로우 실행 ────────────────────────────────
@@ -382,6 +392,8 @@ class ChatStreamPipeline:
                 completion_tokens=acc.usage_info["completion_tokens"] if acc.usage_info else 0,
                 metadata=message_metadata,
             )
+            if agent_turn is not None:
+                await self._agent_threads.close_turn(agent_turn, acc.full_content)
 
             # ── Step 8: 비용 기록 (메시지 저장 후 — FK 제약 위반 방지) ─
             if acc.usage_info and acc.cost_info:
@@ -436,6 +448,33 @@ class ChatStreamPipeline:
     # ------------------------------------------------------------------ #
     # Workflow execution
     # ------------------------------------------------------------------ #
+
+    async def _join_agent_thread(
+        self,
+        conversation_id: str,
+        user_id: str,
+        content: str,
+        user_message: Any,
+        history_messages: List[Dict],
+    ) -> tuple[Any, List[Dict]]:
+        """(열린 스레드 턴 또는 None, 이번 턴이 볼 이력). 스레드가 없으면 이력은 그대로다."""
+        if self._agent_threads is None:
+            return None, history_messages
+        message_id = user_message.get("message_id") if isinstance(user_message, dict) else None
+        turn = await self._agent_threads.open_web_turn(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            user_text=(content or "").strip() or "The user sent a message with no text.",
+            idem_key=str(message_id) if message_id else None,
+        )
+        if turn is None:
+            return None, history_messages
+        current = [m for m in history_messages[-1:] if m.get("role") == "user"]
+        window = [
+            {"role": h["role"], "content": h["content"], "created_at": h["timestamp"]}
+            for h in turn.history
+        ]
+        return turn, window + current
 
     async def _run_workflow(
         self,

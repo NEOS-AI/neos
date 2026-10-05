@@ -43,6 +43,9 @@ _LEARN_DISABLED = "Learning is disabled."
 _LEARN_STAGED = "Lesson staged."
 _LEARN_USAGE = "Usage: /learn <text>"
 _SESSION_RESET = "Session reset."
+_AGENT_THREAD_ROTATED = (
+    "Session reset. Your agent's conversation starts fresh on every channel it is attached to."
+)
 _DRAFT_WORKFLOW = "Working..."
 _DRAFT_CODING = "Starting coding task..."
 _COMPACT_UNAVAILABLE = "Compact is not available."
@@ -297,8 +300,12 @@ class ChannelGateway:
         inbound: Any | None = None,
         generations: Any | None = None,
         workflow_approvals: Any | None = None,
+        agent_threads: Any | None = None,
     ) -> None:
         self._workflow = workflow
+        # Q8b 채널 횡단 스레드(`neos.standing.channel_threads.ChannelAgentThreads`). 없으면
+        # 스레드가 없다 -- 플래그는 그쪽이 호출 때마다 읽는다.
+        self._agent_threads = agent_threads
         self._coding = coding
         self._workflow_approvals = workflow_approvals
         self._workflow_pending: Dict[str, Dict[str, str]] = {}
@@ -470,6 +477,12 @@ class ChannelGateway:
         query = (message.text or "").strip() + _attachment_prompt(message)
         if not query.strip():
             query = "The user sent a message with no text."
+        # 스레드에는 발신자 표지 없이 적는다 -- 붙는 세션은 소유자의 DM 뿐이다(Q8 §5).
+        agent_turn = (
+            await self._agent_threads.open_turn(message, query)
+            if self._agent_threads is not None
+            else None
+        )
         query = _with_sender_prefix(message, query)
         channel_attachments = _channel_attachment_blocks(message)
         await self._send_start_draft(message, _DRAFT_WORKFLOW)
@@ -497,6 +510,9 @@ class ChannelGateway:
             "retry_count": 0,
             "channel_attachments": channel_attachments,
         }
+        if agent_turn is not None:
+            # 웹 채팅과 같은 모양 -- 워크플로우는 고치지 않는다(Q8 §6).
+            workflow_input["chat_history"] = agent_turn.history
 
         # 워크플로우 실행 (checkpointer 사용 — 세션 지속성 보장)
         result = await self._workflow.execute_workflow(
@@ -518,6 +534,8 @@ class ChannelGateway:
             return f"{message.session_id} waiting_approval"
 
         final_response = result.get("final_response") or result.get("response") or ""
+        if agent_turn is not None and final_response:
+            await self._agent_threads.close_turn(agent_turn, final_response)
         if not final_response:
             final_response = "응답을 생성하지 못했습니다. 다시 시도해주세요."
 
@@ -661,6 +679,10 @@ class ChannelGateway:
             if key[0] != message.session_id
         }
         await self._inbound.clear_session(message.session_id)
+        if self._agent_threads is not None and await self._agent_threads.rotate_for_session(
+            message
+        ):
+            return _AGENT_THREAD_ROTATED
         return _SESSION_RESET
 
     def _schedule_fold(self, session_id: str) -> None:

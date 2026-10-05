@@ -1,0 +1,27 @@
+# 테스트 세션의 앰비언트 오버레이 -- `tests/conftest.py` 가 `NEOS_CONFIG_PATH` 기본값으로 건다.
+#
+# development 프로파일은 2026-10-03 부터 트랙 Q·G/H 를 켠다(개발 기동 편의). 테스트 세션의
+# `neos.main:app` 과 전역 `settings` 는 그 프로파일로 만들어지는데, 그러면
+#   - "플래그가 꺼지면 라우트가 없다" 를 지키는 가드 테스트가 켜진 앱을 읽어 공허해지고
+#   - 설계 그래프(`graph_design_enabled`)가 워크플로 테스트마다 **실제 LLM 을 부른다**
+#     (로컬은 과금, CI 는 자리표시자 키로 실패).
+# 그래서 세션의 앰비언트 앱은 스키마 기본값(off)으로 돌린다. 켜진 경로는 각 기능의 테스트가
+# 자기 설정으로 검증한다 -- Jev 오버레이를 development.yaml 에 넣지 않은 것과 같은 이유다.
+# 명시적인 `config_path` 나 `NEOS_CONFIG_PATH` 를 주는 테스트는 이 파일을 쓰지 않는다.
+workflow:
+  graph_design_enabled: false
+standing_agents:
+  enabled: false
+  triggers:
+    enabled: false
+  budget:
+    enabled: false
+    enforce: false
+  notifications:
+    enabled: false
+  questions:
+    enabled: false
+coding_model:
+  secret_broker: false
+  device_bridge:
+    enabled: false

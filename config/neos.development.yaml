@@ -22,6 +22,12 @@ coding_model:
   command_enabled: true
   command_allowlist: [pytest, ruff, mypy, pnpm, git]
   mutation_snapshot_interval: 5
+  # Q6a·Q6b 자격증명 브로커. `NEOS_SECRET_BROKER_KEY`(32자 이상)가 없으면 기동이 멈춘다.
+  secret_broker: true
+  # Q16a~c 사용자 기기 브리지. READ_ONLY 와 자격증명이 허락한 쓰기만 -- 명령 allowlist 는
+  # 비워 둔다(COMMAND 를 열려면 실행 파일 이름을 적는다). 무인 쓰기·명령은 어떤 설정으로도 거절된다.
+  device_bridge:
+    enabled: true
 sandbox:
   # 실제 코딩 루프가 요구하는 샌드박스. development 는 로컬 디렉터리 기반 memory.
   enabled: true
@@ -38,3 +44,29 @@ telemetry:
     enabled: false
 storage:
   provider: local
+workflow:
+  # 트랙 G·H (결정 2026-10-03): 설계 서브에이전트가 질의별 그래프를 짠다 -- C3·C4 계약
+  # 검증과 H3 시간적 합성이 이 플래그 하나로 켜진다. 스키마 기본값은 여전히 false 다.
+  # 트랙 I(`subagent_nodes_enabled`)는 켜지 않는다 -- 별도 결정(GS6 표본 전).
+  graph_design_enabled: true
+standing_agents:
+  # 트랙 Q (결정 2026-10-03): development 에서 상시 에이전트 표면을 켠다.
+  # 스키마·staging·production 은 여전히 false 다. 상시 런은 라이브 표본이 아니다(로드맵 §8).
+  enabled: true
+  triggers:
+    # Q4a. `NEOS_TRIGGER_SIGNING_KEY`(32자 이상)가 없으면 기동이 멈춘다.
+    enabled: true
+  budget:
+    # Q10a 봉투 + Q10b 멈춤. 한도는 스키마 기본값($20/월)이다.
+    enabled: true
+    enforce: true
+  notifications:
+    # Q10b·Q3 소유자 알림 큐. 보내는 것은 API 프로세스다(채널 게이트웨이).
+    enabled: true
+  questions:
+    # Q3 상시 질문. DA 비용을 줄이려고 dev 프로파일로 돈다.
+    enabled: true
+    profile: dev
+  threads:
+    # Q8 채널 횡단 스레드(결정 2026-10-05). 소유자의 DM 과 웹 에이전트 대화가 한 맥락을 쓴다.
+    enabled: true

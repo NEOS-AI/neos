@@ -47,6 +47,11 @@ def telegram_inbound_filters(filters: Any) -> list[Any]:
     return inbound
 
 
+def telegram_chat_is_dm(chat: Any) -> bool:
+    """개인 대화(private)인가. 게이트와 `ChannelMessage.metadata` 가 이 함수 하나를 쓴다."""
+    return bool(chat is not None and getattr(chat, "type", None) == "private")
+
+
 def _telegram_session_id(raw: Any) -> str:
     chat = getattr(raw, "effective_chat", None)
     message = getattr(raw, "effective_message", None)
@@ -229,6 +234,8 @@ class TelegramAdapter(ChannelAdapterBase):
             "idempotency_key": str(
                 getattr(raw, "update_id", None) or message_id or ""
             ),
+            # 게이트가 쓰는 판정 그대로(Q8b).
+            "is_dm": telegram_chat_is_dm(chat),
         }
         if settings.config.channels.inbound_media:
             from neos.api.channels.media import collect_telegram_attachments
@@ -376,7 +383,7 @@ class TelegramAdapter(ChannelAdapterBase):
             platform_user_id=str(effective_user.id) if effective_user is not None else "",
             channel_id=str(effective_chat.id) if effective_chat is not None else "",
             text=text,
-            is_dm=bool(effective_chat is not None and effective_chat.type == "private"),
+            is_dm=telegram_chat_is_dm(effective_chat),
             is_bot=bool(getattr(effective_user, "is_bot", False)),
             is_self=bool(
                 bot_id is not None
@@ -476,7 +483,7 @@ class TelegramAdapter(ChannelAdapterBase):
             platform_user_id=str(effective_user.id) if effective_user is not None else "",
             channel_id=str(effective_chat.id) if effective_chat is not None else "",
             text=text,
-            is_dm=bool(effective_chat is not None and effective_chat.type == "private"),
+            is_dm=telegram_chat_is_dm(effective_chat),
             is_bot=bool(getattr(effective_user, "is_bot", False)),
             is_self=bool(
                 bot_id is not None

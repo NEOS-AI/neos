@@ -396,7 +396,12 @@ def _localize(chains: list[RunChain]) -> None:
     )
 
 
-async def _run(samples: list[str], verify: bool) -> int:
+def production_ratios(chains: list[RunChain]) -> list[float | None]:
+    """D90 의 런별 `cited/verified`. verified 가 0 이면 None -- 0 으로 읽지 않는다."""
+    return [(c.cited / c.verified) if c.verified else None for c in chains]
+
+
+async def _run(samples: list[str], verify: bool, extra_runs: list[str] | None = None) -> int:
     all_chains: list[RunChain] = []
     per_sample: dict[str, list[RunChain]] = {}
 
@@ -406,12 +411,27 @@ async def _run(samples: list[str], verify: bool) -> int:
             chains = [await _load_run(session, prefix) for prefix in prefixes]
             per_sample[sample] = chains
             all_chains.extend(chains)
+        if extra_runs:
+            # D105: 새 표본(#24·#25)을 같은 자로 잰다. 정답키가 없으니 D90 게이트는 걸 수 없다.
+            chains = [await _load_run(session, prefix) for prefix in extra_runs]
+            per_sample["(직접 지정)"] = chains
+            all_chains.extend(chains)
+            samples = [*samples, "(직접 지정)"]
+            ratios = production_ratios(chains)
+            print("| run | verified | cited | cited/verified |")
+            print("|---|---:|---:|---:|")
+            for chain, ratio in zip(chains, ratios):
+                shown = "—" if ratio is None else f"{ratio:.2f}"
+                print(f"| `{chain.prefix}` | {chain.verified} | {chain.cited} | {shown} |")
+            known = [r for r in ratios if r is not None]
+            if known:
+                print(f"- 런별 cited/verified 중앙값: {statistics.median(known):.2f}")
 
     missing = [c.prefix for c in all_chains if not c.body_found]
     if missing:
         print(f"⚠️ 배달 본문 없음: {', '.join(missing)}", file=sys.stderr)
 
-    if verify:
+    if verify and not extra_runs:
         problems = _verify_d90(all_chains)
         if problems:
             print(
@@ -438,13 +458,19 @@ def main() -> int:
         help="표본 번호. 반복 지정 가능. 생략하면 전부.",
     )
     parser.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        help="런 접두사 8자. 표본 원장에 없는 새 표본을 읽을 때 쓴다(D105).",
+    )
+    parser.add_argument(
         "--no-verify-d90",
         action="store_true",
         help="D90 재현 게이트를 끈다. SAMPLES 를 확장할 때만 쓸 것.",
     )
     args = parser.parse_args()
-    samples = args.sample or sorted(SAMPLES)
-    return asyncio.run(_run(samples, verify=not args.no_verify_d90))
+    samples = args.sample or ([] if args.run else sorted(SAMPLES))
+    return asyncio.run(_run(samples, verify=not args.no_verify_d90, extra_runs=args.run))
 
 
 if __name__ == "__main__":

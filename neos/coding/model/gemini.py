@@ -20,6 +20,7 @@ from neos.coding.model.base import (
 )
 from neos.coding.model.buffers import ToolArgumentBuffer, complete_tool_buffer
 from neos.coding.model.errors import CodingModelError
+from neos.coding.model.names import ToolNameCodec
 from neos.coding.model.stop import normalize_stop_reason
 
 
@@ -43,10 +44,12 @@ class GeminiCodingModel:
         output_tokens = 0
         seen_usage = False
         finish_reason: str | None = None
+        # D106: 와이어 이름은 이 요청의 코덱으로 만들고 같은 코덱으로 되돌린다.
+        codec = ToolNameCodec.for_request(request)
         try:
             async with asyncio.timeout(request.limits.timeout_sec):
                 stream = self._client.aio.models.generate_content_stream(
-                    **_to_gemini_request(request)
+                    **_to_gemini_request(request, codec)
                 )
                 if hasattr(stream, "__await__"):
                     stream = await stream
@@ -71,7 +74,7 @@ class GeminiCodingModel:
                     if text:
                         yield TextDelta(str(text))
                     for call in _function_calls(raw):
-                        async for event in self._consume_call(buffers, call):
+                        async for event in self._consume_call(buffers, call, codec):
                             yield event
         except CodingModelError:
             raise
@@ -106,8 +109,9 @@ class GeminiCodingModel:
         self,
         buffers: dict[str, ToolArgumentBuffer],
         call: object,
+        codec: ToolNameCodec,
     ) -> AsyncIterator[ModelEvent]:
-        name = str(getattr(call, "name", "") or "")
+        name = codec.original(str(getattr(call, "name", "") or ""))
         call_id = str(
             getattr(call, "id", "") or getattr(call, "call_id", "") or name
         )
@@ -131,26 +135,32 @@ class GeminiCodingModel:
         )
 
 
-def _to_gemini_request(request: ModelRequest) -> dict[str, object]:
+def _to_gemini_request(
+    request: ModelRequest, codec: ToolNameCodec | None = None
+) -> dict[str, object]:
+    if codec is None:
+        codec = ToolNameCodec.for_request(request)
     return {
         "model": request.model,
-        "contents": _messages_to_gemini(request.messages),
+        "contents": _messages_to_gemini(request.messages, codec),
         "config": {
             "system_instruction": request.system,
             "max_output_tokens": request.limits.max_output_tokens,
-            "tools": _tools_to_gemini(request.tools),
+            "tools": _tools_to_gemini(request.tools, codec),
         },
     }
 
 
-def _tools_to_gemini(tools: tuple[Any, ...]) -> list[dict[str, object]]:
+def _tools_to_gemini(
+    tools: tuple[Any, ...], codec: ToolNameCodec | None = None
+) -> list[dict[str, object]]:
     if not tools:
         return []
     return [
         {
             "function_declarations": [
                 {
-                    "name": tool.name,
+                    "name": codec.wire(tool.name) if codec is not None else tool.name,
                     "description": tool.description,
                     "parameters": dict(tool.input_schema),
                 }
@@ -161,7 +171,7 @@ def _tools_to_gemini(tools: tuple[Any, ...]) -> list[dict[str, object]]:
 
 
 def _messages_to_gemini(
-    messages: tuple[CanonicalMessage, ...]
+    messages: tuple[CanonicalMessage, ...], codec: ToolNameCodec | None = None
 ) -> list[dict[str, object]]:
     contents: list[dict[str, object]] = []
     for message in messages:
@@ -202,7 +212,7 @@ def _messages_to_gemini(
                 parts.append(
                     {
                         "function_call": {
-                            "name": item.name,
+                            "name": codec.wire(item.name) if codec is not None else item.name,
                             "args": dict(item.input),
                             "id": item.tool_call_id,
                         }
