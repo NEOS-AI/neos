@@ -1596,6 +1596,25 @@ DELETE /api/v1/standing-agents/{agent_id}/questions/{question_id}
 GET    /api/v1/standing-agents/{agent_id}/questions/{question_id}/runs
 ```
 
+#### Cross-channel threads (track Q8)
+
+```yaml
+standing_agents:
+  threads:
+    enabled: false
+```
+
+Each standing agent has one **active thread**: the owner's direct-message
+sessions (Slack, Discord, Telegram) and one designated web conversation attach
+to it, and the next turn reads its context from the thread instead of the
+channel. The window size is `chat.max_history_messages`, the same as web chat.
+Group channels never attach. Starting over (`/new`, or rotating through the API)
+archives the active thread and opens a new one; attached sessions move to the
+new thread. Deleting the agent deletes its threads, sessions and turns in the
+same transaction. Design: `docs/Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md`.
+Q8a (2026-10-05) lands the store only -- nothing reads or writes a thread until
+the gateway wiring (Q8b) lands.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:
