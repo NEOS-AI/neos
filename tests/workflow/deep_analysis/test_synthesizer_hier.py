@@ -959,3 +959,15 @@ def test_sample_29_is_sample_28_again():
     s28 = yaml.safe_load(Path("config/samples/sample-28.yaml").read_text(encoding="utf-8"))
     s29 = yaml.safe_load(Path("config/samples/sample-29.yaml").read_text(encoding="utf-8"))
     assert s29 == s28
+
+
+def test_sample_30_is_sample_29_with_the_compose_turns_named():
+    """#30 = #29 + D114. 설정에서 보이는 차이는 `compose_max_turns: 12` 한 줄이다(나머지 둘은 코드다)."""
+    from pathlib import Path
+
+    import yaml
+
+    s29 = yaml.safe_load(Path("config/samples/sample-29.yaml").read_text(encoding="utf-8"))
+    s30 = yaml.safe_load(Path("config/samples/sample-30.yaml").read_text(encoding="utf-8"))
+    assert s30["deep_analysis"] == {**s29["deep_analysis"], "compose_max_turns": 12}
+    assert {k: v for k, v in s30.items() if k != "deep_analysis"} == {k: v for k, v in s29.items() if k != "deep_analysis"}
