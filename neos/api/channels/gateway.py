@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 if TYPE_CHECKING:
     from neos.workflow.graph import MultiAgentWorkflow
 
-from .base import ChannelMessage, RetryableReply
+from .base import VOICE_PREFIX, ChannelMessage, RetryableReply
 from .commands import (
     ChannelCommandKind,
     display_name_from_metadata,
@@ -64,7 +64,7 @@ _VOICE_REPLIES = {
     "provider_error": _VOICE_TRANSCRIBE_FAILED,
     "timeout": _VOICE_TRANSCRIBE_FAILED,
 }
-_VOICE_PREFIX = "[voice] "
+_VOICE_PREFIX = VOICE_PREFIX
 _CONTROL_LOCK_BYPASS = frozenset(
     {
         ChannelCommandKind.STOP,

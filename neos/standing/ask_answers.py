@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from neos.api.channels.base import RetryableReply
+from neos.api.channels.base import VOICE_PREFIX, RetryableReply
 from neos.standing.asks import PendingAsk, PendingAskStore, ask_effective, count_ask
 from neos.standing.models import StandingAgentStatus
 from neos.standing.resolve import resolve_agent
@@ -53,6 +53,17 @@ def split_answers(text: str, question_count: int) -> list[str]:
     if len(lines) == question_count:
         return [_NUMBERED.sub("", line, count=1).strip() or line for line in lines]
     return [whole] * question_count
+
+
+def answer_text(message: Any, text: str) -> str:
+    """답 값. 전사된 음성(Q15)이면 `"[voice] "` 표지를 뗀다 -- 재개된 도구 호출은 말한 내용만 받는다.
+
+    스레드의 사용자 턴은 이 값이 아니라 전사된 본문 그대로다(Q9 × Q15 통합 결정). 표지는 게이트웨이가
+    실제로 전사한 메시지(`metadata["voice"]` 가 있다)에서만 뗀다 -- 타이핑한 "[voice] ..." 는 그대로 답이다.
+    """
+    if isinstance((message.metadata or {}).get("voice"), dict) and text.startswith(VOICE_PREFIX):
+        return text[len(VOICE_PREFIX) :].strip() or text
+    return text
 
 
 def _prompts(questions: Sequence[Any]) -> list[str]:
@@ -154,7 +165,7 @@ class ChannelAskAnswers:
             )
             if thread is None:
                 return None
-            answers = split_answers(text, len(ask.questions))
+            answers = split_answers(answer_text(message, text), len(ask.questions))
             commit = await self._resume(ask, owner, answers, message.channel_type)
             if commit is None:
                 return await self._not_resumed(ask)

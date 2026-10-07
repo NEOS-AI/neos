@@ -24,6 +24,11 @@ class ChannelMessage:
     metadata: Dict[str, Any] = field(default_factory=dict)  # 채널별 추가 메타데이터
 
 
+#: 전사된 음성 본문의 표지(트랙 Q15c) -- 게이트웨이가 `"[voice] <전사>"` 로 본문을 바꾼다.
+#: Q9 답 판정은 답 값에서 이 표지를 떼고, 스레드 턴은 전사된 그대로 남긴다(통합 결정).
+VOICE_PREFIX = "[voice] "
+
+
 class RetryableReply(str):
     """다시 보내 달라는 응답(트랙 Q9c). 게이트웨이는 이 응답을 인바운드 멱등 기록에 **남기지 않는다**
     -- 같은 이벤트가 다시 와도 처음부터 처리되어야 하기 때문이다(기록이 남으면 재전송이 막힌다)."""
