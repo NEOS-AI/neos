@@ -180,11 +180,26 @@ class SlackAdapter(ChannelAdapterBase):
         display = await self._resolve_user_name(slack_user_id, self._team_scope(raw))
         if display:
             metadata["slack_user_name"] = display
+        files = list(raw.get("files") or [])
+        voice_file = None
+        if settings.config.channels.voice.enabled:
+            from neos.api.channels.media import collect_slack_voice, slack_voice_file
+
+            voice_file = slack_voice_file(files)
+            if voice_file is not None:
+                metadata["voice"] = await collect_slack_voice(
+                    voice_file,
+                    config=settings.config.channels.voice,
+                    token=self._bot_token,
+                    fetch=getattr(self, "_media_fetch", None),
+                    resolve_host=getattr(self, "_media_resolve", None),
+                )
         if settings.config.channels.inbound_media:
             from neos.api.channels.media import collect_slack_attachments
 
             attachments = await collect_slack_attachments(
-                list(raw.get("files") or []),
+                # 음성으로 잡힌 파일은 첨부가 아니다 — 두 번 내려받지 않고 워크플로우 첨부로 가지 않는다.
+                [item for item in files if item is not voice_file],
                 token=self._bot_token,
                 fetch=getattr(self, "_media_fetch", None),
                 resolve_host=getattr(self, "_media_resolve", None),
@@ -600,7 +615,12 @@ class SlackAdapter(ChannelAdapterBase):
 
         text = message.get("text") or ""
         files = list(message.get("files") or [])
-        has_attachment = bool(settings.config.channels.inbound_media and files)
+        from neos.api.channels.media import slack_voice_file
+
+        has_voice = bool(
+            settings.config.channels.voice.enabled and slack_voice_file(files) is not None
+        )
+        has_attachment = bool(settings.config.channels.inbound_media and files) or has_voice
         if not text.strip() and not has_attachment:
             return
         from neos.api.channels.session_bind import session_wakes_without_mention

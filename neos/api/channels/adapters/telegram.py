@@ -44,6 +44,12 @@ def telegram_inbound_filters(filters: Any) -> list[Any]:
     video = getattr(filters, "VIDEO", None)
     if video is not None:
         inbound.append(video)
+    # Q15b: 음성은 늘 받고, `channels.voice.enabled` 는 메시지마다 읽는다. 꺼져 있으면 캡션 없는
+    # 음성은 `_handle_message` 의 빈 본문 검사에서 버려진다(지금과 같은 결과).
+    for name in ("VOICE", "AUDIO"):
+        extra = getattr(filters, name, None)
+        if extra is not None:
+            inbound.append(extra)
     return inbound
 
 
@@ -249,6 +255,18 @@ class TelegramAdapter(ChannelAdapterBase):
             )
             if attachments:
                 metadata["attachments"] = attachments
+        if settings.config.channels.voice.enabled:
+            from neos.api.channels.media import collect_telegram_voice
+
+            voice = await collect_telegram_voice(
+                message,
+                config=settings.config.channels.voice,
+                bot=getattr(self._app, "bot", None) if self._app is not None else None,
+                fetch=getattr(self, "_media_fetch", None),
+                resolve_host=getattr(self, "_media_resolve", None),
+            )
+            if voice is not None:
+                metadata["voice"] = voice
         return ChannelMessage(
             user_id=user_id,
             session_id=_telegram_session_id(raw),
@@ -372,7 +390,13 @@ class TelegramAdapter(ChannelAdapterBase):
             or getattr(effective_message, "document", None)
             or getattr(effective_message, "video", None)
         )
-        has_attachment = bool(settings.config.channels.inbound_media and has_media)
+        from neos.api.channels.media import telegram_voice_media
+
+        has_voice = bool(
+            settings.config.channels.voice.enabled
+            and telegram_voice_media(effective_message) is not None
+        )
+        has_attachment = bool(settings.config.channels.inbound_media and has_media) or has_voice
         if not text.strip() and not has_attachment:
             return
         bot = getattr(self._app, "bot", None) if self._app is not None else None

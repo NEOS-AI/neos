@@ -8,6 +8,7 @@ from neos.config.schema import (
     AppConfig,
     ChannelConfig,
     ChannelPrincipal,
+    ChannelVoiceConfig,
     DiscordChannelConfig,
     SlackChannelConfig,
     TelegramChannelConfig,
@@ -41,6 +42,7 @@ def install_channel_settings(
     outbound_files: bool = False,
     draft_streaming: bool = False,
     principals: list[ChannelPrincipal] | None = None,
+    voice: ChannelVoiceConfig | None = None,
 ) -> Settings:
     import neos.config.settings as settings_module
 
@@ -60,6 +62,7 @@ def install_channel_settings(
             outbound_files=outbound_files,
             draft_streaming=draft_streaming,
             principals=principals or [],
+            voice=voice or ChannelVoiceConfig(),
         )
     )
     installed = Settings(config=config)
