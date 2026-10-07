@@ -5,7 +5,6 @@ nothing while the flag is off (design §6.2 · §9.1, row (h))."""
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timedelta
 
 import pytest
 
