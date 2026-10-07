@@ -239,3 +239,72 @@ async def test_cancelling_the_task_closes_its_question(world) -> None:
     assert (await world.asks.for_call(task_id, run_id, "a1")).status == "cancelled"
     assert await world.asks.waiting_for_agent(await world.agent()) is None
     assert await world.task_status(task_id) == "cancelled"
+
+
+# ---- final review fixes (Postgres only: they are about the real schema) -------------
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_agent_cannot_ask() -> None:
+    """Final review (Q9-2): the lock query requires a live agent. Mutation: drop the
+    `agent.deleted_at IS NULL` -> the ask is written for a deleted agent."""
+    await _seed_users()
+    world = PostgresWorld()
+    task_id, run_id, lease = await world.waiting_task()
+    assert await world.agents.delete(OWNER, await world.agent())
+
+    with pytest.raises(StaleExecutionLease):
+        await _ask(world, lease)
+
+    assert await world.task_status(task_id) == "running"
+    assert await world.asks.for_call(task_id, run_id, "a1") is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_without_the_pending_asks_table_still_cancels(monkeypatch, caplog) -> None:
+    """Final review Important 2: a database without migration 095 must still cancel.
+    The seam points the close at a relation that does not exist -- a real Postgres
+    `undefined_table` -- without altering the shared test DB."""
+    from neos.standing import asks as asks_module
+
+    await _seed_users()
+    world = PostgresWorld()
+    task_id, _run_id, _lease = await world.waiting_task()
+    monkeypatch.setattr(asks_module, "PENDING_ASKS_TABLE", "standing_pending_asks_absent_q9")
+    monkeypatch.setattr(asks_module, "_warned_missing_pending_asks", False)
+    caplog.set_level("WARNING", logger="neos.standing.asks")
+
+    await world.runs.mark_task_cancelled(task_id=task_id, now=NOW)
+    await world.runs.mark_task_cancelled(task_id=task_id, now=NOW)
+
+    assert await world.task_status(task_id) == "cancelled"
+    warnings = [r for r in caplog.records if "standing_pending_asks" in r.getMessage()]
+    assert len(warnings) == 1  # once
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT 1 / 0",  # any other database error
+        "UPDATE standing_pending_asks_unrelated_q9 SET status = 'x'",  # another missing table
+    ],
+)
+@pytest.mark.asyncio
+async def test_any_other_close_error_still_fails_the_cancel(monkeypatch, statement) -> None:
+    """Only an undefined `standing_pending_asks` is "nothing to close"."""
+    from sqlalchemy.exc import DBAPIError
+
+    from neos.standing import asks as asks_module
+
+    async def broken_close(session, task_id):
+        await session.execute(text(statement))
+
+    await _seed_users()
+    world = PostgresWorld()
+    task_id, _run_id, _lease = await world.waiting_task()
+    monkeypatch.setattr(asks_module, "cancel_for_task_in_session", broken_close)
+
+    with pytest.raises(DBAPIError):
+        await world.runs.mark_task_cancelled(task_id=task_id, now=NOW)
+
+    assert await world.task_status(task_id) == "running"  # the cancel rolled back

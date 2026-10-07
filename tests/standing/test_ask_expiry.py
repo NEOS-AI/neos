@@ -321,3 +321,35 @@ async def test_an_answer_holding_the_row_wins_over_a_concurrent_expiry() -> None
 
     assert expired == []
     assert (await world.asks.for_call(task_id, run_id, "a1")).status == "answered"
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_expired_notice_is_logged(caplog) -> None:
+    """Final review (Q9-4): no question notice to stand beside -> no `ask_expired`
+    notice, and a warning says so. Mutation: drop the warning."""
+    await _seed_users()
+    world = PostgresWorld()
+    task_id, run_id, lease = await world.waiting_task()
+    commit = await world.runs.request_user_answer(  # asked without its notice
+        lease=lease,
+        tool_call=CALL,
+        validated=VALIDATED,
+        loop_state=STATE,
+        workspace_revision="rev",
+        agent_id=await world.agent(),
+        reply_session_id=TELEGRAM.session_id,
+        reply_channel_type="telegram",
+        asked_at=NOW,
+        expires_at=EXPIRES,
+    )
+    caplog.set_level("WARNING", logger="neos.coding.repositories.run_repository")
+
+    commits = await _expire(world)
+
+    assert commit.ask.ask_id in {c.ask.ask_id for c in commits}
+    assert [n for n in await _notices(world, await world.agent()) if n[0] == "ask_expired"] == []
+    assert any(
+        commit.ask.ask_id in r.getMessage() and "notice" in r.getMessage()
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    )

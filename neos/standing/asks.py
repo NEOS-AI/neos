@@ -371,11 +371,18 @@ async def expire_due_in_session(session, now: datetime, *, limit: int = 100) -> 
     return sorted((_row(row) for row in result.all()), key=lambda a: (a.expires_at, a.ask_id))
 
 
+#: 대기 질문 테이블(마이그레이션 095). 상수인 것은 테스트 이음새다 -- 공유 테스트 DB 를 바꾸지 않고
+#: "095 가 없는 DB" 를 흉내 낸다(`test_cancel_without_the_pending_asks_table_still_cancels`).
+PENDING_ASKS_TABLE = "standing_pending_asks"
+_UNDEFINED_TABLE = "42P01"
+_warned_missing_pending_asks = False
+
+
 async def cancel_for_task_in_session(session, task_id: str) -> int:
     result = await session.execute(
         text(
-            """
-            UPDATE standing_pending_asks SET status = 'cancelled'
+            f"""
+            UPDATE {PENDING_ASKS_TABLE} SET status = 'cancelled'
             WHERE task_id = :task_id AND status = 'waiting'
             RETURNING ask_id
             """
@@ -383,6 +390,47 @@ async def cancel_for_task_in_session(session, task_id: str) -> int:
         {"task_id": task_id},
     )
     return len(result.all())
+
+
+def _is_missing_pending_asks_table(error: BaseException) -> bool:
+    """`undefined_table`(42P01) 이고 그 대상이 대기 질문 테이블일 때만 참이다."""
+    seen: BaseException | None = error
+    codes: set[str] = set()
+    for _ in range(4):
+        if seen is None:
+            break
+        for attr in ("sqlstate", "pgcode"):
+            value = getattr(seen, attr, None)
+            if isinstance(value, str):
+                codes.add(value)
+        seen = getattr(seen, "orig", None) or seen.__cause__
+    return _UNDEFINED_TABLE in codes and f'"{PENDING_ASKS_TABLE}"' in str(error)
+
+
+async def close_for_cancelled_task_in_session(session, task_id: str) -> int:
+    """태스크 취소 트랜잭션 안에서 그 태스크의 대기 질문을 닫는다(설계 §8.1).
+
+    SAVEPOINT 안에서 돈다. 095 가 적용되지 않은 DB(대기 질문 테이블이 없다)에서는 닫을 것이 없으므로
+    경고 한 번을 남기고 0 -- 취소는 그대로 커밋된다(최종 리뷰 Important 2: 취소는 안전 장치다).
+    그 밖의 오류는 전부 그대로 던져 취소를 실패시킨다.
+    """
+    global _warned_missing_pending_asks
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        async with session.begin_nested():
+            return await cancel_for_task_in_session(session, task_id)
+    except DBAPIError as error:
+        if not _is_missing_pending_asks_table(error):
+            raise
+        if not _warned_missing_pending_asks:
+            _warned_missing_pending_asks = True
+            logger.warning(
+                "%s does not exist (migration 095 not applied) -- task cancel closes no "
+                "pending ask; apply db/migrations/095_add_standing_pending_asks.sql",
+                PENDING_ASKS_TABLE,
+            )
+        return 0
 
 
 class PostgresPendingAskStore:
@@ -502,6 +550,9 @@ def ask_effective(config: Any) -> bool:
 # ---- delivery (track Q9b, design §6) ---------------------------------------------
 
 _REPLY_LINE = "Reply in this chat to answer."
+#: 알림 대상으로 물었다(붙은 DM 이 없다). 그곳은 그룹일 수 있고 그룹의 답은 답이 아니다(`try_answer` 는
+#: DM 만 받는다) -- 통하는 규칙을 말한다(최종 리뷰 Important 1).
+_REPLY_DM_LINE = "Reply to me in a direct message to answer."
 _ONE_LINE_EACH = "Answer one line per question, in order."
 
 
@@ -534,7 +585,9 @@ def question_notice(
     """질문 알림(설계 §6.2)과 그 목적지. 중복 키는 `question:{ask_id}` 다.
 
     본문은 질문 목록(선택지 포함) 다음에, 질문이 여럿이면 "한 줄에 한 질문씩"(결정 Q-B),
-    맨 끝에 "Reply in this chat to answer." 를 둔다. 상한을 넘으면 질문 쪽을 자르고 안내 줄은 남긴다.
+    맨 끝에 "Reply in this chat to answer." 를 둔다 -- 붙은 DM 세션(`destination.session_id`)이 아니라
+    알림 대상으로 보낼 때는 "Reply to me in a direct message to answer." 다. 상한을 넘으면 질문 쪽을 자르고
+    안내 줄은 남긴다.
     """
     from neos.standing.notifications import (
         KIND_QUESTION_ASKED,
@@ -544,7 +597,7 @@ def question_notice(
     )
 
     footer = [_ONE_LINE_EACH] if len(questions) > 1 else []
-    footer.append(_REPLY_LINE)
+    footer.append(_REPLY_LINE if destination.session_id else _REPLY_DM_LINE)
     tail = "\n\n" + "\n".join(footer)
     head = bounded_body("\n".join(_question_lines(questions)), max(0, max_body_chars - len(tail)))
     notice = StandingNotice(

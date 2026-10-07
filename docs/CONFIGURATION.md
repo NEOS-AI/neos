@@ -1680,12 +1680,19 @@ its latest checkpoint and the answer reaches the tool input. Design:
   denial, and the owner gets one `ask_expired` notice where the question went.
   A Celery beat entry `expire-standing-asks` (every 60 s) runs only when the
   feature is in effect.
+- **Turning it off — drain first.** With `ask.enabled` off the expiry beat is not
+  registered and the gateway ignores answers, so a task already in `waiting_user`
+  neither expires nor accepts an answer: it waits until someone cancels it. Before
+  turning `ask.enabled` off, let the waiting questions be answered or expire, or
+  cancel the waiting tasks (`SELECT task_id FROM standing_pending_asks WHERE status = 'waiting'`).
 - **Metrics.** `standing_ask_total{outcome}` with `asked`, `refused_pending`,
   `refused_no_channel`, `lookup_failed`, `answered`, `answer_failed`, `expired`.
 - **Migration 095 before rollout.** Apply `db/migrations/095_add_standing_pending_asks.sql`
-  (`scripts/apply_schema.py`) before deploying this code, even with the flag off:
-  cancelling any coding task closes its waiting question in the same transaction,
-  so a database without `standing_pending_asks` fails task cancellation. 095 also
+  (`scripts/apply_schema.py`) before deploying this code, even with the flag off.
+  Cancelling a coding task closes its waiting question in the same transaction,
+  inside a savepoint: on a database without `standing_pending_asks` the cancel
+  still succeeds and one warning names the missing migration (any other error
+  still fails the cancel). Asking needs the table. 095 also
   widens the `standing_notifications` kind CHECK (`question_asked`, `ask_expired`).
 
 ### Channel voice messages (track Q15)

@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import replace
 from datetime import datetime
 from typing import Any, Mapping
@@ -66,6 +67,8 @@ from neos.coding.domain.phases import (
 from neos.coding.persistence.postgres import SessionFactory
 from neos.coding.model.base import ToolCallCompleted
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
+
+logger = logging.getLogger(__name__)
 
 
 class PostgresCodingRunRepository:
@@ -254,9 +257,10 @@ class PostgresCodingRunRepository:
                 )
                 # 트랙 Q9 (설계 §8.1) -- 대기 질문을 같은 트랜잭션에서 닫는다. 남겨 두면 그 행이
                 # "에이전트당 대기 하나" 인덱스를 쥐고 다음 질문을 전부 `ask_pending` 으로 만든다.
-                from neos.standing.asks import cancel_for_task_in_session
+                # SAVEPOINT 안에서 돌아 095 가 없는 DB 에서도 취소는 된다(최종 리뷰 Important 2).
+                from neos.standing.asks import close_for_cancelled_task_in_session
 
-                await cancel_for_task_in_session(session, task_id)
+                await close_for_cancelled_task_in_session(session, task_id)
 
     async def pause_task(
         self,
@@ -1218,6 +1222,12 @@ class PostgresCodingRunRepository:
                           AND task.agent_id = :agent_id
                           AND run.run_id = :run_id
                           AND run.status = 'running'
+                          -- 최종 리뷰(Q9-2): 지운 에이전트는 묻지 못한다(알림 없이 질문만 남는다).
+                          AND EXISTS (
+                              SELECT 1 FROM standing_agents agent
+                              WHERE agent.agent_id = task.agent_id
+                                AND agent.deleted_at IS NULL
+                          )
                         FOR UPDATE OF task, run
                         """
                     ),
@@ -1485,12 +1495,19 @@ class PostgresCodingRunRepository:
                             ),
                         )
                     if notice_for is not None:
-                        await enqueue_beside_in_session(
+                        noticed = await enqueue_beside_in_session(
                             session,
                             notice_for(ask),
                             beside_dedupe_key=f"question:{ask.ask_id}",
                             now=now,
                         )
+                        if not noticed:
+                            logger.warning(
+                                "ask_expired notice skipped ask_id=%s agent_id=%s -- no question "
+                                "notice to send it beside, or the agent was deleted",
+                                ask.ask_id,
+                                ask.agent_id,
+                            )
                     commits.append(AskExpiryCommit(ask, events, checkpoint_id, resumed))
         if commits and self._wake_outbox is not None:
             self._wake_outbox()

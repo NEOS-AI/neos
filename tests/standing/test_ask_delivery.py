@@ -330,6 +330,35 @@ def test_several_questions_with_options_ask_for_one_line_each() -> None:
 
 
 @pytest.mark.no_db
+def test_a_dm_destination_says_reply_in_this_chat() -> None:
+    """Final review Important 1: an attached DM session -- the reply there is an answer."""
+    notice, _ = question_notice(
+        "spa_f1", "sa_1", ["Which branch?"], ReplyDestination("slack", "D1", SLACK), max_body_chars=3500
+    )
+
+    assert notice.body.rstrip().endswith("Reply in this chat to answer.")
+    assert "direct message" not in notice.body
+
+
+@pytest.mark.no_db
+def test_a_notify_target_destination_asks_for_a_direct_message() -> None:
+    """Final review Important 1: the notify target may be a group, where a reply is not an
+    answer -- the footer names the rule that works (a DM to the bot)."""
+    notice, target = question_notice(
+        "spa_f2",
+        "sa_1",
+        ["Which branch?", "Run tests?"],
+        ReplyDestination("slack", "C_general", None),
+        max_body_chars=3500,
+    )
+
+    assert notice.body.rstrip().endswith("Reply to me in a direct message to answer.")
+    assert "Reply in this chat" not in notice.body
+    assert "one line per question" in notice.body
+    assert target == NotifyTarget("slack", "C_general")
+
+
+@pytest.mark.no_db
 def test_a_long_notice_is_bounded() -> None:
     notice, _ = question_notice(
         "spa_3", "sa_1", ["x" * 400] * 4, ReplyDestination("slack", "D1", None), max_body_chars=300
