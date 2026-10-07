@@ -208,6 +208,14 @@ class InMemoryCodingRunRepository:
         #: never resume); the resume tests set it.
         self.task_owners: dict[str, str] = {}
         self.pause_events = []
+        #: Q9 -- the pending-ask store the transaction writes into, and each task's
+        #: agent (`request_user_answer` checks it like the Postgres join does).
+        from neos.standing.asks import InMemoryPendingAskStore
+
+        self.asks = InMemoryPendingAskStore()
+        self.task_agents: dict[str, str] = {}
+        #: Q9b -- question notices written in the ask's transaction: (notice, target).
+        self.notices: list = []
 
     def _canonical_run(self, task_id):
         runs_by_id = {
@@ -295,6 +303,155 @@ class InMemoryCodingRunRepository:
             "cancelled",
         }:
             self.task_statuses[task_id] = "cancelled"
+        await self.asks.cancel_for_task(task_id)
+
+    async def request_user_answer(
+        self,
+        *,
+        lease,
+        tool_call,
+        validated,
+        loop_state,
+        workspace_revision,
+        agent_id,
+        reply_session_id,
+        reply_channel_type,
+        asked_at,
+        expires_at,
+        ask_id=None,
+        notice=None,
+        notice_target=None,
+    ):
+        """Same contract as Postgres (track Q9): ask + checkpoint + `question.asked` +
+        `running -> waiting_user` + status event, or `None` when the agent already waits."""
+        from neos.coding.domain.durability import (
+            WAITING_USER_STATUS,
+            AskRequestCommit,
+            question_asked_payload,
+        )
+
+        async with self._durability_lock:
+            self._require_current_lease(lease, now=asked_at)
+            self._require_canonical_running_run(lease)
+            if self.task_statuses.get(lease.task_id, "running") != "running":
+                raise StaleExecutionLease(lease.task_id)
+            if self.task_agents.get(lease.task_id, agent_id) != agent_id:
+                raise StaleExecutionLease(lease.task_id)
+            ask = await self.asks.open(
+                agent_id=agent_id,
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                tool_call_id=tool_call.tool_call_id,
+                questions=list(validated.input.get("questions") or ()),
+                reply_session_id=reply_session_id,
+                asked_at=asked_at,
+                expires_at=expires_at,
+                ask_id=ask_id,
+            )
+            if ask is None:
+                return None
+            if notice is not None:
+                self.notices.append((notice, notice_target))
+            self._durability_seq += 1
+            checkpoint = CodingCheckpoint(
+                checkpoint_id=f"cc_ask_{tool_call.tool_call_id}",
+                task_id=lease.task_id,
+                run_id=lease.run_id,
+                seq=self._durability_seq,
+                loop_state=dict(loop_state),
+                workspace_revision=workspace_revision,
+                created_at=asked_at,
+            )
+            asked = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="question.asked",
+                payload=question_asked_payload(ask, reply_channel_type),
+                now=asked_at,
+                run_id=lease.run_id,
+                tool_call_id=tool_call.tool_call_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            self._durability_seq += 1
+            status = make_event(
+                task_id=lease.task_id,
+                seq=self._durability_seq,
+                event_type="task.status.changed",
+                payload={"status": WAITING_USER_STATUS},
+                now=asked_at,
+                run_id=lease.run_id,
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
+            self.checkpoints.append(checkpoint)
+            self.task_statuses[lease.task_id] = WAITING_USER_STATUS
+            return AskRequestCommit(ask=ask, checkpoint=checkpoint, events=(asked, status))
+
+    async def answer_user_question(self, *, ask_id, owner_id, answers, channel_type, now):
+        """Same contract as Postgres (track Q9c)."""
+        from neos.coding.domain.durability import AskAnswerCommit
+
+        async with self._durability_lock:
+            ask = self.asks.rows.get(ask_id)
+            if ask is None or ask.status != "waiting":
+                return None
+            owner = self.task_owners.get(ask.task_id)
+            if owner is not None and owner != owner_id:
+                return None
+            if self.task_statuses.get(ask.task_id) != "waiting_user":
+                return None
+            answered = await self.asks.answer(ask_id, answers, now=now)
+            checkpoint_id = self._latest_checkpoint_id(ask.task_id, ask.run_id)
+            events = []
+            for event_type, payload, tool_call_id in (
+                ("question.answered", {"ask_id": ask_id, "channel_type": channel_type}, ask.tool_call_id),
+                ("task.status.changed", {"status": "running", "resumed_by": "answer"}, None),
+            ):
+                self._durability_seq += 1
+                events.append(
+                    make_event(
+                        task_id=ask.task_id,
+                        seq=self._durability_seq,
+                        event_type=event_type,
+                        payload=payload,
+                        now=now,
+                        run_id=ask.run_id,
+                        tool_call_id=tool_call_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+                )
+            self.task_statuses[ask.task_id] = "running"
+            return AskAnswerCommit(ask=answered, events=tuple(events), checkpoint_id=checkpoint_id)
+
+    async def expire_user_questions(self, *, limit, now, notice_for=None):
+        """Same contract as Postgres (track Q9d)."""
+        from neos.coding.domain.durability import AskExpiryCommit
+
+        async with self._durability_lock:
+            commits = []
+            for ask in (await self.asks.expire_due(now))[:limit]:
+                resumed = self.task_statuses.get(ask.task_id) == "waiting_user"
+                checkpoint_id = self._latest_checkpoint_id(ask.task_id, ask.run_id)
+                events = ()
+                if resumed:
+                    self.task_statuses[ask.task_id] = "running"
+                    self._durability_seq += 1
+                    events = (
+                        make_event(
+                            task_id=ask.task_id,
+                            seq=self._durability_seq,
+                            event_type="task.status.changed",
+                            payload={"status": "running", "reason_code": "ask_expired"},
+                            now=now,
+                            run_id=ask.run_id,
+                            checkpoint_id=checkpoint_id,
+                        ),
+                    )
+                if notice_for is not None and any(
+                    n.dedupe_key == f"question:{ask.ask_id}" for n, _ in self.notices
+                ):
+                    self.notices.append((notice_for(ask), None))
+                commits.append(AskExpiryCommit(ask, events, checkpoint_id, resumed))
+            return commits
 
     async def pause_task(self, *, lease, judgement_type, judgement, reason_code, now):
         """Same contract as Postgres: judgement + `running -> paused`, run stays running."""

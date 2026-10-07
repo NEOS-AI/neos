@@ -70,3 +70,12 @@ standing_agents:
   threads:
     # Q8 채널 횡단 스레드(결정 2026-10-05). 소유자의 DM 과 웹 에이전트 대화가 한 맥락을 쓴다.
     enabled: true
+  ask:
+    # Q9 묻고 기다리기. 에이전트의 autonomous 태스크가 소유자 DM 으로 묻고 waiting_user 로 기다린다.
+    # notifications·threads 가 함께 켜져 있어야 효력이 있다. 마이그레이션 095 가 먼저다.
+    enabled: true
+channels:
+  voice:
+    # Q15 음성 전사는 development 에서도 끈다 -- 라이브 dry run 3/3(OGG 음성 · Slack 오디오 클립 ·
+    # 상한 초과 거절) 전에는 어느 프로파일에서도 켜지 않는다(docs/CONFIGURATION.md).
+    enabled: false

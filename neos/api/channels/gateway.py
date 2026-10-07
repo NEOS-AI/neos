@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 if TYPE_CHECKING:
     from neos.workflow.graph import MultiAgentWorkflow
 
-from .base import ChannelMessage
+from .base import VOICE_PREFIX, ChannelMessage, RetryableReply
 from .commands import (
     ChannelCommandKind,
     display_name_from_metadata,
@@ -53,6 +53,18 @@ _CONTEXT_CLEAR_REQUESTED = "Conversation context clear is requested."
 _COST_TRACKED = "Cost is tracked on the task."
 _EXPORT_UI = "Transcript export is available in the Code UI."
 _UNKNOWN_COMMAND = "Unknown command. Try /help."
+# Q15c 음성 거절 문구(설계 §9). 거절이면 워크플로우도 스레드도 돌지 않는다.
+_VOICE_TRANSCRIBE_FAILED = "Could not transcribe the voice message."
+_VOICE_REPLIES = {
+    "too_large": "The voice message is too large to transcribe.",
+    "too_long": "The voice message is too long to transcribe (limit: {max_seconds}s).",
+    "unsupported_format": "This audio format can't be transcribed.",
+    "download_failed": "Could not read the voice message.",
+    "empty": "No speech was found in the voice message.",
+    "provider_error": _VOICE_TRANSCRIBE_FAILED,
+    "timeout": _VOICE_TRANSCRIBE_FAILED,
+}
+_VOICE_PREFIX = VOICE_PREFIX
 _CONTROL_LOCK_BYPASS = frozenset(
     {
         ChannelCommandKind.STOP,
@@ -147,6 +159,36 @@ def _with_sender_prefix(message: ChannelMessage, text: str) -> str:
     if not body:
         return label
     return f"{label} {body}"
+
+
+def _mapped_user_id(message: ChannelMessage) -> str | None:
+    """대화할 NEOS 사용자. principals 가 있는데 발신자가 매핑되지 않으면 None(`_NO_OWNER`).
+
+    `_run_workflow`·`_run_learn` 과 음성 전사 앞단(Q15c)이 이 함수 하나를 쓴다 — 미매핑 발신자의
+    음성은 공급자에 가기 전에 여기서 멈춘다.
+    """
+    from neos.config.settings import settings
+
+    from .principals import platform_user_id_from_message, resolve_channel_principal
+
+    channels = settings.config.channels
+    if not channels.principals:
+        return message.user_id
+    mapped = resolve_channel_principal(
+        platform=message.channel_type,
+        platform_user_id=platform_user_id_from_message(message),
+        channels=channels,
+    )
+    return mapped or None
+
+
+def _count_voice(outcome: str) -> None:
+    try:
+        from neos.observability.metrics import metrics
+
+        metrics.channel_voice_transcriptions_total.labels(outcome=outcome).inc()
+    except Exception:  # noqa: BLE001 -- 계측 실패가 대화를 막지 않는다
+        logger.debug("voice transcription counter unavailable", exc_info=True)
 
 
 def _attachment_bytes(item: dict[str, Any]) -> bytes:
@@ -301,8 +343,12 @@ class ChannelGateway:
         generations: Any | None = None,
         workflow_approvals: Any | None = None,
         agent_threads: Any | None = None,
+        ask_answers: Any | None = None,
     ) -> None:
         self._workflow = workflow
+        # Q9c 묻고 기다리기(`neos.standing.ask_answers.ChannelAskAnswers`). 없으면 답을 받지
+        # 않는다 -- 플래그는 그쪽이 호출 때마다 읽는다.
+        self._ask_answers = ask_answers
         # Q8b 채널 횡단 스레드(`neos.standing.channel_threads.ChannelAgentThreads`). 없으면
         # 스레드가 없다 -- 플래그는 그쪽이 호출 때마다 읽는다.
         self._agent_threads = agent_threads
@@ -405,7 +451,11 @@ class ChannelGateway:
             else:
                 response = await self._route(message)
             if idem:
-                await self._inbound.remember(message.session_id, idem, response)
+                if isinstance(response, RetryableReply):
+                    # Q9c -- "다시 보내 주세요"를 기억하면 같은 이벤트의 재전송이 그 문구만 돌려받는다.
+                    await self._inbound.abandon(message.session_id, idem)
+                else:
+                    await self._inbound.remember(message.session_id, idem, response)
         except Exception as e:
             logger.error(
                 f"[ChannelGateway] dispatch failed for channel={message.channel_type}: {e}"
@@ -421,8 +471,16 @@ class ChannelGateway:
         return response
 
     async def _route(self, message: ChannelMessage) -> str:
+        # Q15c: 음성은 무엇보다 먼저 텍스트가 된다(통합 순서: 전사 → Q9 답 판정 → 갈래).
+        voice_refusal = await self._transcribe_voice(message)
+        if voice_refusal is not None:
+            return voice_refusal
         command = parse_channel_command(message.text)
         if command.kind is ChannelCommandKind.CHAT:
+            # Q9c -- 기다리는 에이전트 질문의 답이면 여기서 끝난다(워크플로우는 돌지 않는다).
+            answered = await self._answer_waiting_question(message)
+            if answered is not None:
+                return answered
             binding = await self._binds.get(message.session_id)
             if binding is not None:
                 return await self._steer_bound_chat(message, binding)
@@ -451,6 +509,85 @@ class ChannelGateway:
             return await self._run_prompt_command(message, command)
         return await self._run_coding_command(message, command)
 
+    async def _answer_waiting_question(self, message: ChannelMessage) -> str | None:
+        """Q9c 답 확인 -- `CHAT` 메시지만 온다(명령은 답이 아니다). 확인 문구 또는 None.
+
+        코딩에 바인딩된 세션의 말은 그 태스크의 조향이므로 답이 아니다(설계 §7.1 의 3).
+        **질문을 찾기 전의** 실패만 여기서 삼킨다: 경고 한 줄을 남기고 None -- 메시지는 지금처럼
+        대화로 간다. 질문을 찾은 **뒤의** 실패는 `ChannelAskAnswers` 가 `RetryableReply` 로 바꾼다
+        -- 다시 보내 달라는 응답이고, `dispatch` 는 그것을 멱등 기록에 남기지 않는다(Q9c 고침 1).
+        트랙 Q15 의 전사 단계가 이 앞에 선다(전사 → 답 확인).
+        """
+        if self._ask_answers is None:
+            return None
+        try:
+            if await self._binds.get(message.session_id) is not None:
+                return None
+            return await self._ask_answers.try_answer(message)
+        except Exception:
+            logger.warning(
+                "[ChannelGateway] ask answer check failed session=%s",
+                message.session_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _transcribe_voice(self, message: ChannelMessage) -> str | None:
+        """`metadata["voice"]` 를 `"[voice] <전사>"` 본문으로 바꾼다(설계 §8). 거절이면 그 문구.
+
+        음성이 없거나, 플래그가 꺼져 있거나, 캡션이 명령이면 아무것도 하지 않는다(None).
+        미매핑 발신자는 공급자에 보내지 않고 `_NO_OWNER`. 어느 경우에도 오디오 바이트는 이 함수가
+        끝날 때 메시지에서 지운다 — 공급자 말고는 어디에도 가지 않는다.
+        """
+        voice = (message.metadata or {}).get("voice")
+        if not isinstance(voice, dict):
+            return None
+        try:
+            from neos.config.settings import settings
+
+            config = settings.config.channels.voice
+            if not config.enabled:
+                return None
+            # dispatch 가 이미 캡션으로 잠금·주차를 정했다 — 전사가 갈래를 바꾸면 안 된다.
+            if parse_channel_command(message.text).kind is not ChannelCommandKind.CHAT:
+                return None
+            if _mapped_user_id(message) is None:
+                return _NO_OWNER
+            outcome, transcript = await self._voice_transcript(voice, config)
+            _count_voice(outcome)
+            if transcript is None:
+                reply = _VOICE_REPLIES.get(outcome, _VOICE_TRANSCRIBE_FAILED)
+                return reply.format(max_seconds=config.max_seconds)
+            caption = (message.text or "").strip()
+            # 접두 `[voice]` 덕에 말한 "/new" 는 명령이 되지 않는다.
+            message.text = _VOICE_PREFIX + transcript + (f"\n\n{caption}" if caption else "")
+            return None
+        finally:
+            voice["bytes"] = None
+
+    @staticmethod
+    async def _voice_transcript(voice: dict[str, Any], config: Any) -> tuple[str, str | None]:
+        """(outcome, 전사 텍스트 | None). 수집 단계의 거절은 공급자를 부르지 않고 그대로 넘긴다."""
+        from neos.services import speech_to_text
+
+        refused = voice.get("refused")
+        if refused:
+            return (refused if refused in _VOICE_REPLIES else "download_failed"), None
+        audio = voice.get("bytes")
+        if not isinstance(audio, (bytes, bytearray)) or not audio:
+            return "download_failed", None
+        try:
+            result = await speech_to_text.transcribe(
+                bytes(audio),
+                filename=str(voice.get("filename") or ""),
+                content_type=str(voice.get("content_type") or ""),
+                duration_seconds=voice.get("duration_seconds"),
+                config=config,
+            )
+        except speech_to_text.TranscriptionRefused as refusal:
+            return refusal.reason, None
+        return "ok", result.text
+
     async def _run_workflow(self, message: ChannelMessage) -> str:
         """
         multi_agent_workflow.execute_workflow()를 직접 호출한다.
@@ -458,21 +595,9 @@ class ChannelGateway:
         channel_type / channel_id를 초기 상태에 포함시켜 워크플로우 전체에서
         채널 정보를 활용할 수 있게 한다 (Phase 3 ContextAssemblyEngine 연동).
         """
-        from neos.config.settings import settings
-
-        from .principals import platform_user_id_from_message, resolve_channel_principal
-
-        channels = settings.config.channels
-        user_id = message.user_id
-        if channels.principals:
-            mapped = resolve_channel_principal(
-                platform=message.channel_type,
-                platform_user_id=platform_user_id_from_message(message),
-                channels=channels,
-            )
-            if not mapped:
-                return _NO_OWNER
-            user_id = mapped
+        user_id = _mapped_user_id(message)
+        if user_id is None:
+            return _NO_OWNER
 
         query = (message.text or "").strip() + _attachment_prompt(message)
         if not query.strip():
@@ -622,8 +747,6 @@ class ChannelGateway:
         from neos.learn.lessons import LessonStatus, new_lesson
         from neos.learn.policy import clip_knowledge, namespace, write_approval_required
 
-        from .principals import platform_user_id_from_message, resolve_channel_principal
-
         learn = settings.config.learn
         if not (learn.channel_learn or learn.coding_lessons):
             return _LEARN_DISABLED
@@ -631,17 +754,9 @@ class ChannelGateway:
         if not rest:
             return _LEARN_USAGE
 
-        channels = settings.config.channels
-        user_id = message.user_id
-        if channels.principals:
-            mapped = resolve_channel_principal(
-                platform=message.channel_type,
-                platform_user_id=platform_user_id_from_message(message),
-                channels=channels,
-            )
-            if not mapped:
-                return _NO_OWNER
-            user_id = mapped
+        user_id = _mapped_user_id(message)
+        if user_id is None:
+            return _NO_OWNER
 
         body = clip_knowledge(rest)
         lesson = new_lesson(

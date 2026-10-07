@@ -321,6 +321,18 @@ models:
     description: "OpenAI Embedding Ada v2 (legacy)"
     dimension: 1536
 
+  # 채널 음성 전사(Q15). 공식 문서로 확인한 값만 적는다 (2026-10-05 조회):
+  #   id·스냅샷 `gpt-transcribe` — https://developers.openai.com/api/docs/models/gpt-transcribe
+  #   가격 $0.0045 / 분 — 같은 페이지 · https://developers.openai.com/api/docs/pricing
+  # pricing 은 1M 토큰 단위만 받으므로 비워 둔다. 전사 비용은 비용 원장에 오르지 않고
+  # 카운터 channel_voice_transcriptions_total 로만 센다(Q15 설계 §13 결정 4).
+  # 고르는 자리는 aliases.transcription / defaults.transcription 이다.
+  gpt-transcribe:
+    provider: openai
+    thinking: none
+    selectable: false
+    description: "OpenAI speech-to-text (channel voice, Q15)"
+
   # ---- Gemini ----
   gemini-2.0-flash-exp:
     provider: gemini
@@ -456,11 +468,14 @@ aliases:
   embedding:
     openai_small: text-embedding-3-small
     openai_large: text-embedding-3-large
+  transcription:
+    openai: gpt-transcribe
 
 defaults:
   vision: gpt4o
   llm: claude_sonnet
   embedding: openai_small
+  transcription: openai
 
 # 역할이 가리키는 트랙. current 는 핀이다 — 최신 자동 선택이 아니다.
 role_aliases:
