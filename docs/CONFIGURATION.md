@@ -1670,6 +1670,11 @@ its latest checkpoint and the answer reaches the tool input. Design:
   whole message answers every question. The reply is
   "Answer recorded — resuming." with the first question quoted. If recording
   fails after a question was matched, the reply asks the owner to send it again.
+- **Voice answers (with track Q15).** The gateway transcribes a voice message
+  first, then checks for a waiting question, so the owner can answer by voice.
+  The recorded answer drops the `"[voice] "` marker; the agent thread's user turn
+  keeps the transcribed text. A refused transcription (too large, too long, ...)
+  replies with the refusal and does not answer.
 - **Expiry.** After `expire_hours` without an answer the question expires; the
   task does **not** end: it returns to `running`, the call gets an `ask_expired`
   denial, and the owner gets one `ask_expired` notice where the question went.
