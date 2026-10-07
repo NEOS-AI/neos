@@ -15,6 +15,7 @@ from .deep_analysis_job_task import (
 )
 from .curate_learned_skills import curate_learned_skills
 from .standing_question_task import poll_standing_questions
+from .standing_ask_task import expire_standing_asks
 
 __all__ = [
     "poll_and_run_scheduled_tasks",
@@ -24,4 +25,5 @@ __all__ = [
     "submit_deep_analysis_job",
     "curate_learned_skills",
     "poll_standing_questions",
+    "expire_standing_asks",
 ]

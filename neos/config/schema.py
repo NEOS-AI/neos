@@ -795,6 +795,19 @@ class StandingThreadsConfig(StrictConfigModel):
     enabled: bool = False
 
 
+class StandingAskConfig(StrictConfigModel):
+    """묻고 기다리기 -- 트랙 Q9 (docs/Q9_ASK_AND_WAIT_DESIGN_261005.md).
+
+    에이전트의 `autonomous` 태스크가 `ask_user.v1` 을 부르면 소유자의 채널로 묻고
+    `WAITING_USER` 로 기다린다. 꺼져 있으면(기본) 지금처럼 무인 DENY 다. 켜도
+    `notifications`·`threads` 가 함께 켜져 있어야 효력이 있다(`neos.standing.asks.ask_effective`).
+    """
+
+    enabled: bool = False
+    #: 답이 이만큼(시간) 오지 않으면 질문은 만료되고, 태스크는 `ask_expired` 거절로 이어 간다.
+    expire_hours: int = Field(default=24, ge=1)
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -810,6 +823,7 @@ class StandingAgentsConfig(StrictConfigModel):
     )
     questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
     threads: StandingThreadsConfig = Field(default_factory=StandingThreadsConfig)
+    ask: StandingAskConfig = Field(default_factory=StandingAskConfig)
 
 
 class LearnConfig(StrictConfigModel):

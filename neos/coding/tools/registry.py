@@ -1004,7 +1004,9 @@ class CodingToolRegistry:
                 "Each question may be a string or {prompt, options[2-4], multi_select}. "
                 "Requires approval. Do not assume the answer. "
                 "Do not use execute.v1 to pose questions. "
-                "On policy_* denial, do not retry the same questions."
+                "On policy_* denial, do not retry the same questions. "
+                "On ask_pending, no_reply_channel or ask_expired, continue "
+                "without the answer; do not retry."
             ),
             ToolRisk.USER_QUESTION,
             _AskUserInput,

@@ -1630,6 +1630,59 @@ DELETE /api/v1/standing-agents/{agent_id}/thread/sessions/{session_id}
 POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation       # one per agent; 201 when created
 ```
 
+#### Ask and wait (track Q9)
+
+```yaml
+standing_agents:
+  ask:
+    enabled: false
+    expire_hours: 24
+```
+
+When on, an agent's **autonomous** coding task that calls `ask_user.v1` asks its
+owner over a chat channel and waits in `waiting_user`, instead of the unattended
+fold denying the call. The run stays `running`; the owner's answer resumes it from
+its latest checkpoint and the answer reaches the tool input. Design:
+`docs/Q9_ASK_AND_WAIT_DESIGN_261005.md`.
+
+- **Who may ask.** Only an agent's `autonomous` task. `background` tasks keep their
+  READ_ONLY ceiling (`policy_mode_ceiling`); `interactive` tasks keep the approval
+  card; a human-opened autonomous task (no agent) still folds to DENY.
+- **Takes effect only with its dependencies.** `standing_agents.enabled`,
+  `ask.enabled`, `notifications.enabled` and `threads.enabled` must all be on
+  (`neos.standing.asks.ask_effective`). Without the notice drain the question never
+  leaves; without threads no answer is recognised. If any is off, behaviour is
+  unchanged. The loop's port and the gateway's answer check are always wired and
+  read the flags on every call.
+- **Where it asks.** The attached channel DM the owner spoke in last, else the
+  agent's notify target, else nowhere: the call gets `no_reply_channel` and the
+  task runs on. The destination platform must map the owner in
+  `channels.principals`. Questions go to the DM top level. A second question of
+  the same agent while one waits gets `ask_pending` (one waiting question per
+  agent).
+- **The notice.** Written to the notice queue (kind `question_asked`, dedupe
+  `question:{ask_id}`) in the same transaction as the question; the API process
+  sends it. Several questions are numbered and the notice says
+  "Answer one line per question, in order."
+- **Answers.** The owner's next DM (not a `/command`, not a group, not a
+  coding-bound session) to the agent is the answer, from any of the owner's
+  mapped DMs. One line per question when the line count matches, otherwise the
+  whole message answers every question. The reply is
+  "Answer recorded — resuming." with the first question quoted. If recording
+  fails after a question was matched, the reply asks the owner to send it again.
+- **Expiry.** After `expire_hours` without an answer the question expires; the
+  task does **not** end: it returns to `running`, the call gets an `ask_expired`
+  denial, and the owner gets one `ask_expired` notice where the question went.
+  A Celery beat entry `expire-standing-asks` (every 60 s) runs only when the
+  feature is in effect.
+- **Metrics.** `standing_ask_total{outcome}` with `asked`, `refused_pending`,
+  `refused_no_channel`, `lookup_failed`, `answered`, `answer_failed`, `expired`.
+- **Migration 095 before rollout.** Apply `db/migrations/095_add_standing_pending_asks.sql`
+  (`scripts/apply_schema.py`) before deploying this code, even with the flag off:
+  cancelling any coding task closes its waiting question in the same transaction,
+  so a database without `standing_pending_asks` fails task cancellation. 095 also
+  widens the `standing_notifications` kind CHECK (`question_asked`, `ask_expired`).
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

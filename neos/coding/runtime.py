@@ -20,6 +20,7 @@ from neos.coding.application.workspace_stream_service import (
 )
 from neos.coding.loop.base import CodingLoop
 from neos.jev.assembly import build_tool_risk_gate, build_trajectory_monitor
+from neos.standing.asks import build_agent_asks
 from neos.standing.budget import build_agent_envelope
 from neos.coding.application.user_rules import build_user_rule_source
 from neos.coding.secrets import build_secret_source
@@ -796,6 +797,9 @@ def _prepare_real_coding_loop(*, config: AppConfig, session_factory=None):
             browser=build_browser_sessions(config),
             # 사용자 기기 브리지(트랙 Q16a). `None` 이 off 다.
             device_bridge=build_device_bridge_service(coding),
+            # 묻고 기다리기(트랙 Q9). 늘 배선한다 -- 켜졌는지는 포트의 `enabled()` 가 호출 때마다
+            # `ask_effective` 로 본다. 꺼져 있으면 에이전트 태스크도 지금처럼 무인 DENY 다.
+            asks=build_agent_asks(config, db_manager.get_session),
         )
         # 코딩 루프의 model 축(TrackedCodingModel 계측, 위)과 이 sandbox
         # provider 축은 직교한다 -- 관리형이 꺼져 있으면(기본값) 빈 dict라
