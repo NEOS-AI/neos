@@ -49,6 +49,8 @@ ASK_OUTCOMES = frozenset(
         "answered",
         # Q9c 고침 1 -- 질문을 찾은 뒤 재개가 실패했다(소유자에게 다시 보내 달라고 했다).
         "answer_failed",
+        # Q9d -- 답 없이 기한이 지났다(태스크는 `ask_expired` 거절로 이어 간다, 결정 Q-C).
+        "expired",
     }
 )
 
@@ -650,3 +652,52 @@ def build_agent_asks(config: Any, session_factory: Callable[[], Awaitable[Any]])
         max_body_chars=standing.notifications.max_body_chars,
         enabled=lambda: ask_effective(config),
     )
+
+
+# ---- expiry (track Q9d, design §8, decision Q-C) --------------------------------
+
+
+def expired_notice(ask: PendingAsk, *, max_body_chars: int):
+    """만료 알림 -- 무엇이 답 없이 끝났고 태스크가 그것 없이 이어 간다는 것. 중복 키는
+    `ask_expired:{ask_id}` 다. 목적지는 저장소가 그 질문의 알림 행에서 가져온다."""
+    from neos.standing.notifications import KIND_ASK_EXPIRED, StandingNotice, bounded_body
+
+    lines = ["Your agent's question expired without an answer:"]
+    lines.extend(_question_lines(ask.questions))
+    lines.append("")
+    lines.append("The task continues without the answer.")
+    return StandingNotice(
+        agent_id=ask.agent_id,
+        kind=KIND_ASK_EXPIRED,
+        dedupe_key=f"ask_expired:{ask.ask_id}",
+        body=bounded_body("\n".join(lines), max_body_chars),
+    )
+
+
+async def expire_due_asks(
+    repository: Any,
+    *,
+    limit: int,
+    now: datetime,
+    wake: Callable[[str, "str | None"], Awaitable[None]],
+    max_body_chars: int,
+) -> list:
+    """폴러 한 번(Q9d). 기한이 지난 대기 질문을 만료시키고, 재개된 태스크를 깨우고, 센다.
+
+    만료 트랜잭션은 코딩 저장소의 `expire_user_questions` 다(원장 이벤트는 `neos/coding`).
+    깨우기 실패는 만료를 되돌리지 않는다 -- 태스크가 `running` 이라 조정 스윕이 찾는다.
+    """
+    commits = await repository.expire_user_questions(
+        limit=limit,
+        now=now,
+        notice_for=lambda ask: expired_notice(ask, max_body_chars=max_body_chars),
+    )
+    for commit in commits:
+        count_ask("expired")
+        if not commit.resumed:
+            continue
+        try:
+            await wake(commit.ask.task_id, commit.checkpoint_id)
+        except Exception:  # noqa: BLE001 -- 위 독스트링
+            logger.warning("agent ask expiry wake failed task_id=%s", commit.ask.task_id, exc_info=True)
+    return commits

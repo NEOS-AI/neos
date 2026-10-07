@@ -34,6 +34,7 @@ from neos.coding.domain.durability import (
     TaskResumeCommit,
     AskRequestCommit,
     AskAnswerCommit,
+    AskExpiryCommit,
     ToolExecutionClaim,
     ToolExecutionDisposition,
 )
@@ -1424,6 +1425,76 @@ class PostgresCodingRunRepository:
         return AskAnswerCommit(
             ask=ask, events=(answered_event, status_event), checkpoint_id=checkpoint_id
         )
+
+    async def expire_user_questions(
+        self, *, limit: int, now: datetime, notice_for=None
+    ) -> list[AskExpiryCommit]:
+        """Track Q9d (decision Q-C): unanswered questions past `expires_at` expire.
+
+        One transaction, shaped like `expire_pending_approvals`: the due asks are
+        claimed `SKIP LOCKED` (so an answer holding the row wins, and two pollers
+        expire once), each goes `expired`, its task `waiting_user -> running` with
+        `task.status.changed{running, reason_code: ask_expired}` on the same run's
+        latest checkpoint. The task does NOT end: the woken loop meets the call
+        again and answers it with an `ask_expired` denial. `notice_for(ask)` is the
+        owner's `ask_expired` notice, sent where the question went.
+        """
+        from neos.standing.asks import expire_due_in_session
+        from neos.standing.notifications import enqueue_beside_in_session
+
+        commits: list[AskExpiryCommit] = []
+        async with await self._session_factory() as session:
+            async with session.begin():
+                for ask in await expire_due_in_session(session, now, limit=limit):
+                    updated = await session.execute(
+                        text(
+                            """
+                            UPDATE coding_tasks
+                            SET status = 'running', updated_at = :now,
+                                last_activity_at = :now
+                            WHERE task_id = :task_id AND status = 'waiting_user'
+                            RETURNING task_id
+                            """
+                        ),
+                        {"task_id": ask.task_id, "now": now},
+                    )
+                    resumed = updated.first() is not None
+                    checkpoint_id = (
+                        await session.execute(
+                            text(
+                                """
+                                SELECT checkpoint_id FROM coding_checkpoints
+                                WHERE task_id = :task_id AND run_id = :run_id
+                                ORDER BY seq DESC LIMIT 1
+                                """
+                            ),
+                            {"task_id": ask.task_id, "run_id": ask.run_id},
+                        )
+                    ).scalar_one_or_none()
+                    events: tuple = ()
+                    if resumed:
+                        events = (
+                            await self._append_event_in_session(
+                                session,
+                                task_id=ask.task_id,
+                                event_type="task.status.changed",
+                                payload={"status": "running", "reason_code": "ask_expired"},
+                                now=now,
+                                run_id=ask.run_id,
+                                checkpoint_id=checkpoint_id,
+                            ),
+                        )
+                    if notice_for is not None:
+                        await enqueue_beside_in_session(
+                            session,
+                            notice_for(ask),
+                            beside_dedupe_key=f"question:{ask.ask_id}",
+                            now=now,
+                        )
+                    commits.append(AskExpiryCommit(ask, events, checkpoint_id, resumed))
+        if commits and self._wake_outbox is not None:
+            self._wake_outbox()
+        return commits
 
     async def get_tool_approval(
         self, *, task_id: str, run_id: str, tool_call_id: str

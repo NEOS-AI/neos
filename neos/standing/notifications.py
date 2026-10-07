@@ -460,6 +460,41 @@ async def enqueue_to_in_session(
     return result.first() is not None
 
 
+async def enqueue_beside_in_session(
+    session, notice: StandingNotice, *, beside_dedupe_key: str, now: datetime
+) -> bool:
+    """같은 에이전트의 다른 알림(`beside_dedupe_key`)이 간 곳으로 적는다(트랙 Q9d: 만료 알림은
+    질문이 간 곳으로). 그 알림 행이 없으면 아무것도 적지 않는다(False)."""
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO standing_notifications
+                (notification_id, agent_id, kind, dedupe_key,
+                 channel_type, channel_id, body, status, attempts,
+                 next_attempt_at, created_at)
+            SELECT :notification_id, beside.agent_id, :kind, :dedupe_key,
+                   beside.channel_type, beside.channel_id, :body, 'pending', 0, :now, :now
+            FROM standing_notifications beside
+            JOIN standing_agents agent ON agent.agent_id = beside.agent_id
+            WHERE beside.agent_id = :agent_id AND beside.dedupe_key = :beside
+              AND agent.deleted_at IS NULL
+            ON CONFLICT (agent_id, dedupe_key) DO NOTHING
+            RETURNING notification_id
+            """
+        ),
+        {
+            "notification_id": f"sn_{uuid4().hex}",
+            "agent_id": notice.agent_id,
+            "kind": notice.kind,
+            "dedupe_key": notice.dedupe_key,
+            "body": notice.body,
+            "beside": beside_dedupe_key,
+            "now": now,
+        },
+    )
+    return result.first() is not None
+
+
 class StandingNotifier:
     """적는 쪽(워커·루프)이 쓰는 입구. 본문 상한을 여기서 건다.
 

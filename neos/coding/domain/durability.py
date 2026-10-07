@@ -55,6 +55,18 @@ class AskAnswerCommit:
     checkpoint_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class AskExpiryCommit:
+    """One expired question (track Q9d, decision Q-C): the ask `expired`; when its task
+    was still `waiting_user`, also `waiting_user -> running` and the status event on
+    the same run's latest checkpoint (`resumed`). The task does not end."""
+
+    ask: Any
+    events: tuple[CodingEvent, ...]
+    checkpoint_id: str | None
+    resumed: bool
+
+
 def question_asked_payload(ask: Any, reply_channel_type: str) -> dict[str, Any]:
     """`question.asked` 의 payload -- 메모리 저장소와 Postgres 저장소가 같이 쓴다.
 

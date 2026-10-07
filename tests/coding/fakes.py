@@ -422,6 +422,37 @@ class InMemoryCodingRunRepository:
             self.task_statuses[ask.task_id] = "running"
             return AskAnswerCommit(ask=answered, events=tuple(events), checkpoint_id=checkpoint_id)
 
+    async def expire_user_questions(self, *, limit, now, notice_for=None):
+        """Same contract as Postgres (track Q9d)."""
+        from neos.coding.domain.durability import AskExpiryCommit
+
+        async with self._durability_lock:
+            commits = []
+            for ask in (await self.asks.expire_due(now))[:limit]:
+                resumed = self.task_statuses.get(ask.task_id) == "waiting_user"
+                checkpoint_id = self._latest_checkpoint_id(ask.task_id, ask.run_id)
+                events = ()
+                if resumed:
+                    self.task_statuses[ask.task_id] = "running"
+                    self._durability_seq += 1
+                    events = (
+                        make_event(
+                            task_id=ask.task_id,
+                            seq=self._durability_seq,
+                            event_type="task.status.changed",
+                            payload={"status": "running", "reason_code": "ask_expired"},
+                            now=now,
+                            run_id=ask.run_id,
+                            checkpoint_id=checkpoint_id,
+                        ),
+                    )
+                if notice_for is not None and any(
+                    n.dedupe_key == f"question:{ask.ask_id}" for n, _ in self.notices
+                ):
+                    self.notices.append((notice_for(ask), None))
+                commits.append(AskExpiryCommit(ask, events, checkpoint_id, resumed))
+            return commits
+
     async def pause_task(self, *, lease, judgement_type, judgement, reason_code, now):
         """Same contract as Postgres: judgement + `running -> paused`, run stays running."""
         async with self._durability_lock:
