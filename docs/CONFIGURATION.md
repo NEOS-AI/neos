@@ -538,6 +538,27 @@ Resolution follows a strict precedence, and the winner is reported as
 The resolver itself never falls back across providers. An unknown provider or
 role, or a blank mapping entry, raises `ValueError` rather than guessing.
 
+#### Substitutions (holding a model back)
+
+`model_routing.substitutions` swaps one catalog pin for another **after** the
+winner is chosen, whatever its source — a user pick, a stored conversation pin,
+a feature override or a role default. `ModelResolution.substituted_from` keeps
+the original pin, and each swap increments
+`neos_model_substitution_total{from_model, to_model, source}`. Unlike the catalog's `retired:` map, the model's facts stay in
+`models.yaml`; this is deployment policy, and deleting the entry undoes it.
+Boot fails if either side is not a catalog model, if the target is itself
+substituted (no chains), or if the two are different providers.
+
+```yaml
+model_routing:
+  substitutions:
+    claude-fable-5-1: claude-opus-5-5   # 2026-10-07: Opus 5.5 is cheaper and benchmarks ahead
+```
+
+Catalog-driven behavior (thinking display, mid-conversation tools, effort
+levels) follows the substituted model, because callers read the catalog with
+the resolved pin.
+
 #### Reasoning effort
 
 `output_config.effort` (Anthropic) is resolved through the **same chain** as the

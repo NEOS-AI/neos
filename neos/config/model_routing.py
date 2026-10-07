@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from neos.config.schema import ModelRoutingConfig
 
+
+logger = logging.getLogger(__name__)
 
 ModelProvider = Literal["anthropic", "openai"]
 WorkloadRole = Literal["everyday", "powerful"]
@@ -27,6 +30,39 @@ class ModelResolution:
     role: WorkloadRole
     source: ResolutionSource
     role_alias: str | None = None
+    # model_routing.substitutions 가 바꿔 끼웠으면 원래 핀. 아니면 None.
+    substituted_from: str | None = None
+
+
+def _record_substitution(
+    old: str, new: str, source: ResolutionSource
+) -> None:
+    """Never breaks resolution -- same contract as _record_catalog_metrics."""
+    logger.debug("model substituted: %s -> %s (source=%s)", old, new, source.value)
+    try:
+        from neos.observability.metrics import get_metrics_collector
+
+        get_metrics_collector().model_substitution_total.labels(
+            from_model=old, to_model=new, source=source.value
+        ).inc()
+    except Exception:
+        return
+
+
+def _substitute(
+    config: ModelRoutingConfig, resolution: ModelResolution
+) -> ModelResolution:
+    target = config.substitutions.get(resolution.model)
+    if target is None:
+        return resolution
+    pin, role_alias = _canonicalize_pick(target, ResolutionSource.ROLE_DEFAULT)
+    _record_substitution(resolution.model, pin, resolution.source)
+    return replace(
+        resolution,
+        model=pin,
+        role_alias=role_alias,
+        substituted_from=resolution.model,
+    )
 
 
 def _canonicalize_pick(
@@ -73,12 +109,15 @@ def resolve_model(
     ):
         if model:
             pin, role_alias = _canonicalize_pick(model, source)
-            return ModelResolution(
-                model=pin,
-                provider=cast(ModelProvider, provider),
-                role=cast(WorkloadRole, role),
-                source=source,
-                role_alias=role_alias,
+            return _substitute(
+                config,
+                ModelResolution(
+                    model=pin,
+                    provider=cast(ModelProvider, provider),
+                    role=cast(WorkloadRole, role),
+                    source=source,
+                    role_alias=role_alias,
+                ),
             )
 
     provider_mapping = getattr(config, provider)
@@ -91,12 +130,15 @@ def resolve_model(
     if not model:
         raise ValueError(f"Incomplete model routing mapping for provider: {provider}")
     pin, role_alias = _canonicalize_pick(model, ResolutionSource.ROLE_DEFAULT)
-    return ModelResolution(
-        model=pin,
-        provider=cast(ModelProvider, provider),
-        role=cast(WorkloadRole, role),
-        source=ResolutionSource.ROLE_DEFAULT,
-        role_alias=role_alias,
+    return _substitute(
+        config,
+        ModelResolution(
+            model=pin,
+            provider=cast(ModelProvider, provider),
+            role=cast(WorkloadRole, role),
+            source=ResolutionSource.ROLE_DEFAULT,
+            role_alias=role_alias,
+        ),
     )
 
 

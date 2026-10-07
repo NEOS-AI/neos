@@ -439,6 +439,13 @@ class EnterpriseMetricsCollector:
             "Catalog remaps applied to a user/cookie string",
             registry=self.registry,
         )
+        # Labels are config keys (catalog pins) and ResolutionSource values -- bounded.
+        self.model_substitution_total = Counter(
+            "neos_model_substitution_total",
+            "model_routing.substitutions swaps applied by resolve_model",
+            ["from_model", "to_model", "source"],
+            registry=self.registry,
+        )
         self.catalog_live_unknown_total = Counter(
             "neos_catalog_live_unknown_total",
             "Live Anthropic ids not present in the YAML catalog",

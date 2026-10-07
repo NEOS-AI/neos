@@ -183,6 +183,11 @@ class ModelRoutingConfig(StrictConfigModel):
             powerful="gpt-6-sol",
         )
     )
+    # {카탈로그 핀: 대신 부를 핀}. 출처(user · conversation · 기능 오버라이드 ·
+    # 역할 기본값)를 가리지 않고 resolve_model 이 마지막에 바꿔 끼운다.
+    # 카탈로그의 `retired` 와 다르다 -- 모델 사실은 그대로 두고 *지금은 안
+    # 부른다*는 배포 정책이다. 항목을 지우면 원래대로 돌아간다.
+    substitutions: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelCatalogConfig(StrictConfigModel):
@@ -3000,6 +3005,32 @@ class AppConfig(StrictConfigModel):
                 raise ValueError(
                     f"model_routing.effort.models: {pin!r} does not take "
                     f"{level!r}; it takes {list(levels)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def validate_model_substitutions(self) -> "AppConfig":
+        substitutions = self.model_routing.substitutions
+        if not substitutions:
+            return self
+        from neos.config.model_config import model_config
+
+        models = model_config.catalog.models
+        for old, new in substitutions.items():
+            for pin in (old, new):
+                if pin not in models:
+                    raise ValueError(
+                        f"model_routing.substitutions: {pin!r} is not a catalog model"
+                    )
+            if new in substitutions:
+                raise ValueError(
+                    f"model_routing.substitutions: {old!r} -> {new!r} chains; "
+                    "point it at the final model"
+                )
+            if models[old].provider != models[new].provider:
+                raise ValueError(
+                    f"model_routing.substitutions: {old!r} and {new!r} are "
+                    "different providers"
                 )
         return self
 
