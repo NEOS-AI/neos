@@ -18,7 +18,7 @@
 | ② 체크포인트 상태 만들기 | `h.loop._restore(INPUT, None)` → `replace(...)` → `h.loop._dump_state(INPUT, state)` | "상태 X 에서 루프를 시작"할 공개 경로가 없다 |
 | ③ 행동 메서드 직접 호출 | `_compact_after_prompt_too_long`, `_guard_thinking_prefix`, `_shrink_old_tool_results`, 체크포인트로부터의 `_restore` … | 믹스인 구조 자체 — **C 로 미룬다** |
 
-덧붙여, 36개 파일이 **다른 테스트 모듈**(`tests/coding/loop/test_anthropic_loop.py`)에서 `harness`·`INPUT`·`collect`
+덧붙여, 36개 파일(`tests/coding`·`tests/standing`)이 **다른 테스트 모듈**(`tests/coding/loop/test_anthropic_loop.py`)에서 `harness`·`INPUT`·`collect`
 등을 import 하고, 파일마다 비슷한 `_loop()` 팩토리와 `_checkpoint()` 헬퍼가 따로 있다. 이것도 테스트끼리의 구조 의존이다.
 
 ## 2. 목표와 비목표
@@ -70,11 +70,18 @@ def encode_state(input: LoopInput, state: AgentLoopState) -> dict[str, Any]:
   `model`(턴 대신 모델 객체를 줄 때), `user_rules`, `secrets`, `browser`, `device_bridge`, `asks`, `jev`.
   기본값은 지금과 같다(`clock=lambda: NOW` 등). `Harness` 는 루프에 넘긴 키워드 전부를 들고 있고(`h.config` 등),
   테스트는 루프의 private 필드 대신 이것을 읽는다.
-- `Harness.resumed(**overrides) -> Harness`: 같은 repository·events·executor·bindings·subagents 를 공유하는
-  **새 루프 인스턴스**를 만든다. "설정이 바뀐 새 배포가 저장된 체크포인트를 재개한다"를 그대로 재현하므로,
-  런 사이에 `h.loop._config = replace(...)` 하던 곳을 대신한다.
-- `checkpoint_for(state, *, input=INPUT, checkpoint_id="cc_test", seq=1) -> CodingCheckpoint`:
-  `encode_state` 로 `CodingCheckpoint` 를 만든다. 파일마다 있던 `_checkpoint()` 헬퍼(3개)를 대신한다.
+- `Harness.rebuilt(**overrides) -> Harness`: 같은 repository·events·deps 를 공유하고 루프 키워드에 `overrides` 를
+  덮은 **새 루프 인스턴스**를 가진 `Harness` 를 돌려준다. 두 가지 재할당을 대신한다:
+  (a) 런 사이에 `h.loop._config = replace(...)` 하던 곳(7곳 전부) — "설정이 바뀐 새 배포가 저장된 체크포인트를
+  재개한다"를 그대로 재현한다. (b) 하네스가 만든 객체가 있어야 만들 수 있는 의존성(`AgentAsks(store=h.repository.asks)`,
+  `port._registry`, `await _vault()`)을 생성 직후 꽂던 곳.
+  루프는 생성자 밖에서 인스턴스 필드를 쓰지 않으므로(2026-10-08 grep 확인) 새 인스턴스로 바꿔도 잃는 상태가 없다.
+- `harness(turns=(), *, model=None, ...)`: `model` 을 주면 `Model(turns)` 대신 그것을 쓴다(`_model` 재할당 2곳).
+- `checkpoint_for(state, *, input=INPUT, checkpoint_id="cc_test") -> CodingCheckpoint`: `encode_state` 로
+  `CodingCheckpoint` 를 만든다(새 동등성 테스트가 쓴다).
+  파일마다 있던 `_checkpoint()` 헬퍼 3개는 모양이 서로 달라(상태를 받는 것, 원시 dict 를 받는 것, dict 를 고치는 것)
+  **남기되 속의 `_restore`/`_dump_state` 만 공개 함수로 바꾼다** — `CodingCheckpoint` 는 공개 도메인 타입이고
+  checkpoint_id 등 기존 값이 그대로라 단언이 바뀌지 않는다.
 - `support.py` 는 `test_` 로 시작하지 않으므로 수집되지 않는다. 다른 디렉터리(`tests/coding/connectors/`,
   `tests/coding/model/`)도 이것을 import 한다.
 
@@ -84,10 +91,12 @@ def encode_state(input: LoopInput, state: AgentLoopState) -> dict[str, Any]:
 |---|---|
 | `h = harness(...); h.loop._clock = clock` | `h = harness(..., clock=clock)` |
 | `h.loop._user_rules = rules` 등 생성 직후 재할당 | `harness(..., user_rules=rules)` |
-| 런 사이 `h.loop._config = replace(h.loop._config, ...)` | `h = h.resumed(config=replace(h.config, ...))` |
+| 런 사이 `h.loop._config = replace(h.loop._config, ...)` | `h = h.rebuilt(config=replace(h.config, ...))` |
+| 하네스 객체가 필요한 의존성 `h.loop._asks = AgentAsks(store=h.repository.asks, …)` | `h = h.rebuilt(asks=AgentAsks(store=h.repository.asks, …))` |
+| `h.loop._model = X` | `harness(..., model=X)` |
 | `h.loop._restore(INPUT, None)` | `initial_state(INPUT)` |
 | `h.loop._dump_state(INPUT, state)` | `encode_state(INPUT, state)` |
-| 파일별 `_checkpoint(h, state)` | `checkpoint_for(state)` |
+| 파일별 `_checkpoint()` 속의 `_restore(…, None)`/`_dump_state` | `initial_state`/`encode_state` |
 | `from tests.coding.loop.test_anthropic_loop import ...` | `from tests.coding.loop.support import ...` |
 
 각자의 `_loop()` 팩토리(`test_mcp_gate`, `test_mcp_pinned`, `test_user_rules_loop`, `test_secret_broker_loop`,
@@ -107,21 +116,24 @@ def encode_state(input: LoopInput, state: AgentLoopState) -> dict[str, Any]:
 
 | 지표 | 명령 | 기준선 | 목표 |
 |---|---|---|---|
-| 의존성 재할당 | `grep -rnE '\bloop\._[a-z_]+\s*=[^=]' tests/coding \| wc -l` | 70 | 0 |
+| 의존성 재할당 | `grep -rnE '\bloop\._(clock\|tools\|user_rules\|config\|asks\|metrics\|device_bridge\|secrets\|model\|subagents\|browser)\s*=[^=]' tests \| wc -l` | 70 | 0 |
+| (참고) 행동 메서드 스파이 `loop._advance_detached_children = spy` | `grep -rnE '\bloop\._advance_detached_children\s*=' tests \| wc -l` | 3 | 3 (③, C 에서) |
 | `_restore(…, None)` | `grep -rnE '\._restore\([^,]+,\s*None' tests/coding \| wc -l` | 40 | 0 |
 | `_dump_state` | `grep -rnE '\._dump_state\(' tests/coding \| wc -l` | 22 | 0 |
 | 테스트 모듈에서의 import | `grep -rlE 'from tests\.coding\.loop\.test_anthropic_loop import' tests \| wc -l` | 36 | 0 |
 | 체크포인트로부터의 `_restore` | `grep -rnE '\._restore\(' tests/coding \| grep -v ', None' \| wc -l` | 25 | 25 (C 에서) |
 
-4. **이음매의 동등성:** `initial_state`/`encode_state` 를 직접 겨누는 테스트를 하나 더한다 — 지금 루프가 커밋하는 첫
-   체크포인트의 `loop_state` 와 `encode_state(INPUT, initial_state(INPUT))` 가 같은지(작업 공간 편집이 있는 입력 포함).
+4. **이음매의 동등성:** 공개 API 로만 겨누는 테스트를 더한다 — 같은 모델 턴으로 (가) `checkpoint=None` 에서 시작한 런과
+   (나) `checkpoint_for(initial_state(INPUT))` 에서 시작한 런이 모델에 보낸 요청과 커밋한 `loop_state` 가 같다.
+   작업 공간 편집이 있는 입력은 여기서 빼고 따로 겨눈다 — 체크포인트에서 재개하면 편집 안내가 그 단계에 다시 붙는 것이
+   현재 행동이라 (가)·(나)가 원래 다르다. 편집 입력은 `initial_state` 의 대화에 편집 요약이 실리는지로 확인한다.
 5. CI 의 Ruff 명령을 로컬에서 그대로 돌린다(메모: 미사용 import).
 
 ## 5. 위험과 대응
 
 - **헬퍼를 옮기며 사본이 남는다.** `_task_seed_text` 등을 모듈 함수로 옮긴 뒤 `CheckpointMixin.` 접두로 부르는 곳이
   남지 않았는지 이름으로 grep 한다.
-- **`resumed()` 가 공유해야 할 것을 빠뜨린다.** 재개 테스트가 같은 repository 의 체크포인트를 읽는지가 단언으로 이미
+- **`rebuilt()` 가 공유해야 할 것을 빠뜨린다.** 재개 테스트가 같은 repository 의 체크포인트를 읽는지가 단언으로 이미
   확인되므로, 빠뜨리면 기존 단언이 실패한다.
 - **병렬 작업과의 충돌.** `tests/coding/loop/` 를 고치는 다른 브랜치가 있으면 import 경로 변경이 충돌한다.
   작업은 dev 기준의 별도 브랜치에서 하고, 머지 직전에 dev 를 다시 받아 기준선 대조를 반복한다.
