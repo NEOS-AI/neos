@@ -69,6 +69,7 @@ from neos.coding.loop._durable.state import (
     CodingLoopConfig as CodingLoopConfig,
     CodingLoopFailure as CodingLoopFailure,
     CodingLoopWaitingApproval as CodingLoopWaitingApproval,
+    CodingLoopWaitingUser as CodingLoopWaitingUser,
     DelegatedSpawn as DelegatedSpawn,
     SpawnWork as SpawnWork,
 )
@@ -120,6 +121,7 @@ class DurableCodingLoop(
         secrets=None,
         browser=None,
         device_bridge=None,
+        asks=None,
     ) -> None:
         # Mixins read these through `self` on every use, never a copy: tests
         # reassign `_config`, `_clock`, and `_metrics` after construction.
@@ -148,6 +150,9 @@ class DurableCodingLoop(
         self._browser = browser
         # 사용자 기기 브리지(트랙 Q16a, `DeviceBridgeService`). `None` 이 off 다.
         self._device_bridge = device_bridge
+        # 묻고 기다리기(트랙 Q9, `neos.standing.asks.AgentAsks`). `None` 이 off 다 -- 에이전트
+        # autonomous 태스크의 `ask_user.v1` 도 지금처럼 무인 DENY 로 접힌다.
+        self._asks = asks
 
     async def run(
         self,
@@ -365,11 +370,16 @@ class DurableCodingLoop(
         return self._jev is not None and self._jev.enforce
 
     @staticmethod
-    def _with_approval_answers(validated, approval) -> Any:
+    def _with_answers(validated, answers) -> Any:
+        """`ask_user.v1` 의 답을 **검증 뒤에** 입력에 싣는다 -- 답이 들어가는 유일한 길이다.
+
+        스키마(`_AskUserInput`, `extra="forbid"`)에는 `answers` 가 없어서 모델은 답을
+        지어낼 수 없다. 승인 카드의 답(Q9-2)과 채널의 답(Q9)이 같은 함수를 지난다 --
+        사본이 둘이면 고침이 한쪽에만 도착한다.
+        """
         if validated.name != "ask_user.v1":
             return validated
-        answers = approval.display_summary.get("answers")
-        if not isinstance(answers, list):
+        if not isinstance(answers, (list, tuple)):
             return validated
         merged = dict(validated.input)
         merged["answers"] = [str(item) for item in answers]

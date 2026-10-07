@@ -86,6 +86,13 @@ model_routing:
     models: {}
     #   claude-opus-5-5: high
     #   gpt-6-sol: medium
+  # {핀: 대신 부를 핀}. 어디서 왔든(사용자 · 대화 · 기능 오버라이드 · 역할 기본값)
+  # 해석 마지막에 바꿔 끼운다. 카탈로그 사실은 그대로 두는 배포 정책이다.
+  substitutions:
+    # 2026-10-07 결정: Fable 5.1 은 $10/$50 로 Opus 5.5($4/$20)의 2.5배인데 최근
+    # 벤치마크에서 Opus 5.5 가 앞선다. 당분간 고급 작업은 Opus 5.5 로 보낸다.
+    # Fable 을 다시 쓰려면(로드맵 §8 경계 9 · K5 ⑤ 스윕) 이 줄을 지운다.
+    claude-fable-5-1: claude-opus-5-5
 
 llm:
   provider: anthropic

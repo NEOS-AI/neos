@@ -183,6 +183,11 @@ class ModelRoutingConfig(StrictConfigModel):
             powerful="gpt-6-sol",
         )
     )
+    # {카탈로그 핀: 대신 부를 핀}. 출처(user · conversation · 기능 오버라이드 ·
+    # 역할 기본값)를 가리지 않고 resolve_model 이 마지막에 바꿔 끼운다.
+    # 카탈로그의 `retired` 와 다르다 -- 모델 사실은 그대로 두고 *지금은 안
+    # 부른다*는 배포 정책이다. 항목을 지우면 원래대로 돌아간다.
+    substitutions: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelCatalogConfig(StrictConfigModel):
@@ -795,6 +800,19 @@ class StandingThreadsConfig(StrictConfigModel):
     enabled: bool = False
 
 
+class StandingAskConfig(StrictConfigModel):
+    """묻고 기다리기 -- 트랙 Q9 (docs/Q9_ASK_AND_WAIT_DESIGN_261005.md).
+
+    에이전트의 `autonomous` 태스크가 `ask_user.v1` 을 부르면 소유자의 채널로 묻고
+    `WAITING_USER` 로 기다린다. 꺼져 있으면(기본) 지금처럼 무인 DENY 다. 켜도
+    `notifications`·`threads` 가 함께 켜져 있어야 효력이 있다(`neos.standing.asks.ask_effective`).
+    """
+
+    enabled: bool = False
+    #: 답이 이만큼(시간) 오지 않으면 질문은 만료되고, 태스크는 `ask_expired` 거절로 이어 간다.
+    expire_hours: int = Field(default=24, ge=1)
+
+
 class StandingAgentsConfig(StrictConfigModel):
     """상시 에이전트 -- 트랙 Q13 (docs/Q13_STANDING_AGENT_DESIGN_260930.md).
 
@@ -810,6 +828,7 @@ class StandingAgentsConfig(StrictConfigModel):
     )
     questions: StandingQuestionsConfig = Field(default_factory=StandingQuestionsConfig)
     threads: StandingThreadsConfig = Field(default_factory=StandingThreadsConfig)
+    ask: StandingAskConfig = Field(default_factory=StandingAskConfig)
 
 
 class LearnConfig(StrictConfigModel):
@@ -2525,6 +2544,29 @@ class ChannelPrincipal(StrictConfigModel):
     user_id: str
 
 
+#: OpenAI 전사 API 업로드 상한. 가이드 원문 "Files can be up to 25 MB." 는 단위
+#: (10진/2진)를 밝히지 않으므로 작은 쪽(10진)을 쓴다 — Q15 설계 §4·§13 결정 2.
+#: https://developers.openai.com/api/docs/guides/speech-to-text (2026-10-05 조회)
+OPENAI_TRANSCRIPTION_MAX_BYTES = 25_000_000
+
+
+class ChannelVoiceConfig(StrictConfigModel):
+    """채널 음성 → 텍스트(Q15). 기본 off — development 에서도 라이브 dry run 전에는 켜지 않는다.
+
+    모델은 여기가 아니라 카탈로그(`aliases.transcription`)가 고른다.
+    """
+
+    enabled: bool = False
+    # 공급자에 보내기 전에 보는 상한. 공급자 상한을 넘을 수 없다.
+    max_bytes: int = Field(
+        default=OPENAI_TRANSCRIPTION_MAX_BYTES, gt=0, le=OPENAI_TRANSCRIPTION_MAX_BYTES
+    )
+    # 우리 정책(공급자 길이 상한은 미확인). 길이를 아는 채널에만 적용된다.
+    max_seconds: int = Field(default=600, gt=0)
+    # 공급자 호출 하나의 시간 상한. 이 동안 채널 세션 잠금을 쥔다.
+    timeout_seconds: float = Field(default=60, gt=0)
+
+
 class ChannelConfig(StrictConfigModel):
     telegram: TelegramChannelConfig = Field(default_factory=TelegramChannelConfig)
     discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
@@ -2537,6 +2579,7 @@ class ChannelConfig(StrictConfigModel):
     coding_invoke: bool = False
     coding_owner_user_id: str = ""
     inbound_media: bool = False
+    voice: ChannelVoiceConfig = Field(default_factory=ChannelVoiceConfig)
     outbound_files: bool = False
     draft_streaming: bool = False
     principals: list[ChannelPrincipal] = Field(default_factory=list)
@@ -3000,6 +3043,32 @@ class AppConfig(StrictConfigModel):
                 raise ValueError(
                     f"model_routing.effort.models: {pin!r} does not take "
                     f"{level!r}; it takes {list(levels)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def validate_model_substitutions(self) -> "AppConfig":
+        substitutions = self.model_routing.substitutions
+        if not substitutions:
+            return self
+        from neos.config.model_config import model_config
+
+        models = model_config.catalog.models
+        for old, new in substitutions.items():
+            for pin in (old, new):
+                if pin not in models:
+                    raise ValueError(
+                        f"model_routing.substitutions: {pin!r} is not a catalog model"
+                    )
+            if new in substitutions:
+                raise ValueError(
+                    f"model_routing.substitutions: {old!r} -> {new!r} chains; "
+                    "point it at the final model"
+                )
+            if models[old].provider != models[new].provider:
+                raise ValueError(
+                    f"model_routing.substitutions: {old!r} and {new!r} are "
+                    "different providers"
                 )
         return self
 

@@ -314,6 +314,23 @@ class EnterpriseMetricsCollector:
             ["op"],
             registry=self.registry,
         )
+        # 트랙 Q9: 상시 에이전트의 질문(묻고 기다리기) 결과. 판정이 나는 자리에서 센다 --
+        # asked · refused_pending · refused_no_channel · lookup_failed · answered (Q9d 가 expired).
+        self.standing_ask_total = Counter(
+            "standing_ask_total",
+            "Standing agent questions by outcome",
+            ["outcome"],
+            registry=self.registry,
+        )
+        # Q15: 채널 음성 전사의 결과. 전사 비용은 비용 원장에 없고 이것으로만 센다.
+        # outcome = ok | too_large | too_long | unsupported_format | provider_error |
+        # timeout | empty | download_failed. 올리는 곳은 게이트웨이 한 곳(Q15c)이다.
+        self.channel_voice_transcriptions_total = Counter(
+            "channel_voice_transcriptions_total",
+            "Channel voice messages by transcription outcome",
+            ["outcome"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",
@@ -437,6 +454,13 @@ class EnterpriseMetricsCollector:
         self.catalog_remap_total = Counter(
             "neos_catalog_remap_total",
             "Catalog remaps applied to a user/cookie string",
+            registry=self.registry,
+        )
+        # Labels are config keys (catalog pins) and ResolutionSource values -- bounded.
+        self.model_substitution_total = Counter(
+            "neos_model_substitution_total",
+            "model_routing.substitutions swaps applied by resolve_model",
+            ["from_model", "to_model", "source"],
             registry=self.registry,
         )
         self.catalog_live_unknown_total = Counter(

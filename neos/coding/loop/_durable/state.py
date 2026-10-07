@@ -29,6 +29,14 @@ class CodingLoopWaitingApproval(RuntimeError):
     pass
 
 
+class CodingLoopWaitingUser(RuntimeError):
+    """The task's `ask_user.v1` is still waiting for its owner's answer (track Q9).
+
+    Raised where `CodingLoopWaitingApproval` is: the loop reached the call again but
+    the question is not answered yet. Nothing moves until the answer (or expiry) does.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class CodingLoopConfig:
     model: str

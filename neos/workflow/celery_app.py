@@ -235,6 +235,17 @@ def configure_standing_question_beat_schedule(schedule: dict, *, enabled: bool) 
         schedule.pop("poll-standing-questions", None)
 
 
+def configure_standing_ask_beat_schedule(schedule: dict, *, enabled: bool) -> None:
+    """상시 에이전트 질문 만료 폴러(트랙 Q9d). `ask_effective(config)` 일 때만."""
+    if enabled:
+        schedule["expire-standing-asks"] = {
+            "task": "neos.tasks.expire_standing_asks",
+            "schedule": 60.0,
+        }
+    else:
+        schedule.pop("expire-standing-asks", None)
+
+
 # Celery Beat 스케줄 (주기적 태스크)
 app.conf.beat_schedule = {
     # 예: 매일 자정에 오래된 체크포인트 정리
@@ -285,6 +296,14 @@ configure_standing_question_beat_schedule(
     app.conf.beat_schedule,
     enabled=_standing_config.enabled and _standing_config.questions.enabled,
 )
+
+def _ask_effective() -> bool:
+    from neos.standing.asks import ask_effective
+
+    return ask_effective(settings.config)
+
+
+configure_standing_ask_beat_schedule(app.conf.beat_schedule, enabled=_ask_effective())
 
 _managed_sandbox_config = settings.config.sandbox.managed
 configure_managed_sandbox_beat_schedule(

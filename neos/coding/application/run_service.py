@@ -13,6 +13,7 @@ from neos.coding.domain.durability import (
     SteeringApplication,
     TaskPaused,
     TaskResumeCommit,
+    TaskWaitingUser,
     ToolExecutionDisposition,
     is_pause_event,
 )
@@ -260,6 +261,11 @@ class CodingRunService:
             # resumes it. Not `None`: that means "completed" to the runner.
             await self._release_lease(lease)
             raise TaskPaused(task_id)
+        if task is not None and task.status is CodingTaskStatus.WAITING_USER:
+            # Q9 -- like a paused task: the run is still `running`, so a lease can be
+            # had, but nothing may move until the question is answered or expires.
+            await self._release_lease(lease)
+            raise TaskWaitingUser(task_id)
         if task is not None and task.status is CodingTaskStatus.CANCELLED:
             committed = await self._cancel_active_run(lease, now)
             await self._release_lease(lease)
@@ -675,6 +681,39 @@ class CodingRunService:
             except Exception:
                 # The task is `running` again; the reconciliation sweep finds it.
                 logger.exception("coding resume wake failed task_id=%s", task_id)
+        return commit
+
+    async def resume_answered(
+        self,
+        *,
+        ask_id: str,
+        owner_id: str,
+        answers: list[str],
+        channel_type: str,
+    ):
+        """The owner's answer resumes a waiting task (track Q9c). `None` when it is not
+        answered (not waiting, not this owner's, or the task moved on).
+
+        The Q10b resume path: the run was never closed, so the woken worker continues
+        the same run from its latest checkpoint and meets its `ask_user.v1` again --
+        this time answered.
+        """
+        answer = getattr(self._runs, "answer_user_question", None)
+        if answer is None:
+            return None
+        commit = await answer(
+            ask_id=ask_id,
+            owner_id=owner_id,
+            answers=answers,
+            channel_type=channel_type,
+            now=self._clock(),
+        )
+        if commit is not None and self._wake is not None:
+            try:
+                await self._wake(commit.ask.task_id, commit.checkpoint_id)
+            except Exception:
+                # The task is `running` again; the reconciliation sweep finds it.
+                logger.exception("coding answer wake failed ask_id=%s", ask_id)
         return commit
 
     async def _mark_task_cancelled(self, task_id: str, now: datetime) -> None:

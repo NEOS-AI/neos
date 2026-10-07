@@ -188,3 +188,96 @@ def test_recommendation_tiers_are_not_routing_roles() -> None:
 
     assert set(anthropic) == {"fast", "balanced", "powerful"}
     assert anthropic["fast"] not in set(ModelRoutingConfig().anthropic.model_dump().values())
+
+
+def test_substitution_applies_to_every_source() -> None:
+    config = ModelRoutingConfig(substitutions={"claude-fable-5-1": "claude-opus-5-5"})
+    for kwargs, source in (
+        ({"user_model": "claude-fable-5-1"}, ResolutionSource.USER),
+        ({"conversation_model": "claude-fable-5-1"}, ResolutionSource.CONVERSATION),
+        ({"feature_override": "claude-fable-5-1"}, ResolutionSource.FEATURE_OVERRIDE),
+    ):
+        resolved = resolve_model(
+            config=config, provider="anthropic", role="powerful", **kwargs
+        )
+        assert resolved.model == "claude-opus-5-5", source
+        assert resolved.substituted_from == "claude-fable-5-1"
+        assert resolved.source is source
+
+    roles = ModelRoutingConfig(
+        anthropic=ProviderModelRolesConfig(
+            everyday="sonnet-5", powerful="claude-fable-5-1"
+        ),
+        substitutions={"claude-fable-5-1": "claude-opus-5-5"},
+    )
+    resolved = resolve_model(config=roles, provider="anthropic", role="powerful")
+    assert resolved.model == "claude-opus-5-5"
+    assert resolved.substituted_from == "claude-fable-5-1"
+
+
+def test_unsubstituted_pick_is_untouched() -> None:
+    config = ModelRoutingConfig(substitutions={"claude-fable-5-1": "claude-opus-5-5"})
+    resolved = resolve_model(
+        config=config, provider="anthropic", role="powerful", user_model="claude-sonnet-5"
+    )
+    assert resolved.model == "claude-sonnet-5"
+    assert resolved.substituted_from is None
+
+
+@pytest.mark.parametrize("env", ["development", "staging", "production"])
+def test_shipped_config_holds_fable_back(env: str) -> None:
+    """2026-10-07: Opus 5.5 is cheaper and benchmarks ahead -- Fable stays parked."""
+    from neos.config.loader import DEFAULT_CONFIG_DIR, deep_merge, load_yaml_file
+
+    data = deep_merge(
+        load_yaml_file(DEFAULT_CONFIG_DIR / "neos.default.yaml"),
+        load_yaml_file(DEFAULT_CONFIG_DIR / f"neos.{env}.yaml"),
+    )
+    config = ModelRoutingConfig.model_validate(data["model_routing"])
+    resolved = resolve_model(
+        config=config,
+        provider="anthropic",
+        role="powerful",
+        feature_override="claude-fable-5-1",
+    )
+    assert resolved.model == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize(
+    "substitutions, message",
+    [
+        ({"claude-fable-5-1": "claude-nope"}, "not a catalog model"),
+        (
+            {"claude-fable-5-1": "claude-opus-5-5", "claude-opus-5-5": "claude-sonnet-5"},
+            "chains",
+        ),
+        ({"claude-fable-5-1": "gpt-6-sol"}, "different providers"),
+    ],
+)
+def test_bad_substitutions_fail_at_boot(substitutions, message) -> None:
+    from neos.config.schema import AppConfig
+
+    with pytest.raises(ValidationError, match=message):
+        AppConfig.model_validate({"model_routing": {"substitutions": substitutions}})
+
+
+def test_substitution_is_counted() -> None:
+    from neos.observability.metrics import get_metrics_collector
+
+    counter = get_metrics_collector().model_substitution_total.labels(
+        from_model="claude-fable-5-1", to_model="claude-opus-5-5", source="feature_override"
+    )
+    before = counter._value.get()
+    config = ModelRoutingConfig(substitutions={"claude-fable-5-1": "claude-opus-5-5"})
+
+    resolve_model(
+        config=config, provider="anthropic", role="powerful",
+        feature_override="claude-fable-5-1",
+    )
+    assert counter._value.get() == before + 1
+
+    resolve_model(
+        config=config, provider="anthropic", role="powerful",
+        feature_override="claude-sonnet-5",
+    )
+    assert counter._value.get() == before + 1

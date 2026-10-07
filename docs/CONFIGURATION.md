@@ -538,6 +538,27 @@ Resolution follows a strict precedence, and the winner is reported as
 The resolver itself never falls back across providers. An unknown provider or
 role, or a blank mapping entry, raises `ValueError` rather than guessing.
 
+#### Substitutions (holding a model back)
+
+`model_routing.substitutions` swaps one catalog pin for another **after** the
+winner is chosen, whatever its source — a user pick, a stored conversation pin,
+a feature override or a role default. `ModelResolution.substituted_from` keeps
+the original pin, and each swap increments
+`neos_model_substitution_total{from_model, to_model, source}`. Unlike the catalog's `retired:` map, the model's facts stay in
+`models.yaml`; this is deployment policy, and deleting the entry undoes it.
+Boot fails if either side is not a catalog model, if the target is itself
+substituted (no chains), or if the two are different providers.
+
+```yaml
+model_routing:
+  substitutions:
+    claude-fable-5-1: claude-opus-5-5   # 2026-10-07: Opus 5.5 is cheaper and benchmarks ahead
+```
+
+Catalog-driven behavior (thinking display, mid-conversation tools, effort
+levels) follows the substituted model, because callers read the catalog with
+the resolved pin.
+
 #### Reasoning effort
 
 `output_config.effort` (Anthropic) is resolved through the **same chain** as the
@@ -1629,6 +1650,115 @@ POST   /api/v1/standing-agents/{agent_id}/thread/rotate                   # same
 DELETE /api/v1/standing-agents/{agent_id}/thread/sessions/{session_id}
 POST   /api/v1/standing-agents/{agent_id}/thread/web-conversation       # one per agent; 201 when created
 ```
+
+#### Ask and wait (track Q9)
+
+```yaml
+standing_agents:
+  ask:
+    enabled: false
+    expire_hours: 24
+```
+
+When on, an agent's **autonomous** coding task that calls `ask_user.v1` asks its
+owner over a chat channel and waits in `waiting_user`, instead of the unattended
+fold denying the call. The run stays `running`; the owner's answer resumes it from
+its latest checkpoint and the answer reaches the tool input. Design:
+`docs/Q9_ASK_AND_WAIT_DESIGN_261005.md`.
+
+- **Who may ask.** Only an agent's `autonomous` task. `background` tasks keep their
+  READ_ONLY ceiling (`policy_mode_ceiling`); `interactive` tasks keep the approval
+  card; a human-opened autonomous task (no agent) still folds to DENY.
+- **Takes effect only with its dependencies.** `standing_agents.enabled`,
+  `ask.enabled`, `notifications.enabled` and `threads.enabled` must all be on
+  (`neos.standing.asks.ask_effective`). Without the notice drain the question never
+  leaves; without threads no answer is recognised. If any is off, behaviour is
+  unchanged. The loop's port and the gateway's answer check are always wired and
+  read the flags on every call.
+- **Where it asks.** The attached channel DM the owner spoke in last, else the
+  agent's notify target, else nowhere: the call gets `no_reply_channel` and the
+  task runs on. The destination platform must map the owner in
+  `channels.principals`. Questions go to the DM top level. A second question of
+  the same agent while one waits gets `ask_pending` (one waiting question per
+  agent).
+- **The notice.** Written to the notice queue (kind `question_asked`, dedupe
+  `question:{ask_id}`) in the same transaction as the question; the API process
+  sends it. Several questions are numbered and the notice says
+  "Answer one line per question, in order."
+- **Answers.** The owner's next DM (not a `/command`, not a group, not a
+  coding-bound session) to the agent is the answer, from any of the owner's
+  mapped DMs. One line per question when the line count matches, otherwise the
+  whole message answers every question. The reply is
+  "Answer recorded — resuming." with the first question quoted. If recording
+  fails after a question was matched, the reply asks the owner to send it again.
+- **Voice answers (with track Q15).** The gateway transcribes a voice message
+  first, then checks for a waiting question, so the owner can answer by voice.
+  The recorded answer drops the `"[voice] "` marker; the agent thread's user turn
+  keeps the transcribed text. A refused transcription (too large, too long, ...)
+  replies with the refusal and does not answer.
+- **Expiry.** After `expire_hours` without an answer the question expires; the
+  task does **not** end: it returns to `running`, the call gets an `ask_expired`
+  denial, and the owner gets one `ask_expired` notice where the question went.
+  A Celery beat entry `expire-standing-asks` (every 60 s) runs only when the
+  feature is in effect.
+- **Turning it off — drain first.** With `ask.enabled` off the expiry beat is not
+  registered and the gateway ignores answers, so a task already in `waiting_user`
+  neither expires nor accepts an answer: it waits until someone cancels it. Before
+  turning `ask.enabled` off, let the waiting questions be answered or expire, or
+  cancel the waiting tasks (`SELECT task_id FROM standing_pending_asks WHERE status = 'waiting'`).
+- **Metrics.** `standing_ask_total{outcome}` with `asked`, `refused_pending`,
+  `refused_no_channel`, `lookup_failed`, `answered`, `answer_failed`, `expired`.
+- **Migration 095 before rollout.** Apply `db/migrations/095_add_standing_pending_asks.sql`
+  (`scripts/apply_schema.py`) before deploying this code, even with the flag off.
+  Cancelling a coding task closes its waiting question in the same transaction,
+  inside a savepoint: on a database without `standing_pending_asks` the cancel
+  still succeeds and one warning names the missing migration (any other error
+  still fails the cancel). Asking needs the table. 095 also
+  widens the `standing_notifications` kind CHECK (`question_asked`, `ask_expired`).
+
+### Channel voice messages (track Q15)
+
+```yaml
+channels:
+  voice:
+    enabled: false          # off in every profile, development included (see the gate below)
+    max_bytes: 25000000     # cannot exceed 25,000,000 -- OpenAI's "25 MB" upload limit
+    max_seconds: 600        # applied only where the channel reports a duration
+    timeout_seconds: 60     # one provider call; the channel session lock is held meanwhile
+```
+
+When enabled, one audio item per inbound message is collected **separately from
+`channels.inbound_media`**: a Telegram `voice` (then `audio`), a Slack file whose
+`mimetype` is `audio/*`, or a Discord voice message / `audio/*` attachment. Size
+and duration are checked **before downloading** wherever the platform reports
+them; Telegram's effective size limit is `min(max_bytes, 20_000_000)` (Bot API
+download limit). The gateway then transcribes it with the OpenAI transcription
+API and the message body becomes `"[voice] <transcript>"`, followed by the
+caption if there was one. That text is what the workflow, a bound coding task's
+steer instruction and an agent's thread (Q8) see; the audio itself never reaches
+the workflow attachments, logs (`repr` shows only its length) or any store.
+
+- Only messages that pass the conversation gate are transcribed: ignored or
+  disallowed channels, bots and senders not mapped in `channels.principals` (when
+  principals are set) are never sent to the provider.
+- A caption that is a command (`/help`, ...) runs the command and the voice is
+  ignored. A transcript is never a command -- saying "slash new" does not reset.
+- Refusals reply and run no workflow: too large / too long / unsupported format /
+  download failed / "No speech was found in the voice message." / provider error
+  or timeout ("Could not transcribe the voice message.").
+- The model is the catalog's `defaults.transcription` (`gpt-transcribe`), not a
+  setting. Transcription spend is **not** in the cost ledger (the catalog prices
+  per token, the provider per minute); count it with
+  `channel_voice_transcriptions_total{outcome}` -- `ok`, `too_large`, `too_long`,
+  `unsupported_format`, `download_failed`, `empty`, `provider_error`, `timeout`.
+- **Enable gate.** OpenAI's docs disagree on whether `ogg` is accepted (the API
+  reference lists it, the speech-to-text guide does not), and Telegram and
+  Discord voice messages are OGG/Opus, sent as-is. Do not set `enabled: true` in
+  any profile until a live dry run passes 3/3: an OGG voice message transcribes,
+  a Slack in-app audio clip transcribes (record its `mimetype`), and an oversize
+  voice message is refused with zero provider calls.
+
+Design: `docs/Q15_VOICE_DESIGN_261005.md`.
 
 ## Staging and Production
 
