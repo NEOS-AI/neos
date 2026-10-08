@@ -42,6 +42,7 @@ from neos.coding.loop._durable.codec import (
     _transcript_digest,
 )
 from neos.coding.loop._durable.state import AgentLoopState, CodingLoopFailure
+from neos.coding.loop._durable.usage import transcript_token_limit
 from neos.coding.loop._durable.transcript import (
     _append_user_text,
     _has_open_tool_pair,
@@ -291,7 +292,7 @@ class CompactionMixin:
         return (
             len(transcript) > self._config.max_transcript_messages
             or self._over_bytes(transcript)
-            or _estimated_tokens(transcript) > self._transcript_token_limit()
+            or _estimated_tokens(transcript) > transcript_token_limit(self._config)
         )
 
     def _over_bytes(self, transcript) -> bool:

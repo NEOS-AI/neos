@@ -11,6 +11,7 @@ from dataclasses import replace
 from neos.coding.model.base import ModelCompleted
 from neos.coding.loop._durable.codec import _nonneg_int
 from neos.coding.loop._durable.state import AgentLoopState, CodingLoopFailure
+from neos.config.model_identity import usable_window_tokens
 
 
 def _usage_tokens(completion: ModelCompleted) -> tuple[int, int]:
@@ -86,3 +87,32 @@ def check_usage_budgets(config, state: AgentLoopState) -> None:
         raise CodingLoopFailure("token_budget_exceeded", retryable=False)
     if state.cost_micros > config.max_cost_micros:
         raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
+
+
+def transcript_token_limit(config) -> int:
+    """The maximum number of tokens that can be in a transcript.
+
+    If a context window is configured, this is the usable window after
+    reserving space for output. Otherwise, it uses the configured max.
+    """
+    usable = usable_window_tokens(
+        context_window=config.context_window,
+        max_output_tokens=config.max_output_tokens,
+        input_limit=config.input_limit,
+        thinking_budget=config.thinking_budget,
+    )
+    if usable is None:
+        return config.max_transcript_tokens
+    return usable
+
+
+def parent_headroom_chars(config, state: AgentLoopState) -> int:
+    """The number of characters available for a parent's prompt.
+
+    Headroom is the remaining tokens multiplied by 4 (a conservative
+    estimate of tokens per character), but never negative.
+    """
+    remaining = max(
+        0, transcript_token_limit(config) - max(0, state.last_prompt_tokens)
+    )
+    return remaining * 4

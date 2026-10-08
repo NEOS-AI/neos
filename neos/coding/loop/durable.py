@@ -42,7 +42,6 @@ from neos.coding.sandbox.bindings import SandboxBindingService
 from neos.coding.sandbox.observability import CodingToolAuditEvent, NullCodingAuditSink
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
-from neos.config.model_identity import usable_window_tokens
 from neos.jev.gate import evaluate_approval_with_jev
 from neos.coding.loop._durable.checkpoint import CheckpointMixin
 from neos.coding.loop._durable.children import _select_spawn_work as _select_spawn_work
@@ -79,7 +78,7 @@ from neos.coding.loop._durable.transcript import (
     _uniquify_tool_calls as _uniquify_tool_calls,
 )
 from neos.coding.loop._durable.transitions import TurnTransitionsMixin
-from neos.coding.loop._durable.usage import check_usage_budgets, price_tokens
+from neos.coding.loop._durable.usage import check_usage_budgets
 from neos.coding.loop._durable.worktree import (
     _session_on_workspace as _session_on_workspace,
 )
@@ -504,33 +503,12 @@ class DurableCodingLoop(
             result = dict(rewritten)
         return redact_sensitive(result)
 
-    # -- budgets and windows -----------------------------------------------
-
-    def _price_tokens(
-        self,
-        input_tokens: int,
-        output_tokens: int,
-        *,
-        cache_read_tokens: int = 0,
-        cache_write_tokens: int = 0,
-    ) -> int:
-        return price_tokens(
-            self._config,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_write_tokens=cache_write_tokens,
-        )
-
-    def _check_usage_budgets(self, state):
-        check_usage_budgets(self._config, state)
-
     async def _enforce_usage_budgets_after_child_spend(
         self, state, deps, bound, input, *, except_tool_call_id: str | None = None
     ) -> None:
         # Production returns on first phase.completed; a post-yield check never runs.
         try:
-            self._check_usage_budgets(state)
+            check_usage_budgets(self._config, state)
         except CodingLoopFailure as error:
             await self.fail_all_live_spawn_claims(
                 state,
@@ -541,23 +519,6 @@ class DurableCodingLoop(
                 except_tool_call_id=except_tool_call_id,
             )
             raise
-
-    def _transcript_token_limit(self) -> int:
-        usable = usable_window_tokens(
-            context_window=self._config.context_window,
-            max_output_tokens=self._config.max_output_tokens,
-            input_limit=self._config.input_limit,
-            thinking_budget=self._config.thinking_budget,
-        )
-        if usable is None:
-            return self._config.max_transcript_tokens
-        return usable
-
-    def _parent_headroom_chars(self, state: AgentLoopState) -> int:
-        remaining = max(
-            0, self._transcript_token_limit() - max(0, state.last_prompt_tokens)
-        )
-        return remaining * 4
 
     def _utc_stamp(self) -> str:
         return self._clock().astimezone(UTC).isoformat()

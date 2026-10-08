@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from neos.coding.loop import initial_state
+from neos.coding.loop import initial_state, parent_headroom_chars, transcript_token_limit, check_usage_budgets, price_tokens
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -65,16 +65,16 @@ def test_usage_budget_counts_cache_and_reasoning() -> None:
         reasoning_tokens=0,
     )
 
-    h.loop._check_usage_budgets(state)
+    check_usage_budgets(h.config, state)
 
     with pytest.raises(CodingLoopFailure) as caught:
-        h.loop._check_usage_budgets(
-            replace(state, cache_read_tokens=6, cache_write_tokens=5)
+        check_usage_budgets(
+            h.config, replace(state, cache_read_tokens=6, cache_write_tokens=5)
         )
     assert caught.value.code == "token_budget_exceeded"
 
     # reasoning 은 output_tokens 의 내역이다 -- 더하면 thinking 을 두 번 센다.
-    h.loop._check_usage_budgets(replace(state, reasoning_tokens=10))
+    check_usage_budgets(h.config, replace(state, reasoning_tokens=10))
 
 
 def test_cost_prices_cache_from_config_rates() -> None:
@@ -91,7 +91,8 @@ def test_cost_prices_cache_from_config_rates() -> None:
     )
     # 1M tokens × rate_micros_per_million // 1M
     assert (
-        h.loop._price_tokens(
+        price_tokens(
+            h.config,
             1_000_000,
             1_000_000,
             cache_read_tokens=1_000_000,
@@ -149,11 +150,11 @@ def test_parent_headroom_chars_uses_last_prompt_remainder() -> None:
         initial_state(INPUT),
         last_prompt_tokens=usable - 200,
     )
-    assert h.loop._parent_headroom_chars(state) == 200 * 4
+    assert parent_headroom_chars(h.config, state) == 200 * 4
     empty = replace(state, last_prompt_tokens=0)
-    assert h.loop._parent_headroom_chars(empty) == usable * 4
+    assert parent_headroom_chars(h.config, empty) == usable * 4
     full = replace(state, last_prompt_tokens=usable + 10)
-    assert h.loop._parent_headroom_chars(full) == 0
+    assert parent_headroom_chars(h.config, full) == 0
 
 
 def test_compact_threshold_uses_usable_window_not_80k() -> None:
@@ -168,7 +169,7 @@ def test_compact_threshold_uses_usable_window_not_80k() -> None:
         ),
     )
     # usable = 40000 - 8192 - min(20000, 4000) = 27808
-    limit = h.loop._transcript_token_limit()
+    limit = transcript_token_limit(h.config)
     assert limit == 40_000 - 8_192 - 4_000
     short = (CanonicalMessage("user", (TextContent("x" * 100),)),)
     assert h.loop._over_budget(short) is False

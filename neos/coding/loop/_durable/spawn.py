@@ -41,7 +41,7 @@ from neos.coding.loop._durable.state import (
     DelegatedSpawn,
 )
 from neos.coding.loop._durable.transcript import _append_user_text
-from neos.coding.loop._durable.usage import price_tokens
+from neos.coding.loop._durable.usage import parent_headroom_chars, price_tokens
 from neos.coding.loop._durable.worktree import (
     _discard_lease,
     _lease_fields,
@@ -230,7 +230,7 @@ class SubagentSpawnMixin:
     async def _fold_child(self, run_id: str, state: AgentLoopState):
         return await self._subagents.fold(
             run_id,
-            parent_headroom_chars=self._parent_headroom_chars(state),
+            parent_headroom_chars=parent_headroom_chars(self._config, state),
             sibling_count=max(1, len(state.active_children or ())),
         )
 
