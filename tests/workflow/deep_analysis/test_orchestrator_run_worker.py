@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.stall import StallTracker
 from neos.workflow.deep_analysis.models import Assignment, Effort, WorkerResult, ProposedClaim
 
 class HangingWorker:
@@ -22,9 +23,9 @@ class BoomWorker:
     async def investigate(self, brief, effort, qid, repairs=None, question_text=""): raise RuntimeError("boom")
     def flush_partial(self, qid): return WorkerResult(question_id=qid, status="partial")
 
-def _orch(factory):
+def _orch(factory, **kwargs):
     return Orchestrator(session=None, run_id="r", worker_factory=factory, grader=None,
-                        ledger=object(), decompose_fn=lambda t: [])
+                        ledger=object(), decompose_fn=lambda t: [], **kwargs)
 
 @pytest.mark.asyncio
 async def test_timeout_yields_partial_with_buffer(monkeypatch):
@@ -49,8 +50,8 @@ async def test_exception_becomes_failed():
 
 @pytest.mark.asyncio
 async def test_non_failed_worker_result_resets_systemic_failure_rounds():
-    orch = _orch(lambda: BoomWorker())
-    orch.max_stall_rounds = 2
+    tracker = StallTracker(max_rounds=2)
+    orch = _orch(lambda: BoomWorker(), stall_tracker=tracker)
     failed = WorkerResult(question_id="q", status="failed")
     completed = WorkerResult(question_id="q", status="completed")
 
@@ -58,4 +59,4 @@ async def test_non_failed_worker_result_resets_systemic_failure_rounds():
     await orch._register_round_outcome([completed])
     await orch._register_round_outcome([failed])
 
-    assert orch._all_failed_rounds == 1
+    assert tracker.failed_rounds == 1

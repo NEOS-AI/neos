@@ -28,6 +28,7 @@ from .subagent_adapter import (
     latest_subagent_pointers,
     log_subagent_step,
 )
+from .stall import StallTracker, made_progress, snapshot
 from .synthesizer import Synthesizer
 from .token_budget import (
     TokenBudget,
@@ -348,6 +349,7 @@ class Orchestrator:
         sandbox_provider=None,
         research_runtime_factory=None,
         compose_runtime_factory=None,
+        stall_tracker: StallTracker | None = None,
     ) -> None:
         self.db = session
         self.run_id = run_id
@@ -396,20 +398,21 @@ class Orchestrator:
         self.max_stall_rounds = (
             config.max_stall_rounds if max_stall_rounds is None else max_stall_rounds
         )
-        # D15: per-question consecutive no-progress counter (in-memory, run
-        # scoped). Reset on any progress; at the cap the question is force
-        # terminated (SPLIT if depth allows, else abandon) to break the
-        # zero-token-partial and always-mismatch livelock classes.
-        self._stall_counts: dict[str, int] = {}
+        # D15: per-question consecutive no-progress counter and the run-scoped
+        # all-failed-rounds breaker live in the tracker (in-memory). At the cap
+        # the question is force terminated (SPLIT if depth allows, else
+        # abandon) to break the zero-token-partial and always-mismatch
+        # livelock classes; the tracker only decides, this class acts.
+        self.stall = (
+            stall_tracker
+            if stall_tracker is not None
+            else StallTracker(self.max_stall_rounds)
+        )
         # M4 §6.7: global conflict-reinvestigation counter (run scoped). At
         # most `conflict_reinvestigation_cap` extra investigation rounds may be
         # spent resolving equal-tier conflicts before the report is assembled
         # with both-sides annotations only.
         self._reinvestigation_count = 0
-        # Run-scoped circuit breaker for systemic failures. Question-level
-        # fail_streak already drives SPLIT; counting all-failed rounds here
-        # prevents a shared dependency outage from expanding that tree.
-        self._all_failed_rounds = 0
         self._token_budget_exhausted_logged = False
         self._investigation_stopped_at_floor_logged = False
         self._investigation_stopped_at_input_bound_logged = False
@@ -1256,53 +1259,6 @@ class Orchestrator:
             {"qid": question.id, "children": child_ids},
         )
 
-    async def _verified_count(self, question_id: str) -> int | None:
-        """Verified-claim count for the stall signal. Returns None when the
-        (possibly faked) ledger does not expose `verified_claims`, which makes
-        `_made_progress` treat the signal as changed and effectively disables
-        the valve for minimal test doubles."""
-        fn = getattr(self.ledger, "verified_claims", None)
-        if fn is None:
-            return None
-        return len(await fn(question_id))
-
-    async def _feedback_signal(self, question_id: str) -> int | None:
-        fn = getattr(self.ledger, "feedback_count", None)
-        if fn is None:
-            return None
-        return await fn(question_id)
-
-    async def _made_progress(
-        self,
-        question_id: str,
-        spent_before: int,
-        verified_before: int | None,
-        feedback_before: int | None,
-    ) -> bool:
-        """A pass made progress iff it produced a new verified claim, new
-        rejection feedback, or burned tokens. An inert pass (partial with 0
-        tokens/0 claims, or a mismatch-skipped assignment) fails all three.
-        Unavailable signals (limited fakes) count as progress -> no stall."""
-        question = await self.ledger.get_question(question_id)
-        spent_after = question.spent_tokens if question is not None else spent_before
-        if spent_after > spent_before:
-            return True
-        verified_after = await self._verified_count(question_id)
-        if (
-            verified_before is None
-            or verified_after is None
-            or verified_after > verified_before
-        ):
-            return True
-        feedback_after = await self._feedback_signal(question_id)
-        if (
-            feedback_before is None
-            or feedback_after is None
-            or feedback_after > feedback_before
-        ):
-            return True
-        return False
-
     async def _register_progress(
         self,
         question_id: str,
@@ -1311,19 +1267,14 @@ class Orchestrator:
         """D15 stall safety valve: track consecutive no-progress passes and
         force-terminate at the cap so a livelocked question cannot spin to the
         global token cap."""
-        if made_progress:
-            self._stall_counts[question_id] = 0
-            return
-        count = self._stall_counts.get(question_id, 0) + 1
-        self._stall_counts[question_id] = count
-        if count >= self.max_stall_rounds:
+        if self.stall.record(question_id, made_progress):
             await self._force_terminate_stalled(question_id)
 
     async def _force_terminate_stalled(self, question_id: str) -> None:
         question = await self.ledger.get_question(question_id)
         if question is None or question.status != "open":
             return
-        rounds = self._stall_counts.get(question_id, 0)
+        rounds = self.stall.count(question_id)
         await self.ledger.log(
             "stall_terminated",
             question_id,
@@ -1333,7 +1284,7 @@ class Orchestrator:
             "stall_terminated",
             {"qid": question_id, "rounds": rounds},
         )
-        self._stall_counts[question_id] = 0
+        self.stall.clear(question_id)
         if self.subagent_runtime is not None:
             child_run_id, _checkpoint = await latest_subagent_pointers(
                 self.ledger, question_id
@@ -1353,16 +1304,15 @@ class Orchestrator:
         """Stop a run when every assigned worker repeatedly fails."""
         if not results:
             return
-        if any(result.status != "failed" for result in results):
-            self._all_failed_rounds = 0
-            return
-        self._all_failed_rounds += 1
-        if self._all_failed_rounds < self.max_stall_rounds:
+        rounds = self.stall.record_round(
+            all(result.status == "failed" for result in results)
+        )
+        if rounds is None:
             return
 
         reasons = [(result.fail_reason or "unknown")[:200] for result in results]
         payload = {
-            "rounds": self._all_failed_rounds,
+            "rounds": rounds,
             "reasons": reasons,
         }
         await self.ledger.log(
@@ -1373,7 +1323,7 @@ class Orchestrator:
         await self._emit("systemic_failure_terminated", payload)
         await self._checkpoint()
         raise SystemicWorkerFailure(
-            f"all workers failed for {self._all_failed_rounds} consecutive rounds"
+            f"all workers failed for {rounds} consecutive rounds"
         )
 
     async def _run_round(self) -> bool:
@@ -1447,9 +1397,7 @@ class Orchestrator:
                 continue
             value_est = question.value_est
             # D15 progress snapshot (before this pass mutates state).
-            spent_before = question.spent_tokens
-            verified_before = await self._verified_count(assignment.question_id)
-            feedback_before = await self._feedback_signal(assignment.question_id)
+            before = await snapshot(self.ledger, question)
             if result.subagent_run_id:
                 await log_subagent_step(
                     self.ledger,
@@ -1529,15 +1477,12 @@ class Orchestrator:
             await self._regrade_pending(result.question_id, value_est)
             # D15: assess progress and trip the stall valve if this
             # question has made none for max_stall_rounds in a row.
-            made_progress = await self._made_progress(
-                assignment.question_id,
-                spent_before,
-                verified_before,
-                feedback_before,
+            progressed = await made_progress(
+                self.ledger, assignment.question_id, before
             )
             if result.subagent_step_kind == "continuing":
-                made_progress = True
-            await self._register_progress(assignment.question_id, made_progress)
+                progressed = True
+            await self._register_progress(assignment.question_id, progressed)
             for subq in result.proposed_subquestions:
                 await self.ledger.log(
                     "subq_proposed",
