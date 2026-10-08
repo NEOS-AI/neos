@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-import neos.workflow.deep_analysis.orchestrator as orch_mod
+import neos.workflow.deep_analysis.report_writer as report_writer_mod
 from neos.config.settings import settings
 from neos.workflow.deep_analysis.citation import OrphanCitationError
 from neos.workflow.deep_analysis.ledger import (
@@ -21,10 +21,8 @@ from neos.workflow.deep_analysis.ledger import (
     _TERMINAL_STATUSES,
 )
 from neos.workflow.deep_analysis.models import NodeSummary, Verdict
-from neos.workflow.deep_analysis.orchestrator import (
-    Orchestrator,
-    _best_rejected_draft,
-)
+from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.report_writer import _best_rejected_draft
 from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
@@ -542,7 +540,7 @@ async def test_conflict_reinvestigation_is_globally_capped_at_one(monkeypatch):
     async def always_reinvestigate(_ledger, summary, _tiers):
         return summary, ["subq0001"]
 
-    monkeypatch.setattr(orch_mod, "resolve_conflicts", always_reinvestigate)
+    monkeypatch.setattr(report_writer_mod, "resolve_conflicts", always_reinvestigate)
 
     rounds = {"n": 0}
 
@@ -587,7 +585,7 @@ async def test_reinvestigation_gate_is_event_based_and_durable(monkeypatch):
     async def always_reinvestigate(_ledger, summary, _tiers):
         return summary, ["subq0001"]
 
-    monkeypatch.setattr(orch_mod, "resolve_conflicts", always_reinvestigate)
+    monkeypatch.setattr(report_writer_mod, "resolve_conflicts", always_reinvestigate)
 
     rounds = {"n": 0}
 
@@ -762,7 +760,7 @@ async def test_a_starved_reinvestigation_round_does_not_kill_the_run(monkeypatch
     async def always_reinvestigate(_ledger, summary, _tiers):
         return summary, ["subq0001"]
 
-    monkeypatch.setattr(orch_mod, "resolve_conflicts", always_reinvestigate)
+    monkeypatch.setattr(report_writer_mod, "resolve_conflicts", always_reinvestigate)
 
     async def starved_round():
         raise TokenBudgetExhausted("cap", cause="input_bound")
@@ -835,7 +833,7 @@ async def test_the_limits_section_speaks_to_a_reader_not_the_ledger():
     원장 쪽 문자열은 그대로 둔다(D28 이 정지 사유를 기계가 읽게 만든 자리다).
     바꾸는 것은 독자에게 보여줄 때뿐이고, 같은 줄의 반복도 접는다.
     """
-    from neos.workflow.deep_analysis.orchestrator import _reader_facing_caveats
+    from neos.workflow.deep_analysis.report_writer import _reader_facing_caveats
 
     out = _reader_facing_caveats(
         ["input_bound", "input_bound", "미확인: EUR-Lex 원문", "input_bound"]
