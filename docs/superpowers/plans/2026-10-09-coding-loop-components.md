@@ -122,7 +122,7 @@ class ToolCatalog:
 
 ```bash
 grep -rnoE '\bloop\._tool_definitions\b' tests | wc -l     # 0
-uv run pytest tests/coding/loop tests/coding/connectors -q -p no:randomly
+uv run pytest tests/coding/loop tests/coding/connectors -q
 uv run ruff check neos/coding/loop tests/coding
 git add -A neos/coding/loop tests/coding
 git commit -m "refactor(coding): the tool catalog is a component the loop holds, not a mixin"
@@ -203,7 +203,7 @@ Run → FAIL (`ImportError: cannot import name 'parent_headroom_chars'`).
 
 ```bash
 grep -rnoE '\bloop\.(_check_usage_budgets|_price_tokens|_transcript_token_limit|_parent_headroom_chars)\b' tests | wc -l   # 0
-uv run pytest tests/coding/loop tests/standing -q -p no:randomly
+uv run pytest tests/coding/loop tests/standing -q
 uv run ruff check neos/coding/loop tests/coding tests/standing
 git add -A neos/coding/loop tests/coding tests/standing
 git commit -m "refactor(coding): usage and window limits are functions of the config, not loop methods"
@@ -309,7 +309,7 @@ async def test_a_compactor_without_hooks_still_compacts_after_prompt_too_long() 
 ```bash
 grep -rnoE '\bloop\.(_compact_after_prompt_too_long|_compact|_maybe_llm_compact|_compact_with_hook|_over_budget|_compaction_request|_estimated_tokens|_digest)\b' tests | wc -l   # 0
 grep -rnoE '\bloop\.(_shrink_old_tool_results|_expand_artifact_refs|_maybe_ref_latest_tool_result)\b' tests | wc -l   # 0
-uv run pytest tests/coding tests/standing -q -p no:randomly
+uv run pytest tests/coding tests/standing -q
 uv run ruff check neos/coding tests/coding tests/standing
 git add -A neos/coding/loop tests/coding tests/standing
 git commit -m "refactor(coding): compaction is a Compactor component; its primitives are public functions"
@@ -394,7 +394,7 @@ async def test_the_harness_components_match_the_loop_run() -> None:
 ```bash
 grep -rnoE '\bloop\._restore\(' tests | wc -l                         # 0
 grep -rhE '^class \w+Mixin' neos/coding/loop/_durable | wc -l         # 6
-uv run pytest tests/coding tests/standing -q -p no:randomly
+uv run pytest tests/coding tests/standing -q
 uv run ruff check neos/coding tests/coding tests/standing
 git add -A neos/coding/loop tests/coding tests/standing
 git commit -m "refactor(coding): restore_state completes the public checkpoint seam; the loop delegates and _dump_state goes"
