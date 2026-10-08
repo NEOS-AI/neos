@@ -207,6 +207,8 @@ class Orchestrator:
         self.max_stall_rounds = (
             config.max_stall_rounds if max_stall_rounds is None else max_stall_rounds
         )
+        # `self.stall.max_rounds` is the cap that counts (an injected tracker
+        # brings its own); `max_stall_rounds` only seeds the default tracker.
         # D15: per-question consecutive no-progress counter and the run-scoped
         # all-failed-rounds breaker live in the tracker (in-memory). At the cap
         # the question is force terminated (SPLIT if depth allows, else

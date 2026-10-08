@@ -29,6 +29,7 @@ from neos.workflow.deep_analysis.compose_worker import (
     run_compose_worker,
 )
 from neos.workflow.deep_analysis.models import NodeSummary
+from neos.workflow.deep_analysis.orchestrator import Orchestrator
 from neos.workflow.deep_analysis.research_session import CommandLimits
 from tests.workflow.deep_analysis.test_orchestrator_m4 import (
     FakeLedger,
@@ -261,6 +262,58 @@ async def test_with_the_flag_on_the_compose_child_writes_the_draft(monkeypatch):
     kinds = [(k, p.get("spec")) for (k, _q, p) in ledger.events if k.startswith("code_worker")]
     assert kinds == [("code_worker_started", "compose"), ("code_worker_submitted", "compose")]
     assert seen["root_id"] == "root0001" and seen["root_summary"] == "루트 요약"
+
+
+def test_the_orchestrator_hands_the_report_writer_its_dependencies():
+    ledger, synth, renderer, grader = ClaimLedger(), FakeSynth(_summaries()), FlakyRenderer(0), OkGrader()
+    provider, factory = MemoryProvider(), (lambda port: None)
+    orch = Orchestrator(
+        object(),
+        "run00001",
+        worker_factory=lambda: None,
+        grader=object(),
+        ledger=ledger,
+        synthesizer=synth,
+        citation_renderer=renderer,
+        report_grader=grader,
+        sandbox_provider=provider,
+        compose_runtime_factory=factory,
+    )
+    rw = orch.report_writer
+    assert rw.sandbox_provider is provider
+    assert rw.compose_runtime_factory is factory
+    assert rw.report_grader is grader
+    assert rw.ledger is orch.ledger
+    assert rw.synthesizer is orch.synthesizer
+    assert rw.citation_renderer is orch.citation_renderer
+
+
+async def test_through_the_orchestrator_the_compose_child_writes_the_draft(monkeypatch):
+    monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
+
+    async def fake(**kwargs):
+        return "COMPOSED [C:c1aaaaaa]\n\n## 출처", {"steps": 1, "cited_verified": 1}
+
+    monkeypatch.setattr(compose_worker, "run_compose_worker", fake)
+    ledger, synth = ClaimLedger(), FakeSynth(_summaries())
+    orch = Orchestrator(
+        object(),
+        "run00001",
+        worker_factory=lambda: None,
+        grader=object(),
+        ledger=ledger,
+        synthesizer=synth,
+        citation_renderer=FlakyRenderer(0),
+        report_grader=OkGrader(),
+        sandbox_provider=MemoryProvider(),
+        compose_runtime_factory=lambda port: None,
+    )
+
+    report = await orch._finalize("root0001")
+
+    assert "COMPOSED" in report and synth.assemble_calls == 0
+    kinds = [(k, p.get("spec")) for (k, _q, p) in ledger.events if k.startswith("code_worker")]
+    assert kinds == [("code_worker_started", "compose"), ("code_worker_submitted", "compose")]
 
 
 async def test_a_failing_compose_child_falls_back_to_assemble_once_and_says_so(monkeypatch):

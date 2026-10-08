@@ -1,9 +1,10 @@
-"""M4 Task 5: Orchestrator._finalize -- hierarchical reduce + bounded conflict
-reinvestigation + assembly retry loop (AC-c).
+"""M4 Task 5: hierarchical reduce + bounded conflict reinvestigation +
+assembly retry loop (AC-c).
 
-These are contract tests driven straight through `_finalize` with a fake synth
-seam (reduce_tree/assemble), a fake citation renderer, and a fake report
-grader -- no real LLM/network call happens. The reinvestigation cap is proven
+The report-writing tests drive `ReportWriter` directly; the reinvestigation
+tests still go through `Orchestrator._finalize`. Both use a fake synth seam
+(reduce_tree/assemble), a fake citation renderer, and a fake report grader --
+no real LLM/network call happens. The reinvestigation cap is proven
 by monkeypatching `resolve_conflicts` to report a persistent conflict and
 asserting only one extra investigation round is spent.
 """
@@ -33,7 +34,7 @@ from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 _CLAIM_MARKER = re.compile(r"\[C:([0-9a-f]{8})\]")
 
-# `_finalize` 는 `report_retry_cap + 1` 회 시도한다. 설정에서 읽어야
+# 리포트 작성기(`ReportWriter`)는 `report_retry_cap + 1` 회 시도한다. 설정에서 읽어야
 # 캡을 조정할 때 테스트가 조용히 낡지 않는다.
 _ATTEMPTS = settings.config.deep_analysis.report_retry_cap + 1
 
@@ -686,7 +687,7 @@ class DegradedJudgeGrader:
 async def test_report_graded_event_persists_the_judge_budget_marker():
     """FIX 1: the existing report-grader test asserted `verdict.detail` in
     process, which is exactly what let this slip through -- the orchestrator's
-    `report_graded` sink (orchestrator.py:886-902) logs `ok`, `attempt`,
+    `report_graded` sink (the report-writing loop in report_writer.py) logs `ok`, `attempt`,
     `code`, and `**verdict.diagnostics`, and never reads `detail` at all.
 
     This asserts the marker at the level that actually matters: what lands in
@@ -874,7 +875,7 @@ async def test_the_limits_section_speaks_to_a_reader_not_the_ledger():
 
 @pytest.mark.asyncio
 async def test_collect_caveats_hands_the_report_reader_facing_text():
-    """`_collect_caveats` 가 경계다 -- 원장 어휘가 리포트 내용이 되는 지점."""
+    """`collect_caveats` 가 경계다 -- 원장 어휘가 리포트 내용이 되는 지점."""
     ledger = FakeLedger()
     summaries = {
         "q1": NodeSummary("q1", "답", [], 0.5, ["input_bound"]),
