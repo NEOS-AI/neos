@@ -226,7 +226,7 @@ def harness(
 def checkpoint_for(state, *, input=INPUT, checkpoint_id="cc_test") -> CodingCheckpoint:
     """A stored checkpoint that holds `state` -- the way a test starts a run at state X."""
     return CodingCheckpoint(
-        checkpoint_id, "ct_1", "cr_1", 1, encode_state(input, state), "1", NOW
+        checkpoint_id, input.task_id, input.run_id, 1, encode_state(input, state), "1", NOW
     )
 
 
