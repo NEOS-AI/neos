@@ -107,6 +107,20 @@ class Harness:
 루프가 컴포넌트를 짓는 방식과 하네스가 짓는 방식이 갈라지면 안 된다 — 둘 다 **같은 생성자와 같은 기본값**(기본값은 컴포넌트 안에 산다, 예: `hooks=None → NullCodingHooks()`)을 쓰고,
 §4.3 의 고정 테스트가 그것을 지킨다.
 
+### 3.5b 계획 때 더한 판정(2026-10-09)
+
+- **공개 이름은 옛 이름에서 밑줄만 뗀다**(`_compact_after_prompt_too_long` → `compact_after_prompt_too_long`, `_tool_definitions` → `definitions` 만 예외 —
+  카탈로그 안에서 `tool_` 은 중복이다). §3.1·§3.2 의 예시 이름(`after_prompt_too_long` 등)보다 이것이 우선한다 — 이름 바꾸기를 최소로 해서
+  옮김을 기계적으로 대조할 수 있게 한다. `Compactor` 의 공개 메서드: `compact_after_prompt_too_long`, `head_drop_after_prompt_too_long`
+  (모델 턴이 부른다), `compact_with_hook`(전이가 부른다), `compact`, `over_budget`, `require_transcript_fit`, `maybe_llm_compact`,
+  `compaction_request`(테스트가 요청 모양을 시험한다 — 요약 컴팩션이 모델에 무엇을 보내는지는 독립된 개념이다).
+- **`CompactionMixin` 의 staticmethod 별칭**(`_shrink_old_tool_results`, `_expand_artifact_refs`, `_maybe_ref_latest_tool_result`,
+  `_compact_ref_path`, `_drop_oldest_prefix_turn`, `_serialized_bytes`, `_estimated_tokens`, `_digest`)은 믹스인과 함께 사라진다.
+  루프 안의 `self.` 호출(`_digest` 5곳, `_maybe_ref_latest_tool_result` 1곳)은 모듈 함수 호출로, 테스트의 `loop.` 호출
+  (`_shrink_old_tool_results` 5, `_expand_artifact_refs` 2, `_maybe_ref_latest_tool_result` 1, `_estimated_tokens` 1, `_digest` 2)은
+  `neos.coding.loop` 가 재수출하는 공개 이름(`shrink_old_tool_results`, `expand_artifact_refs`, `maybe_ref_latest_tool_result`,
+  `estimated_tokens`, `transcript_digest`)으로 옮긴다. 지표에 "별칭" 줄을 더한다(8 → 0, `_estimated_tokens`·`_digest` 는 컴팩션 줄에 이미 있다).
+
 ### 3.6 이주 규칙
 
 | 지금 | 바꾼 뒤 |
@@ -131,6 +145,7 @@ class Harness:
 | 컴팩션 private | `grep -rnoE '\bloop\.(_compact_after_prompt_too_long\|_compact\|_maybe_llm_compact\|_compact_with_hook\|_over_budget\|_compaction_request\|_estimated_tokens\|_digest)\b' tests \| wc -l` | 25 | 0 |
 | 카탈로그 private | `grep -rnoE '\bloop\._tool_definitions\b' tests \| wc -l` | 8 | 0 |
 | 사용량 private | `grep -rnoE '\bloop\.(_check_usage_budgets\|_price_tokens\|_transcript_token_limit\|_parent_headroom_chars)\b' tests \| wc -l` | 8 | 0 |
+| 별칭 private | `grep -rnoE '\bloop\.(_shrink_old_tool_results\|_expand_artifact_refs\|_maybe_ref_latest_tool_result)\b' tests \| wc -l` | 8 | 0 |
 | 체크포인트 복원 private | `grep -rnoE '\bloop\._restore\(' tests \| wc -l` | 25 | 0 |
 | 믹스인 수 | `grep -rhE '^class \w+Mixin' neos/coding/loop/_durable \| wc -l` | 8 | 6 |
 | `self._dump_state` | `grep -rnoE 'self\._dump_state\(' neos \| wc -l` | 7 | 0 |
