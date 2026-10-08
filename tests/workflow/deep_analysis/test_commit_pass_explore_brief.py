@@ -9,7 +9,9 @@ import pytest
 
 from neos.workflow.deep_analysis.ledger import Ledger
 from neos.workflow.deep_analysis.models import WorkerResult
+from neos.config.settings import settings
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.stall import Progress, StallTracker, made_progress
 
 
 pytestmark = pytest.mark.no_db
@@ -204,6 +206,25 @@ async def test_explore_brief_is_not_a_dead_end() -> None:
     assert memory == [dead_end]
 
 
+class _RecordingTracker(StallTracker):
+    def __init__(self, max_rounds):
+        super().__init__(max_rounds)
+        self.registered: list[tuple[str, bool]] = []
+
+    def record(self, question_id, made_progress):
+        self.registered.append((question_id, made_progress))
+        return super().record(question_id, made_progress)
+
+
+def _seeded_tracker(question_id: str) -> _RecordingTracker:
+    """Two no-progress passes already counted -- the same max as the constructor default."""
+    tracker = _RecordingTracker(settings.config.deep_analysis.max_stall_rounds)
+    tracker.record(question_id, False)
+    tracker.record(question_id, False)
+    tracker.registered.clear()
+    return tracker
+
+
 class _ContinuingWorker:
     def __init__(self, tokens_spent: int) -> None:
         self.tokens_spent = tokens_spent
@@ -229,6 +250,7 @@ async def test_continuing_plus_tokens_is_progress() -> None:
 
     question = _Question(id="qid00001", text="What?", status="open", cap_tokens=999_999)
     ledger = _MemoryLedger(question)
+    tracker = _seeded_tracker(question.id)
     orchestrator = Orchestrator(
         session=None,
         run_id="run00001",
@@ -237,27 +259,19 @@ async def test_continuing_plus_tokens_is_progress() -> None:
         ledger=ledger,
         decompose_fn=lambda _text: [],
         global_token_cap=10_000,
+        stall_tracker=tracker,
     )
-    registered: list[tuple[str, bool]] = []
-    original = orchestrator._register_progress
-
-    async def spy(question_id, made_progress):
-        registered.append((question_id, made_progress))
-        await original(question_id, made_progress)
-
-    orchestrator._register_progress = spy
-    orchestrator._stall_counts[question.id] = 2
 
     question.spent_tokens = 40
-    assert await orchestrator._made_progress(question.id, 0, 1, 0) is True
+    assert await made_progress(ledger, question.id, Progress(0, 1, 0)) is True
     question.spent_tokens = 0
-    assert await orchestrator._made_progress(question.id, 0, 1, 0) is False
+    assert await made_progress(ledger, question.id, Progress(0, 1, 0)) is False
 
     ran = await orchestrator._run_round()
 
     assert ran is True
-    assert registered == [(question.id, True)]
-    assert orchestrator._stall_counts[question.id] == 0
+    assert tracker.registered == [(question.id, True)]
+    assert tracker.count(question.id) == 0
     assert question.spent_tokens == 40
 
 
@@ -324,6 +338,7 @@ async def test_continuing_with_zero_tokens_is_still_progress() -> None:
     """continuing counts as progress even when tokens_spent stays 0."""
     question = _Question(id="qid00001", text="What?", status="open", cap_tokens=999_999)
     ledger = _MemoryLedger(question)
+    tracker = _seeded_tracker(question.id)
     orchestrator = Orchestrator(
         session=None,
         run_id="run00001",
@@ -332,25 +347,17 @@ async def test_continuing_with_zero_tokens_is_still_progress() -> None:
         ledger=ledger,
         decompose_fn=lambda _text: [],
         global_token_cap=10_000,
+        stall_tracker=tracker,
     )
-    registered: list[tuple[str, bool]] = []
-    original = orchestrator._register_progress
-
-    async def spy(question_id, made_progress):
-        registered.append((question_id, made_progress))
-        await original(question_id, made_progress)
-
-    orchestrator._register_progress = spy
-    orchestrator._stall_counts[question.id] = 2
 
     assert question.spent_tokens == 0
-    assert await orchestrator._made_progress(question.id, 0, 1, 0) is False
+    assert await made_progress(ledger, question.id, Progress(0, 1, 0)) is False
 
     ran = await orchestrator._run_round()
 
     assert ran is True
-    assert registered == [(question.id, True)]
-    assert orchestrator._stall_counts[question.id] == 0
+    assert tracker.registered == [(question.id, True)]
+    assert tracker.count(question.id) == 0
     assert question.spent_tokens == 0
 
 

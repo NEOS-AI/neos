@@ -56,7 +56,7 @@ _LIMITS_SCORING_BOUNDARY = re.compile(
 )
 
 # The harness-owned list of resolved sub-questions (W3-l,
-# `orchestrator._QUESTIONS_HEADING`). Excluded for the same reason as the
+# `report_writer._QUESTIONS_HEADING`). Excluded for the same reason as the
 # limits section: it is a list of questions, not factual assertions, so no
 # verified claim stands behind its lines and demanding citations on them is
 # an impossible requirement.

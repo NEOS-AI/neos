@@ -505,7 +505,7 @@ if result.subagent_step_kind == "continuing":
     made_progress = True
 ```
 
-`tokens_spent=outcome.tokens_delta` is already added in `commit_pass`. Leave both. A continuing explore that spent tokens is progress, not a stall. Tests must pin this; do not "simplify" `_made_progress` by ignoring `subagent_step_kind`.
+`tokens_spent=outcome.tokens_delta` is already added in `commit_pass`. Leave both. A continuing explore that spent tokens is progress, not a stall. Tests must pin this; do not "simplify" `stall.made_progress` (and the `continuing` override in `Orchestrator._run_round`) by ignoring `subagent_step_kind`.
 
 DA fan-out of assignments stays `asyncio.gather` of `_run_worker`. Each worker still does **one** `advance`. That is DA's existing long-job shape, not a coding 300s slot. Do not change it to serial-one-child in this wave.
 

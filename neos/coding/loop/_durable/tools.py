@@ -57,6 +57,7 @@ from neos.coding.loop._durable.children import (
     _upsert_active_child,
     _without_child,
 )
+from neos.coding.loop.checkpoint import encode_state
 from neos.coding.loop._durable.signatures import _is_stall_denied
 from neos.coding.loop._durable.state import (
     CodingLoopFailure,
@@ -192,7 +193,7 @@ class ToolExecutionMixin:
     def _static_denial(self, call, state) -> tuple[str | None, ValidatedToolCall | None]:
         if not tool_allowed_in_phase(call.name, state.phase):
             return "policy_phase_denied", None
-        if not self._tool_allowed_by_skills(call.name, state):
+        if not self._catalog.allowed_by_skills(call.name, state):
             return "policy_skill_denied", None
         try:
             validated = self._tools.validate(call.name, call.input)
@@ -280,7 +281,7 @@ class ToolExecutionMixin:
                 lease=deps.lease,
                 tool_call=call,
                 validated=validated,
-                loop_state=self._dump_state(input, state),
+                loop_state=encode_state(input, state),
                 workspace_revision=str(bound.binding.workspace_revision),
                 requested_at=now,
                 expires_at=now + timedelta(seconds=self._config.approval_ttl_sec),
@@ -417,7 +418,7 @@ class ToolExecutionMixin:
             lease=deps.lease,
             tool_call=call,
             validated=validated,
-            loop_state=self._dump_state(input, state),
+            loop_state=encode_state(input, state),
             workspace_revision=str(bound.binding.workspace_revision),
             agent_id=input.agent_id,
             reply_session_id=destination.session_id,
@@ -608,7 +609,7 @@ class ToolExecutionMixin:
             phase=started.phase,
             tool_call_id=call.tool_call_id,
             result=payload,
-            loop_state=self._dump_state(input, parked),
+            loop_state=encode_state(input, parked),
             workspace_revision=str(bound.binding.workspace_revision),
             now=self._clock(),
         )
@@ -693,7 +694,7 @@ class ToolExecutionMixin:
             phase=started.phase,
             tool_call_id=call.tool_call_id,
             result=result,
-            loop_state=self._dump_state(input, after),
+            loop_state=encode_state(input, after),
             workspace_revision=revision,
             now=self._clock(),
         )
@@ -792,7 +793,7 @@ class ToolExecutionMixin:
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
-            if not self._tool_allowed_by_skills(call.name, state):
+            if not self._catalog.allowed_by_skills(call.name, state):
                 break
             try:
                 validated = self._tools.validate(call.name, call.input)
@@ -920,7 +921,7 @@ class ToolExecutionMixin:
             phase=started.phase,
             tool_call_id=last_call.tool_call_id,
             result=last_result,
-            loop_state=self._dump_state(input, current),
+            loop_state=encode_state(input, current),
             workspace_revision=revision,
             now=self._clock(),
         )
@@ -973,7 +974,7 @@ class ToolExecutionMixin:
                 phase=started.phase,
                 tool_call_id=call.tool_call_id,
                 result=result,
-                loop_state=self._dump_state(input, after),
+                loop_state=encode_state(input, after),
                 workspace_revision=str(bound.binding.workspace_revision),
                 now=self._clock(),
             )
@@ -1079,7 +1080,7 @@ class ToolExecutionMixin:
             return None
         if not tool_allowed_in_phase(call.name, state.phase):
             return None
-        if not self._tool_allowed_by_skills(call.name, state):
+        if not self._catalog.allowed_by_skills(call.name, state):
             return None
         try:
             validated = self._tools.validate(call.name, call.input)

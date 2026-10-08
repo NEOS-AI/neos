@@ -124,7 +124,7 @@ def test_phases_that_hide_execute_hide_the_device_command(phase, shown) -> None:
 
     h = _loop(_end_turn(), CommandRelay(_commander()))
     state = AgentLoopState((), 0, 0, 0, (), 0, "", phase=phase, device_bridge=_commander())
-    names = [getattr(d, "name", d) for d in h.loop._tool_definitions(state)]
+    names = [getattr(d, "name", d) for d in h.catalog().definitions(state)]
 
     assert "device_read_file.v1" in names and (RUN in names) is shown
     assert tool_allowed_in_phase(RUN, phase) is shown

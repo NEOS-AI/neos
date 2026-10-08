@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from neos.coding.loop import initial_state
+from neos.coding.loop import initial_state, transcript_digest
 from neos.coding.model.anthropic import _to_anthropic_request
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -121,7 +121,7 @@ def test_editing_earlier_history_strips_thinking() -> None:
     again = h.loop._guard_thinking_prefix(edited, "code", ())
 
     assert not _has_thinking(again.transcript)
-    assert again.transcript_digest == h.loop._digest(again.transcript)
+    assert again.transcript_digest == transcript_digest(again.transcript)
 
 
 def test_changing_the_system_prompt_strips_thinking_once() -> None:

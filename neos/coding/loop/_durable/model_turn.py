@@ -56,6 +56,7 @@ from neos.coding.phases import (
     plan_text_has_body,
 )
 from neos.coding.prompts import inject_previous_summary
+from neos.coding.loop._durable.codec import _transcript_digest
 from neos.coding.loop._durable.hook_decisions import parse_stop_decision
 from neos.coding.loop._durable.state import (
     EMPTY_RETRY_LIMIT,
@@ -67,7 +68,7 @@ from neos.coding.loop._durable.transcript import (
     _is_empty_or_think_only,
     _scrub_think_blocks,
 )
-from neos.coding.loop._durable.usage import with_turn_usage
+from neos.coding.loop._durable.usage import check_usage_budgets, with_turn_usage
 
 # One status line's worth. `max_text_delta_bytes` governs durable model text
 # and is three orders of magnitude too large for this.
@@ -280,7 +281,7 @@ class ModelTurnMixin:
         return commit.status_event
 
     async def _advance_one_model_turn(self, input, state, bound, deps):
-        self._check_usage_budgets(state)
+        check_usage_budgets(self._config, state)
         if state.turn_count >= self._config.max_turns:
             raise CodingLoopFailure("turn_budget_exceeded", retryable=False)
         # 멈춤 자리(Q10b·Q5b). 봉투가 먼저다(MP4): 둘이 같은 턴에 멈추려 해도 멈춤
@@ -375,7 +376,7 @@ class ModelTurnMixin:
                 state.transcript
                 + (CanonicalMessage("system", (SystemNoteContent(system_note),)),),
             )
-        tools = self._tool_definitions(state)
+        tools = self._catalog.definitions(state)
         state = self._guard_thinking_prefix(state, system, tools)
         return state, system, tools
 
@@ -447,7 +448,7 @@ class ModelTurnMixin:
         self, fingerprint: str, messages: tuple[CanonicalMessage, ...]
     ) -> str:
         return hashlib.sha256(
-            f"{fingerprint}:{self._digest(messages)}".encode()
+            f"{fingerprint}:{_transcript_digest(messages)}".encode()
         ).hexdigest()
 
     def _model_limits(self, state: AgentLoopState) -> ModelLimits:
@@ -567,9 +568,9 @@ class ModelTurnMixin:
 
     async def _recover_prompt_too_long(self, state, error) -> AgentLoopState:
         if state.prompt_compact_retries < 1:
-            return await self._compact_after_prompt_too_long(state)
+            return await self._compactor.compact_after_prompt_too_long(state)
         if state.prompt_compact_retries < _PROMPT_TOO_LONG_RETRIES:
-            return self._head_drop_after_prompt_too_long(state)
+            return self._compactor.head_drop_after_prompt_too_long(state)
         raise CodingLoopFailure("prompt_too_long", retryable=False) from error
 
     def _record_turn_metric(self, completion: ModelCompleted) -> None:
@@ -600,7 +601,7 @@ class ModelTurnMixin:
                 instructions_loaded=True,
                 output_token_escalations=state.output_token_escalations + 1,
             )
-            self._check_usage_budgets(retry_state)
+            check_usage_budgets(self._config, retry_state)
             committed = await self._commit_model(
                 input, bound, deps, retry_state, _completion_payload(completion)
             )
@@ -609,7 +610,7 @@ class ModelTurnMixin:
         next_state = await self._completed_turn(
             state, turn.text_parts, turn.calls, completion, turn.thinking
         )
-        self._check_usage_budgets(next_state)
+        check_usage_budgets(self._config, next_state)
         prefetch = await self._await_prefetch(turn.prefetch_tasks)
         if completion.stop_reason == "refusal":
             # A refusal is an answer, not a truncated turn. It gets its own

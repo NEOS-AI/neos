@@ -52,16 +52,25 @@ def _skill_allowed_names(content: Mapping[str, object]) -> set[str]:
     return incoming
 
 
-class ToolCatalogMixin:
+class ToolCatalog:
+    """Which tools the model sees this step, and which a transcript has revealed.
+
+    Built from the registry and the loop config; holds no state of its own.
+    """
+
+    def __init__(self, tools, config) -> None:
+        self._tools = tools
+        self._config = config
+
     @staticmethod
-    def _tool_allowed_by_skills(name: str, state: AgentLoopState) -> bool:
+    def allowed_by_skills(name: str, state: AgentLoopState) -> bool:
         if not state.allowed_tools:
             return True
         if name == "load_skill.v1":
             return True
         return name in state.allowed_tools
 
-    def _tool_definitions(self, state: AgentLoopState):
+    def definitions(self, state: AgentLoopState):
         method = self._tools.definitions
         try:
             parameters = inspect.signature(method).parameters
@@ -107,7 +116,7 @@ class ToolCatalogMixin:
             definitions = tuple(
                 item
                 for item in definitions
-                if self._tool_allowed_by_skills(getattr(item, "name", item), state)
+                if self.allowed_by_skills(getattr(item, "name", item), state)
             )
         return definitions
 
@@ -123,7 +132,7 @@ class ToolCatalogMixin:
         except TypeError:
             return frozenset()
 
-    def _union_skill_allowed_tools(
+    def union_skill_allowed_tools(
         self, current: frozenset[str], content: Mapping[str, object]
     ) -> frozenset[str]:
         incoming = _skill_allowed_names(content)
@@ -135,7 +144,7 @@ class ToolCatalogMixin:
             merged &= set(registry)
         return frozenset(merged)
 
-    def _revealed_from_transcript(
+    def revealed_from(
         self, transcript: Sequence[CanonicalMessage]
     ) -> frozenset[str]:
         deferred = frozenset(self._tools.deferred_tool_names())
@@ -155,7 +164,7 @@ class ToolCatalogMixin:
                     names |= _entry_names(item.content)
         return frozenset(names)
 
-    def _announce_reveals(self, transcript, before, after):
+    def announce_reveals(self, transcript, before, after):
         """Append newly revealed tools instead of growing the tool array.
 
         Defined once because two call sites widen `revealed_tools`, and a

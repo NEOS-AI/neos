@@ -1,97 +1,20 @@
-"""Checkpoint restore, pending slash commands, and the abort checkpoint.
+"""Checkpoint restore delegation and the abort checkpoint.
 
-The wire format itself is `codec`; this mixin decides what a restore *does*
-with a stored state -- apply workspace edits, run a queued command -- and
-what the dump records as the task's instruction.
+The wire format is `codec`; what a restore does with a stored state is
+`neos.coding.loop.checkpoint.restore_state`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
 
-from neos.coding.loop.base import LoopInput
-from neos.coding.model.base import (
-    CanonicalMessage,
-    TextContent,
-    ToolResultContent,
-)
-from neos.coding.loop._durable.children import (
-    _drain_completed_prefix,
-    _sync_active_children,
-)
-from neos.coding.loop._durable.codec import (
-    _message_from_mapping,
-    _state_from_mapping,
-)
-from neos.coding.loop._durable.state import AgentLoopState
-from neos.coding.loop._durable.transcript import _append_user_text, _tool_result_ids
-from neos.coding.loop.checkpoint import (
-    _CLEARED_NOTICE,
-    _task_seed_text,
-    _with_workspace_edits,
-    encode_state,
-    initial_state,
-)
+from neos.coding.model.base import ToolResultContent
+from neos.coding.loop._durable.children import _drain_completed_prefix
+from neos.coding.loop._durable.transcript import _tool_result_ids
+from neos.coding.loop.checkpoint import initial_state, restore_state
 
 logger = logging.getLogger("neos.coding.loop.durable")
-
-
-def _note(state: AgentLoopState, text: str) -> AgentLoopState:
-    return replace(state, transcript=_append_user_text(state.transcript, text))
-
-
-def _compact_command(loop, input, state: AgentLoopState, decision) -> AgentLoopState:
-    from neos.coding.commands.parse import sanitize_command_args
-
-    bodies = dict(state.compacted_bodies)
-    after = loop._compact(state.transcript, force=True, bodies=bodies)
-    hint = sanitize_command_args(decision.parsed.args, max_len=240)
-    notice = (
-        f"Transcript compacted by /compact. Keep: {hint}"
-        if hint
-        else "Transcript compacted by /compact."
-    )
-    return replace(
-        state,
-        transcript=_append_user_text(after, notice),
-        compacted_bodies=bodies,
-        instructions_loaded=False,
-    )
-
-
-def _clear_command(loop, input, state: AgentLoopState, decision) -> AgentLoopState:
-    return replace(
-        state,
-        transcript=loop._cleared_transcript(input, state.transcript),
-        compacted_bodies={},
-        todos=(),
-        instructions_loaded=False,
-    )
-
-
-def _cost_command(loop, input, state: AgentLoopState, decision) -> AgentLoopState:
-    from neos.coding.commands.service import format_cost_parts
-
-    usage = {
-        "cost_micros": state.cost_micros,
-        "input_tokens": state.input_tokens,
-        "output_tokens": state.output_tokens,
-        "cache_read_tokens": state.cache_read_tokens,
-        "cache_write_tokens": state.cache_write_tokens,
-        "reasoning_tokens": state.reasoning_tokens,
-    }
-    return _note(state, " ".join(format_cost_parts(usage)))
-
-
-#: Slash commands a restore applies itself. Anything else the interpreter
-#: recognizes as a command is answered with its message and not run.
-_PENDING_COMMANDS = {
-    "compact": _compact_command,
-    "clear": _clear_command,
-    "cost": _cost_command,
-}
 
 
 class CheckpointMixin:
@@ -157,54 +80,6 @@ class CheckpointMixin:
     def _restore(self, input, checkpoint):
         if checkpoint is None:
             return initial_state(input)
-        raw = checkpoint.loop_state
-        transcript = _with_workspace_edits(
-            tuple(_message_from_mapping(item) for item in raw.get("transcript", [])),
-            input.workspace_edits,
+        return restore_state(
+            input, checkpoint, catalog=self._catalog, compactor=self._compactor
         )
-        state = _state_from_mapping(
-            raw,
-            transcript=transcript,
-            revealed=self._revealed_from_transcript(transcript),
-        )
-        # A queued instruction waits while a tool call is still open: it
-        # would otherwise land between the call and its result.
-        open_tool = bool(state.pending_tool_calls) and state.has_pending_tool
-        if state.pending_instruction is not None and not open_tool:
-            state = self._apply_pending_command(input, state, state.pending_instruction)
-            state = replace(
-                state,
-                pending_instruction=None,
-                terminal_pending=False,
-                transcript_digest=self._digest(state.transcript),
-                empty_retry_count=0,
-            )
-        return _sync_active_children(state, state.active_children)
-
-    def _apply_pending_command(
-        self, input: LoopInput, state: AgentLoopState, text: str
-    ) -> AgentLoopState:
-        from neos.coding.commands.interpret import interpret_coding_command
-        from neos.coding.commands.types import CommandDisposition
-
-        decision = interpret_coding_command(text)
-        if decision.disposition is CommandDisposition.CHAT:
-            return _note(state, text)
-        if decision.disposition is CommandDisposition.INJECT:
-            return _note(state, decision.inject_text)
-        spec_name = decision.spec.name if decision.spec is not None else ""
-        handler = _PENDING_COMMANDS.get(spec_name)
-        if handler is not None:
-            return handler(self, input, state, decision)
-        return _note(state, decision.message or "Command was not applied as user work.")
-
-    def _cleared_transcript(self, input: LoopInput, transcript=()):
-        seed = _task_seed_text(transcript, input)
-        messages: list[CanonicalMessage] = []
-        if seed:
-            messages.append(CanonicalMessage("user", (TextContent(seed),)))
-        messages.append(CanonicalMessage("user", (TextContent(_CLEARED_NOTICE),)))
-        return tuple(messages)
-
-    def _dump_state(self, input, state):
-        return encode_state(input, state)

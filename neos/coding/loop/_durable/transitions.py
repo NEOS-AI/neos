@@ -21,6 +21,8 @@ from neos.coding.model.base import (
 )
 from neos.coding.phases import parse_phase
 from neos.coding.sandbox.paths import normalize_workspace_path
+from neos.coding.loop._durable import artifact_refs
+from neos.coding.loop._durable.codec import _transcript_digest
 from neos.coding.loop._durable.signatures import _stall_fields
 from neos.coding.loop._durable.state import AgentLoopState
 from neos.coding.loop._durable.tool_catalog import _entry_names
@@ -69,7 +71,7 @@ def _reveal_tools(loop, state, tool_input, result) -> dict:
 
 def _allow_skill_tools(loop, state, tool_input, result) -> dict:
     return {
-        "allowed_tools": loop._union_skill_allowed_tools(
+        "allowed_tools": loop._catalog.union_skill_allowed_tools(
             state.allowed_tools, result.content
         )
     }
@@ -111,7 +113,7 @@ class TurnTransitionsMixin:
         return replace(
             state,
             transcript=transcript,
-            transcript_digest=self._digest(transcript),
+            transcript_digest=_transcript_digest(transcript),
             **changes,
         )
 
@@ -140,16 +142,16 @@ class TurnTransitionsMixin:
             transcript += (CanonicalMessage("assistant", tuple(content)),)
         bodies = dict(state.compacted_bodies)
         before_compact = transcript
-        transcript = await self._compact_with_hook(
+        transcript = await self._compactor.compact_with_hook(
             transcript, preserve_tools=bool(calls), bodies=bodies
         )
-        revealed = state.revealed_tools | self._revealed_from_transcript(
+        revealed = state.revealed_tools | self._catalog.revealed_from(
             before_compact
         )
         # Catches a reveal re-derived from the transcript, which is what a
         # resume does. Announcing only the delta keeps this from repeating
         # what the tool-result path already announced.
-        transcript = self._announce_reveals(
+        transcript = self._catalog.announce_reveals(
             transcript, state.revealed_tools, revealed
         )
         reset_empty = bool(calls) or not _is_empty_or_think_only(text)
@@ -176,12 +178,12 @@ class TurnTransitionsMixin:
     ):
         has_more_tools = state.pending_tool_index + 1 < len(state.pending_tool_calls)
         bodies = dict(state.compacted_bodies)
-        transcript = self._maybe_ref_latest_tool_result(
+        transcript = artifact_refs._maybe_ref_latest_tool_result(
             state.transcript + (CanonicalMessage("tool", (result,)),),
             tool_name=tool_name,
             bodies=bodies,
         )
-        transcript = await self._compact_with_hook(
+        transcript = await self._compactor.compact_with_hook(
             transcript,
             preserve_tools=has_more_tools,
             bodies=bodies,
@@ -202,7 +204,7 @@ class TurnTransitionsMixin:
                 effects.update(effect(self, state, tool_input, result))
         # The primary path: the search result that revealed the tool has
         # just been appended, so the announcement follows it directly.
-        transcript = self._announce_reveals(
+        transcript = self._catalog.announce_reveals(
             transcript,
             state.revealed_tools,
             effects.get("revealed_tools", state.revealed_tools),

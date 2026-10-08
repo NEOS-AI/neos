@@ -57,7 +57,7 @@ async def test_off_sends_the_legacy_request() -> None:
     config = AnthropicLoopConfig(model="claude-test", system="code", timeout_sec=120)
     h = harness(_reply("old style facts"), config=config)
 
-    after = await h.loop._compact_after_prompt_too_long(_state(h))
+    after = await h.compactor().compact_after_prompt_too_long(_state(h))
 
     request = h.model.requests[0]
     assert request.system == _LEGACY_SYSTEM
@@ -88,7 +88,7 @@ async def test_on_sends_the_official_instruction_and_the_configured_ceiling() ->
     )
     h = harness(_reply("<summary>kept</summary>"), config=config)
 
-    await h.loop._compact_after_prompt_too_long(_state(h))
+    await h.compactor().compact_after_prompt_too_long(_state(h))
 
     request = h.model.requests[0]
     assert request.system == COMPACTION_SUMMARY_INSTRUCTION
@@ -106,7 +106,7 @@ async def test_on_stores_what_is_inside_the_summary_tags() -> None:
         config=config,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(_state(h))
+    after = await h.compactor().compact_after_prompt_too_long(_state(h))
 
     assert after.summary == "user asked: keep the API stable"
 
@@ -138,14 +138,14 @@ async def test_a_summary_cut_at_its_ceiling_is_discarded() -> None:
     h = harness(_reply("<summary>(1) problems ... (4) sta", "max_tokens"), config=config)
     state = _state(h)
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     assert after.summary == ""
     assert after.llm_compact_attempts == 1
 
 
 def test_extraction_policy() -> None:
-    from neos.coding.loop._durable.compaction import extract_preserved_summary
+    from neos.coding.loop import extract_preserved_summary
 
     # 닫는 태그 뒤에서 잘렸다 -- 요약은 온전하다.
     assert extract_preserved_summary("<summary>a</summary> tra", "max_tokens") == "a"

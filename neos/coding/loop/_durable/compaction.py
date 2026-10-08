@@ -2,11 +2,11 @@
 
 Three escalating responses to a transcript that no longer fits:
 
-1. `_compact` -- shrink old tool results to refs, then drop the oldest turns.
+1. `Compactor.compact` -- shrink old tool results to refs, then drop the oldest turns.
    Runs after every turn and tool result; free when under budget.
-2. `_compact_after_prompt_too_long` -- the provider said no. Force (1), then
-   try one LLM summary of the prefix (`_maybe_llm_compact`).
-3. `_head_drop_after_prompt_too_long` -- the summary did not save us. Drop
+2. `Compactor.compact_after_prompt_too_long` -- the provider said no. Force (1), then
+   try one LLM summary of the prefix (`maybe_llm_compact`).
+3. `Compactor.head_drop_after_prompt_too_long` -- the summary did not save us. Drop
    one turn per retry until the retry budget in the model-turn path runs out.
 """
 
@@ -29,6 +29,7 @@ from neos.coding.model.base import (
     ToolUseContent,
     strip_thinking,
 )
+from neos.coding.hooks import NullCodingHooks
 from neos.coding.loop.hooks import (
     invoke_post_compact,
     invoke_pre_compact,
@@ -42,6 +43,7 @@ from neos.coding.loop._durable.codec import (
     _transcript_digest,
 )
 from neos.coding.loop._durable.state import AgentLoopState, CodingLoopFailure
+from neos.coding.loop._durable.usage import transcript_token_limit
 from neos.coding.loop._durable.transcript import (
     _append_user_text,
     _has_open_tool_pair,
@@ -128,28 +130,28 @@ def _split_head(
     return (), remaining
 
 
-class CompactionMixin:
-    # Pure primitives, reachable through the loop because tests drive them
-    # there. The implementations live in `artifact_refs` and `codec`.
-    _compact_ref_path = staticmethod(artifact_refs._compact_ref_path)
-    _maybe_ref_latest_tool_result = staticmethod(
-        artifact_refs._maybe_ref_latest_tool_result
-    )
-    _shrink_old_tool_results = staticmethod(artifact_refs._shrink_old_tool_results)
-    _expand_artifact_refs = staticmethod(artifact_refs._expand_artifact_refs)
-    _drop_oldest_prefix_turn = staticmethod(_drop_oldest_prefix_turn)
-    _serialized_bytes = staticmethod(_serialized_bytes)
-    _estimated_tokens = staticmethod(_estimated_tokens)
-    _digest = staticmethod(_transcript_digest)
+class Compactor:
+    """Keeps a transcript inside its window: mechanical compaction, the head
+    drop after `prompt_too_long`, and the optional LLM summary.
 
-    async def _compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
+    Holds the config, hooks, model and tool catalog it was built with; no
+    state of its own.
+    """
+
+    def __init__(self, *, config, hooks=None, model, catalog) -> None:
+        self._config = config
+        self._hooks = hooks or NullCodingHooks()
+        self._model = model
+        self._catalog = catalog
+
+    async def compact_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
         before = state.transcript
         pre = await invoke_pre_compact(self._hooks, before)
         if pre:
             before = _append_user_text(before, pre)
         bodies = dict(state.compacted_bodies)
-        after = self._compact(before, force=True, bodies=bodies)
-        after, attempts, summary = await self._maybe_llm_compact(state, after)
+        after = self.compact(before, force=True, bodies=bodies)
+        after, attempts, summary = await self.maybe_llm_compact(state, after)
         if after != before:
             await self._hooks.compact(before, after)
         post = await invoke_post_compact(self._hooks, before, after)
@@ -161,14 +163,14 @@ class CompactionMixin:
         return replace(
             state,
             transcript=after,
-            transcript_digest=self._digest(after),
+            transcript_digest=_transcript_digest(after),
             prompt_compact_retries=state.prompt_compact_retries + 1,
             llm_compact_attempts=attempts,
             compacted_bodies=bodies,
             instructions_loaded=False,
             summary=summary,
             revealed_tools=state.revealed_tools
-            | self._revealed_from_transcript(before),
+            | self._catalog.revealed_from(before),
         )
 
     def _recent_read_preview(self, state: AgentLoopState) -> str:
@@ -187,19 +189,19 @@ class CompactionMixin:
             ordered = sorted(str(path) for path in state.read_paths if path)
         return tuple(ordered[-limit:])
 
-    def _head_drop_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
+    def head_drop_after_prompt_too_long(self, state: AgentLoopState) -> AgentLoopState:
         head, remaining = _split_head(state.transcript)
         after = head + tuple(_drop_oldest_prefix_turn(remaining))
         return replace(
             state,
             transcript=after,
-            transcript_digest=self._digest(after),
+            transcript_digest=_transcript_digest(after),
             prompt_compact_retries=state.prompt_compact_retries + 1,
             revealed_tools=state.revealed_tools
-            | self._revealed_from_transcript(state.transcript),
+            | self._catalog.revealed_from(state.transcript),
         )
 
-    def _compaction_request(self, prompt: str) -> tuple[ModelRequest, bool]:
+    def compaction_request(self, prompt: str) -> tuple[ModelRequest, bool]:
         """The summary request, and whether it asks for the preserving format."""
         preserving = self._config.compaction_preserving_summary
         if preserving:
@@ -228,7 +230,7 @@ class CompactionMixin:
         )
         return request, preserving
 
-    async def _maybe_llm_compact(
+    async def maybe_llm_compact(
         self, state: AgentLoopState, transcript: tuple[CanonicalMessage, ...]
     ) -> tuple[tuple[CanonicalMessage, ...], int, str]:
         attempts = state.llm_compact_attempts
@@ -250,7 +252,7 @@ class CompactionMixin:
         prompt = f"Summarize this transcript prefix:\n{blob}"
         if previous:
             prompt = f"Previous summary:\n{previous}\n\n{prompt}"
-        request, preserving = self._compaction_request(prompt)
+        request, preserving = self.compaction_request(prompt)
         parts: list[str] = []
         stop_reason = ""
         try:
@@ -270,7 +272,7 @@ class CompactionMixin:
         compacted = (head,) + transcript[tail_start:]
         return compacted, attempts + 1, summary
 
-    async def _compact_with_hook(
+    async def compact_with_hook(
         self, transcript, *, preserve_tools: bool = False, bodies=None
     ):
         before = tuple(transcript)
@@ -279,7 +281,7 @@ class CompactionMixin:
         # A note between a tool call and its result would split the pair.
         if pre and not open_pair:
             before = _append_user_text(before, pre)
-        after = self._compact(before, preserve_tools=preserve_tools, bodies=bodies)
+        after = self.compact(before, preserve_tools=preserve_tools, bodies=bodies)
         if after != before:
             await self._hooks.compact(before, after)
         post = await invoke_post_compact(self._hooks, before, after)
@@ -287,17 +289,17 @@ class CompactionMixin:
             after = _append_user_text(after, post)
         return after
 
-    def _over_budget(self, transcript) -> bool:
+    def over_budget(self, transcript) -> bool:
         return (
             len(transcript) > self._config.max_transcript_messages
             or self._over_bytes(transcript)
-            or _estimated_tokens(transcript) > self._transcript_token_limit()
+            or _estimated_tokens(transcript) > transcript_token_limit(self._config)
         )
 
     def _over_bytes(self, transcript) -> bool:
         return _serialized_bytes(transcript) > self._config.max_transcript_bytes
 
-    def _compact(
+    def compact(
         self,
         transcript,
         *,
@@ -307,7 +309,7 @@ class CompactionMixin:
     ):
         del preserve_tools
         transcript = tuple(transcript)
-        if not force and not self._over_budget(transcript):
+        if not force and not self.over_budget(transcript):
             return transcript
         # Stage 1: shrink old results. The newest tool exchange stays whole.
         active_start = _last_tool_use_index(transcript)
@@ -322,14 +324,14 @@ class CompactionMixin:
             for message in prefix
         )
         candidate = prefix + active
-        if not force and not self._over_budget(candidate):
+        if not force and not self.over_budget(candidate):
             return candidate
         # Stage 2: drop the oldest turns behind a notice.
         notice = CanonicalMessage("user", (TextContent(_COMPACTED_NOTICE),))
         head, remaining = _split_head(prefix)
         if force and remaining:
             remaining = _drop_oldest_prefix_turn(remaining)
-        while remaining and self._over_budget(
+        while remaining and self.over_budget(
             head + (notice,) + tuple(remaining) + active
         ):
             remaining = _drop_oldest_prefix_turn(remaining)
@@ -341,11 +343,11 @@ class CompactionMixin:
             candidate = head
         else:
             candidate = (notice,)
-        if not self._over_budget(candidate) or not self._over_bytes(candidate):
+        if not self.over_budget(candidate) or not self._over_bytes(candidate):
             return candidate
-        return self._require_transcript_fit(candidate)
+        return self.require_transcript_fit(candidate)
 
-    def _require_transcript_fit(self, transcript):
+    def require_transcript_fit(self, transcript):
         if self._over_bytes(transcript):
             raise CodingLoopFailure(
                 "transcript_budget_exceeded", retryable=False
