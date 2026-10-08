@@ -22,7 +22,12 @@ from neos.workflow.deep_analysis.ledger import (
 )
 from neos.workflow.deep_analysis.models import NodeSummary, Verdict
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
-from neos.workflow.deep_analysis.report_writer import _best_rejected_draft
+from neos.workflow.deep_analysis.report_writer import (
+    ReportWriter,
+    _best_rejected_draft,
+    collect_caveats,
+    reduce_and_resolve,
+)
 from neos.workflow.deep_analysis.token_budget import TokenBudgetExhausted
 
 
@@ -166,6 +171,21 @@ def _orch(ledger, synth, renderer, grader=None):
     )
 
 
+def _writer(ledger, synth, renderer, grader=None, **kwargs):
+    return ReportWriter(ledger, synth, renderer, grader, **kwargs)
+
+
+async def _write(writer, root_id="root0001"):
+    """What _finalize hands the writer when nothing needs reinvestigation."""
+    summaries, _ = await reduce_and_resolve(
+        writer.synthesizer,
+        writer.ledger,
+        settings.config.deep_analysis.source_tiers,
+        root_id,
+    )
+    return await writer.write(root_id, summaries)
+
+
 def _graded(ledger):
     return [p for (k, _q, p) in ledger.events if k == "report_graded"]
 
@@ -177,9 +197,9 @@ async def test_orphan_citation_retries_assembly_then_succeeds():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=1)
-    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+    writer = _writer(ledger, synth, renderer, grader=OkGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "DRAFT-2" in report  # second assembly is the one that shipped
     assert synth.assemble_calls == 2
@@ -201,9 +221,9 @@ async def test_orphan_every_attempt_exhausts_cap_and_appends_appendix():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=99)
-    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+    writer = _writer(ledger, synth, renderer, grader=OkGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "## 부록: 미해결 사유" in report
     # 캡은 설정에서 읽는다 -- `report_retry_cap` 이 바뀌면 이 테스트도 따라온다.
@@ -237,9 +257,9 @@ async def test_a_rejection_reaches_the_next_assembly():
                 revision_hints=["- 2024년에 발효되었다"],
             )
 
-    orch = _orch(ledger, synth, renderer, grader=_HintingGrader())
+    writer = _writer(ledger, synth, renderer, grader=_HintingGrader())
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     assert synth.assemble_calls == _ATTEMPTS
     # 첫 시도는 되먹일 것이 없고, 이후 시도는 직전 반려를 손에 쥔다.
@@ -286,9 +306,9 @@ async def test_the_draft_that_got_furthest_is_delivered_not_the_last():
             _rejected("E_REPORT_UNCITED", 0.2083, 48),
         ]
     )
-    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+    writer = _writer(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "DRAFT-2" in report  # 가장 깊이 가고, 그중 가장 잘 인용된 것
     assert "DRAFT-3" not in report
@@ -311,9 +331,9 @@ async def test_at_equal_depth_the_better_cited_draft_wins():
             _rejected("E_REPORT_UNCITED", 0.2500, 12),
         ]
     )
-    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+    writer = _writer(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "DRAFT-2" in report
     assert "DRAFT-3" not in report
@@ -328,9 +348,9 @@ async def test_equal_scores_do_not_drift_toward_the_last_draft():
     grader = ScriptedGrader(
         [_rejected("E_REPORT_UNCITED", 0.3, 10) for _ in range(3)]
     )
-    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
+    writer = _writer(ledger, synth, FlakyRenderer(fail_times=0), grader=grader)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "DRAFT-1" in report
 
@@ -355,9 +375,9 @@ async def test_an_orphan_citation_gets_its_own_hint_not_a_stale_one():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=99)
-    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+    writer = _writer(ledger, synth, renderer, grader=OkGrader())
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     assert synth.hints_seen[0] == []
     assert "claim id" in synth.hints_seen[1][0]
@@ -410,14 +430,14 @@ async def test_caveat_markers_are_rendered_not_shipped_raw():
             }
 
     synth = _CaveatSynth()
-    orch = _orch(
+    writer = _writer(
         ledger,
         synth,
         ResolvingRenderer({"aaaaaaaa", "bbbbbbbb"}),
         grader=OkGrader(),
     )
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "[C:" not in report
     # 마커가 지워진 게 아니라 각주로 바뀌어야 한다 -- caveat 이 읽을 수 있어야 한다.
@@ -431,11 +451,11 @@ async def test_an_orphan_rejection_records_which_claim_orphaned():
     원인인지 사후에 알 수 없었다 -- 이벤트가 코드만 적었기 때문이다.
     `CitationRenderer` 는 claim id 를 손에 쥔 채로 raise 한다."""
     ledger = FakeLedger()
-    orch = _orch(
+    writer = _writer(
         ledger, FakeSynth(), FlakyRenderer(fail_times=99), grader=OkGrader()
     )
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     assert all(p["orphan_claim_id"] == "aaaaaaaa" for p in _graded(ledger))
 
@@ -445,9 +465,9 @@ async def test_report_grader_rejection_exhausts_cap_and_appends_appendix():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=0)  # render always clean
-    orch = _orch(ledger, synth, renderer, grader=FailGrader())
+    writer = _writer(ledger, synth, renderer, grader=FailGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "## 부록: 미해결 사유" in report
     assert synth.assemble_calls == _ATTEMPTS
@@ -468,9 +488,9 @@ async def test_cap_exhaustion_ships_the_rendered_draft_not_the_raw_one():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=0)  # render always clean
-    orch = _orch(ledger, synth, renderer, grader=FailGrader())
+    writer = _writer(ledger, synth, renderer, grader=FailGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "[1] http://x" in report  # 렌더 결과가 실렸다
     assert "## 부록: 미해결 사유" in report
@@ -492,9 +512,9 @@ async def test_cap_exhaustion_falls_back_to_best_effort_when_nothing_rendered():
     ledger = FakeLedger()
     synth = FakeSynth()
     renderer = FlakyRenderer(fail_times=99)
-    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+    writer = _writer(ledger, synth, renderer, grader=OkGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert f"DRAFT-{_ATTEMPTS}" in report
     assert "[1] http://x" not in report
@@ -516,9 +536,9 @@ async def test_cap_exhaustion_falls_back_to_best_effort_when_nothing_rendered():
 async def test_missing_report_grader_defaults_to_ok():
     ledger = FakeLedger()
     synth = FakeSynth()
-    orch = _orch(ledger, synth, FlakyRenderer(fail_times=0), grader=None)
+    writer = _writer(ledger, synth, FlakyRenderer(fail_times=0), grader=None)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "DRAFT-1" in report
     assert synth.assemble_calls == 1
@@ -634,10 +654,10 @@ async def test_report_graded_event_carries_grader_diagnostics(ok):
     distribution censored at the threshold.
     """
     ledger = FakeLedger()
-    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=0),
+    writer = _writer(ledger, FakeSynth(), FlakyRenderer(fail_times=0),
                  grader=DiagnosticGrader(ok=ok))
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     graded = [p for p in _graded(ledger) if p.get("code") != "E_ORPHAN_CITE"]
     assert graded
@@ -675,12 +695,12 @@ async def test_report_graded_event_persists_the_judge_budget_marker():
     ran and approved.
     """
     ledger = FakeLedger()
-    orch = _orch(
+    writer = _writer(
         ledger, FakeSynth(), FlakyRenderer(fail_times=0),
         grader=DegradedJudgeGrader(),
     )
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     graded = _graded(ledger)
     assert graded == [{"ok": True, "attempt": 0, "judge": "budget_exhausted"}]
@@ -695,10 +715,10 @@ async def test_report_graded_omits_diagnostics_when_the_grader_reports_none():
     the renderer already had in hand and the event used to drop.
     """
     ledger = FakeLedger()
-    orch = _orch(ledger, FakeSynth(), FlakyRenderer(fail_times=1),
+    writer = _writer(ledger, FakeSynth(), FlakyRenderer(fail_times=1),
                  grader=OkGrader())
 
-    await orch._finalize("root0001")
+    await _write(writer)
 
     assert _graded(ledger)[0] == {
         "ok": False,
@@ -735,9 +755,9 @@ async def test_the_harness_guarantees_the_limits_section_the_model_lost():
 
     synth = _TruncatedSynth()
     renderer = FlakyRenderer(fail_times=0)
-    orch = _orch(ledger, synth, renderer, grader=OkGrader())
+    writer = _writer(ledger, synth, renderer, grader=OkGrader())
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert "## 한계와 미확인 사항" in report
 
@@ -807,21 +827,28 @@ async def test_the_harness_names_the_resolved_questions_the_model_dropped():
             self.reduce_tree_calls += 1
             return {root_id: NodeSummary(root_id, "루트", [], 0.9, [])}
 
-    orch = _orch(ledger, _Synth(), FlakyRenderer(fail_times=0), grader=OkGrader())
-    orch._child_summaries = lambda root_id, summaries: _as_coro(
-        [resolved, open_child]
-    )
+    class _Child:
+        def __init__(self, summary):
+            self.id = summary.question_id
+            self.text = summary.question_text
+            self.status = summary.question_status
 
-    report = await orch._finalize("root0001")
+    async def children(root_id):
+        return [_Child(resolved), _Child(open_child)]
+
+    ledger.children = children
+    synth = _Synth()
+    writer = _writer(ledger, synth, FlakyRenderer(fail_times=0), grader=OkGrader())
+    summaries = await synth.reduce_tree("root0001")
+    summaries["child001"] = resolved
+    summaries["child002"] = open_child
+
+    report = await writer.write("root0001", summaries)
 
     assert "## 조사한 하위 질문" in report
     assert resolved.question_text in report
     # resolved 가 아닌 질문은 넣지 않는다 -- 검사 대상이 아니다.
     assert open_child.question_text not in report
-
-
-async def _as_coro(value):
-    return value
 
 
 @pytest.mark.asyncio
@@ -849,15 +876,12 @@ async def test_the_limits_section_speaks_to_a_reader_not_the_ledger():
 async def test_collect_caveats_hands_the_report_reader_facing_text():
     """`_collect_caveats` 가 경계다 -- 원장 어휘가 리포트 내용이 되는 지점."""
     ledger = FakeLedger()
-    orch = _orch(
-        ledger, FakeSynth(), FlakyRenderer(fail_times=0), grader=OkGrader()
-    )
     summaries = {
         "q1": NodeSummary("q1", "답", [], 0.5, ["input_bound"]),
         "q2": NodeSummary("q2", "답", [], 0.5, ["input_bound"]),
     }
 
-    caveats = await orch._collect_caveats(summaries)
+    caveats = await collect_caveats(ledger, summaries)
 
     assert caveats == [
         "이 하위 질문의 요약은 입력이 한도를 넘어 축약본으로 대체되었습니다."

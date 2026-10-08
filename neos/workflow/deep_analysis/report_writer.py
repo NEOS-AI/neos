@@ -1,9 +1,11 @@
 """Report writing for a deep-analysis run: assemble (or compose) → render → grade,
 retried up to `report_retry_cap`, never empty-handed (§6.8).
 
-Moved verbatim from `Orchestrator._finalize` (2026-10-08). The Orchestrator still
-owns reduction, conflict reinvestigation (it needs a round) and the run loop;
-this module owns everything from "here are the summaries" to the delivered text.
+Moved verbatim from `Orchestrator._finalize` (2026-10-08). This module provides
+reduction plus conflict resolution as `reduce_and_resolve` and report writing as
+`ReportWriter`; the Orchestrator decides on and runs the reinvestigation round
+(it needs a round) and owns the run loop. `ReportWriter` owns everything from
+"here are the summaries" to the delivered text.
 """
 
 from __future__ import annotations

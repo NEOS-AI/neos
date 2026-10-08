@@ -1243,10 +1243,10 @@ class Orchestrator:
         return True
 
     async def _finalize(self, root_id: str) -> str:
-        """Reduce the tree, resolve conflicts (with at most one bounded
-        reinvestigation round), then assemble → render → grade the report with
-        a bounded retry loop. Never exits empty-handed (§6.8): on cap
-        exhaustion a failure appendix is attached to the last draft."""
+        """Reduce the tree, resolve conflicts, run at most one bounded
+        reinvestigation round, then delegate report writing (assemble or
+        compose → render → grade, the retry loop and the failure appendix) to
+        `ReportWriter.write`. Never exits empty-handed (§6.8)."""
         config = settings.config.deep_analysis
         summaries, reinvestigate = await reduce_and_resolve(
             self.synthesizer, self.ledger, config.source_tiers, root_id
