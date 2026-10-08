@@ -54,8 +54,10 @@ async def test_rebuilt_shares_the_repository_and_the_model_queue() -> None:
     assert again.model is h.model
     assert again.deps is h.deps
     assert again.config == h.config
+    before = len(h.repository.checkpoints)
     await collect(again, parked)
-    assert len(h.repository.checkpoints) > 1
+    assert len(h.repository.checkpoints) > before
+    assert len(h.model.requests) == 2
 
 
 def test_rebuilt_rejects_an_unknown_dependency() -> None:

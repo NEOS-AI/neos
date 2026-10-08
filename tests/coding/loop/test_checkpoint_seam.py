@@ -8,6 +8,7 @@ import pytest
 from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.base import LoopInput, WorkspaceEditContext
 from neos.coding.model.base import CanonicalMessage, TextContent
+from tests.coding.loop.support import checkpoint_for, collect, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 
@@ -78,11 +79,8 @@ def test_encode_state_changes_with_the_state() -> None:
     assert [m["content"][0]["text"] for m in encoded["transcript"]] == ["Fix it", "more"]
 
 
-
 @pytest.mark.asyncio
 async def test_starting_from_the_encoded_initial_state_matches_a_fresh_start() -> None:
-    from tests.coding.loop.support import checkpoint_for, collect, completed, harness, tool_call
-
     fresh = harness([[tool_call(), completed()]])
     seeded = harness([[tool_call(), completed()]])
 
@@ -93,3 +91,8 @@ async def test_starting_from_the_encoded_initial_state_matches_a_fresh_start() -
         c.loop_state for c in fresh.repository.checkpoints
     ]
     assert len(seeded.model.requests) == len(fresh.model.requests) == 1
+
+    def strip(requests):
+        return [replace(request, turn_id="turn") for request in requests]
+
+    assert strip(seeded.model.requests) == strip(fresh.model.requests)
