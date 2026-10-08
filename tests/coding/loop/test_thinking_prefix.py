@@ -12,6 +12,7 @@ from dataclasses import replace
 
 import pytest
 
+from neos.coding.loop import initial_state
 from neos.coding.model.anthropic import _to_anthropic_request
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -93,7 +94,7 @@ async def test_consecutive_requests_share_a_byte_identical_prefix() -> None:
 
 def test_appending_keeps_earlier_thinking() -> None:
     h = harness([])
-    state = replace(h.loop._restore(INPUT, None), transcript=_thinking_transcript())
+    state = replace(initial_state(INPUT), transcript=_thinking_transcript())
 
     sent = h.loop._guard_thinking_prefix(state, "code", ())
     appended = replace(
@@ -107,7 +108,7 @@ def test_appending_keeps_earlier_thinking() -> None:
 
 def test_editing_earlier_history_strips_thinking() -> None:
     h = harness([])
-    state = replace(h.loop._restore(INPUT, None), transcript=_thinking_transcript())
+    state = replace(initial_state(INPUT), transcript=_thinking_transcript())
 
     sent = h.loop._guard_thinking_prefix(state, "code", ())
     edited = replace(
@@ -125,7 +126,7 @@ def test_editing_earlier_history_strips_thinking() -> None:
 
 def test_changing_the_system_prompt_strips_thinking_once() -> None:
     h = harness([])
-    state = replace(h.loop._restore(INPUT, None), transcript=_thinking_transcript())
+    state = replace(initial_state(INPUT), transcript=_thinking_transcript())
 
     sent = h.loop._guard_thinking_prefix(state, "code", ())
     changed = h.loop._guard_thinking_prefix(sent, "code, now with a summary", ())

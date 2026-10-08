@@ -13,6 +13,7 @@ import pytest
 from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.domain.durability import StaleExecutionLease, ToolExecutionDisposition
 from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.loop.durable import COMPACT_REF_THRESHOLD_BYTES
 from neos.coding.model.anthropic import CodingModelError
@@ -172,8 +173,8 @@ def test_compact_stores_small_bodies_and_expand_restores_them() -> None:
 
 def test_compacted_bodies_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = replace(h.loop._restore(INPUT, None), compacted_bodies={"abc": "full text"})
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), compacted_bodies={"abc": "full text"})
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -190,8 +191,8 @@ def test_read_stamps_round_trip_in_loop_state() -> None:
             "full": False,
         }
     }
-    state = replace(h.loop._restore(INPUT, None), read_stamps=stamps)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), read_stamps=stamps)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -286,14 +287,14 @@ def test_approval_gate_forwards_unattended_from_loop_config() -> None:
             approval_unattended=True,
         ),
     )
-    state = attended.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     assert attended.loop._approval_gate(state).unattended is False
     assert unattended.loop._approval_gate(state).unattended is True
 
 
 def _phase_checkpoint(h, phase: str) -> CodingCheckpoint:
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["phase"] = phase
     dumped["instructions_loaded"] = True
     return CodingCheckpoint("cc_phase", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -450,8 +451,8 @@ async def test_stop_retry_is_capped_at_two() -> None:
         [[TextDelta("done"), ModelCompleted("end_turn", ModelUsage(2, 1))]],
         hooks=hooks,
     )
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["stop_retry_count"] = 2
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_stop", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -570,7 +571,7 @@ async def test_model_request_keeps_compact_preview_instead_of_expanding() -> Non
     )
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=transcript,
         compacted_bodies={
             digest: json.dumps(old_body, sort_keys=True, separators=(",", ":"))
@@ -578,7 +579,7 @@ async def test_model_request_keeps_compact_preview_instead_of_expanding() -> Non
         transcript_digest=h.loop._digest(transcript),
         instructions_loaded=True,
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     checkpoint = CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW)
     await collect(h, checkpoint)
     results = {
@@ -760,8 +761,8 @@ async def test_pre_turn_budget_veto_skips_model_request() -> None:
             max_total_tokens=10,
         ),
     )
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["input_tokens"] = 11
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_budget", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -791,8 +792,8 @@ class _ErrorExecutor(Executor):
 
 
 def _pending_tool_checkpoint(h, *, instruction: str | None = None, **overrides):
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     tool_input = {"path": "a.txt", "content": "x"}
     dumped["transcript"] = [
         {"role": "user", "content": [{"type": "text", "text": "Fix it"}]},
@@ -888,8 +889,8 @@ async def test_think_block_with_public_text_is_terminal() -> None:
 @pytest.mark.asyncio
 async def test_empty_end_turn_retry_then_fails_incomplete() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["empty_retry_count"] = 1
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_empty", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -923,7 +924,7 @@ def test_pending_instruction_waits_until_tool_pairs_close() -> None:
         if hasattr(item, "text")
     ]
     assert "Inspect cache first" not in texts
-    dumped = h.loop._dump_state(INPUT, restored)
+    dumped = encode_state(INPUT, restored)
     assert dumped["pending_instruction"] == "Inspect cache first"
 
     checkpoint.loop_state["pending_tool_index"] = 1
@@ -1390,11 +1391,11 @@ async def test_readonly_batch_denies_secret_read_without_execute() -> None:
 def test_verdict_and_critical_files_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         verdict="FAIL",
         critical_files=("src/app.py", "tests/test_app.py"),
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -1443,8 +1444,8 @@ def test_read_stamps_round_trip_offset_and_limit() -> None:
             "limit": 40,
         }
     }
-    state = replace(h.loop._restore(INPUT, None), read_stamps=stamps)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), read_stamps=stamps)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -1463,7 +1464,7 @@ async def test_workspace_instruction_tree_starts_at_session_cwd(tmp_path) -> Non
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     h.bindings.session._record = SimpleNamespace(workspace=str(tmp_path))
     h.bindings.session.cwd = str(pkg)
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     loaded = await h.loop._load_workspace_instructions(
         state, SimpleNamespace(session=h.bindings.session)
     )
@@ -1493,7 +1494,7 @@ async def test_workspace_instruction_tree_does_not_walk_above_workspace(
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     h.bindings.session._record = SimpleNamespace(workspace=str(workspace))
     h.bindings.session.cwd = str(parent)
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     loaded = await h.loop._load_workspace_instructions(
         state, SimpleNamespace(session=h.bindings.session)
     )
@@ -1646,12 +1647,12 @@ async def test_success_stall_resets_when_result_hash_changes() -> None:
 def test_success_stall_fields_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         last_success_signature="sig",
         last_success_result_hash="hash",
         last_success_count=3,
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),

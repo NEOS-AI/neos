@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import pytest
 
+from neos.coding.loop import initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -56,7 +57,7 @@ def test_usage_budget_counts_cache_and_reasoning() -> None:
         ),
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         input_tokens=10,
         output_tokens=10,
         cache_read_tokens=0,
@@ -123,7 +124,7 @@ async def test_fold_child_passes_last_prompt_remainder() -> None:
     )
     usable = 40_000 - 8_192 - 4_000
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         last_prompt_tokens=usable - 200,
     )
     assert await h.loop._fold_child("sa_1", state) == "folded"
@@ -145,7 +146,7 @@ def test_parent_headroom_chars_uses_last_prompt_remainder() -> None:
     )
     usable = 40_000 - 8_192 - 4_000
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         last_prompt_tokens=usable - 200,
     )
     assert h.loop._parent_headroom_chars(state) == 200 * 4

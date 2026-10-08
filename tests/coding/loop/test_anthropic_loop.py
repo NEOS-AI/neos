@@ -19,6 +19,7 @@ from neos.coding.domain.phases import (
     SteeringMode,
     SteeringRequest,
 )
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import (
     AnthropicLoopConfig,
     CodingLoopFailure,
@@ -1066,7 +1067,7 @@ async def test_second_max_tokens_without_tools_is_incomplete() -> None:
 @pytest.mark.asyncio
 async def test_set_phase_success_updates_loop_state_phase() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     after = await h.loop._after_result(
         state,
         ToolResultContent("phase_1", "ok", {}),
@@ -1075,7 +1076,7 @@ async def test_set_phase_success_updates_loop_state_phase() -> None:
     )
 
     assert after.phase == "explore"
-    assert h.loop._dump_state(INPUT, after)["phase"] == "explore"
+    assert encode_state(INPUT, after)["phase"] == "explore"
 
 
 @pytest.mark.asyncio
@@ -1312,7 +1313,7 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
     h = harness(
         [[TextDelta("old files were edited"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
     )
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     long_prefix = tuple(
         CanonicalMessage("user", (TextContent(f"note {index} " + ("x" * 20)),))
         for index in range(4)

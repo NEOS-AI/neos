@@ -28,6 +28,7 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.events.store import InMemoryCodingEventStore
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.loop.durable import _select_spawn_work
 from neos.observability.metrics import EnterpriseMetricsCollector
@@ -533,8 +534,7 @@ async def test_flag_on_without_runtime_raises_subagent_runtime_missing() -> None
 
 
 def test_restore_missing_active_child_keys_are_none() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     assert state.active_child_run_id is None
     assert state.active_child_checkpoint_id is None
     assert state.active_child_tool_call_id is None
@@ -623,7 +623,7 @@ def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
         active_child_checkpoint_id="sc_stale",
         active_child_tool_call_id="s2",
     )
-    dumped = h.loop._dump_state(INPUT, stale)
+    dumped = encode_state(INPUT, stale)
     assert dumped["active_children"][0]["tool_call_id"] == "s1"
     assert dumped["active_children"][1]["tool_call_id"] == "s2"
     assert dumped["active_child_run_id"] == "sa_1"
@@ -1896,7 +1896,7 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
         reason="aborted",
         task_id="ct_1",
     )
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     results = _tool_results(dumped)
     s1_results = [item for item in results if item["tool_call_id"] == "s1"]
     s2_results = [item for item in results if item["tool_call_id"] == "s2"]

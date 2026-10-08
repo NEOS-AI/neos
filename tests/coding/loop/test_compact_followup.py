@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from neos.coding.domain.phases import CodingCheckpoint
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import CodingLoopFailure
 from neos.coding.model.anthropic import CodingModelError
 from neos.coding.model.base import (
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.no_db
 
 
 def _checkpoint(h, state) -> CodingCheckpoint:
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     return CodingCheckpoint("cc_followup", "ct_1", "cr_1", 1, dumped, "1", NOW)
 
 
@@ -55,7 +56,7 @@ def _prefix_transcript() -> tuple[CanonicalMessage, ...]:
 async def test_prompt_too_long_after_compact_drops_oldest_prefix_turn() -> None:
     h = harness([CodingModelError("prompt_too_long", retryable=True)])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=_prefix_transcript(),
         prompt_compact_retries=1,
         instructions_loaded=True,
@@ -81,7 +82,7 @@ async def test_prompt_too_long_after_compact_drops_oldest_prefix_turn() -> None:
 async def test_prompt_too_long_after_three_head_drops_is_non_retryable() -> None:
     h = harness([CodingModelError("prompt_too_long", retryable=True)])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=_prefix_transcript(),
         prompt_compact_retries=4,
         instructions_loaded=True,
@@ -127,7 +128,7 @@ async def test_compact_after_prompt_too_long_reattaches_recent_reads() -> None:
         CanonicalMessage("user", (TextContent("continue from here"),)),
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=reads,
         read_paths=frozenset({"old.txt", "src/a.py", "src/b.py"}),
         instructions_loaded=True,
@@ -170,7 +171,7 @@ async def test_compact_after_prompt_too_long_reattaches_at_most_five_reads() -> 
             )
         )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=tuple(pairs),
         instructions_loaded=True,
     )
@@ -213,7 +214,7 @@ async def test_compact_after_prompt_too_long_ignores_denied_absolute_reads() -> 
         ),
     )
     state = replace(
-        h.loop._restore(INPUT, None), transcript=reads, instructions_loaded=True
+        initial_state(INPUT), transcript=reads, instructions_loaded=True
     )
 
     after = await h.loop._compact_after_prompt_too_long(state)
@@ -239,7 +240,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         for index in range(4)
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=(CanonicalMessage("user", (TextContent("Fix it"),)),) + long_prefix,
         llm_compact_attempts=0,
         summary="old facts about auth",
@@ -258,7 +259,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         for item in message.content
         if hasattr(item, "text")
     )
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_sum", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -278,7 +279,7 @@ async def test_previous_summary_is_injected_after_cache_boundary() -> None:
         config=AnthropicLoopConfig(model="claude-test", system=system),
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         summary="auth uses JWT",
         instructions_loaded=True,
     )
@@ -328,7 +329,7 @@ async def test_pre_and_post_compact_inject_user_instructions() -> None:
         hooks=_InjectCompactHooks(),
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=_prefix_transcript(),
         instructions_loaded=True,
     )
@@ -379,7 +380,7 @@ async def test_compact_hooks_do_not_split_open_tool_pairs() -> None:
 @pytest.mark.asyncio
 async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     after = await h.loop._after_result(
         state,
         ToolResultContent(
@@ -400,7 +401,7 @@ async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> Non
         tool_input={"name": "guided"},
     )
 
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_skill", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -418,7 +419,7 @@ async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> Non
 async def test_empty_skill_allowed_tools_do_not_restrict() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     after = await h.loop._after_result(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         ToolResultContent(
             "skill_1",
             "ok",
@@ -436,7 +437,7 @@ async def test_empty_skill_allowed_tools_do_not_restrict() -> None:
 async def test_loaded_skill_allowed_tools_union_across_skills() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     first = await h.loop._after_result(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         ToolResultContent(
             "s1",
             "ok",
@@ -495,7 +496,7 @@ async def test_llm_compact_keeps_tool_result_ref_bodies() -> None:
         [[TextDelta("compressed facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=(
             CanonicalMessage("user", (TextContent("Fix it"),)),
             CanonicalMessage("user", (TextContent("note 0 " + ("x" * 20)),)),
@@ -528,7 +529,7 @@ async def test_llm_compact_keeps_tool_result_ref_bodies() -> None:
     assert results[-1].content.get("compacted") is True
     assert results[-1].content.get("sha256") == digest
     assert "entries" not in results[-1].content
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     assert dumped["compacted_bodies"][digest] == payload_text
     assert dumped["summary"] == "compressed facts"
 
@@ -569,7 +570,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
         [[TextDelta("facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=_search_tools_transcript(),
         revealed_tools=frozenset({"web_fetch.v1"}),
         llm_compact_attempts=0,
@@ -581,7 +582,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
 
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -598,7 +599,7 @@ async def test_compact_recovers_revealed_tools_from_transcript() -> None:
         [[TextDelta("facts"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
     )
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=_search_tools_transcript(),
         revealed_tools=frozenset(),
         llm_compact_attempts=0,
@@ -618,7 +619,7 @@ async def test_skill_allowed_tools_deny_disallowed_tool() -> None:
 
     h = harness([[tool_call(), completed()]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         allowed_tools=frozenset({"read_file.v1", "execute.v1"}),
         instructions_loaded=True,
     )

@@ -77,3 +77,19 @@ def test_encode_state_changes_with_the_state() -> None:
     assert encoded["turn_count"] == 2
     assert [m["content"][0]["text"] for m in encoded["transcript"]] == ["Fix it", "more"]
 
+
+
+@pytest.mark.asyncio
+async def test_starting_from_the_encoded_initial_state_matches_a_fresh_start() -> None:
+    from tests.coding.loop.support import checkpoint_for, collect, completed, harness, tool_call
+
+    fresh = harness([[tool_call(), completed()]])
+    seeded = harness([[tool_call(), completed()]])
+
+    await collect(fresh)
+    await collect(seeded, checkpoint_for(initial_state(INPUT)))
+
+    assert [c.loop_state for c in seeded.repository.checkpoints] == [
+        c.loop_state for c in fresh.repository.checkpoints
+    ]
+    assert len(seeded.model.requests) == len(fresh.model.requests) == 1
