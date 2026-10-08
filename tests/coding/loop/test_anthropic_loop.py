@@ -1,36 +1,30 @@
 import asyncio
 import json
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from neos.coding.domain.durability import (
-    ExecutionLease,
     StaleExecutionLease,
     ToolExecutionDisposition,
 )
 from neos.coding.domain.approvals import (
     ApprovalDecision,
-    ApprovalPolicyOutcome,
     evaluate_approval,
 )
 from neos.coding.domain.phases import (
     CodingCheckpoint,
-    CodingRun,
-    CodingRunStatus,
     SteeringMode,
     SteeringRequest,
 )
-from neos.coding.domain.events import make_event
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import (
-    AnthropicCodingLoop,
     AnthropicLoopConfig,
     CodingLoopFailure,
 )
 from neos.coding.loop.base import (
-    LoopDependencies,
     LoopInput,
     WorkspaceEditContext,
 )
@@ -41,172 +35,26 @@ from neos.coding.model.base import (
     ModelUsage,
     TextContent,
     TextDelta,
-    ToolCallCompleted,
     ToolInputDelta,
     ToolResultContent,
     ToolUseContent,
 )
 from neos.coding.tools.executor import ToolResult
-from neos.coding.tools.registry import CodingToolRegistry
-from tests.coding.fakes import InMemoryCodingRunRepository, RecordingCodingAuditSink
+from tests.coding.fakes import RecordingCodingAuditSink
+from tests.coding.loop.support import (
+    INPUT,
+    NOW,
+    Bindings,
+    DecisionHook,
+    Executor,
+    collect,
+    completed,
+    harness,
+    tool_call,
+)
 
 pytestmark = pytest.mark.no_db
 
-NOW = datetime(2026, 7, 19, tzinfo=UTC)
-
-
-class Model:
-    def __init__(self, turns):
-        self.turns = list(turns)
-        self.requests = []
-
-    async def stream(self, request):
-        self.requests.append(request)
-        turn = self.turns.pop(0)
-        if isinstance(turn, BaseException):
-            raise turn
-        for event in turn:
-            yield event
-
-
-class Events:
-    def __init__(self):
-        self.items = []
-
-    async def append(self, *, task_id, event_type, payload, **ids):
-        event = make_event(
-            task_id=task_id,
-            seq=100 + len(self.items),
-            event_type=event_type,
-            payload=payload,
-            now=NOW,
-            **ids,
-        )
-        self.items.append(event)
-        return event
-
-
-class Executor:
-    def __init__(self, *, fail_after_mutation=False):
-        self.calls = []
-        self.fail_after_mutation = fail_after_mutation
-
-    async def execute(self, session, call, **kwargs):
-        self.calls.append(call)
-        session.writes += call.name == "write_file.v1"
-        if self.fail_after_mutation:
-            raise RuntimeError("connection lost after mutation")
-        return ToolResult.ok(workspace_revision=str(session.writes + 1))
-
-
-class Bindings:
-    def __init__(self, *, mutation_error=None, files=None, workspace=None):
-        self.session = Session(files=files, workspace=workspace)
-        self.mutation_error = mutation_error
-
-    async def resolve(self, lease):
-        return SimpleNamespace(
-            binding=SimpleNamespace(workspace_revision="1", provider="memory"),
-            session=self.session,
-        )
-
-    async def record_mutation(self, lease, *, workspace_revision):
-        if self.mutation_error is not None:
-            raise self.mutation_error
-        return None
-
-
-class Session:
-    def __init__(self, files=None, workspace=None) -> None:
-        self.writes = 0
-        self.workspace = workspace
-        self.files = {
-            name: value if isinstance(value, bytes) else value.encode("utf-8")
-            for name, value in dict(files or {}).items()
-        }
-
-    def clone_with_workspace(self, workspace):
-        cloned = Session(files=self.files, workspace=workspace)
-        cloned.writes = self.writes
-        return cloned
-
-    async def workspace_revision(self) -> int:
-        return self.writes + 1
-
-    async def read_file(self, path: str) -> bytes:
-        if path not in self.files:
-            raise FileNotFoundError(path)
-        return self.files[path]
-
-
-@dataclass
-class Harness:
-    loop: AnthropicCodingLoop
-    repository: InMemoryCodingRunRepository
-    events: Events
-    model: Model
-    executor: Executor
-    bindings: Bindings
-    deps: LoopDependencies
-
-
-def tool_call(call_id="toolu_1", name="write_file.v1", input=None):
-    return ToolCallCompleted(call_id, name, input or {"path": "a.txt", "content": "x"})
-
-
-def completed(input_tokens=5, output_tokens=3):
-    return ModelCompleted("tool_use", ModelUsage(input_tokens, output_tokens))
-
-
-def harness(
-    turns,
-    *,
-    completed_tools=None,
-    executor=None,
-    config=None,
-    audit=None,
-    bindings=None,
-    approval_evaluator=lambda _call: ApprovalPolicyOutcome.ALLOW,
-    hooks=None,
-    subagents=None,
-    command_allowlist=frozenset({"git"}),
-    monitor=None,
-    envelope=None,
-):
-    repository = InMemoryCodingRunRepository(completed_tools=completed_tools)
-    repository.execution_leases["ct_1"] = LEASE
-    run = CodingRun("cr_1", "ct_1", 1, CodingRunStatus.RUNNING, None, NOW)
-    repository.active_run = run
-    repository.created_runs = [run]
-    repository.task_statuses["ct_1"] = "running"
-    events = Events()
-    model = Model(turns)
-    executor = executor or Executor()
-    bindings = bindings or Bindings()
-    loop = AnthropicCodingLoop(
-        model=model,
-        tools=CodingToolRegistry.default(command_allowlist=frozenset(command_allowlist)),
-        executor=executor,
-        bindings=bindings,
-        config=config or AnthropicLoopConfig(model="claude-test", system="code"),
-        audit=audit,
-        clock=lambda: NOW,
-        approval_evaluator=approval_evaluator,
-        hooks=hooks,
-        subagents=subagents,
-        monitor=monitor,
-        envelope=envelope,
-    )
-    deps = LoopDependencies(repository=repository, events=events, lease=LEASE)
-    return Harness(loop, repository, events, model, executor, bindings, deps)
-
-
-LEASE = ExecutionLease("ct_1", "cr_1", "worker", 1, NOW, NOW + timedelta(minutes=1))
-INPUT = LoopInput("ct_1", "cr_1", "Fix it")
-
-
-async def collect(h, checkpoint=None):
-    return [event async for event in h.loop.run(INPUT, checkpoint, h.deps)]
 
 
 @pytest.mark.asyncio
@@ -867,9 +715,7 @@ async def test_pending_interrupt_aborts_in_flight_model_turn() -> None:
             await resume.wait()
             yield ModelCompleted("end_turn", ModelUsage(2, 1))
 
-    h = harness([[TextDelta("unused"), completed()]])
-    h.model = GatedModel()
-    h.loop._model = h.model
+    h = harness(model=GatedModel())
     original = h.repository.commit_model_checkpoint
 
     async def recording_commit(**kwargs):
@@ -1221,7 +1067,7 @@ async def test_second_max_tokens_without_tools_is_incomplete() -> None:
 @pytest.mark.asyncio
 async def test_set_phase_success_updates_loop_state_phase() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     after = await h.loop._after_result(
         state,
         ToolResultContent("phase_1", "ok", {}),
@@ -1230,7 +1076,7 @@ async def test_set_phase_success_updates_loop_state_phase() -> None:
     )
 
     assert after.phase == "explore"
-    assert h.loop._dump_state(INPUT, after)["phase"] == "explore"
+    assert encode_state(INPUT, after)["phase"] == "explore"
 
 
 @pytest.mark.asyncio
@@ -1467,7 +1313,7 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
     h = harness(
         [[TextDelta("old files were edited"), ModelCompleted("end_turn", ModelUsage(1, 1))]]
     )
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     long_prefix = tuple(
         CanonicalMessage("user", (TextContent(f"note {index} " + ("x" * 20)),))
         for index in range(4)
@@ -1490,27 +1336,9 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
     )
 
 
-class _DecisionHook:
-    def __init__(self, decision: str, reason: str = "blocked") -> None:
-        self.decision = decision
-        self.reason = reason
-
-    async def pre_tool(self, call):
-        return {"decision": self.decision, "reason": self.reason}
-
-    async def post_tool(self, call, result) -> None:
-        return None
-
-    async def stop(self, reason: str) -> None:
-        return None
-
-    async def compact(self, before, after) -> None:
-        return None
-
-
 @pytest.mark.asyncio
 async def test_pre_tool_deny_commits_policy_hook_denied_without_execute() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("deny"))
 
     events = await collect(h)
 
@@ -1522,7 +1350,7 @@ async def test_pre_tool_deny_commits_policy_hook_denied_without_execute() -> Non
 
 @pytest.mark.asyncio
 async def test_pre_tool_retry_returns_without_execute_or_splitting_pairs() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("retry", "try later"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("retry", "try later"))
 
     events = await collect(h)
 

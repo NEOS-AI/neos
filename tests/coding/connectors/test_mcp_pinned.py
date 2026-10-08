@@ -497,11 +497,10 @@ def test_a_pinned_credentialed_tool_is_s7_and_never_speculated() -> None:
 # -- N7: the tools array is fixed for the life of a task ------------------------------
 
 
-from tests.coding.loop.test_anthropic_loop import (  # noqa: E402
+from neos.coding.model.base import ModelCompleted, ModelUsage  # noqa: E402
+from tests.coding.loop.support import (  # noqa: E402
     INPUT,
     Bindings,
-    ModelCompleted,
-    ModelUsage,
     Session,
     completed,
     harness,
@@ -523,12 +522,12 @@ def _loop(catalog, turns, *, secrets=None, rules=None):
         executor=SandboxToolExecutor(65536, 10, connectors=ConnectorRunner(catalog)),
         bindings=bindings,
         approval_evaluator=evaluator,
+        tools=CodingToolRegistry.default(
+            command_allowlist=frozenset({"git"}), secret_env_refs=True, connectors=catalog
+        ),
+        secrets=secrets,
+        user_rules=rules,
     )
-    h.loop._tools = CodingToolRegistry.default(
-        command_allowlist=frozenset({"git"}), secret_env_refs=True, connectors=catalog
-    )
-    h.loop._secrets = secrets
-    h.loop._user_rules = rules
     h.turns = len(turns)
     return h
 

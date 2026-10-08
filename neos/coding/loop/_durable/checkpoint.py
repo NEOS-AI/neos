@@ -22,16 +22,20 @@ from neos.coding.loop._durable.children import (
     _sync_active_children,
 )
 from neos.coding.loop._durable.codec import (
-    _dump_loop_state,
     _message_from_mapping,
     _state_from_mapping,
 )
 from neos.coding.loop._durable.state import AgentLoopState
 from neos.coding.loop._durable.transcript import _append_user_text, _tool_result_ids
+from neos.coding.loop.checkpoint import (
+    _CLEARED_NOTICE,
+    _task_seed_text,
+    _with_workspace_edits,
+    encode_state,
+    initial_state,
+)
 
 logger = logging.getLogger("neos.coding.loop.durable")
-
-_CLEARED_NOTICE = "Conversation context was cleared."
 
 
 def _note(state: AgentLoopState, text: str) -> AgentLoopState:
@@ -152,21 +156,9 @@ class CheckpointMixin:
 
     def _restore(self, input, checkpoint):
         if checkpoint is None:
-            transcript = self._with_workspace_edits(
-                (CanonicalMessage("user", (TextContent(input.instruction),)),),
-                input.workspace_edits,
-            )
-            return AgentLoopState(
-                transcript=transcript,
-                turn_count=0,
-                tool_count=0,
-                consecutive_tool_errors=0,
-                pending_tool_calls=(),
-                pending_tool_index=0,
-                transcript_digest=self._digest(transcript),
-            )
+            return initial_state(input)
         raw = checkpoint.loop_state
-        transcript = self._with_workspace_edits(
+        transcript = _with_workspace_edits(
             tuple(_message_from_mapping(item) for item in raw.get("transcript", [])),
             input.workspace_edits,
         )
@@ -207,59 +199,12 @@ class CheckpointMixin:
         return _note(state, decision.message or "Command was not applied as user work.")
 
     def _cleared_transcript(self, input: LoopInput, transcript=()):
-        seed = self._task_seed_text(transcript, input)
+        seed = _task_seed_text(transcript, input)
         messages: list[CanonicalMessage] = []
         if seed:
             messages.append(CanonicalMessage("user", (TextContent(seed),)))
         messages.append(CanonicalMessage("user", (TextContent(_CLEARED_NOTICE),)))
         return tuple(messages)
 
-    @staticmethod
-    def _task_seed_text(transcript, input: LoopInput) -> str:
-        for message in transcript or ():
-            if getattr(message, "role", None) != "user":
-                continue
-            for item in getattr(message, "content", ()):
-                text = getattr(item, "text", None)
-                if not isinstance(text, str):
-                    continue
-                candidate = text.strip()
-                if CheckpointMixin._is_task_seed(candidate):
-                    return candidate
-        fallback = (input.instruction or "").strip()
-        if CheckpointMixin._is_task_seed(fallback):
-            return fallback
-        return ""
-
-    @staticmethod
-    def _is_task_seed(text: str) -> bool:
-        from neos.coding.commands.interpret import interpret_coding_command
-        from neos.coding.commands.types import CommandDisposition
-
-        if not text or text == _CLEARED_NOTICE:
-            return False
-        return (
-            interpret_coding_command(text).disposition is CommandDisposition.CHAT
-        )
-
-    @staticmethod
-    def _with_workspace_edits(transcript, edits):
-        if not edits:
-            return transcript
-        summary = ", ".join(
-            f"{edit.path} @ revision {edit.resulting_revision}"
-            for edit in edits
-        )
-        return _append_user_text(
-            transcript,
-            "The user directly edited these workspace files. "
-            "Treat the listed revisions as authoritative and read "
-            f"files before changing them: {summary}",
-        )
-
     def _dump_state(self, input, state):
-        state = _sync_active_children(state, state.active_children)
-        current = (input.instruction or "").strip()
-        if not self._is_task_seed(current):
-            current = self._task_seed_text(state.transcript, input) or current
-        return _dump_loop_state(state, current_instruction=current)
+        return encode_state(input, state)

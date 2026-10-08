@@ -23,7 +23,7 @@ from neos.standing.channel_threads import ChannelAgentThreads
 from neos.standing.store import InMemoryStandingAgentStore
 from neos.standing.threads import InMemoryAgentThreadStore
 from tests.api.channels.conftest import install_channel_settings
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 
@@ -64,7 +64,7 @@ async def test_the_answer_lines_reach_the_resumed_tool_as_pairs(monkeypatch) -> 
     async def destination(agent_id, owner_id):
         return ReplyDestination("slack", "D_alice", "v2:slack:T1:D_alice:-")
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=destination)
+    h = h.rebuilt(asks=AgentAsks(store=h.repository.asks, destination=destination))
     h.repository.task_owners["ct_1"] = OWNER
     task = replace(INPUT, mode="autonomous", agent_id=agent.agent_id, owner_id=OWNER)
     [event async for event in h.loop.run(task, None, h.deps)]

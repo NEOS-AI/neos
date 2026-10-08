@@ -27,7 +27,7 @@ from neos.standing.notifications import (
     NotifyTarget,
     StandingNotifier,
 )
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, NOW, completed, harness, tool_call
 from tests.coding.monitor.test_monitor_in_the_loop import LedgerEvents
 
 pytestmark = pytest.mark.no_db

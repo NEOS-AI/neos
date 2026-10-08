@@ -18,7 +18,7 @@ from neos.coding.bridge.service import DeviceBridgeService
 from neos.coding.domain.approvals import ApprovalDecision, evaluate_approval
 from neos.coding.tools.registry import CodingToolRegistry
 from neos.config.schema import DeviceBridgeConfig
-from tests.coding.loop.test_anthropic_loop import NOW, completed, tool_call
+from tests.coding.loop.support import NOW, completed, tool_call
 from tests.coding.loop.test_device_bridge_loop import (
     DEVICE_NAMES,
     OWNED,
@@ -178,7 +178,7 @@ async def test_a_child_cannot_write_to_the_device(tmp_path: Path, monkeypatch) -
     from neos.subagent.ports import SystemClock
     from neos.subagent.runtime import SubagentRuntime
     from neos.subagent.stepper import ChildStepper
-    from tests.coding.loop.test_anthropic_loop import Bindings, harness
+    from tests.coding.loop.support import Bindings, harness
     from tests.coding.loop.test_child_gate import _child_calls, _denials, _PortExecutor, _spawn
     from tests.coding.loop.test_spawn_subagent import (
         ScriptedCodingModel,
@@ -214,9 +214,9 @@ async def test_a_child_cannot_write_to_the_device(tmp_path: Path, monkeypatch) -
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        tools=port._registry,
+        device_bridge=DeviceBridgeService(relay, DeviceBridgeConfig()),
     )
-    h.loop._tools = port._registry
-    h.loop._device_bridge = DeviceBridgeService(relay, DeviceBridgeConfig())
 
     checkpoint = None
     for _ in range(8):

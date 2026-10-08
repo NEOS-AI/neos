@@ -1,7 +1,7 @@
 """Token and cost accounting against the loop's budgets.
 
-Functions take `config` rather than capturing it: tests swap `loop._config`
-after construction, and a copy taken earlier would price with stale rates.
+Functions take `config` per call rather than capturing it, so pricing always
+uses the loop's current config and never a copy taken earlier.
 """
 
 from __future__ import annotations

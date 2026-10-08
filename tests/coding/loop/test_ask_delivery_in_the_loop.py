@@ -12,7 +12,7 @@ from neos.coding import runtime as runtime_module
 from neos.coding.domain.approvals import evaluate_approval
 from neos.config.schema import AppConfig
 from neos.standing.asks import AgentAsks, ReplyDestination
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 
@@ -40,7 +40,7 @@ def _port(h, destination):
 async def test_the_notice_rides_the_ask_transaction() -> None:
     """Mutation: drop `notice=` from the loop's call -> nothing is ever sent."""
     h = harness(_turns(), approval_evaluator=evaluate_approval)
-    h.loop._asks = _port(h, ReplyDestination("telegram", "42", "v2:telegram:dm:42:-"))
+    h = h.rebuilt(asks=_port(h, ReplyDestination("telegram", "42", "v2:telegram:dm:42:-")))
 
     await _run(h)
 
@@ -65,7 +65,7 @@ async def test_the_worker_never_calls_the_gateway(monkeypatch) -> None:
     monkeypatch.setattr(ChannelGateway, "send_to_channel", send)
     monkeypatch.setattr(ChannelGateway, "get_instance", classmethod(lambda cls: calls.append("get") or None))
     h = harness(_turns(), approval_evaluator=evaluate_approval)
-    h.loop._asks = _port(h, ReplyDestination("slack", "D1", "v2:slack:T1:D1:-"))
+    h = h.rebuilt(asks=_port(h, ReplyDestination("slack", "D1", "v2:slack:T1:D1:-")))
 
     events = await _run(h)
 
@@ -127,8 +127,7 @@ async def test_flag_off_with_the_port_wired_is_unchanged() -> None:
     check from `_answerable_ask` -> the flag-off agent task asks."""
     wired = _real_loop({**ON, "ask": {"enabled": False}})._asks
     baseline = harness(_turns(), approval_evaluator=evaluate_approval)
-    h = harness(_turns(), approval_evaluator=evaluate_approval)
-    h.loop._asks = wired
+    h = harness(_turns(), approval_evaluator=evaluate_approval, asks=wired)
 
     without = await _run(baseline)
     with_port = await _run(h)

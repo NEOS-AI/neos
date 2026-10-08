@@ -28,6 +28,7 @@ from neos.coding.domain.phases import (
     SteeringRequest,
 )
 from neos.coding.events.store import InMemoryCodingEventStore
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.loop.durable import _select_spawn_work
 from neos.observability.metrics import EnterpriseMetricsCollector
@@ -47,7 +48,7 @@ from neos.subagent.types import (
     SubagentStatus,
     SubagentTicket,
 )
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     LEASE,
     NOW,
@@ -491,7 +492,7 @@ async def test_flag_on_then_off_cancels_active_child_without_prompt_paste() -> N
     await collect(h)
     parked = h.repository.checkpoints[-1]
     assert parked.loop_state["active_child_run_id"]
-    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    h = h.rebuilt(config=replace(h.config, subagent_enabled=False))
     events = await collect(h, parked)
     completed_events = [event for event in events if event.type == "tool.completed"]
     assert completed_events
@@ -533,8 +534,7 @@ async def test_flag_on_without_runtime_raises_subagent_runtime_missing() -> None
 
 
 def test_restore_missing_active_child_keys_are_none() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     assert state.active_child_run_id is None
     assert state.active_child_checkpoint_id is None
     assert state.active_child_tool_call_id is None
@@ -623,7 +623,7 @@ def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
         active_child_checkpoint_id="sc_stale",
         active_child_tool_call_id="s2",
     )
-    dumped = h.loop._dump_state(INPUT, stale)
+    dumped = encode_state(INPUT, stale)
     assert dumped["active_children"][0]["tool_call_id"] == "s1"
     assert dumped["active_children"][1]["tool_call_id"] == "s2"
     assert dumped["active_child_run_id"] == "sa_1"
@@ -702,7 +702,7 @@ async def test_flag_off_with_two_live_children_completes_every_claim() -> None:
     await collect(h)
     parked = h.repository.checkpoints[-1]
     planted, sibling = await _plant_second_child(h, runtime, parked)
-    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    h = h.rebuilt(config=replace(h.config, subagent_enabled=False))
     events = await collect(h, planted)
     completed_events = [event for event in events if event.type == "tool.completed"]
     assert completed_events
@@ -832,8 +832,8 @@ async def test_max_active_2_allows_two_different_tool_call_ids() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     state = parked.loop_state
     ids = [child["tool_call_id"] for child in state["active_children"]]
@@ -849,8 +849,7 @@ async def test_max_active_2_allows_two_different_tool_call_ids() -> None:
 async def test_same_tool_call_id_resume_still_parks() -> None:
     runtime, _child = _make_runtime([_child_tool(), _child_tool()])
     clock = TickableClock()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._clock = clock
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, clock=clock)
     await collect(h)
     first = h.repository.checkpoints[-1]
     first_run = first.loop_state["active_child_run_id"]
@@ -871,8 +870,7 @@ async def test_old_last_advanced_at_folds_stalled_without_advance() -> None:
     inner, child = _make_runtime([_child_tool(), _text("should not run")])
     runtime = RecordingSubagents(inner)
     clock = TickableClock()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._clock = clock
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, clock=clock)
     await collect(h)
     parked = h.repository.checkpoints[-1]
     state = dict(parked.loop_state)
@@ -907,8 +905,7 @@ async def test_epoch_last_advanced_at_still_advances() -> None:
     inner, _child = _make_runtime([_child_tool(), _child_tool()])
     runtime = RecordingSubagents(inner)
     clock = TickableClock()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._clock = clock
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, clock=clock)
     await collect(h)
     parked = h.repository.checkpoints[-1]
     state = dict(parked.loop_state)
@@ -939,8 +936,8 @@ async def test_one_delivery_advances_exactly_one_child() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     assert len(parked.loop_state["active_children"]) == 2
     before = len(runtime.advance_tickets)
@@ -959,8 +956,8 @@ async def test_fill_before_rr() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     await collect(h)
     first = h.repository.checkpoints[-1]
     s1 = _child_by_id(first.loop_state, "s1")
@@ -993,8 +990,8 @@ async def test_rr_picks_oldest_last_advanced_at() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     store = _subagent_store(runtime)
     s1 = _child_by_id(parked.loop_state, "s1")
@@ -1028,8 +1025,8 @@ async def test_resume_uses_child_ref_not_scalars() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     state = parked.loop_state
     s1 = _child_by_id(state, "s1")
@@ -1059,8 +1056,8 @@ async def test_fold_of_one_child_does_not_complete_the_sibling() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     folded = await _collect_until_folded(h, clock, parked, "s1")
     state = folded.loop_state
@@ -1085,8 +1082,8 @@ async def test_out_of_order_fold_does_not_double_append() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     state = dict(parked.loop_state)
     children = [dict(child) for child in state["active_children"]]
@@ -1133,8 +1130,8 @@ async def test_non_spawn_breaks_the_window() -> None:
         ],
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     await collect(h)
     clock.tick()
     first = h.repository.checkpoints[-1]
@@ -1160,8 +1157,8 @@ async def test_adopt_all_rewrites_sibling_fencing() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     claim_a_s1, _ = h.repository.tool_claims[("ct_1", "s1")]
     lease_a = h.deps.lease
@@ -1208,8 +1205,8 @@ async def test_deny_of_non_prefix_spawn_does_not_advance_index() -> None:
         ],
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     await collect(h)
     clock.tick()
     parked = h.repository.checkpoints[-1]
@@ -1239,8 +1236,8 @@ async def test_adopt_all_remarks_expired_sibling_delegated() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     clock.tick(160)
     lease_a = h.deps.lease
@@ -1382,7 +1379,7 @@ async def test_flag_off_completed_reuse_drops_child_and_counts_result_once() -> 
     parked = h.repository.checkpoints[-1]
     assert _child_by_id(parked.loop_state, "s1") is not None
     assert _child_by_id(parked.loop_state, "s2") is None
-    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    h = h.rebuilt(config=replace(h.config, subagent_enabled=False))
     original = h.repository.commit_phase_checkpoint
 
     async def kill(**kwargs):
@@ -1428,11 +1425,11 @@ async def test_budget_exceed_keeps_folded_result_and_cancels_siblings() -> None:
         _two_spawn_turns(),
         config=_priced(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     parent_cost = int(parked.loop_state["cost_micros"])
-    h.loop._config = replace(h.loop._config, max_cost_micros=max(1, parent_cost))
+    h = h.rebuilt(config=replace(h.config, max_cost_micros=max(1, parent_cost)))
     service = await _run_service(h, clock)
     with pytest.raises(CodingLoopFailure) as caught:
         for _ in range(8):
@@ -1519,8 +1516,7 @@ def _live_bucket(metrics, le: str) -> float:
 async def test_spawn_delivery_observes_live_children_histogram() -> None:
     runtime, _child = _make_runtime([_child_tool()])
     metrics = _metrics()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._metrics = metrics
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, metrics=metrics)
     events = await collect(h)
     assert _live_count(metrics) == 1
     assert _live_sum(metrics) == 1.0
@@ -1536,8 +1532,7 @@ async def test_spawn_delivery_observes_live_children_histogram() -> None:
 async def test_policy_child_already_active_increments_capped_counter() -> None:
     runtime, _child = _make_runtime([_child_tool()])
     metrics = _metrics()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._metrics = metrics
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, metrics=metrics)
     await collect(h)
     parked = h.repository.checkpoints[-1]
     state = dict(parked.loop_state)
@@ -1564,8 +1559,7 @@ async def test_child_fold_records_parent_priced_rollup_not_folded_cost() -> None
 
     runtime.fold = inflated
     metrics = _metrics()
-    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
-    h.loop._metrics = metrics
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime, metrics=metrics)
     await collect(h)
     assert (
         metrics.subagent_fold_rollup_tokens_total.labels(
@@ -1597,8 +1591,7 @@ async def test_child_fold_records_parent_priced_rollup_not_folded_cost() -> None
 async def test_child_fold_observes_live_children_after_drop() -> None:
     runtime, _child = _make_runtime([_usage_turn("found login.py", 2, 3)])
     metrics = _metrics()
-    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
-    h.loop._metrics = metrics
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime, metrics=metrics)
     await collect(h)
     state = h.repository.checkpoints[-1].loop_state
     assert not state.get("active_children")
@@ -1624,16 +1617,18 @@ async def test_token_budget_exceed_cancels_siblings_with_token_reason() -> None:
         _two_spawn_turns(),
         config=_priced(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     parent_tokens = int(parked.loop_state["input_tokens"]) + int(
         parked.loop_state["output_tokens"]
     )
-    h.loop._config = replace(
-        h.loop._config,
-        max_total_tokens=max(1, parent_tokens),
-        max_cost_micros=10**12,
+    h = h.rebuilt(
+        config=replace(
+            h.config,
+            max_total_tokens=max(1, parent_tokens),
+            max_cost_micros=10**12,
+        )
     )
     service = await _run_service(h, clock)
     with pytest.raises(CodingLoopFailure) as caught:
@@ -1785,14 +1780,14 @@ async def test_flag_off_mid_flight_cancels_all_live_children() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     assert [child["tool_call_id"] for child in parked.loop_state["active_children"]] == [
         "s1",
         "s2",
     ]
-    h.loop._config = replace(h.loop._config, subagent_enabled=False)
+    h = h.rebuilt(config=replace(h.config, subagent_enabled=False))
     await collect(h, parked)
     state = h.repository.checkpoints[-1].loop_state
     results = _tool_results(state)
@@ -1866,8 +1861,8 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
         _two_spawn_turns(),
         config=_flag_on(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     original_s1 = {"status": "ok", "summary": "already folded"}
     h.repository.completed_tools[("ct_1", "s1")] = dict(original_s1)
@@ -1901,7 +1896,7 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
         reason="aborted",
         task_id="ct_1",
     )
-    dumped = h.loop._dump_state(INPUT, after)
+    dumped = encode_state(INPUT, after)
     results = _tool_results(dumped)
     s1_results = [item for item in results if item["tool_call_id"] == "s1"]
     s2_results = [item for item in results if item["tool_call_id"] == "s2"]
@@ -1932,8 +1927,7 @@ async def test_continuing_park_increments_parent_usage_fold_does_not_double_coun
         ]
     )
     clock = TickableClock()
-    h = harness(_spawn_turns(), config=_priced(), subagents=runtime)
-    h.loop._clock = clock
+    h = harness(_spawn_turns(), config=_priced(), subagents=runtime, clock=clock)
     await collect(h)
     parked = h.repository.checkpoints[-1]
     before = _parent_tokens_before_child(h)
@@ -1970,16 +1964,18 @@ async def test_token_budget_exceed_on_continuing_cancels_siblings() -> None:
         _two_spawn_turns(),
         config=_priced(subagent_max_active=2),
         subagents=runtime,
+        clock=clock,
     )
-    h.loop._clock = clock
     parked = await _park_two(h, clock)
     parent_tokens = int(parked.loop_state["input_tokens"]) + int(
         parked.loop_state["output_tokens"]
     )
-    h.loop._config = replace(
-        h.loop._config,
-        max_total_tokens=max(1, parent_tokens),
-        max_cost_micros=10**12,
+    h = h.rebuilt(
+        config=replace(
+            h.config,
+            max_total_tokens=max(1, parent_tokens),
+            max_cost_micros=10**12,
+        )
     )
     service = await _run_service(h, clock)
     with pytest.raises(CodingLoopFailure) as caught:
@@ -2040,8 +2036,7 @@ async def test_adopt_and_complete_claim_errors_are_logged_not_raised(
 ) -> None:
     runtime, _child = _make_runtime([_child_tool()])
     metrics = _metrics()
-    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime)
-    h.loop._metrics = metrics
+    h = harness(_spawn_turns(), config=_flag_on(), subagents=runtime, metrics=metrics)
 
     async def boom_claim(**kwargs):
         raise RuntimeError("claim exploded")

@@ -30,7 +30,7 @@ from neos.subagent.memory import InMemorySubagentStore
 from neos.subagent.ports import SystemClock
 from neos.subagent.runtime import SubagentRuntime
 from neos.subagent.stepper import ChildStepper
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     NOW,
     Bindings,
     collect,

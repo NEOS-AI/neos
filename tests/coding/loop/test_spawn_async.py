@@ -31,7 +31,7 @@ import pytest
 
 from neos.coding.loop.anthropic import AnthropicLoopConfig
 
-from tests.coding.loop.test_anthropic_loop import collect, completed, harness, tool_call
+from tests.coding.loop.support import collect, completed, harness, tool_call
 from tests.coding.loop.test_spawn_subagent import (
     _child_tool,
     _make_runtime,

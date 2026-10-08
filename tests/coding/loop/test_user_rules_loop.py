@@ -14,7 +14,7 @@ import pytest
 from neos.coding.application.user_rules import InMemoryUserRuleStore
 from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.loop._durable.state import CodingLoopFailure
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 
@@ -30,9 +30,12 @@ def _two_reads():
 
 
 def _loop(rules, turns=None, **kwargs):
-    h = harness(turns or _two_reads(), approval_evaluator=evaluate_approval, **kwargs)
-    h.loop._user_rules = rules
-    return h
+    return harness(
+        turns or _two_reads(),
+        approval_evaluator=evaluate_approval,
+        user_rules=rules,
+        **kwargs,
+    )
 
 
 async def _step(h, input, checkpoint=None):
