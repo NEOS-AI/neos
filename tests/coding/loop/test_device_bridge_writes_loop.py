@@ -96,7 +96,7 @@ def test_phases_that_block_writes_hide_the_device_write(phase, shown) -> None:
 
     h = _loop(_end_turn(), WriteRelay(_writer()))
     state = AgentLoopState((), 0, 0, 0, (), 0, "", phase=phase, device_bridge=_writer())
-    names = [getattr(d, "name", d) for d in h.loop._tool_definitions(state)]
+    names = [getattr(d, "name", d) for d in h.catalog().definitions(state)]
 
     assert ("device_read_file.v1" in names) and ((WRITE in names) is shown)
 

@@ -375,7 +375,7 @@ class ModelTurnMixin:
                 state.transcript
                 + (CanonicalMessage("system", (SystemNoteContent(system_note),)),),
             )
-        tools = self._tool_definitions(state)
+        tools = self._catalog.definitions(state)
         state = self._guard_thinking_prefix(state, system, tools)
         return state, system, tools
 

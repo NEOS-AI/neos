@@ -408,7 +408,7 @@ async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> Non
     )
     assert set(dumped["allowed_tools"]) == {"execute.v1", "read_file.v1"}
     assert restored.allowed_tools == frozenset({"read_file.v1", "execute.v1"})
-    names = {tool.name for tool in h.loop._tool_definitions(restored)}
+    names = {tool.name for tool in h.catalog().definitions(restored)}
     assert "read_file.v1" in names
     assert "execute.v1" in names
     assert "write_file.v1" not in names
@@ -428,7 +428,7 @@ async def test_empty_skill_allowed_tools_do_not_restrict() -> None:
         tool_name="load_skill.v1",
         tool_input={"name": "open"},
     )
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    names = {tool.name for tool in h.catalog().definitions(after)}
     assert after.allowed_tools == frozenset()
     assert "write_file.v1" in names
 
@@ -467,7 +467,7 @@ async def test_loaded_skill_allowed_tools_union_across_skills() -> None:
     assert second.allowed_tools == frozenset(
         {"read_file.v1", "execute.v1", "write_file.v1"}
     )
-    names = {tool.name for tool in h.loop._tool_definitions(second)}
+    names = {tool.name for tool in h.catalog().definitions(second)}
     assert "write_file.v1" in names
     assert "edit_file.v1" not in names
 
@@ -578,7 +578,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
     )
 
     after = await h.loop._compact_after_prompt_too_long(state)
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names
@@ -589,7 +589,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
     )
     assert "web_fetch.v1" in restored.revealed_tools
     assert "web_fetch.v1" in {
-        tool.name for tool in h.loop._tool_definitions(restored)
+        tool.name for tool in h.catalog().definitions(restored)
     }
 
 
@@ -607,7 +607,7 @@ async def test_compact_recovers_revealed_tools_from_transcript() -> None:
     )
 
     after = await h.loop._compact_after_prompt_too_long(state)
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names

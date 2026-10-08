@@ -69,7 +69,7 @@ def _reveal_tools(loop, state, tool_input, result) -> dict:
 
 def _allow_skill_tools(loop, state, tool_input, result) -> dict:
     return {
-        "allowed_tools": loop._union_skill_allowed_tools(
+        "allowed_tools": loop._catalog._union_skill_allowed_tools(
             state.allowed_tools, result.content
         )
     }
@@ -143,13 +143,13 @@ class TurnTransitionsMixin:
         transcript = await self._compact_with_hook(
             transcript, preserve_tools=bool(calls), bodies=bodies
         )
-        revealed = state.revealed_tools | self._revealed_from_transcript(
+        revealed = state.revealed_tools | self._catalog.revealed_from(
             before_compact
         )
         # Catches a reveal re-derived from the transcript, which is what a
         # resume does. Announcing only the delta keeps this from repeating
         # what the tool-result path already announced.
-        transcript = self._announce_reveals(
+        transcript = self._catalog.announce_reveals(
             transcript, state.revealed_tools, revealed
         )
         reset_empty = bool(calls) or not _is_empty_or_think_only(text)
@@ -202,7 +202,7 @@ class TurnTransitionsMixin:
                 effects.update(effect(self, state, tool_input, result))
         # The primary path: the search result that revealed the tool has
         # just been appended, so the announcement follows it directly.
-        transcript = self._announce_reveals(
+        transcript = self._catalog.announce_reveals(
             transcript,
             state.revealed_tools,
             effects.get("revealed_tools", state.revealed_tools),

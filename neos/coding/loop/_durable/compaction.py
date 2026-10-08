@@ -168,7 +168,7 @@ class CompactionMixin:
             instructions_loaded=False,
             summary=summary,
             revealed_tools=state.revealed_tools
-            | self._revealed_from_transcript(before),
+            | self._catalog.revealed_from(before),
         )
 
     def _recent_read_preview(self, state: AgentLoopState) -> str:
@@ -196,7 +196,7 @@ class CompactionMixin:
             transcript_digest=self._digest(after),
             prompt_compact_retries=state.prompt_compact_retries + 1,
             revealed_tools=state.revealed_tools
-            | self._revealed_from_transcript(state.transcript),
+            | self._catalog.revealed_from(state.transcript),
         )
 
     def _compaction_request(self, prompt: str) -> tuple[ModelRequest, bool]:

@@ -165,7 +165,7 @@ class CheckpointMixin:
         state = _state_from_mapping(
             raw,
             transcript=transcript,
-            revealed=self._revealed_from_transcript(transcript),
+            revealed=self._catalog.revealed_from(transcript),
         )
         # A queued instruction waits while a tool call is still open: it
         # would otherwise land between the call and its result.

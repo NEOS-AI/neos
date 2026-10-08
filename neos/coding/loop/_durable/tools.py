@@ -192,7 +192,7 @@ class ToolExecutionMixin:
     def _static_denial(self, call, state) -> tuple[str | None, ValidatedToolCall | None]:
         if not tool_allowed_in_phase(call.name, state.phase):
             return "policy_phase_denied", None
-        if not self._tool_allowed_by_skills(call.name, state):
+        if not self._catalog.allowed_by_skills(call.name, state):
             return "policy_skill_denied", None
         try:
             validated = self._tools.validate(call.name, call.input)
@@ -792,7 +792,7 @@ class ToolExecutionMixin:
                 break
             if not tool_allowed_in_phase(call.name, state.phase):
                 break
-            if not self._tool_allowed_by_skills(call.name, state):
+            if not self._catalog.allowed_by_skills(call.name, state):
                 break
             try:
                 validated = self._tools.validate(call.name, call.input)
@@ -1079,7 +1079,7 @@ class ToolExecutionMixin:
             return None
         if not tool_allowed_in_phase(call.name, state.phase):
             return None
-        if not self._tool_allowed_by_skills(call.name, state):
+        if not self._catalog.allowed_by_skills(call.name, state):
             return None
         try:
             validated = self._tools.validate(call.name, call.input)

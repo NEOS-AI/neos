@@ -73,7 +73,7 @@ from neos.coding.loop._durable.state import (
     DelegatedSpawn as DelegatedSpawn,
     SpawnWork as SpawnWork,
 )
-from neos.coding.loop._durable.tool_catalog import ToolCatalogMixin
+from neos.coding.loop._durable.tool_catalog import ToolCatalog
 from neos.coding.loop._durable.tools import ToolExecutionMixin
 from neos.coding.loop._durable.transcript import (
     _uniquify_tool_calls as _uniquify_tool_calls,
@@ -98,7 +98,6 @@ class DurableCodingLoop(
     TurnTransitionsMixin,
     CompactionMixin,
     CheckpointMixin,
-    ToolCatalogMixin,
 ):
     def __init__(
         self,
@@ -131,6 +130,7 @@ class DurableCodingLoop(
         self._executor = executor
         self._bindings = bindings
         self._config = config
+        self._catalog = ToolCatalog(tools, config)
         self._metrics = metrics
         self._audit = audit or NullCodingAuditSink()
         self._clock = clock

@@ -15,6 +15,7 @@ from neos.coding.loop.anthropic import (
     AnthropicLoopConfig,
 )
 from neos.coding.loop._durable.state import AgentLoopState
+from neos.coding.loop._durable.tool_catalog import ToolCatalog
 from neos.coding.loop.checkpoint import encode_state, initial_state
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "LoopCheckpointState",
     "LoopDependencies",
     "LoopInput",
+    "ToolCatalog",
     "encode_state",
     "initial_state",
 ]
