@@ -1,7 +1,7 @@
 """Token and cost accounting against the loop's budgets.
 
-Functions take `config` per call rather than capturing it, so pricing always
-uses the loop's current config and never a copy taken earlier.
+Functions take `config` per call rather than capturing it; the loop passes the
+config it was built with (it is fixed in `__init__`).
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from dataclasses import replace
 from neos.coding.model.base import ModelCompleted
 from neos.coding.loop._durable.codec import _nonneg_int
 from neos.coding.loop._durable.state import AgentLoopState, CodingLoopFailure
+from neos.config.model_identity import usable_window_tokens
 
 
 def _usage_tokens(completion: ModelCompleted) -> tuple[int, int]:
@@ -86,3 +87,33 @@ def check_usage_budgets(config, state: AgentLoopState) -> None:
         raise CodingLoopFailure("token_budget_exceeded", retryable=False)
     if state.cost_micros > config.max_cost_micros:
         raise CodingLoopFailure("cost_budget_exceeded", retryable=False)
+
+
+def transcript_token_limit(config) -> int:
+    """The maximum number of tokens that can be in a transcript.
+
+    If a context window is configured, this is the usable window after
+    reserving space for output. Otherwise, it uses the configured max.
+    """
+    usable = usable_window_tokens(
+        context_window=config.context_window,
+        max_output_tokens=config.max_output_tokens,
+        input_limit=config.input_limit,
+        thinking_budget=config.thinking_budget,
+    )
+    if usable is None:
+        return config.max_transcript_tokens
+    return usable
+
+
+def parent_headroom_chars(config, state: AgentLoopState) -> int:
+    """Characters of room left in the parent transcript for folding a child's result.
+
+    Passed to the subagent fold so child reports are budgeted to fit. It is the
+    remaining prompt tokens times 4 (an estimate of characters per token),
+    never negative.
+    """
+    remaining = max(
+        0, transcript_token_limit(config) - max(0, state.last_prompt_tokens)
+    )
+    return remaining * 4

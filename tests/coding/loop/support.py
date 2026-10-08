@@ -9,7 +9,8 @@ from neos.coding.domain.approvals import ApprovalPolicyOutcome
 from neos.coding.domain.durability import ExecutionLease
 from neos.coding.domain.events import make_event
 from neos.coding.domain.phases import CodingCheckpoint, CodingRun, CodingRunStatus
-from neos.coding.loop import encode_state
+from neos.coding.loop import Compactor, ToolCatalog, encode_state, restore_state
+from neos.coding.loop._durable.state import AgentLoopState
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.base import ModelCompleted, ModelUsage, ToolCallCompleted
@@ -127,6 +128,25 @@ class Harness:
     @property
     def config(self) -> AnthropicLoopConfig:
         return self.loop_kwargs["config"]
+
+    def catalog(self) -> ToolCatalog:
+        """The tool catalog this harness's loop was built with."""
+        return ToolCatalog(self.loop_kwargs["tools"], self.config)
+
+    def compactor(self) -> Compactor:
+        """The compactor this harness's loop was built with."""
+        return Compactor(
+            config=self.config,
+            hooks=self.loop_kwargs["hooks"],
+            model=self.loop_kwargs["model"],
+            catalog=self.catalog(),
+        )
+
+    def restore(self, checkpoint, *, input=INPUT) -> AgentLoopState:
+        """The state this harness's loop would resume `checkpoint` into."""
+        return restore_state(
+            input, checkpoint, catalog=self.catalog(), compactor=self.compactor()
+        )
 
     def rebuilt(self, **overrides: Any) -> "Harness":
         """A new loop over the same repository, events and lease.

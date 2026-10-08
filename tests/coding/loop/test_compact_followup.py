@@ -134,7 +134,7 @@ async def test_compact_after_prompt_too_long_reattaches_recent_reads() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     assert after.instructions_loaded is False
     texts = [
@@ -176,7 +176,7 @@ async def test_compact_after_prompt_too_long_reattaches_at_most_five_reads() -> 
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     preview = "\n".join(
         item.text
@@ -217,7 +217,7 @@ async def test_compact_after_prompt_too_long_ignores_denied_absolute_reads() -> 
         initial_state(INPUT), transcript=reads, instructions_loaded=True
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     preview = "\n".join(
         item.text
@@ -247,7 +247,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     prompt = h.model.requests[0].messages[0].content[0].text
     assert "old facts about auth" in prompt
@@ -260,10 +260,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         if hasattr(item, "text")
     )
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_sum", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_sum", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["summary"] == "new compressed facts"
     assert restored.summary == "new compressed facts"
 
@@ -334,7 +331,7 @@ async def test_pre_and_post_compact_inject_user_instructions() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     texts = [
         item.text
@@ -361,7 +358,7 @@ async def test_compact_hooks_do_not_split_open_tool_pairs() -> None:
         ),
     )
 
-    after = await h.loop._compact_with_hook(open_pair, preserve_tools=True)
+    after = await h.compactor().compact_with_hook(open_pair, preserve_tools=True)
 
     roles = [message.role for message in after]
     assert roles[-1] == "assistant"
@@ -402,13 +399,10 @@ async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> Non
     )
 
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_skill", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_skill", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert set(dumped["allowed_tools"]) == {"execute.v1", "read_file.v1"}
     assert restored.allowed_tools == frozenset({"read_file.v1", "execute.v1"})
-    names = {tool.name for tool in h.loop._tool_definitions(restored)}
+    names = {tool.name for tool in h.catalog().definitions(restored)}
     assert "read_file.v1" in names
     assert "execute.v1" in names
     assert "write_file.v1" not in names
@@ -428,7 +422,7 @@ async def test_empty_skill_allowed_tools_do_not_restrict() -> None:
         tool_name="load_skill.v1",
         tool_input={"name": "open"},
     )
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    names = {tool.name for tool in h.catalog().definitions(after)}
     assert after.allowed_tools == frozenset()
     assert "write_file.v1" in names
 
@@ -467,7 +461,7 @@ async def test_loaded_skill_allowed_tools_union_across_skills() -> None:
     assert second.allowed_tools == frozenset(
         {"read_file.v1", "execute.v1", "write_file.v1"}
     )
-    names = {tool.name for tool in h.loop._tool_definitions(second)}
+    names = {tool.name for tool in h.catalog().definitions(second)}
     assert "write_file.v1" in names
     assert "edit_file.v1" not in names
 
@@ -515,7 +509,7 @@ async def test_llm_compact_keeps_tool_result_ref_bodies() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     assert after.summary == "compressed facts"
     assert after.compacted_bodies[digest] == payload_text
@@ -577,19 +571,16 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    after = await h.compactor().compact_after_prompt_too_long(state)
+    names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert "web_fetch.v1" in restored.revealed_tools
     assert "web_fetch.v1" in {
-        tool.name for tool in h.loop._tool_definitions(restored)
+        tool.name for tool in h.catalog().definitions(restored)
     }
 
 
@@ -606,8 +597,8 @@ async def test_compact_recovers_revealed_tools_from_transcript() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
-    names = {tool.name for tool in h.loop._tool_definitions(after)}
+    after = await h.compactor().compact_after_prompt_too_long(state)
+    names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names

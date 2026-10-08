@@ -554,8 +554,7 @@ def _checkpoint(loop_state: dict) -> CodingCheckpoint:
 
 def test_restore_missing_list_uses_scalars() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(
-        INPUT,
+    state = h.restore(
         _checkpoint(
             {
                 "transcript": [],
@@ -565,7 +564,7 @@ def test_restore_missing_list_uses_scalars() -> None:
                 "active_child_checkpoint_id": "sc_legacy",
                 "active_child_tool_call_id": "s1",
             }
-        ),
+        )
     )
     assert state.active_child_run_id == "sa_legacy"
     assert state.active_child_checkpoint_id == "sc_legacy"
@@ -595,8 +594,7 @@ def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
         },
     ]
     with caplog.at_level(logging.WARNING, logger="neos.coding.loop.durable"):
-        state = h.loop._restore(
-            INPUT,
+        state = h.restore(
             _checkpoint(
                 {
                     "transcript": [],
@@ -607,7 +605,7 @@ def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
                     "active_child_tool_call_id": "s2",
                     "active_children": children,
                 }
-            ),
+            )
         )
     assert [child.tool_call_id for child in state.active_children] == ["s1", "s2"]
     assert state.active_child_run_id == "sa_1"
@@ -628,7 +626,7 @@ def test_restore_list_mirrors_scalars(caplog: pytest.LogCaptureFixture) -> None:
     assert dumped["active_children"][1]["tool_call_id"] == "s2"
     assert dumped["active_child_run_id"] == "sa_1"
     assert dumped["active_child_tool_call_id"] == "s1"
-    again = h.loop._restore(INPUT, _checkpoint(dumped))
+    again = h.restore(_checkpoint(dumped))
     assert [child.tool_call_id for child in again.active_children] == ["s1", "s2"]
     assert again.active_child_run_id == "sa_1"
     assert again.active_child_tool_call_id == "s1"
@@ -738,7 +736,7 @@ async def test_checkpoint_aborted_completes_every_live_spawn_claim() -> None:
     parked = h.repository.checkpoints[-1]
     planted, sibling = await _plant_second_child(h, runtime, parked)
     bound = await h.loop._bindings.resolve(h.deps.lease)
-    state = h.loop._restore(INPUT, planted)
+    state = h.restore(planted)
     await h.loop._checkpoint_aborted(INPUT, state, bound, h.deps)
     assert h.repository.completed_tools[("ct_1", "s1")]["reason_code"] == "aborted"
     assert h.repository.completed_tools[("ct_1", "s2")]["reason_code"] == "aborted"
@@ -1705,8 +1703,7 @@ async def test_completed_reuse_skips_after_result_and_drains_prefix() -> None:
 
 def test_restore_empty_stamps_when_len_gt_1_use_epoch() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(
-        INPUT,
+    state = h.restore(
         _checkpoint(
             {
                 "transcript": [],
@@ -1727,7 +1724,7 @@ def test_restore_empty_stamps_when_len_gt_1_use_epoch() -> None:
                     },
                 ],
             }
-        ),
+        )
     )
     assert [child.tool_call_id for child in state.active_children] == ["s1", "s2"]
     assert {child.last_advanced_at for child in state.active_children} == {
@@ -1737,8 +1734,7 @@ def test_restore_empty_stamps_when_len_gt_1_use_epoch() -> None:
 
 def test_select_spawn_work_resume_call_none_on_pending_mutation() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(
-        INPUT,
+    state = h.restore(
         _checkpoint(
             {
                 "transcript": [],
@@ -1759,7 +1755,7 @@ def test_select_spawn_work_resume_call_none_on_pending_mutation() -> None:
                     }
                 ],
             }
-        ),
+        )
     )
     work = _select_spawn_work(state, max_active=1)
     assert work is not None
@@ -1888,7 +1884,7 @@ async def test_fail_all_skips_completed_and_already_on_transcript() -> None:
     state["transcript"] = transcript
     mutated = replace(parked, loop_state=state)
     bound = await h.loop._bindings.resolve(h.deps.lease)
-    restored = h.loop._restore(INPUT, mutated)
+    restored = h.restore(mutated)
     after = await h.loop.fail_all_live_spawn_claims(
         restored,
         h.deps,

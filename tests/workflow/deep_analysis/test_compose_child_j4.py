@@ -29,13 +29,15 @@ from neos.workflow.deep_analysis.compose_worker import (
     run_compose_worker,
 )
 from neos.workflow.deep_analysis.models import NodeSummary
+from neos.workflow.deep_analysis.orchestrator import Orchestrator
 from neos.workflow.deep_analysis.research_session import CommandLimits
 from tests.workflow.deep_analysis.test_orchestrator_m4 import (
     FakeLedger,
     FakeSynth,
     FlakyRenderer,
     OkGrader,
-    _orch,
+    _write,
+    _writer,
 )
 
 pytestmark = pytest.mark.no_db
@@ -236,7 +238,7 @@ def _summaries():
 async def test_with_the_flag_off_assemble_writes_the_draft_and_no_compose_event(monkeypatch):
     monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", False)
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
-    report = await _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())._finalize("root0001")
+    report = await _write(_writer(ledger, synth, FlakyRenderer(0), grader=OkGrader()))
     assert "DRAFT-1" in report and synth.assemble_calls == 1
     assert not [e for e in ledger.events if e[0].startswith("code_worker")]
 
@@ -251,16 +253,67 @@ async def test_with_the_flag_on_the_compose_child_writes_the_draft(monkeypatch):
 
     monkeypatch.setattr(compose_worker, "run_compose_worker", fake)
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
-    orch = _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())
-    orch.sandbox_provider = MemoryProvider()
-    orch.compose_runtime_factory = lambda port: None
+    writer = _writer(ledger, synth, FlakyRenderer(0), grader=OkGrader(),
+                     sandbox_provider=MemoryProvider(), compose_runtime_factory=lambda port: None)
+
+    report = await _write(writer)
+
+    assert "COMPOSED" in report and synth.assemble_calls == 0
+    kinds = [(k, p.get("spec")) for (k, _q, p) in ledger.events if k.startswith("code_worker")]
+    assert kinds == [("code_worker_started", "compose"), ("code_worker_submitted", "compose")]
+    assert seen["root_id"] == "root0001" and seen["root_summary"] == "루트 요약"
+
+
+def test_the_orchestrator_hands_the_report_writer_its_dependencies():
+    ledger, synth, renderer, grader = ClaimLedger(), FakeSynth(_summaries()), FlakyRenderer(0), OkGrader()
+    provider, factory = MemoryProvider(), (lambda port: None)
+    orch = Orchestrator(
+        object(),
+        "run00001",
+        worker_factory=lambda: None,
+        grader=object(),
+        ledger=ledger,
+        synthesizer=synth,
+        citation_renderer=renderer,
+        report_grader=grader,
+        sandbox_provider=provider,
+        compose_runtime_factory=factory,
+    )
+    rw = orch.report_writer
+    assert rw.sandbox_provider is provider
+    assert rw.compose_runtime_factory is factory
+    assert rw.report_grader is grader
+    assert rw.ledger is orch.ledger
+    assert rw.synthesizer is orch.synthesizer
+    assert rw.citation_renderer is orch.citation_renderer
+
+
+async def test_through_the_orchestrator_the_compose_child_writes_the_draft(monkeypatch):
+    monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
+
+    async def fake(**kwargs):
+        return "COMPOSED [C:c1aaaaaa]\n\n## 출처", {"steps": 1, "cited_verified": 1}
+
+    monkeypatch.setattr(compose_worker, "run_compose_worker", fake)
+    ledger, synth = ClaimLedger(), FakeSynth(_summaries())
+    orch = Orchestrator(
+        object(),
+        "run00001",
+        worker_factory=lambda: None,
+        grader=object(),
+        ledger=ledger,
+        synthesizer=synth,
+        citation_renderer=FlakyRenderer(0),
+        report_grader=OkGrader(),
+        sandbox_provider=MemoryProvider(),
+        compose_runtime_factory=lambda port: None,
+    )
 
     report = await orch._finalize("root0001")
 
     assert "COMPOSED" in report and synth.assemble_calls == 0
     kinds = [(k, p.get("spec")) for (k, _q, p) in ledger.events if k.startswith("code_worker")]
     assert kinds == [("code_worker_started", "compose"), ("code_worker_submitted", "compose")]
-    assert seen["root_id"] == "root0001" and seen["root_summary"] == "루트 요약"
 
 
 async def test_a_failing_compose_child_falls_back_to_assemble_once_and_says_so(monkeypatch):
@@ -276,11 +329,10 @@ async def test_a_failing_compose_child_falls_back_to_assemble_once_and_says_so(m
 
     monkeypatch.setattr(compose_worker, "run_compose_worker", fail)
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
-    orch = _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())
-    orch.sandbox_provider = MemoryProvider()
-    orch.compose_runtime_factory = lambda port: None
+    writer = _writer(ledger, synth, FlakyRenderer(0), grader=OkGrader(),
+                     sandbox_provider=MemoryProvider(), compose_runtime_factory=lambda port: None)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     reasons = [p["reason"] for (k, _q, p) in ledger.events if k == "code_worker_unsubmitted"]
     attempts = settings.config.deep_analysis.report_retry_cap + 1
@@ -306,11 +358,10 @@ async def test_a_compose_draft_that_was_rejected_is_delivered_not_the_fallback(m
 
     monkeypatch.setattr(compose_worker, "run_compose_worker", compose)
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
-    orch = _orch(ledger, synth, FlakyRenderer(0), grader=RejectGrader())
-    orch.sandbox_provider = MemoryProvider()
-    orch.compose_runtime_factory = lambda port: None
+    writer = _writer(ledger, synth, FlakyRenderer(0), grader=RejectGrader(),
+                     sandbox_provider=MemoryProvider(), compose_runtime_factory=lambda port: None)
 
-    report = await orch._finalize("root0001")
+    report = await _write(writer)
 
     assert synth.assemble_calls == 0 and "COMPOSED" in report
     assert not [p for (k, _q, p) in ledger.events if k == "report_assembly_degraded"]
@@ -319,7 +370,7 @@ async def test_a_compose_draft_that_was_rejected_is_delivered_not_the_fallback(m
 async def test_a_missing_sandbox_is_reported_by_name(monkeypatch):
     monkeypatch.setattr(settings.config.deep_analysis, "compose_child_enabled", True)
     ledger, synth = ClaimLedger(), FakeSynth(_summaries())
-    await _orch(ledger, synth, FlakyRenderer(0), grader=OkGrader())._finalize("root0001")
+    await _write(_writer(ledger, synth, FlakyRenderer(0), grader=OkGrader()))
     reasons = {p["reason"] for (k, _q, p) in ledger.events if k == "code_worker_unsubmitted"}
     assert reasons == {"sandbox_provider_missing"} and synth.assemble_calls == 1  # 루프 밖 대체 한 번(D114)
 
@@ -424,10 +475,9 @@ async def test_the_orchestrator_hands_each_attempt_its_number(monkeypatch):
         raise ComposeFailed("submit_not_called")
 
     monkeypatch.setattr(compose_worker, "run_compose_worker", fail)
-    orch = _orch(ClaimLedger(), FakeSynth(_summaries()), FlakyRenderer(0), grader=OkGrader())
-    orch.sandbox_provider = MemoryProvider()
-    orch.compose_runtime_factory = lambda port: None
-    await orch._finalize("root0001")
+    writer = _writer(ClaimLedger(), FakeSynth(_summaries()), FlakyRenderer(0), grader=OkGrader(),
+                     sandbox_provider=MemoryProvider(), compose_runtime_factory=lambda port: None)
+    await _write(writer)
     assert seen == list(range(settings.config.deep_analysis.report_retry_cap + 1))
 
 

@@ -21,6 +21,7 @@ from neos.subagent.types import (
 )
 from neos.workflow.deep_analysis.models import Assignment, Effort, WorkerResult
 from neos.workflow.deep_analysis.orchestrator import Orchestrator
+from neos.workflow.deep_analysis.stall import StallTracker
 from neos.coding.model.errors import CodingModelError
 from neos.workflow.deep_analysis.subagent_adapter import (
     DAToolPort,
@@ -146,7 +147,7 @@ def _outcome(**overrides) -> StepOutcome:
     return StepOutcome(**payload)
 
 
-def _orch(*, runtime=None, worker=None, ledger=None):
+def _orch(*, runtime=None, worker=None, ledger=None, stall_tracker=None):
     worker = worker or RecordingWorker()
     return Orchestrator(
         session=None,
@@ -156,6 +157,7 @@ def _orch(*, runtime=None, worker=None, ledger=None):
         ledger=ledger or RecordingLedger(),
         decompose_fn=lambda t: [],
         subagent_runtime=runtime,
+        stall_tracker=stall_tracker,
     )
 
 
@@ -563,15 +565,16 @@ async def test_stall_cancel_uses_latest_pointer_and_survives_cancel_error() -> N
     )
 
     runtime = RecordingRuntime([], cancel_error=RuntimeError("cancel_broke"))
-    orch = _orch(runtime=runtime, ledger=ledger)
+    tracker = StallTracker(settings.config.deep_analysis.max_stall_rounds)
+    for _ in range(3):
+        tracker.record("qid00001", False)
+    orch = _orch(runtime=runtime, ledger=ledger, stall_tracker=tracker)
     split_ids: list[str] = []
 
     async def capture_split(question):
         split_ids.append(question.id)
 
     orch._do_split = capture_split
-    orch._stall_counts["qid00001"] = 3
-
     await orch._force_terminate_stalled("qid00001")
 
     assert runtime.cancel_calls == [("sa_latest", "stall_terminated")]
@@ -579,4 +582,4 @@ async def test_stall_cancel_uses_latest_pointer_and_survives_cancel_error() -> N
         (kind, qid, payload) for kind, qid, payload in ledger.events
     ]
     assert split_ids == ["qid00001"]
-    assert orch._stall_counts["qid00001"] == 0
+    assert tracker.count("qid00001") == 0
