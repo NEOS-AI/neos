@@ -37,7 +37,7 @@ async def test_model_completed_usage_window_persists_on_state() -> None:
     assert dumped["cache_read_tokens"] == 8
     assert dumped["cache_write_tokens"] == 3
     assert dumped["reasoning_tokens"] == 4
-    restored = h.loop._restore(INPUT, h.repository.checkpoints[-1])
+    restored = h.restore(h.repository.checkpoints[-1])
     assert restored.input_tokens == 11
     assert restored.output_tokens == 5
     assert restored.cache_read_tokens == 8

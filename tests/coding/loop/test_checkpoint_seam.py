@@ -7,7 +7,7 @@ import pytest
 
 from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.base import LoopInput, WorkspaceEditContext
-from neos.coding.model.base import CanonicalMessage, TextContent
+from neos.coding.model.base import CanonicalMessage, ModelCompleted, ModelUsage, TextContent
 from tests.coding.loop.support import checkpoint_for, collect, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
@@ -96,3 +96,25 @@ async def test_starting_from_the_encoded_initial_state_matches_a_fresh_start() -
         return [replace(request, turn_id="turn") for request in requests]
 
     assert strip(seeded.model.requests) == strip(fresh.model.requests)
+
+
+@pytest.mark.asyncio
+async def test_the_harness_components_match_the_loop_run() -> None:
+    """A step resumed by the loop and a step started from `h.restore(...)` commit the same state,
+    and the tools the catalog lists are the tools the model was offered."""
+    first = harness([[tool_call(), completed()], [ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    await collect(first)
+    parked = first.repository.checkpoints[-1]
+
+    resumed = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    await collect(resumed, parked)
+
+    seeded = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
+    await collect(seeded, checkpoint_for(seeded.restore(parked)))
+
+    assert [c.loop_state for c in seeded.repository.checkpoints] == [
+        c.loop_state for c in resumed.repository.checkpoints
+    ]
+    offered = {tool.name for tool in resumed.model.requests[0].tools}
+    listed = {tool.name for tool in resumed.catalog().definitions(resumed.restore(parked))}
+    assert offered == listed

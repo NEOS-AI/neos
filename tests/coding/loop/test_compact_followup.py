@@ -260,10 +260,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         if hasattr(item, "text")
     )
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_sum", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_sum", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["summary"] == "new compressed facts"
     assert restored.summary == "new compressed facts"
 
@@ -402,10 +399,7 @@ async def test_load_skill_allowed_tools_persist_and_restrict_visibility() -> Non
     )
 
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_skill", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_skill", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert set(dumped["allowed_tools"]) == {"execute.v1", "read_file.v1"}
     assert restored.allowed_tools == frozenset({"read_file.v1", "execute.v1"})
     names = {tool.name for tool in h.catalog().definitions(restored)}
@@ -583,10 +577,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
     assert "web_fetch.v1" in after.revealed_tools
     assert "web_fetch.v1" in names
     dumped = encode_state(INPUT, after)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_rev", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert "web_fetch.v1" in restored.revealed_tools
     assert "web_fetch.v1" in {
         tool.name for tool in h.catalog().definitions(restored)

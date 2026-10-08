@@ -44,6 +44,7 @@ from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
 from neos.jev.gate import evaluate_approval_with_jev
 from neos.coding.loop._durable.checkpoint import CheckpointMixin
+from neos.coding.loop.checkpoint import encode_state
 from neos.coding.loop._durable.children import _select_spawn_work as _select_spawn_work
 from neos.coding.loop._durable.compaction import Compactor
 from neos.coding.loop._durable.hook_decisions import (
@@ -199,7 +200,7 @@ class DurableCodingLoop(
             lease=deps.lease,
             event_type=event_type,
             event_payload=payload,
-            loop_state=self._dump_state(input, state),
+            loop_state=encode_state(input, state),
             workspace_revision=str(bound.binding.workspace_revision),
             now=self._clock(),
         )

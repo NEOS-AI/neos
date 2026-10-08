@@ -27,7 +27,7 @@ from neos.coding.loop._durable.compaction import Compactor, extract_preserved_su
 from neos.coding.loop._durable.state import AgentLoopState
 from neos.coding.loop._durable.tool_catalog import ToolCatalog
 from neos.coding.loop._durable.usage import check_usage_budgets, parent_headroom_chars, price_tokens, transcript_token_limit
-from neos.coding.loop.checkpoint import encode_state, initial_state
+from neos.coding.loop.checkpoint import encode_state, initial_state, restore_state
 
 __all__ = [
     "AgentLoopState",
@@ -49,6 +49,7 @@ __all__ = [
     "expand_artifact_refs",
     "extract_preserved_summary",
     "initial_state",
+    "restore_state",
     "parent_headroom_chars",
     "maybe_ref_latest_tool_result",
     "price_tokens",

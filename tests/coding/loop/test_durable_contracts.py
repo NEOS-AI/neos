@@ -173,10 +173,7 @@ def test_compacted_bodies_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(initial_state(INPUT), compacted_bodies={"abc": "full text"})
     dumped = encode_state(INPUT, state)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dict(restored.compacted_bodies) == {"abc": "full text"}
 
 
@@ -191,10 +188,7 @@ def test_read_stamps_round_trip_in_loop_state() -> None:
     }
     state = replace(initial_state(INPUT), read_stamps=stamps)
     dumped = encode_state(INPUT, state)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["read_stamps"] == stamps
     assert dict(restored.read_stamps) == stamps
 
@@ -910,7 +904,7 @@ async def test_unknown_empty_stop_is_not_success() -> None:
 def test_pending_instruction_waits_until_tool_pairs_close() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     checkpoint = _pending_tool_checkpoint(h, instruction="Inspect cache first")
-    restored = h.loop._restore(INPUT, checkpoint)
+    restored = h.restore(checkpoint)
     assert restored.pending_instruction == "Inspect cache first"
     assert restored.has_pending_tool is True
     assert restored.transcript[-1].role == "assistant"
@@ -926,7 +920,7 @@ def test_pending_instruction_waits_until_tool_pairs_close() -> None:
     assert dumped["pending_instruction"] == "Inspect cache first"
 
     checkpoint.loop_state["pending_tool_index"] = 1
-    closed = h.loop._restore(INPUT, checkpoint)
+    closed = h.restore(checkpoint)
     assert closed.pending_instruction is None
     assert closed.has_pending_tool is False
     closed_texts = [
@@ -1389,10 +1383,7 @@ def test_verdict_and_critical_files_round_trip_in_loop_state() -> None:
         critical_files=("src/app.py", "tests/test_app.py"),
     )
     dumped = encode_state(INPUT, state)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["verdict"] == "FAIL"
     assert dumped["critical_files"] == ["src/app.py", "tests/test_app.py"]
     assert restored.verdict == "FAIL"
@@ -1439,10 +1430,7 @@ def test_read_stamps_round_trip_offset_and_limit() -> None:
     }
     state = replace(initial_state(INPUT), read_stamps=stamps)
     dumped = encode_state(INPUT, state)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["read_stamps"]["exists.txt"]["offset"] == 10
     assert dumped["read_stamps"]["exists.txt"]["limit"] == 40
     assert dict(restored.read_stamps) == stamps
@@ -1646,10 +1634,7 @@ def test_success_stall_fields_round_trip_in_loop_state() -> None:
         last_success_count=3,
     )
     dumped = encode_state(INPUT, state)
-    restored = h.loop._restore(
-        INPUT,
-        CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
-    )
+    restored = h.restore(CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW))
     assert dumped["last_success_signature"] == "sig"
     assert dumped["last_success_result_hash"] == "hash"
     assert dumped["last_success_count"] == 3
