@@ -12,7 +12,7 @@ from neos.coding.domain.approvals import evaluate_approval
 from neos.config.schema import ChannelConfig
 from neos.observability.metrics import metrics
 from neos.standing.asks import AgentAsks, ReplyDestination, resolve_reply_destination
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, NOW, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 
@@ -32,7 +32,7 @@ async def _ask_once(destination, *, pending=False):
     async def find(agent_id, owner_id):
         return destination
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=find)
+    h = h.rebuilt(asks=AgentAsks(store=h.repository.asks, destination=find))
     if pending:
         await h.repository.asks.open(
             agent_id="sa_q9", task_id="ct_x", run_id="cr_x", tool_call_id="x",

@@ -3,16 +3,17 @@ from __future__ import annotations
 import pytest
 
 from neos.coding.domain.phases import CodingCheckpoint
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.base import LoopInput
 from neos.coding.model.base import ModelCompleted, ModelUsage
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, harness
+from tests.coding.loop.support import INPUT, NOW, harness
 
 pytestmark = pytest.mark.no_db
 
 
 def _checkpoint(h, instruction: str, **overrides) -> CodingCheckpoint:
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["pending_instruction"] = instruction
     dumped["instructions_loaded"] = True
     dumped["cost_micros"] = 42
@@ -73,7 +74,7 @@ def test_restore_clear_does_not_reseed_slash_as_task() -> None:
     assert "Fix the flaky test" in texts
     assert "/clear" not in texts
     assert texts[-1] == "Conversation context was cleared."
-    dumped = h.loop._dump_state(poisoned, restored)
+    dumped = encode_state(poisoned, restored)
     assert dumped["current_instruction"] == "Fix the flaky test"
     assert dumped["pending_instruction"] is None
 

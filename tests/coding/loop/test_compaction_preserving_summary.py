@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from neos.coding.loop import initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -24,7 +25,7 @@ from neos.coding.model.base import (
     TextDelta,
 )
 from neos.coding.prompts.official import COMPACTION_SUMMARY_INSTRUCTION
-from tests.coding.loop.test_anthropic_loop import INPUT, harness
+from tests.coding.loop.support import INPUT, harness
 
 pytestmark = pytest.mark.no_db
 
@@ -37,7 +38,7 @@ def _state(h):
         for index in range(4)
     )
     return replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=(CanonicalMessage("user", (TextContent("Fix it"),)),) + prefix,
         llm_compact_attempts=0,
         instructions_loaded=True,

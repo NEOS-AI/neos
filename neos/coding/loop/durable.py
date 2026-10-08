@@ -123,8 +123,9 @@ class DurableCodingLoop(
         device_bridge=None,
         asks=None,
     ) -> None:
-        # Mixins read these through `self` on every use, never a copy: tests
-        # reassign `_config`, `_clock`, and `_metrics` after construction.
+        # Fields are set only here, and mixins read them through `self` on every
+        # use, never a copy -- so a new instance with other arguments is the
+        # whole of "the same loop, reconfigured".
         self._model = model
         self._tools = tools
         self._executor = executor

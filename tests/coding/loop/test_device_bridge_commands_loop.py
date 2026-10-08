@@ -19,7 +19,7 @@ from neos.coding.bridge.service import DeviceBridgeService
 from neos.coding.domain.approvals import ApprovalDecision, evaluate_approval
 from neos.coding.tools.registry import CodingToolRegistry
 from neos.config.schema import DeviceBridgeConfig
-from tests.coding.loop.test_anthropic_loop import NOW, completed, harness, tool_call
+from tests.coding.loop.support import NOW, completed, harness, tool_call
 from tests.coding.loop.test_device_bridge_loop import (
     DEVICE_NAMES,
     OWNED,
@@ -54,15 +54,18 @@ class CommandRelay:
 
 
 def _loop(turns, relay=None, *, on=True, rules=None, **kwargs):
-    h = harness(turns, approval_evaluator=evaluate_approval, **kwargs)
-    h.loop._tools = CodingToolRegistry.default(
-        command_allowlist=frozenset({"git"}),
-        device_tools=on,
-        device_command_allowlist=frozenset(CONFIG.command_allowlist),
+    return harness(
+        turns,
+        approval_evaluator=evaluate_approval,
+        tools=CodingToolRegistry.default(
+            command_allowlist=frozenset({"git"}),
+            device_tools=on,
+            device_command_allowlist=frozenset(CONFIG.command_allowlist),
+        ),
+        device_bridge=DeviceBridgeService(relay, CONFIG) if relay is not None else None,
+        user_rules=rules,
+        **kwargs,
     )
-    h.loop._device_bridge = DeviceBridgeService(relay, CONFIG) if relay is not None else None
-    h.loop._user_rules = rules
-    return h
 
 
 async def _first_request(h, input=OWNED):
@@ -246,7 +249,7 @@ async def test_a_child_cannot_run_a_command_on_the_device(tmp_path: Path, monkey
     from neos.subagent.ports import SystemClock
     from neos.subagent.runtime import SubagentRuntime
     from neos.subagent.stepper import ChildStepper
-    from tests.coding.loop.test_anthropic_loop import Bindings
+    from tests.coding.loop.support import Bindings
     from tests.coding.loop.test_child_gate import _child_calls, _denials, _PortExecutor, _spawn
     from tests.coding.loop.test_spawn_subagent import (
         ScriptedCodingModel,
@@ -284,9 +287,9 @@ async def test_a_child_cannot_run_a_command_on_the_device(tmp_path: Path, monkey
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        tools=port._registry,
+        device_bridge=DeviceBridgeService(relay, CONFIG),
     )
-    h.loop._tools = port._registry
-    h.loop._device_bridge = DeviceBridgeService(relay, CONFIG)
 
     checkpoint = None
     for _ in range(8):

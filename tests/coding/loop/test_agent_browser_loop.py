@@ -12,7 +12,7 @@ import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
 from neos.coding.tools.executor import SandboxToolExecutor
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 from tests.coding.test_agent_browser import (
     FakeDriver,
     World,
@@ -36,9 +36,9 @@ def _loop(monkeypatch, sessions):
             [TextDelta("done"), ModelCompleted("end_turn", ModelUsage(5, 3))],
         ],
         executor=SandboxToolExecutor(1 << 20, 10),
+        tools=_registry(),
+        browser=sessions,
     )
-    h.loop._tools = _registry()
-    h.loop._browser = sessions
     return h
 
 

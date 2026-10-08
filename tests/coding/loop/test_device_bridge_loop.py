@@ -19,7 +19,7 @@ from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.model.base import ModelCompleted, ModelUsage
 from neos.coding.tools.registry import CodingToolRegistry
 from neos.config.schema import DeviceBridgeConfig
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     Bindings,
     completed,
@@ -64,15 +64,18 @@ class StubRelay:
 
 
 def _loop(turns, relay=None, *, on=True, rules=None, **kwargs):
-    h = harness(turns, approval_evaluator=evaluate_approval, **kwargs)
-    h.loop._tools = CodingToolRegistry.default(
-        command_allowlist=frozenset({"git"}), device_tools=on
+    return harness(
+        turns,
+        approval_evaluator=evaluate_approval,
+        tools=CodingToolRegistry.default(
+            command_allowlist=frozenset({"git"}), device_tools=on
+        ),
+        device_bridge=(
+            DeviceBridgeService(relay, DeviceBridgeConfig()) if relay is not None else None
+        ),
+        user_rules=rules,
+        **kwargs,
     )
-    h.loop._device_bridge = (
-        DeviceBridgeService(relay, DeviceBridgeConfig()) if relay is not None else None
-    )
-    h.loop._user_rules = rules
-    return h
 
 
 def _end_turn():
@@ -302,9 +305,9 @@ async def test_a_child_cannot_reach_the_device_even_with_an_opted_in_bridge(
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        tools=port._registry,
+        device_bridge=DeviceBridgeService(relay, DeviceBridgeConfig()),
     )
-    h.loop._tools = port._registry
-    h.loop._device_bridge = DeviceBridgeService(relay, DeviceBridgeConfig())
 
     checkpoint = None
     for _ in range(6):

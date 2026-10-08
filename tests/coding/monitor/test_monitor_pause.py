@@ -22,7 +22,7 @@ from neos.coding.monitor.monitor import TrajectoryMonitor, pause_reason_code
 from neos.coding.monitor.rules import RULESET_VERSION, FallbackThresholds
 from neos.jev.gate import RiskScore
 from neos.standing.budget import AgentBudgetEnvelope, InMemoryAgentSpendSource
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, NOW, completed, harness, tool_call
 from tests.coding.monitor.test_monitor_in_the_loop import LedgerEvents
 
 pytestmark = pytest.mark.no_db
@@ -251,7 +251,7 @@ async def test_a_broken_monitor_does_not_pause() -> None:
 
 @pytest.mark.asyncio
 async def test_an_unreadable_sink_is_never_judged_or_paused() -> None:
-    from tests.coding.loop.test_anthropic_loop import Events
+    from tests.coding.loop.support import Events
 
     scorer = Scorer(probability=0.9)
     h = harness(_reads(["a.py", "b.py", "c.py"]), monitor=_monitor(scorer, every_n=1))

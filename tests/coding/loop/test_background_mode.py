@@ -16,7 +16,7 @@ import pytest
 from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.loop.anthropic import AnthropicLoopConfig
 from neos.coding.model.base import ModelCompleted, ModelUsage
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     completed,
     harness,

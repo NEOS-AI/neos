@@ -13,6 +13,7 @@ import pytest
 from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.domain.durability import StaleExecutionLease, ToolExecutionDisposition
 from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
+from neos.coding.loop import encode_state, initial_state
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.loop.durable import COMPACT_REF_THRESHOLD_BYTES
 from neos.coding.model.anthropic import CodingModelError
@@ -26,12 +27,12 @@ from neos.coding.model.base import (
     ToolUseContent,
 )
 from tests.coding.fakes import RecordingCodingAuditSink
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     NOW,
     Bindings,
     Executor,
-    _DecisionHook,
+    DecisionHook,
     collect,
     completed,
     harness,
@@ -172,8 +173,8 @@ def test_compact_stores_small_bodies_and_expand_restores_them() -> None:
 
 def test_compacted_bodies_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = replace(h.loop._restore(INPUT, None), compacted_bodies={"abc": "full text"})
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), compacted_bodies={"abc": "full text"})
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -190,8 +191,8 @@ def test_read_stamps_round_trip_in_loop_state() -> None:
             "full": False,
         }
     }
-    state = replace(h.loop._restore(INPUT, None), read_stamps=stamps)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), read_stamps=stamps)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -286,14 +287,14 @@ def test_approval_gate_forwards_unattended_from_loop_config() -> None:
             approval_unattended=True,
         ),
     )
-    state = attended.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     assert attended.loop._approval_gate(state).unattended is False
     assert unattended.loop._approval_gate(state).unattended is True
 
 
 def _phase_checkpoint(h, phase: str) -> CodingCheckpoint:
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["phase"] = phase
     dumped["instructions_loaded"] = True
     return CodingCheckpoint("cc_phase", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -397,7 +398,7 @@ async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
     assert list(state["critical_files"]) == ["src/app.py"]
 
 
-class _StopHook(_DecisionHook):
+class _StopHook(DecisionHook):
     def __init__(self, decision: str, reason: str = "blocked") -> None:
         super().__init__("allow", reason)
         self.stop_decision = decision
@@ -450,8 +451,8 @@ async def test_stop_retry_is_capped_at_two() -> None:
         [[TextDelta("done"), ModelCompleted("end_turn", ModelUsage(2, 1))]],
         hooks=hooks,
     )
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["stop_retry_count"] = 2
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_stop", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -475,7 +476,7 @@ async def test_pre_tool_timeout_denies_without_execute(monkeypatch) -> None:
 
     monkeypatch.setattr(durable_mod, "PRE_TOOL_HOOK_TIMEOUT_SEC", 0.01)
 
-    class SlowHook(_DecisionHook):
+    class SlowHook(DecisionHook):
         async def pre_tool(self, call):
             await asyncio.sleep(0.2)
             return {"decision": "allow"}
@@ -570,7 +571,7 @@ async def test_model_request_keeps_compact_preview_instead_of_expanding() -> Non
     )
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         transcript=transcript,
         compacted_bodies={
             digest: json.dumps(old_body, sort_keys=True, separators=(",", ":"))
@@ -578,7 +579,7 @@ async def test_model_request_keeps_compact_preview_instead_of_expanding() -> Non
         transcript_digest=h.loop._digest(transcript),
         instructions_loaded=True,
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     checkpoint = CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW)
     await collect(h, checkpoint)
     results = {
@@ -600,7 +601,7 @@ async def test_post_tool_timeout_or_error_skips_without_failing_tool(
 
     monkeypatch.setattr(durable_mod, "PRE_TOOL_HOOK_TIMEOUT_SEC", 0.01)
 
-    class BoomPost(_DecisionHook):
+    class BoomPost(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow"}
 
@@ -616,15 +617,13 @@ async def test_post_tool_timeout_or_error_skips_without_failing_tool(
 
 @pytest.mark.asyncio
 async def test_model_error_after_delta_is_not_retryable() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-
     class PartialThenError:
         async def stream(self, request):
             del request
             yield TextDelta("hello")
             raise CodingModelError("model_rate_limited", retryable=True)
 
-    h.loop._model = PartialThenError()
+    h = harness(model=PartialThenError())
     with pytest.raises(CodingLoopFailure, match="model_rate_limited") as caught:
         await collect(h)
     assert caught.value.retryable is False
@@ -640,7 +639,7 @@ async def test_model_error_before_delta_keeps_retryable() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_updated_input_is_revalidated_before_execute() -> None:
-    class RewriteHook(_DecisionHook):
+    class RewriteHook(DecisionHook):
         async def pre_tool(self, call):
             return {
                 "decision": "allow",
@@ -654,7 +653,7 @@ async def test_pre_tool_updated_input_is_revalidated_before_execute() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_invalid_updated_input_denies() -> None:
-    class BadRewrite(_DecisionHook):
+    class BadRewrite(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow", "updatedInput": {"surprise": True}}
 
@@ -697,7 +696,7 @@ async def test_tool_result_secrets_are_redacted_before_persist() -> None:
 
 @pytest.mark.asyncio
 async def test_post_tool_rewrite_is_applied_then_redacted() -> None:
-    class RewritePost(_DecisionHook):
+    class RewritePost(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow"}
 
@@ -730,7 +729,7 @@ async def test_denied_tool_content_is_denial_envelope() -> None:
                 completed(),
             ]
         ],
-        hooks=_DecisionHook("deny"),
+        hooks=DecisionHook("deny"),
     )
     events = await collect(h)
     assert events[-1].type == "tool.denied"
@@ -762,8 +761,8 @@ async def test_pre_turn_budget_veto_skips_model_request() -> None:
             max_total_tokens=10,
         ),
     )
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["input_tokens"] = 11
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_budget", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -793,8 +792,8 @@ class _ErrorExecutor(Executor):
 
 
 def _pending_tool_checkpoint(h, *, instruction: str | None = None, **overrides):
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     tool_input = {"path": "a.txt", "content": "x"}
     dumped["transcript"] = [
         {"role": "user", "content": [{"type": "text", "text": "Fix it"}]},
@@ -890,8 +889,8 @@ async def test_think_block_with_public_text_is_terminal() -> None:
 @pytest.mark.asyncio
 async def test_empty_end_turn_retry_then_fails_incomplete() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-    state = h.loop._restore(INPUT, None)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = initial_state(INPUT)
+    dumped = encode_state(INPUT, state)
     dumped["empty_retry_count"] = 1
     dumped["instructions_loaded"] = True
     checkpoint = CodingCheckpoint("cc_empty", "ct_1", "cr_1", 1, dumped, "1", NOW)
@@ -925,7 +924,7 @@ def test_pending_instruction_waits_until_tool_pairs_close() -> None:
         if hasattr(item, "text")
     ]
     assert "Inspect cache first" not in texts
-    dumped = h.loop._dump_state(INPUT, restored)
+    dumped = encode_state(INPUT, restored)
     assert dumped["pending_instruction"] == "Inspect cache first"
 
     checkpoint.loop_state["pending_tool_index"] = 1
@@ -1078,7 +1077,7 @@ class _FatExecutor(Executor):
 
 @pytest.mark.asyncio
 async def test_pre_tool_prevent_closes_pair_and_is_terminal() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("prevent", "stop"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("prevent", "stop"))
     events = await collect(h)
 
     assert h.executor.calls == []
@@ -1110,7 +1109,7 @@ async def test_pre_tool_prevent_does_not_continue_remaining_tools() -> None:
                 completed(),
             ]
         ],
-        hooks=_DecisionHook("prevent"),
+        hooks=DecisionHook("prevent"),
     )
     await collect(h)
     assert h.executor.calls == []
@@ -1132,7 +1131,7 @@ async def test_pre_tool_prevent_does_not_continue_remaining_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_deny_is_not_terminal() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("deny"))
     events = await collect(h)
     assert events[-1].type == "tool.denied"
     assert events[-1].payload["reason_code"] == "policy_hook_denied"
@@ -1392,11 +1391,11 @@ async def test_readonly_batch_denies_secret_read_without_execute() -> None:
 def test_verdict_and_critical_files_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         verdict="FAIL",
         critical_files=("src/app.py", "tests/test_app.py"),
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -1426,7 +1425,7 @@ async def test_tool_started_is_emitted_before_execute() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_denied_payload_includes_name_and_preview() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("deny"))
     events = await collect(h)
     denied = next(event for event in events if event.type == "tool.denied")
     assert denied.payload["name"] == "write_file.v1"
@@ -1445,8 +1444,8 @@ def test_read_stamps_round_trip_offset_and_limit() -> None:
             "limit": 40,
         }
     }
-    state = replace(h.loop._restore(INPUT, None), read_stamps=stamps)
-    dumped = h.loop._dump_state(INPUT, state)
+    state = replace(initial_state(INPUT), read_stamps=stamps)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -1465,7 +1464,7 @@ async def test_workspace_instruction_tree_starts_at_session_cwd(tmp_path) -> Non
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     h.bindings.session._record = SimpleNamespace(workspace=str(tmp_path))
     h.bindings.session.cwd = str(pkg)
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     loaded = await h.loop._load_workspace_instructions(
         state, SimpleNamespace(session=h.bindings.session)
     )
@@ -1495,7 +1494,7 @@ async def test_workspace_instruction_tree_does_not_walk_above_workspace(
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     h.bindings.session._record = SimpleNamespace(workspace=str(workspace))
     h.bindings.session.cwd = str(parent)
-    state = h.loop._restore(INPUT, None)
+    state = initial_state(INPUT)
     loaded = await h.loop._load_workspace_instructions(
         state, SimpleNamespace(session=h.bindings.session)
     )
@@ -1648,12 +1647,12 @@ async def test_success_stall_resets_when_result_hash_changes() -> None:
 def test_success_stall_fields_round_trip_in_loop_state() -> None:
     h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     state = replace(
-        h.loop._restore(INPUT, None),
+        initial_state(INPUT),
         last_success_signature="sig",
         last_success_result_hash="hash",
         last_success_count=3,
     )
-    dumped = h.loop._dump_state(INPUT, state)
+    dumped = encode_state(INPUT, state)
     restored = h.loop._restore(
         INPUT,
         CodingCheckpoint("cc_1", "ct_1", "cr_1", 1, dumped, "1", NOW),
@@ -1706,7 +1705,7 @@ def test_uniquify_avoids_existing_suffixed_ids() -> None:
     assert len(ids) == len(set(ids))
 
 
-class _PostPrevent(_DecisionHook):
+class _PostPrevent(DecisionHook):
     async def pre_tool(self, call):
         return {"decision": "allow"}
 
