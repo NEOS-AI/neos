@@ -32,7 +32,7 @@ async def _ask_once(destination, *, pending=False):
     async def find(agent_id, owner_id):
         return destination
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=find)
+    h = h.rebuilt(asks=AgentAsks(store=h.repository.asks, destination=find))
     if pending:
         await h.repository.asks.open(
             agent_id="sa_q9", task_id="ct_x", run_id="cr_x", tool_call_id="x",

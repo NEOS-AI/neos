@@ -66,12 +66,12 @@ def _loop(secrets, rules, session):
         executor=SandboxToolExecutor(4096, 10),
         bindings=bindings,
         approval_evaluator=evaluate_approval,
+        tools=CodingToolRegistry.default(
+            command_allowlist=frozenset({"gh"}), secret_env_refs=True
+        ),
+        secrets=secrets,
+        user_rules=rules,
     )
-    h.loop._tools = CodingToolRegistry.default(
-        command_allowlist=frozenset({"gh"}), secret_env_refs=True
-    )
-    h.loop._secrets = secrets
-    h.loop._user_rules = rules
     return h
 
 
@@ -181,17 +181,18 @@ async def test_a_child_cannot_use_secrets_even_with_the_owners_allow(tmp_path: P
     )
     rules = InMemoryUserRuleStore()
     await rules.create("alice", effect="allow", tool="execute.v1", argv_prefix=["gh"])
+    secrets = await _vault()
     h = harness(
         _spawn("implement"),
         config=_flag_on(approval_allow_tools=("spawn_agent.v1",)),
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        # One flag feeds both registries in production (`runtime.py`): the port's and the parent's.
+        tools=port._registry,
+        secrets=secrets,
+        user_rules=rules,
     )
-    # One flag feeds both registries in production (`runtime.py`): the port's and the parent's.
-    h.loop._tools = port._registry
-    h.loop._secrets = await _vault()
-    h.loop._user_rules = rules
 
     checkpoint = None
     for _ in range(6):

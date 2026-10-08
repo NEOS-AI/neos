@@ -44,8 +44,10 @@ def _with_asks(h, destination=SLACK, hours=24):
         calls.append((agent_id, owner_id))
         return destination
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=find, expire_hours=hours)
-    return calls
+    h = h.rebuilt(
+        asks=AgentAsks(store=h.repository.asks, destination=find, expire_hours=hours)
+    )
+    return h, calls
 
 
 async def _run(h, input, checkpoint=None):
@@ -60,7 +62,7 @@ def _denials(events):
 async def test_an_agent_autonomous_task_asks_and_waits() -> None:
     """(a) Mutation: drop the question branch -> the fold denies it as today."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    asked_for = _with_asks(h)
+    h, asked_for = _with_asks(h)
 
     events = await _run(h, AGENT_TASK)
 
@@ -88,7 +90,7 @@ async def test_an_agent_autonomous_task_asks_and_waits() -> None:
 async def test_expiry_comes_from_the_port() -> None:
     """Mutation: hard-code the expiry -> the configured hours are ignored."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h, hours=3)
+    h, _ = _with_asks(h, hours=3)
 
     await _run(h, AGENT_TASK)
 
@@ -99,7 +101,7 @@ async def test_expiry_comes_from_the_port() -> None:
 async def _events_and_state(input, *, with_port):
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
     if with_port:
-        _with_asks(h)
+        h, _ = _with_asks(h)
     events = await _run(h, input)
     # part ids are random per run; everything else must match
     return h, [
@@ -122,7 +124,7 @@ async def test_interactive_is_byte_for_byte_unchanged() -> None:
 async def test_background_keeps_its_ceiling() -> None:
     """(c) Q9-1. Mutation: let background into the branch -> it asks."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
 
     events = await _run(h, replace(AGENT_TASK, mode="background"))
 
@@ -135,7 +137,7 @@ async def test_background_keeps_its_ceiling() -> None:
 async def test_a_human_opened_autonomous_task_still_folds_to_deny() -> None:
     """(d) Mutation: drop the `agent_id` check -> a task with nobody to answer waits forever."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
 
     events = await _run(h, replace(AGENT_TASK, agent_id=None))
 
@@ -165,7 +167,7 @@ async def test_a_second_question_of_the_same_agent_is_refused_and_the_task_runs_
         ],
         approval_evaluator=evaluate_approval,
     )
-    _with_asks(h)
+    h, _ = _with_asks(h)
     await h.repository.asks.open(
         agent_id=AGENT,
         task_id="ct_other",
@@ -194,7 +196,7 @@ async def test_a_second_question_of_the_same_agent_is_refused_and_the_task_runs_
 async def test_no_reply_channel_refuses_and_does_not_wait() -> None:
     """(f) Mutation: ask without a destination -> nobody can answer, the task hangs."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h, destination=None)
+    h, _ = _with_asks(h, destination=None)
 
     events = await _run(h, AGENT_TASK)
 
@@ -211,7 +213,7 @@ async def test_an_allow_listed_ask_still_asks() -> None:
         model="claude-test", system="code", approval_allow_tools=frozenset({"ask_user.v1"})
     )
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval, config=config)
-    _with_asks(h)
+    h, _ = _with_asks(h)
 
     events = await _run(h, AGENT_TASK)
 
@@ -226,7 +228,7 @@ async def test_an_operator_deny_list_still_denies() -> None:
         model="claude-test", system="code", approval_deny_tools=frozenset({"ask_user.v1"})
     )
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval, config=config)
-    _with_asks(h)
+    h, _ = _with_asks(h)
 
     events = await _run(h, AGENT_TASK)
 
@@ -239,7 +241,7 @@ async def test_a_global_unattended_operator_setting_still_folds() -> None:
     """The operator's narrowing wins. Mutation: pass `unattended=False` past the config OR."""
     config = AnthropicLoopConfig(model="claude-test", system="code", approval_unattended=True)
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval, config=config)
-    _with_asks(h)
+    h, _ = _with_asks(h)
 
     events = await _run(h, AGENT_TASK)
 
@@ -250,7 +252,7 @@ async def test_a_global_unattended_operator_setting_still_folds() -> None:
 async def test_a_waiting_question_does_not_move_on_resume() -> None:
     """(i) Mutation: ask again instead of raising -> a second question, or a hang."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
     await _run(h, AGENT_TASK)
     h.repository.task_statuses["ct_1"] = "running"  # a stray continuation got a lease
     asked_requests = len(h.model.requests)
@@ -267,7 +269,7 @@ async def test_a_waiting_question_does_not_move_on_resume() -> None:
 async def test_an_answer_reaches_the_tool_input_after_validation() -> None:
     """Mutation: drop `_with_answers` on the branch -> the tool runs with no answers."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
     await _run(h, AGENT_TASK)
     ask = await h.repository.asks.waiting_for_agent(AGENT)
     await h.repository.asks.answer(ask.ask_id, ["main"], now=NOW)
@@ -286,7 +288,7 @@ async def test_a_closed_question_is_refused_on_resume(closed, reason) -> None:
     """Q-C: expiry does not end the task -- the loop resumes and the call is refused.
     Mutation: map every closed status to one code -> the reason lies."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
     await _run(h, AGENT_TASK)
     if closed == "expired":
         await h.repository.asks.expire_due(NOW + timedelta(days=2))
@@ -304,7 +306,7 @@ async def test_a_closed_question_is_refused_on_resume(closed, reason) -> None:
 async def test_cancelling_a_waiting_task_frees_the_agent() -> None:
     """(j) Mutation: drop the ask close from `mark_task_cancelled` -> `ask_pending` forever."""
     h = harness(_ask_turns(), approval_evaluator=evaluate_approval)
-    _with_asks(h)
+    h, _ = _with_asks(h)
     await _run(h, AGENT_TASK)
 
     await h.repository.mark_task_cancelled(task_id="ct_1", now=NOW)

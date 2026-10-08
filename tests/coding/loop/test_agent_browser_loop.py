@@ -36,9 +36,9 @@ def _loop(monkeypatch, sessions):
             [TextDelta("done"), ModelCompleted("end_turn", ModelUsage(5, 3))],
         ],
         executor=SandboxToolExecutor(1 << 20, 10),
+        tools=_registry(),
+        browser=sessions,
     )
-    h.loop._tools = _registry()
-    h.loop._browser = sessions
     return h
 
 

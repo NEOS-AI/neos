@@ -30,9 +30,12 @@ def _two_reads():
 
 
 def _loop(rules, turns=None, **kwargs):
-    h = harness(turns or _two_reads(), approval_evaluator=evaluate_approval, **kwargs)
-    h.loop._user_rules = rules
-    return h
+    return harness(
+        turns or _two_reads(),
+        approval_evaluator=evaluate_approval,
+        user_rules=rules,
+        **kwargs,
+    )
 
 
 async def _step(h, input, checkpoint=None):

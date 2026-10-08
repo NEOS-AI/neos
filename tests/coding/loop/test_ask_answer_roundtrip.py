@@ -64,7 +64,7 @@ async def test_the_answer_lines_reach_the_resumed_tool_as_pairs(monkeypatch) -> 
     async def destination(agent_id, owner_id):
         return ReplyDestination("slack", "D_alice", "v2:slack:T1:D_alice:-")
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=destination)
+    h = h.rebuilt(asks=AgentAsks(store=h.repository.asks, destination=destination))
     h.repository.task_owners["ct_1"] = OWNER
     task = replace(INPUT, mode="autonomous", agent_id=agent.agent_id, owner_id=OWNER)
     [event async for event in h.loop.run(task, None, h.deps)]

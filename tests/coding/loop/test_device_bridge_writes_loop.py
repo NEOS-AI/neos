@@ -214,9 +214,9 @@ async def test_a_child_cannot_write_to_the_device(tmp_path: Path, monkeypatch) -
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        tools=port._registry,
+        device_bridge=DeviceBridgeService(relay, DeviceBridgeConfig()),
     )
-    h.loop._tools = port._registry
-    h.loop._device_bridge = DeviceBridgeService(relay, DeviceBridgeConfig())
 
     checkpoint = None
     for _ in range(8):

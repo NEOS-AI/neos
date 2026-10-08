@@ -119,8 +119,8 @@ async def test_fold_child_passes_last_prompt_remainder() -> None:
             context_window=40_000,
             max_output_tokens=8_192,
         ),
+        subagents=FoldSpy(),
     )
-    h.loop._subagents = FoldSpy()
     usable = 40_000 - 8_192 - 4_000
     state = replace(
         h.loop._restore(INPUT, None),

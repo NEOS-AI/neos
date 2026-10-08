@@ -248,7 +248,9 @@ async def test_after_expiry_the_resumed_loop_denies_with_ask_expired() -> None:
     async def destination(agent_id, owner_id):
         return TELEGRAM
 
-    h.loop._asks = AgentAsks(store=h.repository.asks, destination=destination, expire_hours=3)
+    h = h.rebuilt(
+        asks=AgentAsks(store=h.repository.asks, destination=destination, expire_hours=3)
+    )
     task = replace(INPUT, mode="autonomous", agent_id="sa_q9", owner_id="u_q9")
     [event async for event in h.loop.run(task, None, h.deps)]
 

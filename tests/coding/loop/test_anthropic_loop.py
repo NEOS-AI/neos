@@ -714,9 +714,7 @@ async def test_pending_interrupt_aborts_in_flight_model_turn() -> None:
             await resume.wait()
             yield ModelCompleted("end_turn", ModelUsage(2, 1))
 
-    h = harness([[TextDelta("unused"), completed()]])
-    h.model = GatedModel()
-    h.loop._model = h.model
+    h = harness(model=GatedModel())
     original = h.repository.commit_model_checkpoint
 
     async def recording_commit(**kwargs):

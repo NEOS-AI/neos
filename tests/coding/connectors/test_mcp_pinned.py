@@ -522,12 +522,12 @@ def _loop(catalog, turns, *, secrets=None, rules=None):
         executor=SandboxToolExecutor(65536, 10, connectors=ConnectorRunner(catalog)),
         bindings=bindings,
         approval_evaluator=evaluator,
+        tools=CodingToolRegistry.default(
+            command_allowlist=frozenset({"git"}), secret_env_refs=True, connectors=catalog
+        ),
+        secrets=secrets,
+        user_rules=rules,
     )
-    h.loop._tools = CodingToolRegistry.default(
-        command_allowlist=frozenset({"git"}), secret_env_refs=True, connectors=catalog
-    )
-    h.loop._secrets = secrets
-    h.loop._user_rules = rules
     h.turns = len(turns)
     return h
 

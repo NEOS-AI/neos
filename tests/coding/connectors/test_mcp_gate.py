@@ -296,10 +296,10 @@ def _loop(catalog, *, secrets, rules, calls):
         executor=SandboxToolExecutor(65536, 10, connectors=ConnectorRunner(catalog)),
         bindings=bindings,
         approval_evaluator=evaluate_approval,
+        tools=_registry(catalog),
+        secrets=secrets,
+        user_rules=rules,
     )
-    h.loop._tools = _registry(catalog)
-    h.loop._secrets = secrets
-    h.loop._user_rules = rules
     return h
 
 
@@ -401,8 +401,8 @@ async def test_the_child_gate_refuses_a_connector_even_if_a_spec_lists_it(
         subagents=runtime,
         bindings=Bindings(workspace=_init_repo(tmp_path)),
         approval_evaluator=evaluate_approval,
+        tools=registry,
     )
-    h.loop._tools = registry
 
     checkpoint = None
     for _ in range(6):

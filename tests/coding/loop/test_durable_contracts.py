@@ -616,15 +616,13 @@ async def test_post_tool_timeout_or_error_skips_without_failing_tool(
 
 @pytest.mark.asyncio
 async def test_model_error_after_delta_is_not_retryable() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
-
     class PartialThenError:
         async def stream(self, request):
             del request
             yield TextDelta("hello")
             raise CodingModelError("model_rate_limited", retryable=True)
 
-    h.loop._model = PartialThenError()
+    h = harness(model=PartialThenError())
     with pytest.raises(CodingLoopFailure, match="model_rate_limited") as caught:
         await collect(h)
     assert caught.value.retryable is False
