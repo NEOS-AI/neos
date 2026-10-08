@@ -18,8 +18,8 @@
 | **정체 판정** | `_stall_counts` 6 · `_register_progress` 4 · `_made_progress` 3 · `_register_round_outcome` 3 · `_force_terminate_stalled` · `_all_failed_rounds` | 18 |
 | 정지 사유·예산 | `_mark_stop_reason` 10 · `_install_token_budget` 9 | 19 |
 
-`_finalize` 를 부르는 27곳 중 25곳(`test_orchestrator_m4.py` 21, `test_compose_child_j4.py` 4)은 **리포트 작성**
-(compose/assemble → render → grade 재시도, 고아 인용, 실패 부록, compose 자식)을 시험한다. 2곳(`test_orchestrator_m4_reinvest.py`)만
+`_finalize` 를 부르는 27곳 중 22곳(`test_orchestrator_m4.py` 18, `test_compose_child_j4.py` 4)은 **리포트 작성**
+(compose/assemble → render → grade 재시도, 고아 인용, 실패 부록, compose 자식)을 시험한다. 5곳(`test_orchestrator_m4_reinvest.py` 2, `test_orchestrator_m4.py` 3)만
 재조사 라운드를 시험한다. `_finalize` 의 본문도 그 경계로 갈린다 — 앞 ~23줄은 축약·충돌 해소·재조사(라운드 루프 `_run_round` 가 필요),
 뒤 ~215줄은 리포트 작성이고 의존성은 `ledger`, `synthesizer`, `citation_renderer`, `report_grader`, `sandbox_provider`,
 `compose_runtime_factory`, `_checkpoint` 일곱뿐이다(Orchestrator 의 생성자 인자는 27개).
@@ -41,7 +41,12 @@
 - 트리·라운드 진행, 워커 디스패치, 정지 사유·예산은 건드리지 않는다.
 - `Orchestrator.__new__` 로 생성자를 건너뛰고 필드를 꽂는 두 파일(`test_subquestion_adoption.py`, `test_subquestion_budget_and_review.py`,
   6곳)은 트리 개념을 시험하므로 이번에 두지 않는다.
-- 재조사 테스트 2곳의 `_finalize` 호출은 남는다(라운드 루프가 필요하다).
+- `test_orchestrator_run_worker.py` 의 `orch._register_round_outcome(...)` 3곳은 남는다 — Orchestrator 가 tracker 를 먹이는 배선을 시험한다(단언 `_all_failed_rounds` 는 `tracker.failed_rounds` 로).
+- `test_subagent_adapter.py` 의 `orch._force_terminate_stalled(...)` 1곳은 남는다 — 정체 종료의 **부수효과**(자식 취소·원장·분할)는 설계상 Orchestrator 에 남으므로 그것을 시험하는 호출이다. 그 테스트의 `_stall_counts` 심기·읽기는 `StallTracker` 로 옮긴다.
+- 재조사 테스트 5곳의 `_finalize` 호출은 남는다(라운드 루프가 필요하다): `test_orchestrator_m4_reinvest.py` 2곳과 `test_orchestrator_m4.py` 의
+  `test_conflict_reinvestigation_is_globally_capped_at_one`·`test_reinvestigation_gate_is_event_based_and_durable`·`test_a_starved_reinvestigation_round_does_not_kill_the_run`.
+  이 셋은 `monkeypatch.setattr(orch_mod, "resolve_conflicts", …)` 로 충돌 해소를 바꿔치기한다 — `resolve_conflicts` 를 부르는 코드가
+  `report_writer.reduce_and_resolve` 로 옮겨 가므로 패치 대상을 `report_writer` 모듈로 옮긴다(옮기지 않으면 패치가 조용히 무효가 된다).
 
 ## 3. 설계
 
@@ -90,10 +95,12 @@ class Progress:
     feedback: int | None   # 원장이 `feedback_count` 를 모르면 None
 
 
-async def read_progress(ledger, question_id: str, *, spent_default: int = 0) -> Progress: ...
+async def snapshot(ledger, question) -> Progress:
+    """이번 패스 전의 신호. 토큰은 질문 객체에서, 검증 주장·피드백은 원장에서(지금의 1449-1452행과 같은 읽기)."""
 
-def progressed(before: Progress, after: Progress) -> bool:
-    """새 토큰 소비, 새 검증 주장, 새 반려 피드백 중 하나라도 있으면 진전. 알 수 없는 신호(None)는 진전으로 친다."""
+async def made_progress(ledger, question_id: str, before: Progress) -> bool:
+    """새 토큰 소비, 새 검증 주장, 새 반려 피드백 중 하나라도 있으면 진전. 알 수 없는 신호(None)는 진전으로 친다.
+    지금의 `_made_progress` 와 **같은 순서로 읽고 같은 곳에서 멈춘다**(토큰이 늘었으면 원장의 나머지를 읽지 않는다)."""
 
 
 class StallTracker:
@@ -101,6 +108,8 @@ class StallTracker:
     def record(self, question_id: str, made_progress: bool) -> bool:
         """진전이면 0 으로, 아니면 +1. 캡에 닿으면 True(부르는 쪽이 종료시킨다)."""
     def count(self, question_id: str) -> int: ...
+    @property
+    def failed_rounds(self) -> int: ...
     def clear(self, question_id: str) -> None: ...
     def record_round(self, all_failed: bool) -> int | None:
         """모든 워커가 실패한 라운드가 연속 몇 번인지. 캡에 닿으면 그 수, 아니면 None."""
@@ -109,8 +118,9 @@ class StallTracker:
 - `StallTracker` 는 부수효과가 없다. 원장 기록·이벤트·서브에이전트 취소·`_do_split`·`SystemicWorkerFailure` 는 Orchestrator 에 남는다:
   `_register_progress(qid, made)` 는 `if self.stall.record(qid, made): await self._force_terminate_stalled(qid)` 가 되고,
   `_force_terminate_stalled` 는 `self.stall.count(qid)` 를 읽고 `self.stall.clear(qid)` 한다. `_register_round_outcome` 은 `record_round` 의 반환으로 판단한다.
-- `_made_progress`·`_verified_count`·`_feedback_signal` 은 `read_progress` + `progressed` 로 바뀐다. 호출부(`_run_round`, 2026-10-08 기준 1446·1451-1452·1532·1540행 근처)는
-  "전" 스냅숏을 `Progress` 로 들고 있다가 "후"를 읽어 `progressed(before, after)` 로 판정한다.
+- `_made_progress`·`_verified_count`·`_feedback_signal` 은 `snapshot` + `made_progress` 로 바뀐다. 호출부(`_run_round`, 2026-10-08 기준 1449-1452·1532-1540행)는
+  `before = await snapshot(self.ledger, question)` 를 들고 있다가 `await made_progress(self.ledger, qid, before)` 로 판정한다.
+  (순수 `progressed(before, after)` 는 두지 않는다 — 토큰이 늘어도 원장을 두 번 더 읽게 되어 DB 쿼리 패턴이 바뀐다.)
 - `Orchestrator.__init__` 에 `stall_tracker: StallTracker | None = None` 를 더한다. 기본은 `StallTracker(self.max_stall_rounds)`.
   `_stall_counts`·`_all_failed_rounds` 필드는 사라진다.
   - 이 주입은 테스트를 위한 문이지만 정당하다: 정체 상태는 크래시 재개 때 초기화되는 런타임 상태이고, 시험하려면 상태를 심어야 한다.
@@ -126,7 +136,7 @@ class StallTracker:
 | `await orch._collect_caveats(summaries)` | 작성기 경유 단언이 어려우면 `collect_caveats(ledger, summaries)` 를 모듈 공개 함수로 두고 그것을 부른다 |
 | `orch._stall_counts[q] = 2` | `tracker = StallTracker(n); tracker.record(q, False)` ×2 → `Orchestrator(..., stall_tracker=tracker)` |
 | `orch._register_progress = spy` | `StallTracker` 하위 클래스로 `record` 호출을 기록해 생성자로 넘긴다 |
-| `await orch._made_progress(q, 0, 1, 0)` | `progressed(Progress(0, 1, 0), await read_progress(ledger, q))` |
+| `await orch._made_progress(q, 0, 1, 0)` | `await made_progress(ledger, q, Progress(0, 1, 0))` |
 | `await orch._register_round_outcome([...]); orch._all_failed_rounds == 1` | `StallTracker(2)` 의 `record_round(...)` 와 그 상태로(아래 단언 규칙) |
 | `from ...orchestrator import _best_rejected_draft, _reader_facing_caveats` | `from ...report_writer import ...` |
 
@@ -142,8 +152,8 @@ class StallTracker:
 
 | 지표 | 명령 | 기준선 | 목표 |
 |---|---|---|---|
-| `_finalize` 직접 호출 | `grep -rnoE '\borch(estrator)?\._finalize\(' tests \| wc -l` | 27 | 2 |
-| 정체 private | `grep -rnoE '\borch(estrator)?\.(_stall_counts\|_register_progress\|_made_progress\|_register_round_outcome\|_force_terminate_stalled\|_all_failed_rounds)\b' tests \| wc -l` | 18 | 0 |
+| `_finalize` 직접 호출 | `grep -rnoE '\borch(estrator)?\._finalize\(' tests \| wc -l` | 27 | 5 |
+| 정체 private | `grep -rnoE '\borch(estrator)?\.(_stall_counts\|_register_progress\|_made_progress\|_register_round_outcome\|_force_terminate_stalled\|_all_failed_rounds)\b' tests \| wc -l` | 18 | 4 |
 | 리포트·정체 의존성 생성 뒤 꽂기 | `grep -rnE '\borch(estrator)?\.(sandbox_provider\|compose_runtime_factory\|max_stall_rounds)\s*=[^=]' tests \| wc -l` | 9 | 0 |
 | (참고) Orchestrator private 전체 | `grep -rnoE '\borch(estrator)?\._[a-z][a-z0-9_]*' tests \| wc -l` | 121 | 기록만 |
 
@@ -160,5 +170,6 @@ class StallTracker:
 - **`max_stall_rounds` 를 읽는 시점.** 지금은 `_register_progress` 가 `self.max_stall_rounds` 를 **매번** 읽는다. `StallTracker` 는 생성 때 받는다.
   프로덕션에서 생성 뒤 `max_stall_rounds` 를 바꾸는 곳은 없다(2026-10-08 grep — 생성자 396행뿐). 테스트의 1곳은 §3.3 으로 옮긴다.
 - **재개 시 정체 카운터.** 지금도 인메모리라 재개하면 0 이다 — 그대로다.
+- **모듈 수준 패치가 조용히 무효가 된다.** 옮기는 코드가 부르는 이름을 테스트가 `monkeypatch.setattr(<모듈>, 이름, …)` 로 바꿔치기하면, 코드가 옮긴 뒤엔 새 모듈을 패치해야 한다. 옮기는 코드의 import 문(함수 안 지연 import 포함)은 글자 그대로 옮기고, `orch_mod`·`orchestrator_module` 패치 5곳(2026-10-08) 중 옮긴 이름(`resolve_conflicts` 3곳)만 대상을 바꾼다.
 - **compose 자식 경로.** `_compose_draft` 는 `sandbox_provider`·`compose_runtime_factory` 를 쓰고 원장에 code_worker 이벤트를 남긴다. 옮긴 뒤에도
   `test_compose_child_j4.py` 의 이벤트 단언이 그대로 통과해야 한다.
