@@ -24,6 +24,7 @@ from neos.coding.loop._durable.transcript import _append_user_text
 from neos.coding.model.base import CanonicalMessage, TextContent
 
 if TYPE_CHECKING:
+    from neos.coding.domain.phases import CodingCheckpoint
     from neos.coding.loop._durable.compaction import Compactor
     from neos.coding.loop._durable.tool_catalog import ToolCatalog
 
@@ -103,7 +104,7 @@ def _is_task_seed(text: str) -> bool:
 
 def restore_state(
     input: LoopInput,
-    checkpoint,
+    checkpoint: CodingCheckpoint,
     *,
     catalog: ToolCatalog,
     compactor: Compactor,

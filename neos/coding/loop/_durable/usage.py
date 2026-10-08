@@ -1,7 +1,7 @@
 """Token and cost accounting against the loop's budgets.
 
-Functions take `config` per call rather than capturing it, so pricing always
-uses the loop's current config and never a copy taken earlier.
+Functions take `config` per call rather than capturing it; the loop passes the
+config it was built with (it is fixed in `__init__`).
 """
 
 from __future__ import annotations
@@ -107,10 +107,11 @@ def transcript_token_limit(config) -> int:
 
 
 def parent_headroom_chars(config, state: AgentLoopState) -> int:
-    """The number of characters available for a parent's prompt.
+    """Characters of room left in the parent transcript for folding a child's result.
 
-    Headroom is the remaining tokens multiplied by 4 (a conservative
-    estimate of tokens per character), but never negative.
+    Passed to the subagent fold so child reports are budgeted to fit. It is the
+    remaining prompt tokens times 4 (an estimate of characters per token),
+    never negative.
     """
     remaining = max(
         0, transcript_token_limit(config) - max(0, state.last_prompt_tokens)

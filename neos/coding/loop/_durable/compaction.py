@@ -2,11 +2,11 @@
 
 Three escalating responses to a transcript that no longer fits:
 
-1. `_compact` -- shrink old tool results to refs, then drop the oldest turns.
+1. `Compactor.compact` -- shrink old tool results to refs, then drop the oldest turns.
    Runs after every turn and tool result; free when under budget.
-2. `_compact_after_prompt_too_long` -- the provider said no. Force (1), then
-   try one LLM summary of the prefix (`_maybe_llm_compact`).
-3. `_head_drop_after_prompt_too_long` -- the summary did not save us. Drop
+2. `Compactor.compact_after_prompt_too_long` -- the provider said no. Force (1), then
+   try one LLM summary of the prefix (`maybe_llm_compact`).
+3. `Compactor.head_drop_after_prompt_too_long` -- the summary did not save us. Drop
    one turn per retry until the retry budget in the model-turn path runs out.
 """
 

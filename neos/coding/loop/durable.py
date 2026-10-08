@@ -9,7 +9,8 @@ live in `neos.coding.loop._durable`:
 - `transitions`  -- how a turn or a tool result changes loop state
 - `spawn` · `spawn_claims` · `spawn_results` -- parent-mediated subagents
 - `compaction` · `artifact_refs` -- keeping the transcript inside budget
-- `checkpoint` · `codec` -- restoring and dumping state
+- `codec` -- encoding state; first state, encode and restore are public
+  in `neos.coding.loop.checkpoint`
 - `tool_catalog` -- which tools the model is offered
 
 This module keeps assembly, approval, and the hook calls whose timeout tests
@@ -121,9 +122,9 @@ class DurableCodingLoop(
         device_bridge=None,
         asks=None,
     ) -> None:
-        # Fields are set only here, and mixins read them through `self` on every
-        # use, never a copy -- so a new instance with other arguments is the
-        # whole of "the same loop, reconfigured".
+        # Fields are set only here. The components (`ToolCatalog`, `Compactor`)
+        # capture config/tools/hooks/model when built below, so changing one
+        # means building a new loop (as the test harness's `rebuilt()` does).
         self._model = model
         self._tools = tools
         self._executor = executor

@@ -92,10 +92,11 @@ async def test_starting_from_the_encoded_initial_state_matches_a_fresh_start() -
     ]
     assert len(seeded.model.requests) == len(fresh.model.requests) == 1
 
-    def strip(requests):
-        return [replace(request, turn_id="turn") for request in requests]
-
     assert strip(seeded.model.requests) == strip(fresh.model.requests)
+
+
+def strip(requests):
+    return [replace(request, turn_id="turn") for request in requests]
 
 
 @pytest.mark.asyncio
@@ -115,6 +116,7 @@ async def test_the_harness_components_match_the_loop_run() -> None:
     assert [c.loop_state for c in seeded.repository.checkpoints] == [
         c.loop_state for c in resumed.repository.checkpoints
     ]
+    assert strip(seeded.model.requests) == strip(resumed.model.requests)
     offered = {tool.name for tool in resumed.model.requests[0].tools}
     listed = {tool.name for tool in resumed.catalog().definitions(resumed.restore(parked))}
     assert offered == listed

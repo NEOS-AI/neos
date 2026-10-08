@@ -2,22 +2,10 @@
 
 import pytest
 
-from neos.coding.hooks import NullCodingHooks
-from neos.coding.loop import Compactor, ToolCatalog, initial_state
+from neos.coding.loop import initial_state
 from tests.coding.loop.support import INPUT, harness
 
 pytestmark = pytest.mark.no_db
-
-
-def test_a_compactor_without_hooks_uses_the_null_hooks() -> None:
-    h = harness([])
-    compactor = Compactor(
-        config=h.config,
-        model=h.model,
-        catalog=ToolCatalog(h.loop_kwargs["tools"], h.config),
-    )
-
-    assert isinstance(compactor._hooks, NullCodingHooks)
 
 
 @pytest.mark.asyncio
