@@ -131,7 +131,7 @@ def test_compaction_carries_it_only_on_the_preserving_summary(preserving, expect
         config=_loop_config(effort="high", compaction_preserving_summary=preserving),
     )
 
-    request, _ = h.loop._compaction_request("summarize")
+    request, _ = h.compactor().compaction_request("summarize")
 
     assert request.limits.effort == expected
 

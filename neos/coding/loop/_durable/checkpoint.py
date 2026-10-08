@@ -24,6 +24,7 @@ from neos.coding.loop._durable.children import (
 from neos.coding.loop._durable.codec import (
     _message_from_mapping,
     _state_from_mapping,
+    _transcript_digest,
 )
 from neos.coding.loop._durable.state import AgentLoopState
 from neos.coding.loop._durable.transcript import _append_user_text, _tool_result_ids
@@ -46,7 +47,7 @@ def _compact_command(loop, input, state: AgentLoopState, decision) -> AgentLoopS
     from neos.coding.commands.parse import sanitize_command_args
 
     bodies = dict(state.compacted_bodies)
-    after = loop._compact(state.transcript, force=True, bodies=bodies)
+    after = loop._compactor.compact(state.transcript, force=True, bodies=bodies)
     hint = sanitize_command_args(decision.parsed.args, max_len=240)
     notice = (
         f"Transcript compacted by /compact. Keep: {hint}"
@@ -176,7 +177,7 @@ class CheckpointMixin:
                 state,
                 pending_instruction=None,
                 terminal_pending=False,
-                transcript_digest=self._digest(state.transcript),
+                transcript_digest=_transcript_digest(state.transcript),
                 empty_retry_count=0,
             )
         return _sync_active_children(state, state.active_children)

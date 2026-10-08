@@ -9,7 +9,7 @@ from neos.coding.domain.approvals import ApprovalPolicyOutcome
 from neos.coding.domain.durability import ExecutionLease
 from neos.coding.domain.events import make_event
 from neos.coding.domain.phases import CodingCheckpoint, CodingRun, CodingRunStatus
-from neos.coding.loop import ToolCatalog, encode_state
+from neos.coding.loop import Compactor, ToolCatalog, encode_state
 from neos.coding.loop.anthropic import AnthropicCodingLoop, AnthropicLoopConfig
 from neos.coding.loop.base import LoopDependencies, LoopInput
 from neos.coding.model.base import ModelCompleted, ModelUsage, ToolCallCompleted
@@ -131,6 +131,15 @@ class Harness:
     def catalog(self) -> ToolCatalog:
         """The tool catalog this harness's loop was built with."""
         return ToolCatalog(self.loop_kwargs["tools"], self.config)
+
+    def compactor(self) -> Compactor:
+        """The compactor this harness's loop was built with."""
+        return Compactor(
+            config=self.config,
+            hooks=self.loop_kwargs["hooks"],
+            model=self.loop_kwargs["model"],
+            catalog=self.catalog(),
+        )
 
     def rebuilt(self, **overrides: Any) -> "Harness":
         """A new loop over the same repository, events and lease.

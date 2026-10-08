@@ -56,6 +56,7 @@ from neos.coding.phases import (
     plan_text_has_body,
 )
 from neos.coding.prompts import inject_previous_summary
+from neos.coding.loop._durable.codec import _transcript_digest
 from neos.coding.loop._durable.hook_decisions import parse_stop_decision
 from neos.coding.loop._durable.state import (
     EMPTY_RETRY_LIMIT,
@@ -447,7 +448,7 @@ class ModelTurnMixin:
         self, fingerprint: str, messages: tuple[CanonicalMessage, ...]
     ) -> str:
         return hashlib.sha256(
-            f"{fingerprint}:{self._digest(messages)}".encode()
+            f"{fingerprint}:{_transcript_digest(messages)}".encode()
         ).hexdigest()
 
     def _model_limits(self, state: AgentLoopState) -> ModelLimits:
@@ -567,9 +568,9 @@ class ModelTurnMixin:
 
     async def _recover_prompt_too_long(self, state, error) -> AgentLoopState:
         if state.prompt_compact_retries < 1:
-            return await self._compact_after_prompt_too_long(state)
+            return await self._compactor.compact_after_prompt_too_long(state)
         if state.prompt_compact_retries < _PROMPT_TOO_LONG_RETRIES:
-            return self._head_drop_after_prompt_too_long(state)
+            return self._compactor.head_drop_after_prompt_too_long(state)
         raise CodingLoopFailure("prompt_too_long", retryable=False) from error
 
     def _record_turn_metric(self, completion: ModelCompleted) -> None:

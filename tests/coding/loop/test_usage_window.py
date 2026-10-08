@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from neos.coding.loop import initial_state, parent_headroom_chars, transcript_token_limit, check_usage_budgets, price_tokens
+from neos.coding.loop import initial_state, parent_headroom_chars, transcript_token_limit, check_usage_budgets, price_tokens, estimated_tokens
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.model.base import (
     CanonicalMessage,
@@ -172,12 +172,12 @@ def test_compact_threshold_uses_usable_window_not_80k() -> None:
     limit = transcript_token_limit(h.config)
     assert limit == 40_000 - 8_192 - 4_000
     short = (CanonicalMessage("user", (TextContent("x" * 100),)),)
-    assert h.loop._over_budget(short) is False
+    assert h.compactor().over_budget(short) is False
     mid = (CanonicalMessage("user", (TextContent("x" * (40_000 * 4)),)),)
-    estimated = h.loop._estimated_tokens(mid)
+    estimated = estimated_tokens(mid)
     assert estimated > limit
     assert estimated < 80_000
-    assert h.loop._over_budget(mid) is True
+    assert h.compactor().over_budget(mid) is True
 
 
 @pytest.mark.asyncio

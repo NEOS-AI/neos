@@ -896,7 +896,7 @@ def test_compact_prefix_drop_never_splits_tool_use_result_pairs() -> None:
         *pair("active"),
     )
 
-    compacted = h.loop._compact(transcript)
+    compacted = h.compactor().compact(transcript)
     use_ids = [
         item.tool_call_id
         for message in compacted
@@ -952,7 +952,7 @@ def test_compact_shrinks_old_results_to_preview_and_sha256() -> None:
         ),
     )
 
-    compacted = h.loop._compact(transcript)
+    compacted = h.compactor().compact(transcript)
     results = {
         item.tool_call_id: dict(item.content)
         for message in compacted
@@ -1323,7 +1323,7 @@ async def test_llm_compact_keeps_first_user_instruction() -> None:
         transcript=(state.transcript[0],) + long_prefix,
         llm_compact_attempts=0,
     )
-    compacted, attempts, summary = await h.loop._maybe_llm_compact(state, state.transcript)
+    compacted, attempts, summary = await h.compactor().maybe_llm_compact(state, state.transcript)
     assert attempts == 1
     assert compacted[0].content[0].text == "Fix it"
     assert summary == "old files were edited"

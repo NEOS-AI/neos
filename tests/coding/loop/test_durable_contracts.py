@@ -13,7 +13,14 @@ import pytest
 from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.domain.durability import StaleExecutionLease, ToolExecutionDisposition
 from neos.coding.domain.phases import CodingCheckpoint, SteeringMode, SteeringRequest
-from neos.coding.loop import encode_state, initial_state
+from neos.coding.loop import (
+    encode_state,
+    expand_artifact_refs,
+    initial_state,
+    maybe_ref_latest_tool_result,
+    shrink_old_tool_results,
+    transcript_digest,
+)
 from neos.coding.loop.anthropic import AnthropicLoopConfig, CodingLoopFailure
 from neos.coding.loop.durable import COMPACT_REF_THRESHOLD_BYTES
 from neos.coding.model.anthropic import CodingModelError
@@ -78,7 +85,7 @@ def test_compact_token_threshold_triggers_and_keeps_pairs() -> None:
         *_pair("active", {"preview": "kept"}),
     )
 
-    compacted = h.loop._compact(transcript)
+    compacted = h.compactor().compact(transcript)
     use_ids = [
         item.tool_call_id
         for message in compacted
@@ -123,7 +130,7 @@ def test_compact_large_payload_stores_artifact_ref_and_body() -> None:
     )
     bodies: dict[str, str] = {}
 
-    compacted = h.loop._compact(transcript, bodies=bodies)
+    compacted = h.compactor().compact(transcript, bodies=bodies)
     results = {
         item.tool_call_id: dict(item.content)
         for message in compacted
@@ -140,15 +147,6 @@ def test_compact_large_payload_stores_artifact_ref_and_body() -> None:
 
 
 def test_compact_stores_small_bodies_and_expand_restores_them() -> None:
-    h = harness(
-        [[ModelCompleted("end_turn", ModelUsage(1, 1))]],
-        config=AnthropicLoopConfig(
-            model="claude-test",
-            system="code",
-            max_transcript_bytes=10_000_000,
-            max_transcript_tokens=1_000_000,
-        ),
-    )
     old_body = {"preview": "tiny-body", "entries": [{"text": "ok"}]}
     digest = _sha256_payload(old_body)
     transcript = (
@@ -157,10 +155,10 @@ def test_compact_stores_small_bodies_and_expand_restores_them() -> None:
         *_pair("active", {"preview": "kept"}),
     )
     bodies: dict[str, str] = {}
-    shrunk = h.loop._shrink_old_tool_results(transcript[2], bodies)
+    shrunk = shrink_old_tool_results(transcript[2], bodies)
     compacted = (transcript[0], transcript[1], shrunk, *transcript[3:])
     assert digest in bodies
-    expanded = h.loop._expand_artifact_refs(compacted, bodies)
+    expanded = expand_artifact_refs(compacted, bodies)
     restored = {
         item.tool_call_id: dict(item.content)
         for message in expanded
@@ -576,7 +574,7 @@ async def test_model_request_keeps_compact_preview_instead_of_expanding() -> Non
         compacted_bodies={
             digest: json.dumps(old_body, sort_keys=True, separators=(",", ":"))
         },
-        transcript_digest=h.loop._digest(transcript),
+        transcript_digest=transcript_digest(transcript),
         instructions_loaded=True,
     )
     dumped = encode_state(INPUT, state)
@@ -1244,26 +1242,24 @@ async def test_latest_small_read_file_result_is_not_ref_compacted() -> None:
 
 
 def test_shrink_old_tool_results_skips_read_file_pairs() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     read_body = {"preview": "     1|" + ("R" * 80), "entries": [{"text": "     1|hi"}]}
     exec_body = {"stdout": "E" * 80}
     read_msg = CanonicalMessage("tool", (ToolResultContent("r1", "ok", read_body),))
     exec_msg = CanonicalMessage("tool", (ToolResultContent("e1", "ok", exec_body),))
     names = {"r1": "read_file.v1", "e1": "execute.v1"}
     bodies: dict[str, str] = {}
-    shrunk_read = h.loop._shrink_old_tool_results(read_msg, bodies, names)
-    shrunk_exec = h.loop._shrink_old_tool_results(exec_msg, bodies, names)
+    shrunk_read = shrink_old_tool_results(read_msg, bodies, names)
+    shrunk_exec = shrink_old_tool_results(exec_msg, bodies, names)
     assert dict(shrunk_read.content[0].content) == read_body
     assert shrunk_exec.content[0].content["compacted"] is True
     assert _sha256_payload(exec_body) in bodies
 
 
 def test_shrink_old_tool_results_skips_unpaired_line_numbered_read() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     read_body = {"preview": "     1|kept-full", "entries": [{"text": "     1|kept-full"}]}
     message = CanonicalMessage("tool", (ToolResultContent("orphan", "ok", read_body),))
     bodies: dict[str, str] = {}
-    shrunk = h.loop._shrink_old_tool_results(message, bodies, {})
+    shrunk = shrink_old_tool_results(message, bodies, {})
     assert dict(shrunk.content[0].content) == read_body
     assert bodies == {}
 
@@ -1279,13 +1275,12 @@ _UNCHANGED_STUB = {
 
 
 def test_unchanged_stub_is_not_persist_refd() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     transcript = (
         CanonicalMessage("user", (TextContent("start"),)),
         *_pair("read1", _UNCHANGED_STUB, name="read_file.v1"),
     )
     bodies: dict[str, str] = {}
-    after = h.loop._maybe_ref_latest_tool_result(
+    after = maybe_ref_latest_tool_result(
         transcript, tool_name="read_file.v1", bodies=bodies
     )
     result = dict(after[-1].content[0].content)
@@ -1296,18 +1291,16 @@ def test_unchanged_stub_is_not_persist_refd() -> None:
 
 
 def test_shrink_keeps_unchanged_stub_even_without_tool_name() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     message = CanonicalMessage(
         "tool", (ToolResultContent("orphan", "ok", _UNCHANGED_STUB),)
     )
     bodies: dict[str, str] = {}
-    shrunk = h.loop._shrink_old_tool_results(message, bodies, {})
+    shrunk = shrink_old_tool_results(message, bodies, {})
     assert dict(shrunk.content[0].content) == _UNCHANGED_STUB
     assert bodies == {}
 
 
 def test_expand_does_not_unfold_unchanged_stub_as_empty_file() -> None:
-    h = harness([[ModelCompleted("end_turn", ModelUsage(1, 1))]])
     digest = _sha256_payload(_UNCHANGED_STUB)
     compacted = {
         "compacted": True,
@@ -1327,7 +1320,7 @@ def test_expand_does_not_unfold_unchanged_stub_as_empty_file() -> None:
             _UNCHANGED_STUB, sort_keys=True, separators=(",", ":")
         )
     }
-    expanded = h.loop._expand_artifact_refs(transcript, bodies)
+    expanded = expand_artifact_refs(transcript, bodies)
     result = dict(expanded[-1].content[0].content)
     assert result.get("unchanged") is True
     assert result["preview"] == "File unchanged since last read."
@@ -1350,7 +1343,7 @@ def test_compact_keeps_full_read_file_prefix_or_drops_pair() -> None:
         *_pair("old", old_body, name="read_file.v1"),
         *_pair("active", {"preview": "kept"}),
     )
-    compacted = h.loop._compact(transcript)
+    compacted = h.compactor().compact(transcript)
     results = {
         item.tool_call_id: dict(item.content)
         for message in compacted

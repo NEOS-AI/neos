@@ -132,7 +132,7 @@ class ToolCatalog:
         except TypeError:
             return frozenset()
 
-    def _union_skill_allowed_tools(
+    def union_skill_allowed_tools(
         self, current: frozenset[str], content: Mapping[str, object]
     ) -> frozenset[str]:
         incoming = _skill_allowed_names(content)

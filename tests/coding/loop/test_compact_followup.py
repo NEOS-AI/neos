@@ -134,7 +134,7 @@ async def test_compact_after_prompt_too_long_reattaches_recent_reads() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     assert after.instructions_loaded is False
     texts = [
@@ -176,7 +176,7 @@ async def test_compact_after_prompt_too_long_reattaches_at_most_five_reads() -> 
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     preview = "\n".join(
         item.text
@@ -217,7 +217,7 @@ async def test_compact_after_prompt_too_long_ignores_denied_absolute_reads() -> 
         initial_state(INPUT), transcript=reads, instructions_loaded=True
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     preview = "\n".join(
         item.text
@@ -247,7 +247,7 @@ async def test_llm_compact_passes_previous_summary_and_stores_new() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     prompt = h.model.requests[0].messages[0].content[0].text
     assert "old facts about auth" in prompt
@@ -334,7 +334,7 @@ async def test_pre_and_post_compact_inject_user_instructions() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     texts = [
         item.text
@@ -361,7 +361,7 @@ async def test_compact_hooks_do_not_split_open_tool_pairs() -> None:
         ),
     )
 
-    after = await h.loop._compact_with_hook(open_pair, preserve_tools=True)
+    after = await h.compactor().compact_with_hook(open_pair, preserve_tools=True)
 
     roles = [message.role for message in after]
     assert roles[-1] == "assistant"
@@ -515,7 +515,7 @@ async def test_llm_compact_keeps_tool_result_ref_bodies() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
 
     assert after.summary == "compressed facts"
     assert after.compacted_bodies[digest] == payload_text
@@ -577,7 +577,7 @@ async def test_compact_keeps_revealed_tool_definitions() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
     names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools
@@ -606,7 +606,7 @@ async def test_compact_recovers_revealed_tools_from_transcript() -> None:
         instructions_loaded=True,
     )
 
-    after = await h.loop._compact_after_prompt_too_long(state)
+    after = await h.compactor().compact_after_prompt_too_long(state)
     names = {tool.name for tool in h.catalog().definitions(after)}
 
     assert "web_fetch.v1" in after.revealed_tools

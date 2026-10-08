@@ -45,7 +45,7 @@ from neos.coding.tools.registry import CodingToolRegistry, ToolRisk
 from neos.jev.gate import evaluate_approval_with_jev
 from neos.coding.loop._durable.checkpoint import CheckpointMixin
 from neos.coding.loop._durable.children import _select_spawn_work as _select_spawn_work
-from neos.coding.loop._durable.compaction import CompactionMixin
+from neos.coding.loop._durable.compaction import Compactor
 from neos.coding.loop._durable.hook_decisions import (
     PreToolDecision,
     parse_pre_tool_decision,
@@ -95,7 +95,6 @@ class DurableCodingLoop(
     SubagentSpawnMixin,
     SpawnClaimsMixin,
     TurnTransitionsMixin,
-    CompactionMixin,
     CheckpointMixin,
 ):
     def __init__(
@@ -135,6 +134,9 @@ class DurableCodingLoop(
         self._clock = clock
         self._approval_evaluator = approval_evaluator
         self._hooks = hooks or NullCodingHooks()
+        self._compactor = Compactor(
+            config=config, hooks=self._hooks, model=model, catalog=self._catalog
+        )
         self._subagents = subagents
         # `None` 이 off 다. 루프는 설정을 읽지 않는다 -- 조립하는 쪽이 정한다.
         self._jev = jev
