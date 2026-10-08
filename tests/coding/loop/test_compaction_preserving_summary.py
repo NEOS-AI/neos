@@ -24,7 +24,7 @@ from neos.coding.model.base import (
     TextDelta,
 )
 from neos.coding.prompts.official import COMPACTION_SUMMARY_INSTRUCTION
-from tests.coding.loop.test_anthropic_loop import INPUT, harness
+from tests.coding.loop.support import INPUT, harness
 
 pytestmark = pytest.mark.no_db
 

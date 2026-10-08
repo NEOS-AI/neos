@@ -12,7 +12,7 @@ from neos.coding.domain.approvals import (
     evaluate_approval,
 )
 from neos.coding.tools.registry import ToolRisk, ValidatedToolCall
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     NOW,
     collect,
     completed,

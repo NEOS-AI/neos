@@ -12,7 +12,7 @@ from neos.coding.domain.approvals import evaluate_approval
 from neos.config.schema import ChannelConfig
 from neos.observability.metrics import metrics
 from neos.standing.asks import AgentAsks, ReplyDestination, resolve_reply_destination
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, NOW, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 

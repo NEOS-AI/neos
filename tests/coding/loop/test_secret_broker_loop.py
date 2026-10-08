@@ -17,7 +17,7 @@ from neos.coding.sandbox.base import CommandResult
 from neos.coding.secrets import InMemorySecretStore
 from neos.coding.tools.executor import SandboxToolExecutor
 from neos.coding.tools.registry import CodingToolRegistry
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     Bindings,
     Session,

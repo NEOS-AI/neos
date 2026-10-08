@@ -12,7 +12,7 @@ import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
 from neos.coding.tools.executor import SandboxToolExecutor
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 from tests.coding.test_agent_browser import (
     FakeDriver,
     World,

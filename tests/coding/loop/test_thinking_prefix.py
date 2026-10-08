@@ -24,7 +24,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
-from tests.coding.loop.test_anthropic_loop import INPUT, collect, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, collect, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 

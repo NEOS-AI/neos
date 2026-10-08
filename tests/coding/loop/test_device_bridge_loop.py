@@ -19,7 +19,7 @@ from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.model.base import ModelCompleted, ModelUsage
 from neos.coding.tools.registry import CodingToolRegistry
 from neos.config.schema import DeviceBridgeConfig
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     Bindings,
     completed,

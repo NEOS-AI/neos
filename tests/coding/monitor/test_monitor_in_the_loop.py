@@ -15,7 +15,7 @@ from neos.coding.model.base import ModelCompleted, ModelUsage
 from neos.coding.monitor.monitor import TrajectoryMonitor
 from neos.coding.monitor.rules import FallbackThresholds
 from neos.jev.gate import RiskScore
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     Events,
     completed,

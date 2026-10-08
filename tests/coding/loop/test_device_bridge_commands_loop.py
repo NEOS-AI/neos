@@ -19,7 +19,7 @@ from neos.coding.bridge.service import DeviceBridgeService
 from neos.coding.domain.approvals import ApprovalDecision, evaluate_approval
 from neos.coding.tools.registry import CodingToolRegistry
 from neos.config.schema import DeviceBridgeConfig
-from tests.coding.loop.test_anthropic_loop import NOW, completed, harness, tool_call
+from tests.coding.loop.support import NOW, completed, harness, tool_call
 from tests.coding.loop.test_device_bridge_loop import (
     DEVICE_NAMES,
     OWNED,
@@ -246,7 +246,7 @@ async def test_a_child_cannot_run_a_command_on_the_device(tmp_path: Path, monkey
     from neos.subagent.ports import SystemClock
     from neos.subagent.runtime import SubagentRuntime
     from neos.subagent.stepper import ChildStepper
-    from tests.coding.loop.test_anthropic_loop import Bindings
+    from tests.coding.loop.support import Bindings
     from tests.coding.loop.test_child_gate import _child_calls, _denials, _PortExecutor, _spawn
     from tests.coding.loop.test_spawn_subagent import (
         ScriptedCodingModel,

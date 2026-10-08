@@ -268,7 +268,7 @@ def test_a_credentialed_call_is_never_speculated() -> None:
 # -- the loop: vault bound to one call, nothing stored holds the value ----------------
 
 
-from tests.coding.loop.test_anthropic_loop import (  # noqa: E402
+from tests.coding.loop.support import (  # noqa: E402
     INPUT,
     Bindings,
     Session,

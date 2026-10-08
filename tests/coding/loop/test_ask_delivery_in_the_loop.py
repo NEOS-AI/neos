@@ -12,7 +12,7 @@ from neos.coding import runtime as runtime_module
 from neos.coding.domain.approvals import evaluate_approval
 from neos.config.schema import AppConfig
 from neos.standing.asks import AgentAsks, ReplyDestination
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 

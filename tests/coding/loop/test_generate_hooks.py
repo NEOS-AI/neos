@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from neos.coding.model.base import ModelCompleted, ModelUsage, TextDelta
-from tests.coding.loop.test_anthropic_loop import collect, harness
+from tests.coding.loop.support import collect, harness
 
 pytestmark = pytest.mark.no_db
 

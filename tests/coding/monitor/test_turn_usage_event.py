@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     completed,
     harness,

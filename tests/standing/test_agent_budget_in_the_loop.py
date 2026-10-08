@@ -18,7 +18,7 @@ from neos.standing.budget import (
     AgentBudgetEnvelope,
     InMemoryAgentSpendSource,
 )
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, NOW, completed, harness, tool_call
 from tests.coding.monitor.test_monitor_in_the_loop import LedgerEvents
 
 pytestmark = pytest.mark.no_db
@@ -123,7 +123,7 @@ async def test_no_envelope_no_judgement() -> None:
 @pytest.mark.asyncio
 async def test_a_sink_that_cannot_be_read_is_not_judged() -> None:
     """Without `list_after` the once-per-run guard cannot hold -- stay out."""
-    from tests.coding.loop.test_anthropic_loop import Events
+    from tests.coding.loop.support import Events
 
     events = Events()
     await _run(_envelope(10**9), events=events)

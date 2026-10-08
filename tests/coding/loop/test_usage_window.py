@@ -12,7 +12,7 @@ from neos.coding.model.base import (
     TextContent,
     TextDelta,
 )
-from tests.coding.loop.test_anthropic_loop import INPUT, collect, harness
+from tests.coding.loop.support import INPUT, collect, harness
 
 pytestmark = pytest.mark.no_db
 

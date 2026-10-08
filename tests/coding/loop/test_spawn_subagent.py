@@ -47,7 +47,7 @@ from neos.subagent.types import (
     SubagentStatus,
     SubagentTicket,
 )
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     LEASE,
     NOW,

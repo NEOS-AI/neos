@@ -26,12 +26,12 @@ from neos.coding.model.base import (
     ToolUseContent,
 )
 from tests.coding.fakes import RecordingCodingAuditSink
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     NOW,
     Bindings,
     Executor,
-    _DecisionHook,
+    DecisionHook,
     collect,
     completed,
     harness,
@@ -397,7 +397,7 @@ async def test_plan_end_turn_with_critical_files_is_terminal() -> None:
     assert list(state["critical_files"]) == ["src/app.py"]
 
 
-class _StopHook(_DecisionHook):
+class _StopHook(DecisionHook):
     def __init__(self, decision: str, reason: str = "blocked") -> None:
         super().__init__("allow", reason)
         self.stop_decision = decision
@@ -475,7 +475,7 @@ async def test_pre_tool_timeout_denies_without_execute(monkeypatch) -> None:
 
     monkeypatch.setattr(durable_mod, "PRE_TOOL_HOOK_TIMEOUT_SEC", 0.01)
 
-    class SlowHook(_DecisionHook):
+    class SlowHook(DecisionHook):
         async def pre_tool(self, call):
             await asyncio.sleep(0.2)
             return {"decision": "allow"}
@@ -600,7 +600,7 @@ async def test_post_tool_timeout_or_error_skips_without_failing_tool(
 
     monkeypatch.setattr(durable_mod, "PRE_TOOL_HOOK_TIMEOUT_SEC", 0.01)
 
-    class BoomPost(_DecisionHook):
+    class BoomPost(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow"}
 
@@ -640,7 +640,7 @@ async def test_model_error_before_delta_keeps_retryable() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_updated_input_is_revalidated_before_execute() -> None:
-    class RewriteHook(_DecisionHook):
+    class RewriteHook(DecisionHook):
         async def pre_tool(self, call):
             return {
                 "decision": "allow",
@@ -654,7 +654,7 @@ async def test_pre_tool_updated_input_is_revalidated_before_execute() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_invalid_updated_input_denies() -> None:
-    class BadRewrite(_DecisionHook):
+    class BadRewrite(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow", "updatedInput": {"surprise": True}}
 
@@ -697,7 +697,7 @@ async def test_tool_result_secrets_are_redacted_before_persist() -> None:
 
 @pytest.mark.asyncio
 async def test_post_tool_rewrite_is_applied_then_redacted() -> None:
-    class RewritePost(_DecisionHook):
+    class RewritePost(DecisionHook):
         async def pre_tool(self, call):
             return {"decision": "allow"}
 
@@ -730,7 +730,7 @@ async def test_denied_tool_content_is_denial_envelope() -> None:
                 completed(),
             ]
         ],
-        hooks=_DecisionHook("deny"),
+        hooks=DecisionHook("deny"),
     )
     events = await collect(h)
     assert events[-1].type == "tool.denied"
@@ -1078,7 +1078,7 @@ class _FatExecutor(Executor):
 
 @pytest.mark.asyncio
 async def test_pre_tool_prevent_closes_pair_and_is_terminal() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("prevent", "stop"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("prevent", "stop"))
     events = await collect(h)
 
     assert h.executor.calls == []
@@ -1110,7 +1110,7 @@ async def test_pre_tool_prevent_does_not_continue_remaining_tools() -> None:
                 completed(),
             ]
         ],
-        hooks=_DecisionHook("prevent"),
+        hooks=DecisionHook("prevent"),
     )
     await collect(h)
     assert h.executor.calls == []
@@ -1132,7 +1132,7 @@ async def test_pre_tool_prevent_does_not_continue_remaining_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_pre_tool_deny_is_not_terminal() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("deny"))
     events = await collect(h)
     assert events[-1].type == "tool.denied"
     assert events[-1].payload["reason_code"] == "policy_hook_denied"
@@ -1426,7 +1426,7 @@ async def test_tool_started_is_emitted_before_execute() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_denied_payload_includes_name_and_preview() -> None:
-    h = harness([[tool_call(), completed()]], hooks=_DecisionHook("deny"))
+    h = harness([[tool_call(), completed()]], hooks=DecisionHook("deny"))
     events = await collect(h)
     denied = next(event for event in events if event.type == "tool.denied")
     assert denied.payload["name"] == "write_file.v1"
@@ -1706,7 +1706,7 @@ def test_uniquify_avoids_existing_suffixed_ids() -> None:
     assert len(ids) == len(set(ids))
 
 
-class _PostPrevent(_DecisionHook):
+class _PostPrevent(DecisionHook):
     async def pre_tool(self, call):
         return {"decision": "allow"}
 

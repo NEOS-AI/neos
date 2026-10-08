@@ -16,7 +16,7 @@ from neos.coding.model.base import (
     ToolResultContent,
     ToolUseContent,
 )
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, collect, harness
+from tests.coding.loop.support import INPUT, NOW, collect, harness
 
 pytestmark = pytest.mark.no_db
 
@@ -614,7 +614,7 @@ async def test_compact_recovers_revealed_tools_from_transcript() -> None:
 
 @pytest.mark.asyncio
 async def test_skill_allowed_tools_deny_disallowed_tool() -> None:
-    from tests.coding.loop.test_anthropic_loop import tool_call, completed
+    from tests.coding.loop.support import tool_call, completed
 
     h = harness([[tool_call(), completed()]])
     state = replace(

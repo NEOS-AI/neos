@@ -5,7 +5,7 @@ import pytest
 from neos.coding.domain.phases import CodingCheckpoint
 from neos.coding.loop.base import LoopInput
 from neos.coding.model.base import ModelCompleted, ModelUsage
-from tests.coding.loop.test_anthropic_loop import INPUT, NOW, harness
+from tests.coding.loop.support import INPUT, NOW, harness
 
 pytestmark = pytest.mark.no_db
 

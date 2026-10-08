@@ -23,7 +23,7 @@ from neos.standing.channel_threads import ChannelAgentThreads
 from neos.standing.store import InMemoryStandingAgentStore
 from neos.standing.threads import InMemoryAgentThreadStore
 from tests.api.channels.conftest import install_channel_settings
-from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
 pytestmark = pytest.mark.no_db
 

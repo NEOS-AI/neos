@@ -17,7 +17,7 @@ from neos.coding.domain.approvals import evaluate_approval
 from neos.coding.loop.anthropic import AnthropicLoopConfig
 from neos.coding.loop.durable import CodingLoopWaitingUser
 from neos.standing.asks import AgentAsks, ReplyDestination
-from tests.coding.loop.test_anthropic_loop import (
+from tests.coding.loop.support import (
     INPUT,
     NOW,
     completed,

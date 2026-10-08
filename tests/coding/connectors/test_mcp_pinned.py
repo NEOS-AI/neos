@@ -497,11 +497,10 @@ def test_a_pinned_credentialed_tool_is_s7_and_never_speculated() -> None:
 # -- N7: the tools array is fixed for the life of a task ------------------------------
 
 
-from tests.coding.loop.test_anthropic_loop import (  # noqa: E402
+from neos.coding.model.base import ModelCompleted, ModelUsage  # noqa: E402
+from tests.coding.loop.support import (  # noqa: E402
     INPUT,
     Bindings,
-    ModelCompleted,
-    ModelUsage,
     Session,
     completed,
     harness,

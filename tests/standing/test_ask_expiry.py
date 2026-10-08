@@ -238,7 +238,7 @@ def test_the_expired_notice_names_the_question() -> None:
 @pytest.mark.no_db
 @pytest.mark.asyncio
 async def test_after_expiry_the_resumed_loop_denies_with_ask_expired() -> None:
-    from tests.coding.loop.test_anthropic_loop import INPUT, completed, harness, tool_call
+    from tests.coding.loop.support import INPUT, completed, harness, tool_call
 
     h = harness(
         [[tool_call("a1", "ask_user.v1", {"questions": ["Which branch?"]}), completed()], [completed()]],

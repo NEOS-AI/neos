@@ -102,7 +102,7 @@ def _loop_config(**kwargs):
 
 def test_a_loop_turn_carries_the_effort() -> None:
     """Mutation: drop `effort=` from `_model_limits` -> ''."""
-    from tests.coding.loop.test_anthropic_loop import harness
+    from tests.coding.loop.support import harness
 
     h = harness([], config=_loop_config(effort="high"))
 
@@ -112,7 +112,7 @@ def test_a_loop_turn_carries_the_effort() -> None:
 
 
 def test_no_effort_means_the_turn_sends_none() -> None:
-    from tests.coding.loop.test_anthropic_loop import harness
+    from tests.coding.loop.support import harness
 
     h = harness([], config=_loop_config())
 
@@ -124,7 +124,7 @@ def test_compaction_carries_it_only_on_the_preserving_summary(preserving, expect
     """The legacy summary is capped at 512 tokens; raising the effort inside
     that cap would spend the summary on thinking. Mutation: drop `effort=`
     from the preserving branch, or add it to the legacy one."""
-    from tests.coding.loop.test_anthropic_loop import harness
+    from tests.coding.loop.support import harness
 
     h = harness(
         [],
