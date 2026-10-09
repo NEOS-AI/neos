@@ -971,3 +971,14 @@ def test_sample_30_is_sample_29_with_the_compose_turns_named():
     s30 = yaml.safe_load(Path("config/samples/sample-30.yaml").read_text(encoding="utf-8"))
     assert s30["deep_analysis"] == {**s29["deep_analysis"], "compose_max_turns": 12}
     assert {k: v for k, v in s30.items() if k != "deep_analysis"} == {k: v for k, v in s29.items() if k != "deep_analysis"}
+
+
+def test_sample_31_is_sample_30_again():
+    """#30 은 크레딧 소진과 dirty 영수증으로 무효였다(D116). #31 은 **같은 설정**으로 다시 돈다(D117)."""
+    from pathlib import Path
+
+    import yaml
+
+    s30 = yaml.safe_load(Path("config/samples/sample-30.yaml").read_text(encoding="utf-8"))
+    s31 = yaml.safe_load(Path("config/samples/sample-31.yaml").read_text(encoding="utf-8"))
+    assert s31 == s30
