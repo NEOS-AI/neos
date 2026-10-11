@@ -63,7 +63,7 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 
 | 묶음 | 토큰 | 쓰는 곳 |
 |---|---|---|
-| 작업 상태 | `--status-{running, waiting, paused, success, warning, danger, idle}` (각 `-foreground` · `-subtle` 배경 짝) | `RunStatus` · `StepTimeline` · 기존 하드코딩 상태 색 |
+| 작업 상태 | `--status-{running, waiting, paused, success, warning, danger, idle}` (옅은 배경은 별도 토큰 없이 Tailwind 불투명도 수식어 `bg-status-running/10`) | `RunStatus` · `StepTimeline` · 기존 하드코딩 상태 색 |
 | 근거 | `--evidence-{verified, unverified, rejected}` | `ClaimEvidence` · DA 카운터 |
 | 위험 대역 | `--risk-{low, mid, high, blocked}` | `VerdictBadge`(코딩 · DA · 감시자 공통) |
 | 표면 깊이 | `--surface-{1, 2, 3}` | 패널 · 카드 · 카드 안 영역 |
@@ -72,9 +72,14 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 `succeeded`→`success`, `failed`→`danger`, `cancelled`→`idle` 이고 나머지는 이름이 같다.
 
 **금지 규칙:** `components/` · `features/` · `app/` 의 `.tsx` 에서 원시 팔레트 상태 클래스
-(`(text|bg|border|ring)-(red|green|amber|yellow|blue|purple|emerald|orange)-\d{2,3}`)를 소스 테스트로 금지한다
+(`(text|bg|border|ring|from|via|to)-(red|green|amber|yellow|blue|purple|emerald|orange|rose|sky|indigo)-\d{2,3}`)를 소스 테스트로 금지한다
 (`web/tests/source/semantic-tokens.test.ts`). `components/ui/` (shadcn 원자)와 `components/icons.tsx` 는 검사 대상에서 빼되, 빼는 목록은
-테스트 안에 이름으로 고정한다.
+테스트 안에 이름으로 고정한다. **예외 하나:** 승인된 blue-black 다크 장식 클래스(`blueblack-theme.test.ts` 가 고정하는
+`dark:border-blue-300/*` 류 — `chat-header.tsx` · `messages.tsx` · `multimodal-input.tsx`)는 `(파일, 클래스)` 쌍의 허용 목록으로 둔다.
+
+**상태가 아닌 장식색의 치환:** `/code` 는 amber 를 상태가 아닌 강조색(타임라인 그라데이션, 아이콘 강조)으로도 쓴다. 장식 용도는
+`--primary` 로 옮긴다 — `/code` 의 강조색이 amber 에서 블루로 바뀌는 **의도된 시각 변화**다(두 앱을 한 브랜드로, §3.2). 상태 용도는
+§3.1 표의 토큰으로 간다.
 
 ### 3.2 라이트 테마
 
@@ -85,7 +90,10 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 ### 3.3 서체와 타입 스케일
 
 - 라틴: Geist / Geist Mono (현행 유지)
-- 한글: **Pretendard Variable**, `next/font/local` 로 저장소에 둔다(`web/app/fonts/`, 한글 서브셋 woff2)
+- 한글: **Pretendard**, npm `pretendard@1.3.9`(OFL-1.1, `github.com/orioncactus/pretendard`, 2026-10-11 레지스트리 확인)를 정확한 버전으로
+  고정하고 `next/font/local` 이 `node_modules` 의 **KS X 1001 서브셋 정적 woff2 네 굵기**(400 · 500 · 600 · 700, 각 약 270KB)를 읽는다.
+  단일 가변 woff2 는 약 2MB 이고 동적 서브셋은 `unicode-range` CSS 1,700여 조각이라 `next/font` 로 표현되지 않는다 — 그래서 가변
+  대신 정적 서브셋이다. 서브셋 밖의 드문 음절은 시스템 폰트로 떨어진다(받아들인 한계)
 - `--font-sans: var(--font-geist), var(--font-pretendard), system-ui, sans-serif`
 - 타입 스케일 6단계 토큰: `--text-{caption, body-sm, body, title-sm, title, display}` (크기 · 줄높이 짝). 본문 줄높이는 한글
   가독성을 위해 1.65 이상
@@ -94,10 +102,13 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 
 ### 3.4 문구 사전
 
-- 사용자에게 보이는 문구를 표면별 사전으로 모은다: `web/lib/copy/{common,chat,code,agents,reports,inbox}.ts`
+- 사용자에게 보이는 문구를 표면별 사전으로 모은다: `web/lib/copy/<표면>.ts`. 파일은 그 표면을 만드는 단계가 만든다 —
+  1단계는 `common`(셸 · 상태 · 자리 화면) · `code` · `chat` · `inbox`, `reports` · `agents` 는 3 · 4단계
 - 각 파일은 `as const` 객체 하나를 export 한다. 키는 의미 이름(`code.stream.restoreFailed`)이고 값은 한국어
 - `/code` 의 영문 사용자 문구는 5단계에서 이 사전으로 옮긴다. 1단계는 **새로 만드는 컴포넌트(셸 · 인박스 · 프리미티브)만** 사전을
-  쓰고, 이식하는 코딩 승인 카드 · Jev 배지(§5.4)의 문구도 함께 옮긴다
+  쓰고, 이식하는 코딩 승인 카드 · Jev 배지(§5.4)의 문구도 함께 사전으로 옮긴다. 단 **그 둘의 값은 1단계에서 지금의 영문 그대로 둔다** —
+  코딩 소스 테스트가 aria-label(`Approve tool request` 등)과 배지 문자열(`jev 0.62 · mid`, `shadow`)을 고정하고 있어, 번역은 §5.4 회귀
+  기준과 충돌한다. 번역은 5단계에서 테스트와 함께 한다
 - 개발자 진단용 문자열(로그 · 에러 코드)은 사전에 넣지 않는다
 
 ### 3.5 템플릿 정체성 제거
@@ -108,7 +119,9 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
   `createDocument` · `updateDocument` 렌더 분기는 아티팩트 경로가 쓰므로 남긴다
 - 반짝이 아바타를 NEOS 마크로 바꾼다(`components/icons.tsx` 에 SVG 하나)
 - 첫 화면(`greeting.tsx` · `suggested-actions.tsx`)은 네 작업 방식(검색 · 심층분석 · 코딩 · 에이전트에게 맡기기)을 보여 주는 빈 상태로
-  바꾼다. 각 항목은 새 작업 컴포저(§4.3)의 모드 칩을 미리 고른 상태로 연다
+  바꾼다. 검색 · 심층분석 카드는 **이미 있는 입력창에 예시 질의를 채운다**(보내지 않는다 — 사용자가 고쳐 보낸다). 코딩 카드는 `/code`
+  로, 에이전트 카드는 에이전트 대화로 간다(§4.3 의 목적지와 같다). 첫 화면이 이미 대화 공간이라 컴포저 다이얼로그를 다시 여는 것은
+  같은 자리로 돌아올 뿐이기 때문이다
 
 ### 3.6 모션
 
@@ -150,15 +163,22 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 
 | 종류 | 출처 (BE) |
 |---|---|
-| 코딩 승인 · 질문 대기 | `GET /coding/tasks` 중 `status` 가 `waiting_approval` · `waiting_user` 인 작업(`neos/coding/domain/models.py` `CodingTaskStatus`) |
-| 상시 에이전트 질문 | `GET /standing-agents` → 에이전트마다 `GET /standing-agents/{id}/questions` (미응답) |
-| 멈춤 · 실패 | `GET /standing-agents` 중 `status == "paused"`(Q10b 예산 멈춤 · Q5b 감시자 멈춤 — 사유는 4단계에서 보인다), `GET /coding/tasks` 중 `failed` |
+| 승인 · 질문 대기 | `GET /coding/tasks` 중 `status` 가 `waiting_approval` · `waiting_user` 인 작업(`neos/coding/domain/models.py` `CodingTaskStatus`). **에이전트가 사람에게 묻는 질문(Q9 묻고 기다리기)은 여기로 온다** — 상시 에이전트의 작업도 사용자 소유 코딩 작업이다(`neos/standing/tasks.py` `open_agent_task` 의 `owner_id=agent.owner_id`) |
+| 멈춤 | `GET /coding/tasks` 중 `paused`(Q10b 봉투 멈춤은 작업을 멈춘다), `GET /standing-agents` 중 `status == "paused"`(Q5b 감시자 멈춤 등 — 사유는 4단계에서 보인다) |
+| 실패 | `GET /coding/tasks` 중 `failed` |
 
-- BFF `GET /api/inbox` 가 위 출처를 병렬로 부르고(fan-out) `InboxItem[]` 로 정규화해 돌려준다. 새 BE 엔드포인트는 만들지 않는다.
+> ⚠️ `GET /standing-agents/{id}/questions` 는 **에이전트의 질문이 아니다** — 사용자가 등록하는 cron 기반 "상시 질문"(Q3)이다.
+> 인박스 출처가 아니다(2026-10-11 코드 대조로 바로잡음).
+
+- BFF `GET /api/inbox` 가 위 두 호출을 병렬로 부르고(fan-out) `InboxItem[]` 로 정규화해 돌려준다. 새 BE 엔드포인트는 만들지 않는다.
+  `GET /coding/tasks` 는 최근 활동 순 최대 50건이므로(`clamp_task_list_limit`) BFF 는 `limit=50` 으로 부른다 — 그보다 오래된 대기 작업은
+  1단계 인박스에 보이지 않는다(받아들인 한계, 4단계 spec 이 BE 필터로 닫는다).
   상태 문자열은 BFF 한 곳(`lib/inbox/normalize.ts`)에서만 해석한다. 출처 하나가 실패해도 나머지는
   돌려주고, 실패한 출처를 `degraded: string[]` 로 함께 싣는다 — 실패를 빈 목록으로 숨기지 않는다
 - 기능이 꺼진 출처(404 · 기능 off)는 실패가 아니라 "없음"이다(`openAgentConversation` 의 404 처리와 같은 규칙)
 - 클라이언트는 30초 폴링 + 창 포커스 시 즉시 갱신. 배지는 항목 수
+- 인박스는 `/inbox` 페이지다(사이드바 "활동" 이 연다). 시트가 아니라 페이지인 이유: 모바일에서는 사이드바 자체가 시트라 시트 안의
+  시트가 되고, 페이지는 링크로 공유·새로고침된다
 - 1단계 인박스는 **보기와 이동**만 한다. 항목을 누르면 그 작업 화면으로 간다. 인박스 안에서 답하기 · 승인하기는 4단계(질문) ·
   코딩 승인 카드가 이미 있는 작업 화면의 몫이다
 - 챗 `approval_request` 는 스트림 안에서만 살아 있어 BE 에 조회 경로가 없다 → 1단계 인박스에서 뺀다(인벤토리에 이유 기록)
@@ -166,7 +186,7 @@ shadcn 토큰(`--primary` · `--muted` …)은 유지하고 그 위에 의미 �
 ```ts
 type InboxItem = {
   id: string;                 // `${source}:${sourceId}`
-  source: "coding_waiting" | "agent_question" | "agent_paused" | "coding_failed";
+  source: "task_waiting" | "task_paused" | "task_failed" | "agent_paused";
   title: string;              // 문구 사전에서
   status: TraceStatus;        // waiting | paused | failed
   href: string;               // 이동 목적지
@@ -178,14 +198,17 @@ type InboxItem = {
 
 "＋ 새 작업" 과 첫 화면 카드는 같은 컴포저를 연다. 1단계 범위는:
 - 모드 칩 넷(검색 · 심층분석 · 코딩 · 에이전트에게 맡기기)과 각 모드의 목적지 라우팅
-  - 검색 → 새 대화, 심층분석 → 새 대화 + 심층분석 요청(현행 DA 시작 경로), 코딩 → `/code` 새 작업, 에이전트 → 에이전트 대화
+  - 검색 → 새 대화, 심층분석 → 새 대화, 코딩 → `/code` 새 작업, 에이전트 → 에이전트 대화
+  - **심층분석은 FE 가 요청할 수 없다** — 지금은 BE 라우팅이 질의를 보고 DA 를 고른다(챗 요청 스키마
+    `app/(chat)/api/chat/schema.ts` 에 DA 필드가 없다). 그래서 1단계의 심층분석 칩은 새 대화로 가고 "복잡한 조사 질문은 자동으로
+    심층분석으로 이어진다" 는 안내만 붙인다. 명시적 DA 요청 필드는 3단계(리포트) spec 의 BE 변경이다
 - 흩어진 모델 선택 · effort · 자율성 선택기를 컴포저 툴바 한 곳으로 모은다(컴포넌트는 기존 것을 재사용)
 
 컴포저 내부 입력(첨부 · 슬래시 명령 등)은 기존 `multimodal-input.tsx` 를 그대로 쓴다. 2단계에서 다시 다룬다.
 
 ### 4.4 모바일
 
-기존 `Sheet` 사이드바 유지. 인박스는 상단 바 아이콘 + 시트로 연다. 코드 독의 모바일 탭 전환은 5단계.
+기존 `Sheet` 사이드바 유지. 인박스는 사이드바의 "활동" 항목으로 `/inbox` 페이지를 연다(§4.2). 코드 독의 모바일 탭 전환은 5단계.
 
 ## 5. 작업 흔적(trace) 프리미티브
 
@@ -311,11 +334,13 @@ export type QuestionView = { id: string; prompt: string; status: "open" | "answe
 }
 ```
 
-- **BE 테스트** `tests/api/test_fe_surface_inventory.py`: 앱 라우트의 태그 집합을 만들고 인벤토리와 **정확히 일치**하는지 본다.
-  인벤토리에 없는 태그도, BE 에 없는 인벤토리 태그도 빨갛다. `test_retired_routes._routes()` 는 `(method, path)` 만 돌려주고 태그를 싣지
-  않으므로, **같은 순회**(`effective_route_contexts()` + 포함 라우터의 `original_router.routes` — WebSocket 포함)로 `tags` 를 모으는 헬퍼
-  `_route_tags()` 를 그 옆에 둔다. `app.routes` 를 그대로 읽으면 포함된 라우터의 태그가 감춰진다(메모리) — 테스트 첫 단언으로 이웃 태그
-  (`Coding Agent`, 그리고 WS 전용 `Coding Agent WebSocket`)가 보이는지 확인한다
+- **BE 테스트** `tests/api/test_fe_surface_inventory.py`: BE 의 태그 집합을 만들고 인벤토리와 **정확히 일치**하는지 본다.
+  인벤토리에 없는 태그도, BE 에 없는 인벤토리 태그도 빨갛다. 태그 집합은 **런타임 순회가 아니라 AST 스캔**으로 만든다 —
+  `neos/main.py` 와 `neos/api/**` 에서 `APIRouter(...)` · `include_router(...)` · `_include_router_for_runtime(...)` 호출의 리터럴 `tags`
+  를 모은다(`test_chat_stream_event_types.py` 와 같은 방식). 런타임 순회는 **설정에 따라 마운트가 달라져** 결과가 흔들린다 — 2026-10-11 실측에서
+  `Coding Approval Rules` 는 마운트되지 않았고 상시 에이전트 태그는 개발 프로파일이 켜서 보였다. 리터럴이 아닌 `tags` 가 있으면 테스트가
+  빨갛다(조용히 건너뛰지 않는다). 2026-10-11 기준 정적 태그는 31개다. 첫 단언으로 이웃 태그(`Coding Agent`, `Coding Agent WebSocket`)가
+  보이는지 확인한다
 - **FE 테스트** `web/tests/source/fe-surface-inventory.test.ts`: `surface.bff` 의 각 경로 파일이 존재하는지, `surface.routes` 의 각
   라우트가 `app/**/page.tsx` 로 존재하는지, `surface` 와 `reason` 이 동시에 있거나 둘 다 없는 항목이 없는지 본다
 - 태그 단위인 이유: 엔드포인트 단위면 화면 하나에 묶이는 경로마다 줄이 생겨 `reason` 이 기계적으로 채워진다(메모리: 낡은 면제
@@ -324,10 +349,13 @@ export type QuestionView = { id: string; prompt: string; status: "open" | "answe
 
 ### 6.2 프리미티브 갤러리
 
-- 개발 모드 전용 페이지 `web/app/(dev)/dev/trace/page.tsx`. `process.env.NODE_ENV !== "development"` 면 `notFound()`
+- 개발 모드 전용 페이지 `web/app/(dev)/dev/trace/page.tsx`. `process.env.NODE_ENV !== "development"` 면 `notFound()`.
+  `web/proxy.ts` 의 catch-all matcher 가 `/dev/*` 도 게스트 인증으로 돌려보내므로(게스트 생성은 BE 를 부른다), 개발 모드에서만
+  `/dev/` 를 통과시키는 분기를 둔다 — 갤러리는 BE 없이 열려야 한다
 - 프리미티브 6종을 fixture 표시 모델로 그린다. fixture 는 `web/tests/fixtures/trace/*.ts` 에 두고 소스 테스트와 공유한다.
   코딩 fixture 는 실제 코딩 이벤트 fixture 를 코딩 어댑터에 통과시킨 결과로 만든다(손으로 지은 표시 모델만 쓰지 않는다)
-- 라이트 · 다크를 나란히 그린다
+- 라이트 · 다크는 같은 페이지를 테마만 바꿔 두 번 찍는다 — 다크 토큰이 `.dark` 클래스에 걸려 있어(`globals.css` `@custom-variant dark`)
+  한 페이지에 두 테마를 나란히 그리려면 라이트 토큰을 되돌리는 별도 클래스가 필요해지기 때문이다
 - Playwright 스펙 `web/tests/e2e/trace-gallery.test.ts` 가 두 모드 스크린샷을 `web/test-results/` 아래에 남긴다. **비교 게이트는 걸지 않는다**
   — 디자인 리뷰 재료다
 - 갤러리 라우트는 인벤토리 대상이 아니다(BE 태그가 아니므로)
@@ -336,12 +364,13 @@ export type QuestionView = { id: string; prompt: string; status: "open" | "answe
 
 | 테스트 | 고정하는 것 |
 |---|---|
-| `semantic-tokens.test.ts` | 원시 팔레트 상태 클래스 금지(§3.1) · `--status/evidence/risk/surface-*` 가 `:root` 와 `.dark` 양쪽에 있다 |
-| `light-theme.test.ts` | 라이트 토큰이 primary hue 214° 계열이다 |
+| `semantic-tokens.test.ts` | `--status-*` 가 `:root` 와 `.dark` 양쪽에 있다 · 근거·위험·표면 토큰이 상태·기본 토큰을 가리킨다 · `@theme` 별칭 · 모션 |
+| `raw-palette-ban.test.ts` | 원시 팔레트 색 클래스 금지(§3.1) · 허용 목록이 낡지 않았다 |
+| `light-theme.test.ts` | 라이트 토큰이 primary hue 214° 계열이다 · 본문·보조·상태 글자가 배경 대비 4.5:1 이상(다크의 버튼 글자 쌍은 승인된 값이라 제외) |
 | `trace-status.test.ts` | `TraceStatus` 7개가 모두 토큰으로 매핑된다 |
 | `trace-primitives.test.tsx` | 6종 정적 렌더(`renderToStaticMarkup`) — 모르는 kind 무시, `VerdictView.sentence: null` 이면 배지만 |
 | `coding-trace-adapter.test.ts` | 코딩 이벤트 fixture → 표시 모델. `describeToolRisk` 결과가 `sentence` 로 그대로 간다 |
-| `inbox-route.test.ts` | 출처 하나 실패 → 나머지 + `degraded`, 404 → 없음 |
+| `inbox.test.ts` | 출처 하나 실패 → 나머지 + `degraded`, 404 → 없음, 둘 다 401 → 401, 시간 초과 → `degraded` |
 | `template-tools-removed.test.ts` | `getWeather` · `requestSuggestions` 가 도구 등록부와 렌더러에 없다 |
 | `fe-surface-inventory.test.ts` | §6.1 |
 
