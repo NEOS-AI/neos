@@ -60,12 +60,28 @@ def _skill_sources(state: AgentState) -> list:
     ]
 
 
+#: 직접 응답 꼬리말 제목. skip 경로에는 `_apply_citations` 가 돌지 않으므로 여기서 붙인다.
+_SOURCES_HEADINGS = {"ko": "참고 자료"}
+
+
+def _source_heads(sources: list) -> list[str]:
+    """`[n] title — url` 줄들. 프롬프트와 꼬리말이 같은 번호를 쓰도록 둘 다 이것을 쓴다."""
+    return [
+        f"[{index}] {source.title}" + (f" — {source.url}" if source.url else "")
+        for index, source in enumerate(sources, start=1)
+    ]
+
+
 def _format_sources(sources: list) -> str:
-    lines = []
-    for index, source in enumerate(sources, start=1):
-        head = f"[{index}] {source.title}" + (f" — {source.url}" if source.url else "")
-        lines.append(f"{head}\n{(source.content or '')[:_SOURCE_PREVIEW_CHARS]}")
-    return "\n\n".join(lines)
+    return "\n\n".join(
+        f"{head}\n{(source.content or '')[:_SOURCE_PREVIEW_CHARS]}"
+        for head, source in zip(_source_heads(sources), sources)
+    )
+
+
+def _sources_footer(sources: list, language: str) -> str:
+    heading = _SOURCES_HEADINGS.get(language, "Sources")
+    return "\n".join([heading, *_source_heads(sources)])
 
 
 class ResponseGenerator:
@@ -249,6 +265,11 @@ class ResponseGenerator:
 
         if not answer:
             answer = _DIRECT_FALLBACKS.get(language, _DIRECT_FALLBACKS["en"])
+        else:
+            sources = _skill_sources(state)
+            if sources:
+                # 프롬프트가 [n] 인용을 요구했으니 그 번호의 목록을 답 끝에 붙인다.
+                answer = f"{answer}\n\n{_sources_footer(sources, language)}"
 
         return {
             "final_response": answer,

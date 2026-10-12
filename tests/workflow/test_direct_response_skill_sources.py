@@ -113,3 +113,72 @@ async def test_a_later_turn_without_skills_does_not_reuse_earlier_sources(monkey
     assert fake.await_count == 1
     assert "[출처]" in prompts[0]
     assert "[출처]" not in prompts[1]
+
+
+# -- 참고 자료 꼬리말 (skip 경로에는 _apply_citations 가 돌지 않는다) -----------
+
+
+def _patch_llm(monkeypatch, generator, reply):
+    class _LLM:
+        async def ainvoke(self, _messages):
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+    monkeypatch.setattr(generator, "_get_llm", lambda **_kw: _LLM(), raising=False)
+    monkeypatch.setattr(
+        "neos.workflow.processors.response_generator.create_tracked_llm",
+        lambda *, llm, **_kw: llm,
+    )
+
+
+def _sources():
+    return [
+        _skill_result("Paper A", "https://arxiv.org/abs/1", "alpha"),
+        _skill_result("Paper B", None, "beta"),
+    ]
+
+
+async def test_a_grounded_answer_ends_with_the_numbered_sources(monkeypatch) -> None:
+    generator = _generator()
+    _patch_llm(monkeypatch, generator, "DiT 는 [1] 과 [2] 에 나온다.")
+    state = {**_state(_sources()), "detected_language": "ko"}
+
+    answer = (await generator.generate_direct_response(state))["final_response"]
+
+    assert answer == (
+        "DiT 는 [1] 과 [2] 에 나온다.\n\n참고 자료\n[1] Paper A — https://arxiv.org/abs/1\n[2] Paper B"
+    )
+    prompt = generator._direct_response_prompt(state, "ko")
+    for line in answer.split("참고 자료\n", 1)[1].splitlines():
+        assert line in prompt  # 프롬프트와 꼬리말의 번호가 같다
+
+
+async def test_the_footer_heading_follows_the_language(monkeypatch) -> None:
+    generator = _generator()
+    _patch_llm(monkeypatch, generator, "See [1].")
+    state = {**_state(_sources()[:1]), "detected_language": "en"}
+
+    answer = (await generator.generate_direct_response(state))["final_response"]
+
+    assert answer == "See [1].\n\nSources\n[1] Paper A — https://arxiv.org/abs/1"
+
+
+async def test_no_footer_without_skill_sources(monkeypatch) -> None:
+    generator = _generator()
+    _patch_llm(monkeypatch, generator, "안녕하세요!")
+
+    answer = (await generator.generate_direct_response({**_state([]), "detected_language": "ko"}))["final_response"]
+
+    assert answer == "안녕하세요!"
+
+
+async def test_no_footer_on_the_neutral_fallback(monkeypatch) -> None:
+    from neos.workflow.processors.response_generator import _DIRECT_FALLBACKS
+
+    generator = _generator()
+    _patch_llm(monkeypatch, generator, TimeoutError("provider down"))
+
+    answer = (await generator.generate_direct_response({**_state(_sources()), "detected_language": "ko"}))["final_response"]
+
+    assert answer == _DIRECT_FALLBACKS["ko"]
