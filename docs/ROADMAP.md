@@ -44,7 +44,7 @@
 - **자동 발견** — `discover_skills(skills_dir: Path)`가 임의 디렉터리를 스캔
   (`SKILL.md` + `skill.py` 규약, `neos/skills/manager/auto_discovery.py`)
 - **의존성 검사** — `neos/skills/manager/dependency_checker.py`
-- ⚠️ 자동 발견은 **opt-in** — `skill_manager.py:28` `use_auto_discovery: bool = False` 기본
+- 빌트인 등록은 **자동 발견 하나뿐** — `skill_manager.register_builtin_skills()` (`neos/skills/manager/skill_manager.py`)
 
 ### 멀티모달 / 문서 처리
 
