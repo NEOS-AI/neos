@@ -4,10 +4,11 @@ NewsAPI.org를 통해 80,000+ 뉴스 소스에서 실시간 뉴스를 검색합�
 realtime_info intent의 핵심 소스로 활용됩니다.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,19 @@ class NewsApiSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize News API skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        return [
+            make_result(
+                self.name,
+                title=article.get("title"),
+                content=join_text(article.get("description"), article.get("content")),
+                url=article.get("url"),
+                score=0.8,
+                metadata={"published_at": article.get("published_at", ""), "outlet": article.get("source", "")},
+            )
+            for article in collect_items(result.data, "articles")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """뉴스 검색 실행

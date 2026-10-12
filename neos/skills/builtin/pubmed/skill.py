@@ -1,9 +1,10 @@
 """PubMed Skill implementation"""
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,23 @@ class PubmedSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize PubMed skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        return [
+            make_result(
+                self.name,
+                title=paper.get("title"),
+                content=paper.get("full_summary") or paper.get("summary"),
+                url=paper.get("pubmed_url"),
+                score=0.95,
+                metadata={
+                    "pmid": paper.get("pmid", ""),
+                    "authors": paper.get("authors", ""),
+                    "published": paper.get("published", ""),
+                },
+            )
+            for paper in collect_items(result.data, "papers")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """PubMed 검색 실행

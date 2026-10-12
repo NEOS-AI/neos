@@ -6,10 +6,11 @@
 ArXiv보다 풍부한 메타데이터와 citation graph를 활용할 수 있습니다.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,27 @@ class SemanticScholarSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize Semantic Scholar skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        items = collect_items(result.data, "papers", "citations", "references")
+        return [
+            make_result(
+                self.name,
+                title=paper.get("title"),
+                content=paper.get("abstract"),
+                url=paper.get("url")
+                or (f"https://www.semanticscholar.org/paper/{paper['paper_id']}" if paper.get("paper_id") else None),
+                score=0.9,
+                metadata={
+                    "paper_id": paper.get("paper_id"),
+                    "year": paper.get("year"),
+                    "citation_count": paper.get("citation_count"),
+                    "doi": paper.get("doi"),
+                    "arxiv_id": paper.get("arxiv_id"),
+                },
+            )
+            for paper in items
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """Semantic Scholar 검색 실행

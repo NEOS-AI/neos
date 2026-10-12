@@ -1,11 +1,12 @@
 """SEC EDGAR Skill implementation"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,27 @@ class SECEdgarSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize SEC EDGAR skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        results = []
+        for filing in collect_items(result.data, "filings", "companies"):
+            filed = f"({filing['filed_date']})" if filing.get("filed_date") else ""
+            title = " ".join(part for part in (filing.get("company_name"), filing.get("form_type"), filed) if part)
+            results.append(
+                make_result(
+                    self.name,
+                    title=title,
+                    content=join_text(filing.get("description"), filing.get("period_of_report")),
+                    url=filing.get("url"),
+                    score=0.85,
+                    metadata={
+                        "form_type": filing.get("form_type", ""),
+                        "filed_date": filing.get("filed_date", ""),
+                        "cik": filing.get("cik", ""),
+                    },
+                )
+            )
+        return results
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """SEC EDGAR 검색 실행

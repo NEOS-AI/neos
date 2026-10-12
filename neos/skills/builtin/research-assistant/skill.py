@@ -5,6 +5,7 @@ import logging
 import re
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, join_text, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,26 @@ class ResearchAssistantSkill(BaseSkill):
         self.is_available = True
         logger.info("Research Assistant skill initialized successfully")
         return True
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        data = result.data if isinstance(result.data, dict) else {}
+        if "summary" in data:
+            return [make_result(self.name, title="Summary of collected sources", content=data["summary"], score=0.7)]
+        if "total_references" in data:
+            refs = [*data.get("urls", []), *data.get("dois", [])]
+            if not refs:
+                return []
+            return [make_result(self.name, title="References in collected sources", content="\n".join(refs), score=0.6)]
+        if "quality_score" in data:
+            return [
+                make_result(
+                    self.name,
+                    title="Source quality analysis",
+                    content=join_text(f"quality score: {data['quality_score']}/100", *data.get("key_points", [])),
+                    score=0.6,
+                )
+            ]
+        return []
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """리서치 작업 실행

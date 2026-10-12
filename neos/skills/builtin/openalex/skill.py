@@ -6,6 +6,7 @@ import logging
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,30 @@ class OpenAlexSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize OpenAlex skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        items = collect_items(result.data, "works", "authors", "institutions")
+        return [
+            make_result(
+                self.name,
+                title=item.get("title") or item.get("name"),
+                content=item.get("abstract")
+                or join_text(
+                    item.get("institution"),
+                    f"works: {item['works_count']}" if item.get("works_count") is not None else "",
+                    f"cited by: {item['cited_by_count']}" if item.get("cited_by_count") is not None else "",
+                ),
+                url=item.get("oa_url") or item.get("doi") or item.get("openalex_id"),
+                score=0.9,
+                metadata={
+                    "openalex_id": item.get("openalex_id", ""),
+                    "doi": item.get("doi") or "",
+                    "publication_year": item.get("publication_year"),
+                    "cited_by_count": item.get("cited_by_count"),
+                },
+            )
+            for item in items
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """OpenAlex 검색 실행

@@ -1,11 +1,12 @@
 """GitHub Search Skill implementation"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,25 @@ class GitHubSearchSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize GitHub Search skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        results = []
+        for item in collect_items(result.data, "repositories", "code_results", "issues"):
+            if item.get("repository") and item.get("path"):
+                title = f"{item['repository']}/{item['path']}"
+            else:
+                title = item.get("title") or item.get("name")
+            results.append(
+                make_result(
+                    self.name,
+                    title=title,
+                    content=item.get("description") or item.get("body") or join_text(item.get("path"), item.get("repository")),
+                    url=item.get("url"),
+                    score=0.8,
+                    metadata={"stars": item.get("stars"), "language": item.get("language"), "state": item.get("state")},
+                )
+            )
+        return results
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """GitHub 검색 실행
