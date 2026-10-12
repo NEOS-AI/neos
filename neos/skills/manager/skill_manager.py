@@ -208,6 +208,10 @@ class SkillManager:
             await self.cleanup_skill(skill_name)
         logger.info("Cleaned up all skills")
 
+    def known_unavailable(self) -> frozenset[str]:
+        """초기화를 시도했고 실패한 스킬 -- API 키 없는 스킬을 셀렉터가 매 턴 고르지 않게."""
+        return frozenset(name for name, ok in self._initialized_skills.items() if not ok)
+
     def get_available_skills(
         self, skill_type: Optional[SkillType] = None
     ) -> List[Dict[str, Any]]:
