@@ -25,10 +25,11 @@ neos/skills/
 │   ├── skill_manager.py  # SkillManager 클래스
 │   └── skill_registry.py # SkillRegistry 클래스
 ├── builtin/              # 내장 스킬들
-│   ├── bigquery/
 │   ├── docx/
 │   ├── pdf/
-│   └── research_assistant/
+│   ├── arxiv/
+│   ├── pubmed/
+│   └── ...
 └── README.md
 ```
 
@@ -49,180 +50,29 @@ neos/skills/
    - Capability 기반 검색
    - 타입별 필터링
 
-## 내장 스킬
+## 내장 스킬 (2026-10-11)
 
-NEOS는 총 7개의 내장 스킬을 제공합니다:
-- **문서 처리**: BigQuery, DOCX, PDF
-- **리서치**: Research Assistant, ArXiv, PubMed, Wikipedia
+`neos/skills/builtin/` 의 15개는 기동 때 자동 발견된다(`SkillManager.register_builtin_skills()`).
+정본은 각 디렉터리의 `SKILL.md` 다 — 이 표는 요약이다.
 
-### 문서 처리 스킬
+| 스킬 | 자동 실행 | 비고 |
+|---|---|---|
+| arxiv · pubmed · wikipedia · openalex · semantic-scholar · google-scholar · sec-edgar · github-search · reddit · news-api | ✅ | 검색형. google-scholar 는 SerpAPI 키, news-api 는 NewsAPI 키가 있어야 초기화된다 |
+| research-assistant | ✅ (2단계) | 검색형 결과를 `content` 로 받아 요약·분석한다 |
+| docx · pdf | — | 채팅 첨부는 N8(`neos/services/attachment_blocks.py`)이 모델에 직접 붙인다 |
+| cron · canvas | — | 각자 `TASK_SCHEDULING` · `UI_FRAME` 경로가 있다 |
 
-#### 1. BigQuery Skill
-BigQuery 데이터베이스 조회 및 분석
+## 메인 그래프에서의 실행
 
-```python
-result = await skill_manager.execute_skill(
-    "bigquery",
-    {
-        "query": "SELECT * FROM `project.dataset.table` LIMIT 10",
-        "max_results": 100
-    }
-)
-```
+`workflow.skill_execution.enabled` 가 켜지면(development 기본) 셀렉터가
+`skill_calls=[{name, params, reason}]` 를 내고 `SKILL_EXECUTOR` 노드가 실행한다.
+후보는 `SKILL.md` 에 `auto_execute: true` 를 단 스킬뿐이다. 결과는 각 스킬의
+`to_search_results()` 로 `search_results` 에 들어간다.
+설계: `docs/superpowers/specs/2026-10-11-builtin-skill-executor-design.md`
 
-#### 2. DOCX Skill
-Microsoft Word 문서 처리
-
-```python
-# 문서 읽기
-result = await skill_manager.execute_skill(
-    "docx",
-    {
-        "action": "read",
-        "file_path": "/path/to/document.docx"
-    }
-)
-
-# 문서 생성
-result = await skill_manager.execute_skill(
-    "docx",
-    {
-        "action": "create",
-        "file_path": "/path/to/new_document.docx",
-        "content": "Hello, World!",
-        "options": {"heading": "Introduction"}
-    }
-)
-```
-
-#### 3. PDF Skill
-PDF 문서 처리
-
-```python
-# PDF 텍스트 추출
-result = await skill_manager.execute_skill(
-    "pdf",
-    {
-        "action": "extract_text",
-        "file_path": "/path/to/document.pdf",
-        "page_numbers": [0, 1, 2]
-    }
-)
-```
-
-### 리서치 스킬
-
-#### 4. Research Assistant Skill
-리서치 작업 보조 - 소스 분석, 요약, 참고문헌 정리
-
-```python
-# 소스 분석
-result = await skill_manager.execute_skill(
-    "research_assistant",
-    {
-        "action": "analyze_source",
-        "content": "...",
-        "options": {
-            "check_credibility": True,
-            "extract_key_points": True
-        }
-    }
-)
-```
-
-#### 5. ArXiv Skill
-학술 논문 검색 - 물리학, 수학, 컴퓨터 과학, AI/ML
-
-```python
-# 논문 검색
-result = await skill_manager.execute_skill(
-    "arxiv",
-    {
-        "action": "search",
-        "query": "large language models transformer",
-        "max_results": 10
-    }
-)
-
-# ArXiv ID로 특정 논문 조회
-result = await skill_manager.execute_skill(
-    "arxiv",
-    {
-        "action": "get_by_id",
-        "query": "2301.12345"
-    }
-)
-```
-
-#### 6. PubMed Skill
-의학/생물학 논문 검색 - 의학, 생명과학, 바이오메디컬
-
-```python
-# 의학 논문 검색
-result = await skill_manager.execute_skill(
-    "pubmed",
-    {
-        "action": "search",
-        "query": "covid-19 vaccine efficacy",
-        "max_results": 10
-    }
-)
-
-# PMID로 특정 논문 조회
-result = await skill_manager.execute_skill(
-    "pubmed",
-    {
-        "action": "get_by_pmid",
-        "query": "12345678"
-    }
-)
-```
-
-#### 7. Wikipedia Skill
-일반 지식 및 배경 정보 검색
-
-```python
-# Wikipedia 문서 검색 (영어)
-result = await skill_manager.execute_skill(
-    "wikipedia",
-    {
-        "action": "search",
-        "query": "artificial intelligence",
-        "max_results": 3,
-        "lang": "en"
-    }
-)
-
-# Wikipedia 문서 검색 (한국어)
-result = await skill_manager.execute_skill(
-    "wikipedia",
-    {
-        "action": "search",
-        "query": "인공지능",
-        "lang": "ko"
-    }
-)
-```
-
-### 리서치 스킬 사용 가이드
-
-리서치를 수행할 때 각 스킬의 특성에 맞게 활용하세요:
-
-1. **초기 탐색 단계**
-   - **Wikipedia**: 주제에 대한 기본 개념과 배경 지식 습득
-   - 일반적인 정의, 역사, 관련 개념 파악
-
-2. **학술 리서치 단계**
-   - **ArXiv**: 물리학, 수학, CS, AI/ML 분야의 최신 연구 논문
-   - **PubMed**: 의학, 생명과학, 바이오메디컬 분야의 학술 문헌
-
-3. **종합 분석 단계**
-   - **Research Assistant**: 수집한 소스들의 품질 평가, 요약, 참고문헌 정리
-
-**추천 워크플로우**:
-```
-Wikipedia (개념 이해) → ArXiv/PubMed (학술 조사) → Research Assistant (분석 및 정리)
-```
+새 스킬을 자동 실행 후보로 만들려면: `get_input_schema()` 가 `execute` 가 읽는 키와
+같아야 하고(`tests/skills/test_skill_input_schemas.py`), `to_search_results()` 를
+구현해야 한다(`tests/skills/test_skill_search_results.py`).
 
 ## Workflow 통합
 
