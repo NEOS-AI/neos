@@ -124,3 +124,32 @@ def test_approval_router_treats_a_reset_outcome_as_rejected() -> None:
     assert workflow._should_continue_after_approval({"approval_outcome": None}) == "rejected"
     assert workflow._should_continue_after_approval({}) == "rejected"
     assert workflow._should_continue_after_approval({"approval_outcome": "approved"}) == "approved"
+
+
+@pytest.mark.parametrize(
+    "approval_state",
+    [
+        {"pending_approvals": [{"request_id": "r1", "skill_name": "arxiv"}]},
+        {"approval_outcome": "rejected"},
+    ],
+    ids=["pending", "rejected"],
+)
+async def test_the_node_never_runs_before_approval_or_after_rejection(monkeypatch, approval_state) -> None:
+    """설계 그래프는 이 노드를 승인 앞이나 거절 뒤에 둘 수 있다 -- 토폴로지와 무관하게 막는다 (spec §2)."""
+    import neos.skills.executor as executor_module
+
+    monkeypatch.setattr(graph_module.settings, "SKILL_EXECUTION_ENABLED", True)
+    fake = AsyncMock()
+    monkeypatch.setattr(executor_module, "execute_skill_calls", fake)
+
+    update = await _node()({"skill_calls": [{"name": "arxiv", "params": {"query": "q"}}], **approval_state})
+
+    assert update == {}  # skill_execution_done 도 쓰지 않는다 -- 승인 뒤 다시 들어오면 돌아야 한다
+    fake.assert_not_awaited()
+
+
+def test_the_contract_declares_the_approval_reads() -> None:
+    from neos.workflow.contracts import NODE_CONTRACTS
+
+    reads = NODE_CONTRACTS[EX].reads
+    assert {"pending_approvals", "approval_outcome"} <= reads

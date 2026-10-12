@@ -1583,7 +1583,13 @@ class MultiAgentWorkflow:
 
     @node_contract(
         node=WorkflowNode.SKILL_EXECUTOR,
-        reads={"skill_calls", "skill_execution_done", "execution_steps"},
+        reads={
+            "skill_calls",
+            "skill_execution_done",
+            "execution_steps",
+            "pending_approvals",
+            "approval_outcome",
+        },
         writes={"search_results", "skill_sources", "skill_execution_done", "execution_steps"},
         # 전부 `.get()` 기본값 경로 -- 빈 skill_calls 는 빈 갱신이다.
     )
@@ -1596,6 +1602,11 @@ class MultiAgentWorkflow:
         노드를 골라도 아무것도 하지 않아야 한다.
         """
         if not settings.SKILL_EXECUTION_ENABLED or state.get("skill_execution_done"):
+            return {}
+        # 승인 전·거절 뒤에는 돌지 않는다 (spec §2) -- 토폴로지에 기대지 않는다:
+        # 설계 그래프는 이 노드를 승인 앞이나 거절 경로에 둘 수 있다.
+        # skill_execution_done 은 쓰지 않는다 -- 승인 뒤 다시 들어오면 돌아야 한다.
+        if state.get("pending_approvals") or state.get("approval_outcome") == "rejected":
             return {}
         calls = state.get("skill_calls") or []
         if not calls:
