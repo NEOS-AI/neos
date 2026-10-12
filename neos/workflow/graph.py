@@ -2398,6 +2398,7 @@ class MultiAgentWorkflow:
             "session_id",
             "user_id",
             "execution_steps",
+            "search_results",
         },
         writes={
             "final_response",
@@ -2412,6 +2413,7 @@ class MultiAgentWorkflow:
         # `conversation_context` 는 위임 대상이 아니라 그 **헬퍼**
         # (`ResponseGenerator._direct_response_prompt`) 안에서 읽힌다. 추출기는
         # 위임 한 단계까지만 따라가므로 이 키를 확인하지 못한다.
+        # `search_results` 도 같은 헬퍼(`_skill_sources`) 안에서 읽힌다 (spec 2026-10-11 §2).
         hand_curated=True,
     )
     async def _direct_response_node(self, state: AgentState) -> Dict[str, Any]:
