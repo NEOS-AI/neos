@@ -104,7 +104,7 @@ async def test_with_the_flag_off_the_design_gate_gets_exactly_the_old_arguments(
 
     assert seen["contracts"] is NODE_CONTRACTS
     assert seen["expand"] is None and seen["subagent"] is None
-    assert len(seen["request"].catalog) == 31
+    assert len(seen["request"].catalog) == 32
     # 템플릿 이름은 정적 계약에 없다 -> 설계는 거부되고 정적으로 내려간다.
     assert resolved.source == "static" and resolved.subagent_host is None
 

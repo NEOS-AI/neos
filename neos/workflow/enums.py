@@ -10,6 +10,7 @@ class WorkflowNode(Enum):
 
     # Agent Skills
     SKILL_TOOL_SELECTOR = "skill_tool_selector"
+    SKILL_EXECUTOR = "skill_executor"  # spec 2026-10-11 builtin skill executor
 
     # Workflow Orchestrators
     SEARCH_ORCHESTRATOR = "search_orchestrator"

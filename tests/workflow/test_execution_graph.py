@@ -34,7 +34,7 @@ def test_current_static_flags_covers_every_flag_the_extractor_knows() -> None:
 
     flags = current_static_flags()
     assert set(flags) == set(STATIC_FLAG_KEYS)
-    assert len(flags) == 5
+    assert len(flags) == 6
 
 
 def test_static_execution_graph_reports_static_source_and_a_stable_hash() -> None:

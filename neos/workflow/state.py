@@ -98,6 +98,10 @@ class AgentState(TypedDict):
     selected_skills: Optional[List[str]]
     selected_tools: Optional[List[str]]
     selection_reasoning: Optional[str]
+    # 셀렉터가 고른 스킬과 인자 [{name, params, reason}] -- 정본. selected_skills 는 여기서 파생한다
+    skill_calls: Optional[List[Dict[str, Any]]]
+    # 공통 실행 노드가 이번 턴에 이미 돌았는가 (루프 재진입 방어)
+    skill_execution_done: Optional[bool]
 
     # 각 에이전트 결과
     search_results: Annotated[List[SearchResult], operator.add]

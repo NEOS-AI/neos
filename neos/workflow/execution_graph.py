@@ -85,10 +85,10 @@ def current_static_flags() -> dict[str, bool]:
     }
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=64)
 def _static_topology_facts(flags_items: tuple[tuple[str, bool], ...]) -> tuple[tuple[str, ...], str]:
     """`static_topology` 는 `inspect.getsource` + `ast.parse` 를 돈다 --
-    요청마다 하면 안 된다. 플래그 조합은 5비트라 상한이 32개이고, 배포 중
+    요청마다 하면 안 된다. 플래그 조합은 6비트라 상한이 64개이고, 배포 중
     플래그가 바뀌지 않으므로 실질 1회다. `lru_cache` 를 쓰려고 인자를
     해시 가능한 튜플로 받는다."""
 

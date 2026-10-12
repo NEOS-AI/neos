@@ -121,6 +121,7 @@ def map_node_to_agent(node_name: str) -> str:
     node_to_agent = {
         "query_classifier": "query_analysis",
         "skill_tool_selector": "tool_selection",
+        "skill_executor": "skill_execution",
         "search_orchestrator": "knowledge_search",
         "analysis_orchestrator": "data_analysis",
         "generation_orchestrator": "content_generation",
