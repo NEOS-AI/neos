@@ -106,3 +106,12 @@ async def test_the_node_writes_results_and_steps(monkeypatch) -> None:
     assert fake.await_args.args[0] == calls
     limits = fake.await_args.kwargs["limits"]
     assert (limits.timeout_seconds, limits.max_results_per_skill, limits.max_content_chars) == (15.0, 5, 4000)
+
+
+def test_initial_state_resets_the_per_turn_skill_and_approval_fields() -> None:
+    workflow = graph_module.MultiAgentWorkflow.__new__(graph_module.MultiAgentWorkflow)
+    state = workflow._create_initial_state({"user_id": "u", "session_id": "s", "query": "q"})
+    assert "skill_calls" in state and "skill_execution_done" in state and "approval_outcome" in state
+    assert state["skill_calls"] is None
+    assert state["skill_execution_done"] is None
+    assert state["approval_outcome"] is None

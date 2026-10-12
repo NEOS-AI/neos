@@ -44,3 +44,7 @@ def test_base_route_never_reads_search_results() -> None:
     source = textwrap.dedent(inspect.getsource(OrchestratorRouter.base_route))
     constants = {node.value for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Constant)}
     assert "search_results" not in constants
+
+
+def test_rejected_outcome_does_not_force_orchestration() -> None:
+    assert OrchestratorRouter().route_after_skill_execution({**_CHITCHAT, "approval_outcome": "rejected"}) == SKIP

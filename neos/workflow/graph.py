@@ -3393,6 +3393,10 @@ class MultiAgentWorkflow:
             execution_time_ms=None,
             tokens_used=None,
             api_calls_made=None,
+            # 턴 단위 필드 -- 승인 재개는 aupdate_state + astream(None) 로 가므로 여기를 지나지 않는다
+            skill_calls=None,
+            skill_execution_done=None,
+            approval_outcome=None,
             # Phase 4.7: Research Templates
             template_id=None,
             template_config=None,
