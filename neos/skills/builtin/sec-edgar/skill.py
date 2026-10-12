@@ -34,6 +34,25 @@ class SECEdgarSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["full_text_search", "company_filings"],
+                    "description": "full_text_search (default) or company_filings (query = ticker or CIK)",
+                },
+                "query": {"type": "string", "description": "Full-text search terms, or a ticker/CIK for company_filings"},
+                "form_type": {"type": "string", "description": "Filing form, e.g. 10-K, 10-Q, 8-K"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of filings (default 10)"},
+                "date_from": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"},
+                "date_to": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """SEC EDGAR API 클라이언트 초기화"""
         try:

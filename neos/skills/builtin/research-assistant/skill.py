@@ -29,6 +29,29 @@ class ResearchAssistantSkill(BaseSkill):
             **kwargs
         )
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        # `content` 는 없다 -- 공통 실행 노드가 1단계 결과로 채운다 (spec §3.3-4).
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["analyze_source", "summarize", "extract_references"],
+                    "description": "What to do with the collected sources (default summarize)",
+                },
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "extract_key_points": {"type": "boolean"},
+                        "max_length": {"type": "integer", "minimum": 100, "maximum": 2000},
+                    },
+                    "description": "analyze_source: extract_key_points; summarize: max_length",
+                },
+            },
+            "required": [],
+        }
+
     async def initialize(self) -> bool:
         """스킬 초기화"""
         self.is_available = True

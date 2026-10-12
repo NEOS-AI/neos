@@ -35,6 +35,25 @@ class RedditSkill(BaseSkill):
         self._client: Optional[httpx.AsyncClient] = None
         self._access_token: Optional[str] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "subreddit_search"], "description": "search (default) or subreddit_search"},
+                "query": {"type": "string", "description": "Search query"},
+                "subreddit": {"type": "string", "description": "Restrict search to this subreddit"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "sort": {"type": "string", "enum": ["relevance", "hot", "new", "top"], "description": "Sort order (default relevance)"},
+                "time_filter": {
+                    "type": "string",
+                    "enum": ["hour", "day", "week", "month", "year", "all"],
+                    "description": "Time window (default all)",
+                },
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """Reddit API 클라이언트 초기화 (OAuth2)"""
         try:

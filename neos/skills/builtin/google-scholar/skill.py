@@ -35,6 +35,20 @@ class GoogleScholarSkill(BaseSkill):
         self._client: Optional[httpx.AsyncClient] = None
         self._api_key: Optional[str] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "cite"], "description": "search (default) or cite"},
+                "query": {"type": "string", "description": "Scholar search query or paper title for cite"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "year_from": {"type": "integer", "description": "Earliest publication year"},
+                "year_to": {"type": "integer", "description": "Latest publication year"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """SerpAPI 클라이언트 초기화"""
         try:

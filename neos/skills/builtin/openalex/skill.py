@@ -36,6 +36,26 @@ class OpenAlexSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search_works", "search_authors", "search_institutions", "get_work"],
+                    "description": "search_works (default), search_authors, search_institutions or get_work",
+                },
+                "query": {"type": "string", "description": "Search text, or an OpenAlex work ID for get_work"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "year_from": {"type": "integer", "description": "Earliest publication year"},
+                "year_to": {"type": "integer", "description": "Latest publication year"},
+                "open_access": {"type": "boolean", "description": "Only open-access works"},
+                "sort": {"type": "string", "description": "e.g. cited_by_count:desc, publication_date:desc (default relevance_score:desc)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """OpenAlex API 클라이언트 초기화"""
         try:

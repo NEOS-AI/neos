@@ -30,6 +30,19 @@ class PubmedSkill(BaseSkill):
         )
         self.pubmed_wrapper = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "get_by_pmid"], "description": "search (default) or get_by_pmid"},
+                "query": {"type": "string", "description": "Biomedical search query, or a PMID for get_by_pmid"},
+                "pmid": {"type": "string", "description": "PubMed ID for get_by_pmid; query is used when omitted"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of papers (default 5)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """PubMed API 래퍼 초기화"""
         try:

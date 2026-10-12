@@ -35,6 +35,24 @@ class NewsApiSkill(BaseSkill):
         self._api_key = None
         self._base_url = "https://newsapi.org/v2"
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "top_headlines"], "description": "search (default) or top_headlines"},
+                "query": {"type": "string", "description": "News search query"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of articles (default 10)"},
+                "language": {"type": "string", "description": "Language code (default en)"},
+                "sort_by": {"type": "string", "enum": ["publishedAt", "relevancy", "popularity"], "description": "Sort order (default publishedAt)"},
+                "from_date": {"type": "string", "description": "ISO 8601 start date"},
+                "to_date": {"type": "string", "description": "ISO 8601 end date"},
+                "country": {"type": "string", "description": "top_headlines only: 2-letter country code"},
+                "category": {"type": "string", "description": "top_headlines only: e.g. business, technology"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """HTTP 세션 초기화"""
         api_key = getattr(settings, "NEWS_API_KEY", None)

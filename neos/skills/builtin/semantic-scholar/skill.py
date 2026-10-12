@@ -38,6 +38,24 @@ class SemanticScholarSkill(BaseSkill):
         )
         self._session = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "get_citations", "get_references", "get_paper"],
+                    "description": "search (default), get_citations, get_references or get_paper",
+                },
+                "query": {"type": "string", "description": "Search query, or a paper ID for the get_* actions"},
+                "paper_id": {"type": "string", "description": "Semantic Scholar paper ID for the get_* actions"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "year": {"type": "string", "description": "Year or range, e.g. 2020-2025"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """HTTP 세션 초기화"""
         try:

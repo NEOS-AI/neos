@@ -34,6 +34,24 @@ class GitHubSearchSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search_repos", "search_code", "search_issues"],
+                    "description": "search_repos (default), search_code or search_issues",
+                },
+                "query": {"type": "string", "description": "GitHub search query"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "language": {"type": "string", "description": "Programming language filter"},
+                "sort": {"type": "string", "enum": ["best-match", "stars", "forks", "updated"], "description": "Sort order (default best-match)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """GitHub API 클라이언트 초기화"""
         try:

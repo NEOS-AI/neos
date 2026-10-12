@@ -30,6 +30,21 @@ class WikipediaSkill(BaseSkill):
         )
         self.wikipedia_wrapper = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "get_page"], "description": "search (default) or get_page"},
+                "query": {"type": "string", "description": "Topic to look up"},
+                "page_title": {"type": "string", "description": "Exact page title for get_page"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of articles (default 3)"},
+                "load_all_summaries": {"type": "boolean", "description": "Load summaries for every hit"},
+                "lang": {"type": "string", "description": "Wikipedia language code, e.g. en, ko (default en)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """Wikipedia API 래퍼 초기화"""
         try:
