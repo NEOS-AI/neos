@@ -76,5 +76,6 @@ test("titles prefer the subagent label, then known agents, then a readable name"
     "Investigating with a subagent"
   );
   assert.equal(workflowAgentTitle("query_analysis"), "질의 분석");
+  assert.equal(workflowAgentTitle("skill_execution"), "스킬 실행");
   assert.equal(workflowAgentTitle("some_new_node"), "Some new node");
 });

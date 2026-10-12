@@ -13,6 +13,7 @@ import type { GraphSubagentView } from "@/lib/types";
 const KNOWN_AGENTS: Record<string, string> = {
   query_analysis: "질의 분석",
   tool_selection: "도구 선택",
+  skill_execution: "스킬 실행",
   knowledge_search: "지식 검색",
   data_analysis: "데이터 분석",
   content_generation: "콘텐츠 생성",
