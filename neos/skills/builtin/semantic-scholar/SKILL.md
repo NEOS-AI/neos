@@ -1,6 +1,7 @@
 ---
 name: semantic-scholar
 type: research
+auto_execute: true
 version: 1.0.0
 description: Semantic Scholar 학술 논문 검색 - 인용 그래프, 오픈 액세스 PDF, 풍부한 메타데이터
 capabilities:

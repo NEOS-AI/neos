@@ -258,7 +258,7 @@ async def lifespan(app: FastAPI):
         from neos.skills.manager import skill_manager
 
         # Register builtin skills with auto-discovery
-        skill_manager.register_builtin_skills(use_auto_discovery=True)
+        skill_manager.register_builtin_skills()
         logger.info("✅ Builtin skills registered (auto-discovery)")
 
         # Initialize skills (optional - can be done on-demand)

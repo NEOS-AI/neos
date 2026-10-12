@@ -1,6 +1,7 @@
 ---
 name: news-api
 type: research
+auto_execute: true
 version: 1.0.0
 description: NewsAPI - 80,000+ 소스에서 실시간 뉴스 검색
 capabilities:

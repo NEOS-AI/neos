@@ -1,6 +1,7 @@
 ---
 name: github-search
 type: research
+auto_execute: true
 version: 1.0.0
 description: GitHub 코드·레포지토리·이슈 검색
 capabilities:

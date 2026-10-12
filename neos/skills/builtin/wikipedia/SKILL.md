@@ -1,6 +1,7 @@
 ---
 name: wikipedia
 type: research
+auto_execute: true
 version: 1.0.0
 description: Wikipedia 일반 지식 검색 - 개념 정의, 배경 정보, 일반 지식
 capabilities:

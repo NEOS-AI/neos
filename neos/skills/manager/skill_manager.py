@@ -26,31 +26,13 @@ class SkillManager:
         self._initialized_skills: Dict[str, bool] = {}
         self._markdown_catalog = None
 
-    def register_builtin_skills(self, use_auto_discovery: bool = False) -> None:
-        """내장 스킬 등록
+    def register_builtin_skills(self) -> None:
+        """내장 스킬 등록 -- `builtin/` 자동 발견 한 경로뿐이다.
 
-        Args:
-            use_auto_discovery: True이면 자동 발견 사용, False이면 기존 방식 (하위 호환성)
+        예전에는 수동 목록(`get_builtin_skills`, 6개)과 자동 발견(15개) 두 경로가
+        있었고, HDR 폴백이 수동 쪽을 타서 등록되는 스킬 집합이 진입점마다 달랐다.
         """
-        if use_auto_discovery:
-            # 새로운 자동 발견 방식
-            self.auto_discover_builtin_skills()
-        else:
-            # 기존 수동 등록 방식 (하위 호환성)
-            try:
-                from neos.skills.builtin import get_builtin_skills
-
-                builtin_skills = get_builtin_skills()
-                for skill_info in builtin_skills:
-                    self.registry.register_skill(skill_info)
-
-                logger.info(
-                    f"Registered {len(builtin_skills)} builtin skills (manual mode)"
-                )
-            except ImportError as e:
-                logger.warning(f"Failed to import builtin skills: {e}")
-            except Exception as e:
-                logger.error(f"Error registering builtin skills: {e}")
+        self.auto_discover_builtin_skills()
         self._log_markdown_catalog()
 
     def auto_discover_builtin_skills(self, check_deps: bool = True) -> None:
@@ -247,6 +229,7 @@ class SkillManager:
                 "version": info.version,
                 "is_available": self._initialized_skills.get(info.name, False),
                 "allowed_tools": info.allowed_tools,
+                "auto_execute": info.auto_execute,
             }
             for info in skill_infos
         ]

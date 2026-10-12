@@ -99,6 +99,7 @@ def parse_skill_metadata(
     metadata.setdefault('version', '1.0.0')
     metadata.setdefault('dependencies', [])
     metadata.setdefault('allowed_tools', None)
+    metadata.setdefault('auto_execute', False)
 
     # Body 포함
     if include_body and body:

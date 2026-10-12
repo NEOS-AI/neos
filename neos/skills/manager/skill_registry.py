@@ -34,6 +34,8 @@ class SkillInfo:
     version: str = "1.0.0"
     skill_dir: Optional[Path] = None
     allowed_tools: Optional[str] = None
+    # SKILL.md `auto_execute: true` -- 셀렉터 후보이자 공통 실행 노드의 대상
+    auto_execute: bool = False
 
 
 class SkillRegistry:
