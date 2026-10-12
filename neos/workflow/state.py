@@ -102,6 +102,8 @@ class AgentState(TypedDict):
     skill_calls: Optional[List[Dict[str, Any]]]
     # 공통 실행 노드가 이번 턴에 이미 돌았는가 (루프 재진입 방어)
     skill_execution_done: Optional[bool]
+    # 이번 턴의 스킬 결과만 (리듀서 없음, 매 턴 교체) -- search_results 는 턴을 넘어 누적된다
+    skill_sources: Optional[List[SearchResult]]
 
     # 각 에이전트 결과
     search_results: Annotated[List[SearchResult], operator.add]

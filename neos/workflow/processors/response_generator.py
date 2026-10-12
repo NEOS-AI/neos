@@ -51,9 +51,11 @@ _GROUNDED_INSTRUCTIONS = {
 
 
 def _skill_sources(state: AgentState) -> list:
+    # 이번 턴의 스킬 결과만 본다. search_results 는 체크포인트 스레드에서
+    # 턴을 넘어 누적되므로(operator.add) 거기서 고르면 앞 턴 출처가 섞인다.
     return [
         result
-        for result in (state.get("search_results") or [])
+        for result in (state.get("skill_sources") or [])
         if (getattr(result, "metadata", None) or {}).get("via") == SKILL_EXECUTOR_VIA
     ]
 

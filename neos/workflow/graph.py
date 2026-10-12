@@ -1584,7 +1584,7 @@ class MultiAgentWorkflow:
     @node_contract(
         node=WorkflowNode.SKILL_EXECUTOR,
         reads={"skill_calls", "skill_execution_done", "execution_steps"},
-        writes={"search_results", "skill_execution_done", "execution_steps"},
+        writes={"search_results", "skill_sources", "skill_execution_done", "execution_steps"},
         # 전부 `.get()` 기본값 경로 -- 빈 skill_calls 는 빈 갱신이다.
     )
     async def _skill_executor_node(self, state: AgentState) -> Dict[str, Any]:
@@ -1616,6 +1616,8 @@ class MultiAgentWorkflow:
         )
         return {
             "search_results": list(outcome.results),
+            # 직접 응답은 이것만 읽는다 -- search_results 는 체크포인트 스레드에서 턴을 넘어 쌓인다
+            "skill_sources": list(outcome.results),
             "skill_execution_done": True,
             "execution_steps": [
                 *state.get("execution_steps", []),
@@ -2469,7 +2471,7 @@ class MultiAgentWorkflow:
             "session_id",
             "user_id",
             "execution_steps",
-            "search_results",
+            "skill_sources",
         },
         writes={
             "final_response",
@@ -2484,7 +2486,7 @@ class MultiAgentWorkflow:
         # `conversation_context` 는 위임 대상이 아니라 그 **헬퍼**
         # (`ResponseGenerator._direct_response_prompt`) 안에서 읽힌다. 추출기는
         # 위임 한 단계까지만 따라가므로 이 키를 확인하지 못한다.
-        # `search_results` 도 같은 헬퍼(`_skill_sources`) 안에서 읽힌다 (spec 2026-10-11 §2).
+        # `skill_sources` 도 같은 헬퍼(`_skill_sources`) 안에서 읽힌다 (spec 2026-10-11 §2).
         hand_curated=True,
     )
     async def _direct_response_node(self, state: AgentState) -> Dict[str, Any]:
@@ -3397,6 +3399,7 @@ class MultiAgentWorkflow:
             # 턴 단위 필드 -- 승인 재개는 aupdate_state + astream(None) 로 가므로 여기를 지나지 않는다
             skill_calls=None,
             skill_execution_done=None,
+            skill_sources=None,
             approval_outcome=None,
             # Phase 4.7: Research Templates
             template_id=None,

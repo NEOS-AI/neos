@@ -101,6 +101,7 @@ async def test_the_node_writes_results_and_steps(monkeypatch) -> None:
     update = await _node()({"skill_calls": calls, "execution_steps": [{"step": "before"}]})
 
     assert update["search_results"] == [result]
+    assert update["skill_sources"] == [result]
     assert update["skill_execution_done"] is True
     assert [s["step"] for s in update["execution_steps"]] == ["before", "skill_execution"]
     assert fake.await_args.args[0] == calls
@@ -114,6 +115,7 @@ def test_initial_state_resets_the_per_turn_skill_and_approval_fields() -> None:
     assert "skill_calls" in state and "skill_execution_done" in state and "approval_outcome" in state
     assert state["skill_calls"] is None
     assert state["skill_execution_done"] is None
+    assert "skill_sources" in state and state["skill_sources"] is None
     assert state["approval_outcome"] is None
 
 
