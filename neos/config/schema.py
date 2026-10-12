@@ -291,6 +291,25 @@ class QualityEvaluatorConfig(StrictConfigModel):
         return self
 
 
+class SkillExecutionConfig(StrictConfigModel):
+    """빌트인 스킬 공통 실행 노드 (spec 2026-10-11-builtin-skill-executor §4).
+
+    꺼져 있으면 정적 그래프 배선이 지금과 같다. 켜면 셀렉터가 고른
+    `auto_execute` 스킬을 `SKILL_EXECUTOR` 노드가 실행한다.
+    """
+
+    enabled: bool = Field(default=False, description="공통 스킬 실행 노드를 그래프에 배선할지 여부.")
+    max_skills_per_turn: int = Field(default=3, ge=1, le=10, description="셀렉터가 한 턴에 낼 수 있는 skill_calls 상한.")
+    timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=60,
+        description="스킬 하나의 initialize+execute 타임아웃. search_orchestration_timeout 보다 짧게 둔다.",
+    )
+    max_results_per_skill: int = Field(default=5, ge=1, le=20, description="스킬 하나가 search_results 에 더할 항목 상한.")
+    max_content_chars: int = Field(default=4000, ge=200, le=20000, description="SearchResult.content 길이 상한.")
+
+
 class WorkflowConfig(StrictConfigModel):
     search_orchestration_timeout: int = 40
     min_quality_score: float = 0.4
@@ -299,6 +318,7 @@ class WorkflowConfig(StrictConfigModel):
     timeout_seconds: int = 300
     cache_enabled: bool = True
     cache_ttl: int = 3600
+    skill_execution: SkillExecutionConfig = Field(default_factory=SkillExecutionConfig)
     # 설계 서브에이전트로 질의별 그래프를 짤지 여부. 기본은 꺼짐이다 -- 정적
     # 그래프가 기본 경로다. 질의마다 LLM 으로 토폴로지를 새로 짜는 비용(지연,
     # 비용, 비결정성)은 라우팅에서 "매 요청마다 LLM 으로 난이도를 분류"하는

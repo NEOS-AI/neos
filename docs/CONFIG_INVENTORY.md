@@ -353,6 +353,7 @@ Generated from `neos/config/settings.py`, `.env.template`, and the config refact
 | `CONTEXTUAL_BUDGET_CAP_USD` | settings.py + .env.template | `yaml` | `contextual_retrieval.budget_cap_usd` | Non-secret runtime behavior belongs in validated YAML. |
 | `CONTEXTUAL_EMBED_SOURCE` | settings.py + .env.template | `yaml` | `contextual_retrieval.embed_source` | Non-secret runtime behavior belongs in validated YAML. |
 | `EXECUTION_APPROVAL_ENABLED` | settings.py + .env.template | `yaml` | `execution_approval.enabled` | Non-secret runtime behavior belongs in validated YAML. |
+| `SKILL_EXECUTION_ENABLED` | settings.py | `yaml` | `workflow.skill_execution.enabled` | Non-secret runtime behavior belongs in validated YAML. |
 | `APPROVAL_REQUIRED_SKILLS` | settings.py | `yaml` | `execution_approval.required_skills` | Non-secret runtime behavior belongs in validated YAML. |
 | `APPROVAL_TIMEOUT_SECONDS` | settings.py + .env.template | `yaml` | `execution_approval.timeout_seconds` | Non-secret runtime behavior belongs in validated YAML. |
 | `DEFAULT_AUTONOMY_LEVEL` | settings.py | `yaml` | `execution_approval.default_autonomy_level` | Non-secret runtime behavior belongs in validated YAML. |

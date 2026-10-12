@@ -210,6 +210,7 @@ LEGACY_EXACT_PATHS = {
     "DUCKDUCKGO_MAX_RESULTS": "search_fallback.duckduckgo_max_results",
     "RECURSIVE_AGENT_ENABLED": "recursive_agent.enabled",
     "HYPER_DEEP_AGENT_ENABLED": "hyper_deep_agent.enabled",
+    "SKILL_EXECUTION_ENABLED": "workflow.skill_execution.enabled",
     "CONTEXTUAL_RETRIEVAL_ENABLED": "contextual_retrieval.enabled",
     "APPROVAL_REQUIRED_SKILLS": "execution_approval.required_skills",
     "DEFAULT_AUTONOMY_LEVEL": "execution_approval.default_autonomy_level",
