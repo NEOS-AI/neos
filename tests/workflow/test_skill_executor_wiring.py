@@ -115,3 +115,10 @@ def test_initial_state_resets_the_per_turn_skill_and_approval_fields() -> None:
     assert state["skill_calls"] is None
     assert state["skill_execution_done"] is None
     assert state["approval_outcome"] is None
+
+
+def test_approval_router_treats_a_reset_outcome_as_rejected() -> None:
+    workflow = graph_module.MultiAgentWorkflow.__new__(graph_module.MultiAgentWorkflow)
+    assert workflow._should_continue_after_approval({"approval_outcome": None}) == "rejected"
+    assert workflow._should_continue_after_approval({}) == "rejected"
+    assert workflow._should_continue_after_approval({"approval_outcome": "approved"}) == "approved"

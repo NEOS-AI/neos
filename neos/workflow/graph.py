@@ -1940,7 +1940,8 @@ class MultiAgentWorkflow:
             "approved": 오케스트레이터 경로 (HYPOTHESIS_GENERATION)
             "rejected": 응답 생성 (RESP_GENERATOR)
         """
-        return state.get("approval_outcome", "rejected")
+        # approval_outcome 은 _create_initial_state 가 턴마다 None 으로 되돌린다 -- 키가 있어도 None 일 수 있다
+        return state.get("approval_outcome") or "rejected"
 
     async def _check_approval_allowlist(self, user_id: str, skill_names: list) -> bool:
         """DB에서 user_id의 skill_names 전체가 allowlist에 있는지 확인한다.
