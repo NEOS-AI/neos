@@ -310,6 +310,16 @@ class SkillExecutionConfig(StrictConfigModel):
     max_content_chars: int = Field(default=4000, ge=200, le=20000, description="SearchResult.content 길이 상한.")
 
 
+class WorkflowSessionConfig(StrictConfigModel):
+    """채팅 워크플로 세션 상태 (spec 2026-10-13 §4.3)."""
+
+    max_carried_items: int = Field(
+        default=200,
+        ge=1,
+        description="저장 때 누적 필드(operator.add)마다 남길 최근 항목 수. Plan 3 라이브 dry run 에서 다시 정한다.",
+    )
+
+
 class WorkflowConfig(StrictConfigModel):
     search_orchestration_timeout: int = 40
     min_quality_score: float = 0.4
@@ -319,6 +329,7 @@ class WorkflowConfig(StrictConfigModel):
     cache_enabled: bool = True
     cache_ttl: int = 3600
     skill_execution: SkillExecutionConfig = Field(default_factory=SkillExecutionConfig)
+    session: WorkflowSessionConfig = Field(default_factory=WorkflowSessionConfig)
 
     # 노드가 계약의 writes 밖 키를 쓸 때 (spec 2026-10-13 §4.2). report = 기록만,
     # drop = 버림, raise = 거절. 기본은 report -- 지금 동작(키를 그대로 둔다)과

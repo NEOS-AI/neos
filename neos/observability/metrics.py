@@ -339,6 +339,24 @@ class EnterpriseMetricsCollector:
             ["node", "key"],
             registry=self.registry,
         )
+        # 세션 상태 (spec 2026-10-13 §4.3). 올리는 곳은 neos/workflow/runtime/turns.py 다.
+        self.workflow_session_trimmed_total = Counter(
+            "workflow_session_trimmed_total",
+            "Accumulated items dropped from a saved workflow session by the carry cap",
+            ["field"],
+            registry=self.registry,
+        )
+        self.workflow_session_conflicts_total = Counter(
+            "workflow_session_conflicts_total",
+            "Workflow session saves that lost an optimistic-lock race",
+            registry=self.registry,
+        )
+        self.workflow_session_failures_total = Counter(
+            "workflow_session_failures_total",
+            "Workflow session load/save failures (the turn continues)",
+            ["op"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",

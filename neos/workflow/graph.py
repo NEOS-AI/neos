@@ -3237,6 +3237,11 @@ class MultiAgentWorkflow:
             skill_execution_done=None,
             skill_sources=None,
             approval_outcome=None,
+            # 턴 단위 승인 필드 (spec 2026-10-13 §4.3, S-PEND) -- 상태가 이어져도 버려진 승인이
+            # 다음 턴의 라우터를 needs_approval 로 보내지 않게 한다. 승인 재개는 초기 상태를
+            # 다시 만들지 않으므로 이 리셋을 지나지 않는다.
+            pending_approvals=[],
+            approval_decision=None,
             # Phase 4.7: Research Templates
             template_id=None,
             template_config=None,
