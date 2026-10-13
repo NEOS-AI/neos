@@ -17,6 +17,7 @@ from neos.coding.domain.durability import (
     ToolExecutionDisposition,
     is_pause_event,
 )
+from neos.coding.application.work_port import notify_task_completed
 from neos.coding.domain.errors import CodingTaskNotFound
 from neos.coding.domain.models import (
     CodingTask,
@@ -405,14 +406,19 @@ class CodingRunService:
         return None
 
     async def _after_completed(self, task_id: str) -> None:
-        """Both ways a run completes come here. A hook failure is logged and
-        never fails the run -- the run is already committed as completed."""
+        """Both ways a run completes come here. Hook failures are logged and
+        never fail the run -- the run is already committed as completed."""
+        try:
+            task = await self._tasks.get(task_id)
+        except Exception:
+            logger.exception("coding completion hook failed task_id=%s", task_id)
+            return
+        if task is None:
+            return
+        await notify_task_completed(task)
         if self._on_completed is None:
             return
         try:
-            task = await self._tasks.get(task_id)
-            if task is None:
-                return
             checkpoint = await self._runs.latest_checkpoint(task_id)
             await self._on_completed(
                 task, checkpoint.loop_state if checkpoint is not None else None

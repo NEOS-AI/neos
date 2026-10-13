@@ -12,6 +12,7 @@ from neos.coding.application.task_service import (
     clamp_task_list_limit,
     task_created_payload,
 )
+from neos.coding.application.work_port import notify_task_created
 from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.events import CodingEvent
 from neos.coding.domain.models import (
@@ -115,6 +116,8 @@ class PostgresCodingService:
             self._wake_outbox()
         task = replace(task, last_seq=event.seq)
         self._notify_task_created(task.task_id)
+        # 트랜잭션 밖: 작업 기록 실패가 태스크 INSERT 를 되돌리면 안 된다.
+        await notify_task_created(task)
         return task
 
     async def append(

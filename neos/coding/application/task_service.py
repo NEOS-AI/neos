@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Callable, Protocol
 from uuid import uuid4
 
+from neos.coding.application.work_port import notify_task_created
 from neos.coding.domain.errors import InvalidTaskTransition
 from neos.coding.domain.models import (
     ARCHIVABLE_TASK_STATUSES,
@@ -195,6 +196,7 @@ class CodingTaskService:
         task = replace(task, last_seq=event.seq)
         task = await self.tasks.save(task)
         self._notify_task_created(task.task_id)
+        await notify_task_created(task)
         return task
 
     async def snapshot(

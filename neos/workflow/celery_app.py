@@ -148,6 +148,11 @@ def init_worker(**kwargs):
 
     sync_live_overlay(model_config.catalog)
 
+    # 네이티브 런타임이면 코딩 태스크를 작업 기록에 잇는다 (spec 2026-10-13 §4.4).
+    from neos.workflow.runtime.coding_link import install_coding_link
+
+    install_coding_link()
+
     logger.info("Celery worker ready")
 
 

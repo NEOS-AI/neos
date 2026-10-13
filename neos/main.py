@@ -261,6 +261,15 @@ async def lifespan(app: FastAPI):
         skill_manager.register_builtin_skills()
         logger.info("✅ Builtin skills registered (auto-discovery)")
 
+        # 네이티브 런타임이면 코딩 태스크를 작업 기록에 잇는다 (기본 런타임에서는 no-op)
+        try:
+            from neos.workflow.runtime.coding_link import install_coding_link
+
+            if install_coding_link():
+                logger.info("[Startup] coding tasks are linked to workflow work records (native runtime)")
+        except Exception as e:
+            logger.warning(f"⚠️ coding work link install failed: {e}")
+
         # Initialize skills (optional - can be done on-demand)
         # await skill_manager.initialize_all()
 
