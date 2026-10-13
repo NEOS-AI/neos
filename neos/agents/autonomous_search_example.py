@@ -186,17 +186,3 @@ class AutonomousKnowledgeSearchAgent(AutonomousAgent):
 # 3. execute_autonomous_task() 메서드 구현
 # 4. 필요시 handle_collaboration_request() 오버라이드
 # 5. 기존 execute() 메서드는 하위 호환성을 위해 유지
-#
-# 사용 예시:
-# ```python
-# from neos.workflow.distributed_graph import distributed_workflow
-#
-# # 자율 에이전트 생성
-# agent = AutonomousKnowledgeSearchAgent()
-#
-# # 워크플로우에 등록
-# await distributed_workflow.initialize()
-# await distributed_workflow.register_autonomous_agent(agent)
-#
-# # 이제 에이전트는 자동으로 작업을 발견하고 실행함
-# ```
