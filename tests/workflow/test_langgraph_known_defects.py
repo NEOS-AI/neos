@@ -15,6 +15,7 @@ from tests.workflow.support.stub_workflow import (
     SKIP_PATH_ROUTES,
     RecordingHandler,
     StubPlan,
+    memory_checkpointer,
     stub_workflow,
     user_input,
 )
@@ -48,15 +49,13 @@ async def test_r1_checkpointer_returns_a_checkpoint_tuple() -> None:
 
 @pytest.mark.xfail(strict=True, reason="R3: interrupt_before 가 GraphInterrupt 를 던지지 않아 승인 이벤트가 안 나간다")
 async def test_r3_an_approval_gate_interrupts_and_asks(monkeypatch) -> None:
-    from langgraph.checkpoint.memory import MemorySaver
-
     pending = [{"request_id": "apr_1"}]
     plan = StubPlan(
         nodes={N.SKILL_TOOL_SELECTOR.value: lambda s: {"pending_approvals": pending, "approval_decision": None}},
         routes={**SKIP_PATH_ROUTES, "_route_after_skill_tool_selector": "needs_approval"},
     )
     workflow = stub_workflow(
-        monkeypatch, plan, flags={"execution_approval": True}, checkpointer=MemorySaver()
+        monkeypatch, plan, flags={"execution_approval": True}, checkpointer=memory_checkpointer()
     )
     handler = RecordingHandler()
     result = await workflow.execute_workflow(user_input(), event_handler=handler, use_checkpointer=True)

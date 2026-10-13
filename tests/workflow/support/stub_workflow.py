@@ -147,5 +147,16 @@ def stub_workflow(
     return workflow
 
 
+def memory_checkpointer():
+    """승인 게이트 시험용 MemorySaver. 상태의 `_event_handler`(런타임 주입 객체)는
+    msgpack 으로 직렬화되지 않는다 -- 그 실패가 시험하려는 중단 의미론을 가린다.
+    운영 PostgreSQL 체크포인터는 모르는 객체를 문자열로 바꾸고, Plan 2 의 코덱은
+    `_` 키를 저장하지 않는다. 그래서 여기서는 pickle 폴백으로 직렬화만 통과시킨다."""
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    return MemorySaver(serde=JsonPlusSerializer(pickle_fallback=True))
+
+
 def user_input(session_id: str = "s-contract", user_id: str = "u1", query: str = "안녕") -> dict:
     return {"query": query, "session_id": session_id, "user_id": user_id, "bypass_cache": True}
