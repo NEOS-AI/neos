@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 import asyncio
@@ -15,6 +15,7 @@ from neos.utils.cache import cache_manager
 from neos.utils.smart_cache_manager import smart_cache_manager
 from neos.config.model_routing import resolve_model
 from neos.config.settings import settings
+from neos.workflow.runtime.node_updates import apply_update
 from neos.tools.tool_selector import tool_selector
 from neos.utils.llm_factory import LLMFactory
 
@@ -295,10 +296,11 @@ def build_ephemeral_workflow(
             continue
         contract = NODE_CONTRACTS[node_name]
         bound_handler = contract.handler.__get__(workflow, type(workflow))
+        wrapped = workflow._node_wrapper()(node_name, bound_handler)
         if node_name in deferred:
-            graph.add_node(node_name, bound_handler, defer=True)
+            graph.add_node(node_name, wrapped, defer=True)
         else:
-            graph.add_node(node_name, bound_handler)
+            graph.add_node(node_name, wrapped)
 
     for source, target in topology.edges:
         if source in template_names:
@@ -538,9 +540,12 @@ class MultiAgentWorkflow:
                 state_schema=AgentState,
                 checkpointer=checkpointer,
                 interrupt_before=wiring.interrupt_before,
+                wrap=self._node_wrapper(),
             )
         logger.debug("[WorkflowGraph] Created without checkpointer (stateless mode)")
-        return compile_wiring(wiring, self, graph_factory=StateGraph, state_schema=AgentState)
+        return compile_wiring(
+            wiring, self, graph_factory=StateGraph, state_schema=AgentState, wrap=self._node_wrapper()
+        )
 
 
     async def _ensure_graph_initialized(self, use_checkpointer: bool = True):
@@ -2452,6 +2457,13 @@ class MultiAgentWorkflow:
         """배선 표의 분기 라우터는 메서드 이름으로 가리킨다 -- 모듈 함수에 이름을 준다."""
         return _should_route_to_harness_repair(state)
 
+    def _node_wrapper(self):
+        """노드 경계의 정규화 (spec 2026-10-13 §4.2). 정책은 조립 시점에 읽는다."""
+        from neos.workflow.runtime.node_updates import wrap_node
+
+        policy = settings.config.workflow.node_update_policy
+        return lambda node, handler: wrap_node(node, handler, policy=policy)
+
     def _should_use_mission_runtime(self, state: AgentState) -> str:
         """Mission Runtime 후보면 mission branch로 보낸다."""
         from neos.workflow.mission import routing as mission_routing
@@ -2749,7 +2761,8 @@ class MultiAgentWorkflow:
                     )
 
                 current_step = 0
-                final_state = None
+                final_state = dict(initial_state)
+                interrupted = False
                 wf_id = user_input.get("session_id", "")
                 # 실제로 직전 chunk 에서 본 노드들. 목록 인덱스로 추정하지
                 # 않는다 -- 옛 코드는 `workflow_nodes.index(node) - 1` 로
@@ -2806,14 +2819,25 @@ class MultiAgentWorkflow:
 
                         previous_nodes = chunk_nodes
 
-                    for _node_name, state in chunk.items():
-                        final_state = state
+                    # 노드 갱신을 리듀서 의미론으로 접는다 -- 결과는 마지막 갱신이 아니라
+                    # 접힌 상태에서 읽는다 (R4). `__interrupt__` 는 승인 대기 신호다 (R3).
+                    for chunk_name, update in chunk.items():
+                        if chunk_name == "__interrupt__":
+                            interrupted = True
+                            continue
+                        if isinstance(update, Mapping):
+                            final_state = apply_update(final_state, update)
 
                 # 마지막으로 **실제로 본** 노드의 종료를 기록한다. 옛 코드는
                 # `workflow_nodes[-1]`(목록의 마지막)을 썼는데, 그 노드는 이
                 # run 에서 돌지 않았을 수 있다.
                 for finished in previous_nodes:
                     record_node_end(finished, wf_id)
+
+                if interrupted:
+                    return await self._interrupted_result(
+                        execution_graph, config, user_input, initial_state, span, event_handler
+                    )
 
                 # 결과 생성
                 add_span_event(span, "generating_result")
@@ -2888,33 +2912,6 @@ class MultiAgentWorkflow:
                     )
                 raise
             except Exception as e:
-                # GraphInterrupt: interrupt_before=EXECUTION_APPROVAL 발동
-                # Generic Exception catch 이전에 처리해야 SSE approval_request 이벤트가 발행됨
-                try:
-                    from langgraph.errors import GraphInterrupt
-                    if isinstance(e, GraphInterrupt):
-                        add_span_event(span, "workflow_interrupted_for_approval")
-                        current_graph_state = await execution_graph.compiled.aget_state(config)
-                        pending = current_graph_state.values.get("pending_approvals", [])
-                        session_id = user_input.get("session_id", "")
-                        await event_handler.on_approval_request(pending, session_id)
-                        logger.info(
-                            f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
-                            f"for session={session_id}, pending={len(pending)}"
-                        )
-                        return {
-                            "success": True,
-                            "interrupted": True,
-                            "response": None,
-                            "pending_approvals": pending,
-                            "execution_time_ms": int(
-                                (datetime.now() - initial_state["execution_start"]).total_seconds() * 1000
-                            ),
-                            "errors": [],
-                        }
-                except ImportError:
-                    pass  # langgraph.errors 미설치 시 일반 에러로 처리
-
                 import traceback
                 traceback.print_exc()
                 logger.error(f"[ExecuteWorkflow] Workflow execution failed: {str(e)}")
@@ -2933,6 +2930,30 @@ class MultiAgentWorkflow:
                     execution_graph, initial_state, "workflow_failed"
                 )
                 return self._create_error_result(e, initial_state)
+
+    async def _interrupted_result(
+        self, execution_graph, config, user_input, initial_state, span, event_handler
+    ) -> Dict[str, Any]:
+        """interrupt_before=EXECUTION_APPROVAL 발동 -- SSE approval_request 를 내보내고 중단 결과를 돌려준다."""
+        add_span_event(span, "workflow_interrupted_for_approval")
+        current_graph_state = await execution_graph.compiled.aget_state(config)
+        pending = current_graph_state.values.get("pending_approvals", [])
+        session_id = user_input.get("session_id", "")
+        await event_handler.on_approval_request(pending, session_id)
+        logger.info(
+            f"[ExecuteWorkflow] GraphInterrupt: approval_request sent "
+            f"for session={session_id}, pending={len(pending)}"
+        )
+        return {
+            "success": True,
+            "interrupted": True,
+            "response": None,
+            "pending_approvals": pending,
+            "execution_time_ms": int(
+                (datetime.now() - initial_state["execution_start"]).total_seconds() * 1000
+            ),
+            "errors": [],
+        }
 
     async def _check_smart_cache(
         self,

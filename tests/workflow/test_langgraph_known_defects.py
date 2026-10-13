@@ -1,4 +1,4 @@
-"""LangGraph 런타임의 알려진 결함 (spec 2026-10-13 §1.2 R1·R3·R4·R5).
+"""LangGraph 런타임의 알려진 결함 (spec 2026-10-13 §1.2 R1 (R3·R4·R5 는 닫혔다 — 아래 회귀 가드)).
 
 `xfail(strict=True)` 다 -- 결함이 실행되는 증거로 남고, 누가 고치면 XPASS 가
 실패로 바뀌어 이 표시를 지우게 만든다. Plan 3 이 LangGraph 와 함께 이 파일을 지운다.
@@ -47,8 +47,8 @@ async def test_r1_checkpointer_returns_a_checkpoint_tuple() -> None:
     assert isinstance(saved, CheckpointTuple)
 
 
-@pytest.mark.xfail(strict=True, reason="R3: interrupt_before 가 GraphInterrupt 를 던지지 않아 승인 이벤트가 안 나간다")
 async def test_r3_an_approval_gate_interrupts_and_asks(monkeypatch) -> None:
+    """R4/R3 는 Task 6 에서 닫혔다 -- 회귀 가드"""
     pending = [{"request_id": "apr_1"}]
     plan = StubPlan(
         nodes={N.SKILL_TOOL_SELECTOR.value: lambda s: {"pending_approvals": pending, "approval_decision": None}},
@@ -64,8 +64,8 @@ async def test_r3_an_approval_gate_interrupts_and_asks(monkeypatch) -> None:
     assert handler.approvals == [pending]
 
 
-@pytest.mark.xfail(strict=True, reason="R4: final_state 가 마지막 노드의 부분 갱신이다")
 async def test_r4_the_result_reads_the_whole_state(monkeypatch) -> None:
+    """R4/R3 는 Task 6 에서 닫혔다 -- 회귀 가드"""
     plan = StubPlan(
         nodes={
             N.RESP_GENERATOR.value: lambda s: {
@@ -87,8 +87,8 @@ async def test_r4_the_result_reads_the_whole_state(monkeypatch) -> None:
     assert result["response"] == "답"
 
 
-@pytest.mark.xfail(strict=True, reason="R5: 전체 상태를 돌려주는 노드가 operator.add 필드를 불린다")
 async def test_r5_full_state_returns_do_not_duplicate_accumulated_results(monkeypatch) -> None:
+    """R5 는 노드 경계 정규화(neos/workflow/runtime/node_updates.py)로 닫혔다 -- 회귀 가드."""
     item = SearchResult(source="web", title="A", content="a", url="https://a")
     seen: list[list] = []
 
