@@ -14,7 +14,7 @@ from langgraph.graph import END as LG_END
 from langgraph.graph import START as LG_START
 
 from neos.workflow.topology import END, START
-from neos.workflow.wiring import Wiring
+from neos.workflow.wiring import Wiring, resolve_ref
 
 _ENDPOINTS = {START: LG_START, END: LG_END}
 
@@ -35,14 +35,14 @@ def compile_wiring(
 ) -> Any:
     graph = graph_factory(state_schema)
     for spec in wiring.nodes:
-        handler = getattr(owner, spec.handler)
-        graph.add_node(spec.name, wrap(spec.name, handler) if wrap else handler)
+        handler = resolve_ref(owner, spec.handler)
+        graph.add_node(spec.name, wrap(spec.name, handler) if wrap and spec.wrapped else handler)
     for edge in wiring.edges:
         graph.add_edge(_lg(edge.source), _lg(edge.target))
     for branch in wiring.branches:
         graph.add_conditional_edges(
             branch.source,
-            getattr(owner, branch.router),
+            resolve_ref(owner, branch.router),
             {route.label: _lg(route.target) for route in branch.routes},
         )
     if checkpointer is not None:

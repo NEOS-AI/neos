@@ -16,14 +16,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from neos.workflow.enums import WorkflowNode as N
 from neos.workflow.enums import WorkflowPathway as P
 from neos.workflow.topology import END, GRAPH_ENTRY_WRITES, START, GraphTopology
 
 Requires = tuple[tuple[str, bool], ...]
+
+# 노드 핸들러·분기 라우터를 가리키는 값. 정적 표는 `MultiAgentWorkflow` 의 메서드 이름(str)을,
+# 설계 그래프(`runtime/designed.py`)는 이미 바인딩한 호출 가능 객체를 넣는다.
+Ref = str | Callable[..., Any]
 
 # `settings` 의 별칭 속성 → 배선 플래그 키. `execution_graph.current_static_flags` 가
 # 이 지도로 실행 시점 플래그를 읽는다 -- 키가 빠지면 그 자리가 기본값('켬')으로 채워져
@@ -82,8 +87,11 @@ class WiringError(ValueError):
 @dataclass(frozen=True)
 class NodeSpec:
     name: str
-    handler: str  # MultiAgentWorkflow 의 메서드 이름
+    handler: Ref  # 메서드 이름 또는 호출 가능 객체
     requires: Requires = ()
+    # 노드 경계 정규화(`node_updates.wrap_node`)로 감쌀지. 서브에이전트 템플릿 노드는 감싸지 않는다
+    # -- 자기 걸음 상태를 스스로 관리한다(`build_ephemeral_workflow` 와 같은 규칙).
+    wrapped: bool = True
 
 
 @dataclass(frozen=True)
@@ -103,7 +111,7 @@ class Route:
 @dataclass(frozen=True)
 class Branch:
     source: str
-    router: str  # MultiAgentWorkflow 의 메서드 이름 -- 상태를 받아 라벨을 돌려준다
+    router: Ref  # 메서드 이름 또는 호출 가능 객체 -- 상태를 받아 라벨을 돌려준다
     routes: tuple[Route, ...]
     requires: Requires = ()
 
@@ -398,3 +406,8 @@ def topology_of(wiring: Wiring) -> GraphTopology:
         loop_bounds={node: bound for node, bound in LOOP_BOUNDS.items() if node in names},
         initial_writes=GRAPH_ENTRY_WRITES,
     )
+
+
+def resolve_ref(owner: Any, ref: Ref) -> Callable[..., Any]:
+    """표의 참조를 호출 가능 객체로. LangGraph 어댑터와 네이티브 러너가 같은 규칙을 쓴다."""
+    return getattr(owner, ref) if isinstance(ref, str) else ref
