@@ -333,6 +333,12 @@ async def _respond_native(body, current_user, pending_approval) -> ApprovalRespo
     async def _resume() -> None:
         try:
             result = await approvals.resume(ticket, _StreamNodeEvents(session_id))
+            # `execute_workflow` 는 예외를 삼키고 실패 결과를 돌려준다 -- 그것도 오류다([H4]).
+            if not result.get("success"):
+                await stream_manager.add_event(
+                    session_id, "error", {"message": result.get("error") or "resume failed"}
+                )
+                return
             await stream_manager.add_event(session_id, "completed", {"response": result.get("response") or ""})
         except Exception as error:  # noqa: BLE001
             logger.error(f"[ApprovalHandler] native resume failed: session={session_id}: {error}")

@@ -97,3 +97,19 @@ async def test_resume_without_a_session_fails_the_work(monkeypatch) -> None:
     result = await approvals.resume(ticket, RecordingHandler())
     assert result["success"] is False
     assert (await lifecycle.store.get(pending.work_id)).status == "failed"
+
+
+async def test_a_resumed_turn_records_its_episode_with_the_original_query(monkeypatch) -> None:
+    """멈춘 앞 절반은 에피소드를 남기지 않는다 -- 재개 턴이 실제 질문으로 남겨야 한다."""
+    workflow, approvals, _ = await _waiting(monkeypatch)
+    recorded: list[dict] = []
+
+    async def _record(user_input, result, final_state):
+        recorded.append(dict(user_input))
+
+    monkeypatch.setattr(workflow, "_save_episode_memory", _record)
+    pending = await approvals.pending_for_session("s-appr")
+    ticket = await approvals.decide(pending.work_id, "apr_1", "approved", actor="u1")
+    result = await approvals.resume(ticket, RecordingHandler())
+    assert result["success"] is True
+    assert [item["query"] for item in recorded] == ["안녕"]

@@ -138,6 +138,8 @@ def stub_workflow(
 
         sessions, lifecycle = InMemorySessionStore(), WorkLifecycle(InMemoryWorkStore())
         monkeypatch.setattr(select, "_turns", NativeTurns(sessions, lifecycle, max_carried_items=200))
+        # 승인 서비스 싱글턴이 이전 테스트의 워크플로를 쥔 채 남지 않게 한다.
+        monkeypatch.setattr(select, "_approvals", None)
         native_stores = (sessions, lifecycle)
         if checkpointer is None:
             checkpointer = memory_checkpointer()

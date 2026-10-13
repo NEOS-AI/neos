@@ -2917,6 +2917,12 @@ class MultiAgentWorkflow:
                             },
                         )
                         config["neos_start_at"] = turn.start_at
+                        # 재개 턴의 기록(에피소드·장기 메모리·세션 완료)은 실제 질문을 서술해야 한다 --
+                        # 멈춘 앞 절반은 에피소드를 남기지 않았다(컨트롤러 결정, Task 7 fix 1).
+                        user_input = {
+                            **user_input,
+                            "query": turn.state.get("original_query") or user_input.get("query", ""),
+                        }
                     else:
                         turn = await native_turns().begin(user_input, initial_state, stateful=use_checkpointer)
                     start_state, turn_handle = turn.state, turn.handle
