@@ -1525,6 +1525,28 @@ class MultiAgentWorkflow:
             "generation_results",
             "execution_steps",
             "errors",
+            # MissionExecutor._merge_state 는 태스크가 돌려준 상태의 **모든 키**를
+            # 합친다(mission/executor.py:110-126). 검색 태스크는 search_orchestrator
+            # 의 쓰기 전부를 가져온다(위 SEARCH_ORCHESTRATOR 계약의 주석).
+            "search_metadata",
+            "search_synthesis",
+            "query_classification",
+            "cumulative_cost",
+            "cost_tracking",
+            "exploration_depth_reached",
+            "exploration_pages_visited",
+            # `_run_task` 가 태스크 사본의 required_agents 를 suggested_agent 로
+            # 바꾸고(executor.py:90), `_merge_state` 가 그 값을 전체 상태로
+            # 되돌려 쓴다 -- 지금 동작이다(최종 리뷰 프로브).
+            "required_agents",
+            # recursive/hyper_deep 태스크는 RecursiveOrchestrator.execute 의
+            # 반환값을 합친다(recursive/orchestrator.py:113-131).
+            "final_response",
+            "recursive_task_tree",
+            "recursive_mode",
+            "recursive_current_depth",
+            "recursive_budget_remaining",
+            "recursive_completed_tasks",
         },
         # mission_plan 이 비어 있으면(`.get(... or {})`) tasks=[] 로 루프가
         # 전혀 돌지 않고도 mission_status="completed" 를 조용히 써낸다 --
@@ -1568,6 +1590,12 @@ class MultiAgentWorkflow:
             "quality_score",
             "quality_feedback",
             "execution_steps",
+            # `_ensure_quality_score` 가 QualityValidator.validate_quality 를
+            # 노드의 상태로 부르고(mission/validators.py:108-110), 그 안에서 점수가
+            # 낮으면 `state["retry_count"] = retry_count + 1`
+            # (processors/quality_validator.py:35) -- 반환 dict 밖의 제자리 쓰기라
+            # 노드 경계가 사본과 반환값을 함께 볼 때 드러났다(최종 리뷰).
+            "retry_count",
         },
         # 전부 `.get()` 기본값 경로 -- validation_contract 가 비어 있으면
         # required_sources=0/min_quality=0.0 으로 완화되어 "통과"로 판정된다
@@ -1736,7 +1764,35 @@ class MultiAgentWorkflow:
             "query_embedding",
             "search_results",
         },
-        writes={"search_results", "search_metadata", "search_synthesis"},
+        writes={
+            "search_results",
+            "search_metadata",
+            "search_synthesis",
+            # 아래는 실제 노드 프로브(최종 리뷰)와 위임 체인 읽기로 찾은 쓰기다 --
+            # 전부 제자리 변경이라 추출기가 보지 못한다.
+            # SearchOrchestrator.orchestrate 의 에이전트 없음 분기
+            # (search_orchestrator.py:89), StandardSearchStrategy
+            # `_record_execution_step`·캐시 적중(search_strategies.py:224,681),
+            # Iterative·MultiHop 전략(152,839)이 `.append` 한다.
+            "execution_steps",
+            # `_execute_with_fallback` 의 폴백 실패(search_orchestrator.py:197,199)와
+            # 전략 안의 에이전트 실패(search_strategies.py:162,336,393,534,...).
+            "errors",
+            # 대화 맥락으로 개선한 질의를 `state["query_classification"]
+            # ["enhanced_query"]` 에 넣는다(search_orchestrator.py:77).
+            "query_classification",
+            # `cost_router.track_cost(state, ...)`(search_orchestrator.py:174 →
+            # utils/cost_router.py:99-104).
+            "cumulative_cost",
+            "cost_tracking",
+            # IterativeSearchStrategy(search_strategies.py:149-150).
+            "exploration_depth_reached",
+            "exploration_pages_visited",
+            # MultiHopSearchStrategy 의 `state["multi_hop_metadata"]`
+            # (search_strategies.py:836)는 `AgentState` 밖 키라 여기 둘 수 없다 --
+            # LangGraph 는 조용히 버려 왔다. tests/workflow/runtime/
+            # test_node_contract_probes.py 가 그 사실을 고정한다.
+        },
         # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError.
         # required_agents 도 `state["required_agents"]` 로 서브스크립트 접근하므로
         # 없으면 KeyError -- 있어도 비어 있으면 "실행할 검색 에이전트가 없습니다"
@@ -1898,13 +1954,22 @@ class MultiAgentWorkflow:
             "integrated_results",
             "execution_steps",
         },
-        writes={"integrated_results"},
+        writes={
+            "integrated_results",
+            # ResultProcessor.integrate_results 가 `state["execution_steps"]
+            # .append(...)`(result_processor.py:35) -- 제자리 변경이라 추출기가
+            # 보지 못한다(최종 리뷰 프로브).
+            "execution_steps",
+        },
         # search_results 가 없으면(검색 노드가 아직 안 돌았으면) search_summary와
         # total_sources가 전부 0/빈 값으로 채워진 integrated_results 를 조용히
         # 만들어낸다 -- (c) 케이스. 순서가 틀려도 예외 없이 빈 통합 결과가 나오는
         # 것이 정확히 이 기능이 잡으려는 실패다. analysis_results/generation_results
         # 는 검색만 필요한 쿼리에서는 정상적으로 비어 있을 수 있어 requires 에서 뺀다.
         requires={"search_results"},
+        # execution_steps 는 위임 대상의 `.append` 라 `state_keys_written` 이
+        # 확인하지 못한다.
+        writes_hand_curated=True,
     )
     async def _integrate_results_node(self, state: AgentState) -> Dict[str, Any]:
         """결과 통합 노드"""
@@ -2070,6 +2135,17 @@ class MultiAgentWorkflow:
             "search_metadata",
             "search_synthesis",
             "integrated_results",
+            # 같은 연쇄의 나머지 쓰기(최종 리뷰 프로브): search_orchestrator 가
+            # 쓰는 키(위 SEARCH_ORCHESTRATOR 계약의 주석)와
+            # ResponseGenerator.generate_response 의 `state["execution_time_ms"]`·
+            # `state["executive_summary"]`(response_generator.py:198,209).
+            "query_classification",
+            "cumulative_cost",
+            "cost_tracking",
+            "exploration_depth_reached",
+            "exploration_pages_visited",
+            "execution_time_ms",
+            "executive_summary",
         },
         # harness_repair_attempts/harness_contract/required_agents 모두
         # `.get()` 기본값 경로 -- 없으면 각각 0/빈 계약/빈 목록으로 안전하게
