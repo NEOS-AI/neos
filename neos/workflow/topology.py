@@ -150,6 +150,7 @@ def validate_topology(
     budget: int | None = None,
     node_costs: Mapping[str, int] | None = None,
     subagent: SubagentRuleInputs | None = None,
+    allow_parallel: bool = True,
 ) -> tuple[TopologyViolation, ...]:
     """규칙 열 가지(+ 템플릿 노드가 있으면 셋)를 검사한다. 빈 튜플이면 유효.
 
@@ -178,6 +179,10 @@ def validate_topology(
 
     `mandatory`, `budget`, `node_costs` 는 기본값이 no-op 이라 기존 호출부
     (`contracts` 만 넘기는 Task 3 호출자)는 그대로 동작한다.
+
+    `allow_parallel=False` 면 출구가 둘 이상인 노드(자기 반복 간선 제외)를
+    `parallel_unsupported` 로 거절한다 -- 네이티브 러너는 순차만 돈다
+    (spec 2026-10-13 §4.10). 기본값은 지금 동작(허용)이다.
     """
 
     violations: list[TopologyViolation] = []
@@ -385,6 +390,20 @@ def validate_topology(
         violations.extend(
             _subagent_violations(topology, contracts, subagent, forward)
         )
+
+    if not allow_parallel:
+        exits: dict[str, int] = {}
+        for source, target in topology.edges:
+            if source != target:
+                exits[source] = exits.get(source, 0) + 1
+        for source in sorted(name for name, count in exits.items() if count > 1):
+            violations.append(
+                TopologyViolation(
+                    rule="parallel_unsupported",
+                    node=source,
+                    detail=f"출구 {exits[source]}개 -- 네이티브 러너는 순차만 돈다",
+                )
+            )
 
     return tuple(violations)
 

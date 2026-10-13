@@ -136,6 +136,7 @@ async def design_graph_or_fallback(
     # 여전히 정적 엣지만 낸다(설계자 ≠ 승인자).
     expand: Callable[[GraphTopology], GraphTopology] | None = None,
     subagent: SubagentRuleInputs | None = None,
+    allow_parallel: bool = True,
 ) -> DesignOutcome:
     """설계자를 호출하고, 성공하면 검증하고, 어느 쪽이든 이벤트를 남긴다.
 
@@ -177,6 +178,7 @@ async def design_graph_or_fallback(
             budget=budget,
             node_costs=node_costs,
             subagent=subagent,
+            allow_parallel=allow_parallel,
         )
     except TimeoutError:
         events.append(
