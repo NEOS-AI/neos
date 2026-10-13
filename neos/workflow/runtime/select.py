@@ -36,3 +36,22 @@ def native_turns() -> NativeTurns:
 def set_native_turns(turns: NativeTurns | None) -> None:
     global _turns
     _turns = turns
+
+
+_approvals = None
+
+
+def native_approvals():
+    """네이티브 승인 서비스. 워크플로 싱글턴(`multi_agent_workflow`)과 같은 작업 저장소를 쓴다."""
+    global _approvals
+    if _approvals is None:
+        from neos.workflow.graph import multi_agent_workflow
+        from neos.workflow.runtime.approvals import WorkflowApprovals
+
+        _approvals = WorkflowApprovals(multi_agent_workflow, native_turns().lifecycle)
+    return _approvals
+
+
+def set_native_approvals(value) -> None:
+    global _approvals
+    _approvals = value

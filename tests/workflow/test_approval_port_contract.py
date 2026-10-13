@@ -29,6 +29,11 @@ _AFTER_APPROVAL_ROUTES = {
 }
 
 
+@pytest.fixture(params=["langgraph", "native"])
+def runtime(request):
+    return request.param
+
+
 async def _drain_resumes() -> None:
     for _ in range(20):
         tasks = [
@@ -41,7 +46,7 @@ async def _drain_resumes() -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def _interrupted_workflow(monkeypatch, reached: list[str]):
+async def _interrupted_workflow(monkeypatch, reached: list[str], runtime: str):
     import neos.api.channels.workflow_approvals as approvals_module
 
     async def _no_db(request_id, owner_id):
@@ -60,26 +65,33 @@ async def _interrupted_workflow(monkeypatch, reached: list[str]):
         },
         routes={**SKIP_PATH_ROUTES, "_route_after_skill_tool_selector": "needs_approval", **_AFTER_APPROVAL_ROUTES},
     )
-    workflow = stub_workflow(monkeypatch, plan, flags={"execution_approval": True}, checkpointer=memory_checkpointer())
+    # 네이티브면 `checkpointer=` 는 무시된다 -- 세션·작업 저장소가 메모리로 꽂힌다.
+    workflow = stub_workflow(
+        monkeypatch,
+        plan,
+        flags={"execution_approval": True},
+        checkpointer=memory_checkpointer(),
+        runtime=runtime,
+    )
     await workflow.execute_workflow(
         user_input(session_id=_SESSION), event_handler=RecordingHandler(), use_checkpointer=True
     )
     return workflow
 
 
-async def test_the_interrupt_owner_is_the_turns_user(monkeypatch) -> None:
+async def test_the_interrupt_owner_is_the_turns_user(monkeypatch, runtime) -> None:
     from neos.api.channels.workflow_approvals import RuntimeWorkflowApprovals
 
-    workflow = await _interrupted_workflow(monkeypatch, [])
+    workflow = await _interrupted_workflow(monkeypatch, [], runtime)
     port = RuntimeWorkflowApprovals(workflow)
     assert await port.interrupt_owner(_SESSION) == "u1"
 
 
-async def test_approving_returns_the_approved_line_and_resumes(monkeypatch) -> None:
+async def test_approving_returns_the_approved_line_and_resumes(monkeypatch, runtime) -> None:
     from neos.api.channels.workflow_approvals import RuntimeWorkflowApprovals
 
     reached: list[str] = []
-    workflow = await _interrupted_workflow(monkeypatch, reached)
+    workflow = await _interrupted_workflow(monkeypatch, reached, runtime)
     port = RuntimeWorkflowApprovals(workflow)
     reply = await port.decide(session_id=_SESSION, request_id="apr_1", owner_id="u1", approve=True)
     assert reply == "apr_1 approved"
@@ -87,28 +99,28 @@ async def test_approving_returns_the_approved_line_and_resumes(monkeypatch) -> N
     assert reached == [N.RESP_GENERATOR.value]
 
 
-async def test_denying_returns_the_denied_line(monkeypatch) -> None:
+async def test_denying_returns_the_denied_line(monkeypatch, runtime) -> None:
     from neos.api.channels.workflow_approvals import RuntimeWorkflowApprovals
 
-    workflow = await _interrupted_workflow(monkeypatch, [])
+    workflow = await _interrupted_workflow(monkeypatch, [], runtime)
     port = RuntimeWorkflowApprovals(workflow)
     reply = await port.decide(session_id=_SESSION, request_id="apr_1", owner_id="u1", approve=False)
     assert reply == "apr_1 denied"
     await _drain_resumes()
 
 
-async def test_an_unknown_request_is_not_claimed(monkeypatch) -> None:
+async def test_an_unknown_request_is_not_claimed(monkeypatch, runtime) -> None:
     from neos.api.channels.workflow_approvals import _INVALID_REQUEST, RuntimeWorkflowApprovals
 
-    workflow = await _interrupted_workflow(monkeypatch, [])
+    workflow = await _interrupted_workflow(monkeypatch, [], runtime)
     port = RuntimeWorkflowApprovals(workflow)
     assert await port.decide(session_id=_SESSION, request_id="apr_x", owner_id="u1", approve=True) == _INVALID_REQUEST
 
 
-async def test_the_same_decision_twice_is_claimed_once(monkeypatch) -> None:
+async def test_the_same_decision_twice_is_claimed_once(monkeypatch, runtime) -> None:
     from neos.api.channels.workflow_approvals import _INVALID_REQUEST, RuntimeWorkflowApprovals
 
-    workflow = await _interrupted_workflow(monkeypatch, [])
+    workflow = await _interrupted_workflow(monkeypatch, [], runtime)
     port = RuntimeWorkflowApprovals(workflow)
     first = await port.decide(session_id=_SESSION, request_id="apr_1", owner_id="u1", approve=True)
     await _drain_resumes()

@@ -2713,7 +2713,9 @@ class MultiAgentWorkflow:
         self,
         user_input: Dict[str, Any],
         event_handler: Optional[WorkflowEventHandler] = None,
-        use_checkpointer: bool = True
+        use_checkpointer: bool = True,
+        *,
+        resume: Any = None,
     ) -> Dict[str, Any]:
         """
         워크플로우 실행 (Enterprise Edition with distributed state)
@@ -2728,6 +2730,7 @@ class MultiAgentWorkflow:
                           None이면 NullEventHandler 사용 (성능 오버헤드 없음)
             use_checkpointer: Whether to use PostgreSQL checkpointer for state persistence
                             Set to False for single-request workflows (like chat API)
+            resume: 승인 재개 티켓(runtime/approvals.ResumeTicket). 주면 캐시·메모리·템플릿·세션 시작 기록을 건너뛰고 저장된 세션의 게이트 노드부터 돈다(네이티브 런타임 전용).
         """
         # OpenTelemetry: 전체 워크플로우 실행 추적 (Phase 3)
         workflow_id = user_input.get("session_id", "unknown")
@@ -2754,7 +2757,7 @@ class MultiAgentWorkflow:
             autonomy_level = _resolve_autonomy_level(user_input.get("autonomy_level"))
             bypass_cache = bool(user_input.get("bypass_cache", False)) or (
                 _should_bypass_cache_for_mission(user_input, autonomy_level)
-            )
+            ) or resume is not None
             cache_key = self._generate_cache_key(
                 query,
                 user_id,
@@ -2796,14 +2799,15 @@ class MultiAgentWorkflow:
             initial_state = self._create_initial_state(user_input)
             initial_state["_event_handler"] = event_handler
 
-            # Phase 2.1: 메모리 컨텍스트 로드
-            await self._load_memory_context(initial_state, user_input)
+            if resume is None:
+                # Phase 2.1: 메모리 컨텍스트 로드
+                await self._load_memory_context(initial_state, user_input)
 
-            # Phase 4.7: 연구 템플릿 자동 선택 및 적용
-            await self._apply_research_template(initial_state, query)
+                # Phase 4.7: 연구 템플릿 자동 선택 및 적용
+                await self._apply_research_template(initial_state, query)
 
-            # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
-            await self._record_session_start(user_input)
+                # 독립 research_sessions 테이블에 세션 기록 (M-6 해결)
+                await self._record_session_start(user_input)
 
             execution_graph = None
             turn_handle = None
@@ -2820,12 +2824,23 @@ class MultiAgentWorkflow:
                 # 없다. 그것도 **플래그가 꺼진 경로**에서 그렇다 -- 꺼진 run 이
                 # 이전과 구별되지 않아야 한다는 이 기능의 전제와 정면으로
                 # 어긋난다. 다른 실패와 같은 경로로 끝나게 둔다.
-                execution_graph = await self._resolve_execution_graph(
-                    user_input=user_input,
-                    use_checkpointer=use_checkpointer,
-                    span=span,
-                    event_handler=event_handler,
-                )
+                if resume is not None:
+                    # 재개는 설계를 다시 하지 않는다 -- 저장된 토폴로지로 그래프를 복원한다(spec §4.5).
+                    from neos.workflow.runtime.designed import resume_execution_graph
+                    from neos.workflow.runtime.select import native_turns
+                    from neos.workflow.runtime.turns import ResumeUnavailable
+
+                    saved = await native_turns().sessions.load(resume.session_id)
+                    if saved is None:
+                        raise ResumeUnavailable(f"{resume.session_id}: 저장된 세션이 없다")
+                    execution_graph = await resume_execution_graph(self, saved.state, use_checkpointer=True)
+                else:
+                    execution_graph = await self._resolve_execution_graph(
+                        user_input=user_input,
+                        use_checkpointer=use_checkpointer,
+                        span=span,
+                        event_handler=event_handler,
+                    )
 
                 # 재개(`approval_handlers`)가 읽을 유일한 근거를 상태에 싣는다.
                 # `initial_state` 와 `execution_graph` 가 둘 다 스코프에 들어오는
@@ -2833,17 +2848,19 @@ class MultiAgentWorkflow:
                 # 는 방금 위에서 만들어졌다. 정적 run 은 `execution_topology_payload`
                 # 가 None 을 돌려줘 이 키가 `None` 으로 남는다(Task 3-6 주석대로
                 # 정적 run 에는 토폴로지를 싣지 않는다).
-                initial_state["execution_topology"] = self.execution_topology_payload(
-                    execution_graph
-                )
-
-                # 트랙 I GS-K4: 템플릿 노드가 있는 실행만 자식 부모 스코프를 받는다.
-                # thread_id(대화) 가 아니라 이 호출 단위다 -- 같은 대화의 다음 턴이
-                # 이전 턴 자식을 되찾지 않게 한다.
-                if execution_graph.subagent_host is not None:
-                    initial_state["subagent_scope"] = (
-                        execution_graph.subagent_host.new_scope()
+                # 재개 때는 저장된 상태가 이미 두 키를 갖고 있다 -- 덮지 않는다.
+                if resume is None:
+                    initial_state["execution_topology"] = self.execution_topology_payload(
+                        execution_graph
                     )
+
+                    # 트랙 I GS-K4: 템플릿 노드가 있는 실행만 자식 부모 스코프를 받는다.
+                    # thread_id(대화) 가 아니라 이 호출 단위다 -- 같은 대화의 다음 턴이
+                    # 이전 턴 자식을 되찾지 않게 한다.
+                    if execution_graph.subagent_host is not None:
+                        initial_state["subagent_scope"] = (
+                            execution_graph.subagent_host.new_scope()
+                        )
 
                 # G2-e: 조인 키를 이 run 이 **실제로 남기게** 한다. 값을
                 # `ExecutionGraph` 에 싣기만 하고 아무 데도 내보내지 않으면
@@ -2891,8 +2908,20 @@ class MultiAgentWorkflow:
                 if execution_graph.runner is not None:
                     from neos.workflow.runtime.select import native_turns
 
-                    turn = await native_turns().begin(user_input, initial_state, stateful=use_checkpointer)
+                    if resume is not None:
+                        turn = await native_turns().begin_resume(
+                            resume,
+                            {
+                                "_event_handler": event_handler,
+                                "execution_start": initial_state["execution_start"],
+                            },
+                        )
+                        config["neos_start_at"] = turn.start_at
+                    else:
+                        turn = await native_turns().begin(user_input, initial_state, stateful=use_checkpointer)
                     start_state, turn_handle = turn.state, turn.handle
+                elif resume is not None:
+                    raise RuntimeError("승인 재개 티켓은 네이티브 런타임에서만 쓴다")
                 else:
                     from neos.workflow.runtime.turns import NULL_TURN
 
@@ -3001,9 +3030,10 @@ class MultiAgentWorkflow:
                 if turn_handle.work_id is not None:
                     result["work_id"] = turn_handle.work_id
 
-                # 성공적인 결과 캐싱
+                # 성공적인 결과 캐싱 -- 재개 턴은 질의가 없다(빈 키로 캐시하지 않는다).
                 if (
-                    result["success"]
+                    resume is None
+                    and result["success"]
                     and result["response"]
                     and _mission_validation_passed(result)
                     and should_cache_harness_result(
@@ -3025,7 +3055,7 @@ class MultiAgentWorkflow:
                     # 기존 Redis 캐시에도 저장 (폴백용)
                     add_span_event(span, "saving_to_redis_cache")
                     await self._cache_workflow_result(cache_key, result)
-                elif result["success"] and result["response"]:
+                elif resume is None and result["success"] and result["response"]:
                     add_span_event(span, "cache_skipped_validation_policy")
 
                 # 데이터셋 자동 저장 (LLM 호출이 있었을 경우)
@@ -3083,6 +3113,14 @@ class MultiAgentWorkflow:
                         await turn_handle.failed(str(e))
                     except Exception:  # noqa: BLE001 -- 실패 기록이 실패 보고를 막지 않는다
                         logger.warning("work failure could not be recorded", exc_info=True)
+                elif resume is not None:
+                    # 재개 턴이 핸들을 얻기 전에 실패했다(ResumeUnavailable 등) -- 작업을 닫는다.
+                    try:
+                        from neos.workflow.runtime.select import native_turns
+
+                        await native_turns().lifecycle.fail(resume.work_id, str(e))
+                    except Exception:  # noqa: BLE001
+                        logger.warning("resumed work failure could not be recorded", exc_info=True)
 
                 # 에러 이벤트
                 await event_handler.on_workflow_error(e)

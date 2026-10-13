@@ -105,3 +105,47 @@ def test_a_template_fanning_out_is_rejected() -> None:
     branch = next(b for b in wiring.branches if b.source == "tpl")
     with pytest.raises(WiringError, match="parallel"):
         branch.router({})
+
+
+@pytest.mark.asyncio
+async def test_resume_without_a_stored_topology_uses_the_static_runner(monkeypatch) -> None:
+    from neos.workflow.runtime.designed import resume_execution_graph
+    from tests.workflow.support.stub_workflow import StubPlan, stub_workflow
+
+    workflow = stub_workflow(monkeypatch, StubPlan(), runtime="native")
+    graph = await resume_execution_graph(workflow, {"x": 1}, use_checkpointer=True)
+    assert graph.source == "static" and graph.runner is not None
+
+
+@pytest.mark.asyncio
+async def test_resume_with_a_stored_chain_uses_the_designed_runner(monkeypatch) -> None:
+    from neos.workflow.runtime.designed import resume_execution_graph
+    from neos.workflow.topology import topology_to_payload
+    from tests.workflow.support.stub_workflow import StubPlan, stub_workflow
+
+    # `_chain()` 은 응답 생성기의 requires 를 채우지 못해 현재 계약 검증을 지나지 않는다 --
+    # 재개 왕복 관문(`tests/workflow/test_designed_resume_round_trip.py`)이 쓰는 사슬을 쓴다.
+    resumable = (
+        N.QUERY_CLS.value,
+        N.SEARCH_ORCHESTRATOR.value,
+        "analysis_orchestrator",
+        "generation_orchestrator",
+        "execution_approval",
+        N.RESP_GENERATOR.value,
+    )
+    topology = GraphTopology(
+        nodes=resumable,
+        edges=(
+            (START, resumable[0]),
+            *((resumable[i], resumable[i + 1]) for i in range(len(resumable) - 1)),
+            (resumable[-1], END),
+        ),
+        initial_writes=GRAPH_ENTRY_WRITES,
+    )
+    workflow = stub_workflow(monkeypatch, StubPlan(), runtime="native")
+    graph = await resume_execution_graph(
+        workflow, {"execution_topology": topology_to_payload(topology)}, use_checkpointer=True
+    )
+    assert graph.source == "designed"
+    assert tuple(graph.nodes) == resumable
+    assert graph.runner is not None

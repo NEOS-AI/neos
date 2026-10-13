@@ -53,3 +53,51 @@ def designed_wiring(
         branches.append(Branch(name, router, (Route(name, name), *(Route(target, target) for target in done))))
     interrupts = tuple(sorted(set(topology.nodes) & gated_nodes))
     return Wiring(tuple(nodes), edges, tuple(branches), interrupts)
+
+
+async def resume_execution_graph(workflow: Any, saved_state: Any, *, use_checkpointer: bool) -> Any:
+    """재개할 그래프를 저장된 상태에서 복원한다(spec §4.5). 설계를 다시 하지 않는다.
+
+    토폴로지가 없으면 정적 그래프, 있으면 현재 계약으로 다시 검증한 뒤 순차 배선. 검증이 깨지면
+    (배포가 노드를 지웠다 등) 재개하지 않는다 -- `ResumeUnavailable`.
+    """
+    from dataclasses import replace
+
+    from neos.config.settings import settings
+    from neos.workflow.execution_graph import ExecutionGraph, current_static_flags, static_execution_graph
+    from neos.workflow.graph_design_ledger import _DEFAULT_MUST_WRITE, topology_hash
+    from neos.workflow.runtime.turns import ResumeUnavailable
+    from neos.workflow.topology import topology_from_payload, validate_topology
+
+    payload = (saved_state or {}).get("execution_topology")
+    if payload is None:
+        await workflow._ensure_graph_initialized(use_checkpointer=use_checkpointer)
+        static = static_execution_graph(compiled=workflow.graph, flags=current_static_flags())
+        return replace(static, runner=workflow._native_runner(static, use_checkpointer=use_checkpointer))
+    try:
+        topology = topology_from_payload(payload)
+    except Exception as error:  # noqa: BLE001 -- 읽을 수 없는 페이로드는 재개할 수 없다
+        raise ResumeUnavailable(f"stored topology payload could not be read: {error}") from error
+    contracts: Any = NODE_CONTRACTS
+    subagent_host = None
+    extra_nodes = set(topology.nodes) - set(NODE_CONTRACTS)
+    if extra_nodes and settings.config.workflow.subagent_nodes_enabled:
+        from neos.workflow.subagent_nodes import merged_contracts
+
+        contracts = merged_contracts(NODE_CONTRACTS)
+        if extra_nodes & set(contracts):
+            subagent_host = workflow._build_subagent_host(None)
+    violations = validate_topology(
+        topology, contracts=contracts, must_write=_DEFAULT_MUST_WRITE, allow_parallel=False
+    )
+    if violations:
+        raise ResumeUnavailable(f"stored topology is no longer valid: {violations}")
+    designed = ExecutionGraph(
+        compiled=None,
+        nodes=topology.nodes,
+        topology_hash=topology_hash(topology),
+        source="designed",
+        topology=topology,
+        subagent_host=subagent_host,
+    )
+    return replace(designed, runner=workflow._native_runner(designed, use_checkpointer=use_checkpointer))

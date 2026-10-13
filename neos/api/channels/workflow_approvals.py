@@ -27,6 +27,12 @@ async def _mark_resolved_best_effort(request_id: str, owner_id: str) -> None:
         )
 
 
+def _native() -> bool:
+    from neos.workflow.runtime.select import runtime_name
+
+    return runtime_name() == "native"
+
+
 class RuntimeWorkflowApprovals:
     def __init__(self, workflow: Any) -> None:
         self._workflow = workflow
@@ -39,7 +45,17 @@ class RuntimeWorkflowApprovals:
             self._locks[session_id] = lock
         return lock
 
+    def _native_approvals(self) -> Any:
+        """이 포트가 쥔 워크플로를 재개한다 -- 전역 싱글턴이 아니다(컨트롤러 결정, Task 7)."""
+        from neos.workflow.runtime.approvals import WorkflowApprovals
+        from neos.workflow.runtime.select import native_turns
+
+        return WorkflowApprovals(self._workflow, native_turns().lifecycle)
+
     async def interrupt_owner(self, session_id: str) -> str | None:
+        if _native():
+            pending = await self._native_approvals().pending_for_session(session_id)
+            return pending.user_id if pending is not None else None
         workflow = self._workflow
         graph = getattr(workflow, "graph", None)
         if graph is None:
@@ -63,6 +79,10 @@ class RuntimeWorkflowApprovals:
         approve: bool,
     ) -> str:
         decision = "approved" if approve else "rejected"
+        if _native():
+            return await self._decide_native(
+                session_id=session_id, request_id=request_id, owner_id=owner_id, approve=approve
+            )
         workflow = self._workflow
         graph = getattr(workflow, "graph", None)
         if (
@@ -162,3 +182,30 @@ class RuntimeWorkflowApprovals:
                 _resume(), name=f"channel_approval_resume_{session_id}"
             )
             return f"{request_id} {'approved' if approve else 'denied'}"
+
+    async def _decide_native(self, *, session_id: str, request_id: str, owner_id: str, approve: bool) -> str:
+        """반환 문자열은 LangGraph 경로와 같다(게이트웨이·Q 계약, spec §5 경계 2)."""
+        from neos.workflow.runtime.approvals import Refusal
+
+        approvals = self._native_approvals()
+        pending = await approvals.pending_for_session(session_id)
+        if pending is None or not request_id:
+            return _INVALID_REQUEST
+        ticket = await approvals.decide(
+            pending.work_id,
+            request_id,
+            "approved" if approve else "rejected",
+            actor=owner_id or pending.user_id,
+        )
+        if isinstance(ticket, Refusal):
+            return _INVALID_REQUEST
+        await _mark_resolved_best_effort(request_id, owner_id)
+
+        async def _resume() -> None:
+            try:
+                await approvals.resume(ticket)
+            except Exception as error:  # noqa: BLE001
+                logger.error("[RuntimeWorkflowApprovals] native resume failed: session=%s: %s", session_id, error)
+
+        asyncio.create_task(_resume(), name=f"channel_approval_resume_{session_id}")
+        return f"{request_id} {'approved' if approve else 'denied'}"

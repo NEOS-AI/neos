@@ -52,7 +52,7 @@ async def _poll_async():
         stmt = (
             select(ScheduledTask)
             .where(
-                ScheduledTask.is_active == True,
+                ScheduledTask.is_active == True,  # noqa: E712 -- SQLAlchemy 컬럼 비교
                 ScheduledTask.next_run_at <= now,
             )
             .with_for_update(skip_locked=True)  # 다중 워커 중복 실행 방지
@@ -216,9 +216,8 @@ def expire_pending_approvals(self):
 
 async def _expire_pending_approvals_async() -> None:
     """만료된 pending_approvals 항목을 조회하여 자동 거부 처리한다."""
-    from neos.database.connection import get_session_ctx, db_manager
+    from neos.database.connection import get_session_ctx
     from neos.database.models import PendingApproval
-    from sqlalchemy import update as sa_update
 
     now = utc_now_naive()
 
@@ -226,7 +225,7 @@ async def _expire_pending_approvals_async() -> None:
         stmt = (
             select(PendingApproval)
             .where(
-                PendingApproval.resolved == False,
+                PendingApproval.resolved == False,  # noqa: E712 -- SQLAlchemy 컬럼 비교
                 PendingApproval.expires_at < now,
             )
             .with_for_update(skip_locked=True)
@@ -284,6 +283,18 @@ async def _inject_timeout_rejection(session_id: str, request_id: str) -> bool:
     `except Exception ... non-critical` 은 바깥 루프의 try/except 를 죽은
     코드로 만들어 실패한 주입까지 성공으로 세게 했다.
     """
+    from neos.workflow.runtime.select import runtime_name
+
+    if runtime_name() == "native":
+        from neos.workflow.runtime.select import native_approvals
+
+        approvals = native_approvals()
+        pending = await approvals.pending_for_session(session_id)
+        if pending is None:
+            return False
+        # 워커에서도 동작한다 -- 그래프 객체가 아니라 작업 행을 읽는다(spec §4.5, R6).
+        return await approvals.expire(pending.work_id, request_id)
+
     from neos.workflow.graph import multi_agent_workflow
     from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
 

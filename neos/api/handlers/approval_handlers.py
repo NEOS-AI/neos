@@ -28,6 +28,7 @@ from neos.api.dependencies.auth import get_current_user
 from neos.api.dependencies.resource_access import require_stream_session_owner
 from neos.database.connection import db_manager
 from neos.database.models import User
+from neos.workflow.events import NullEventHandler
 from neos.workflow.graph import multi_agent_workflow
 from neos.workflow.runtime.node_updates import apply_update
 from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
@@ -156,6 +157,11 @@ async def respond_to_approval(
         user_id=current_user.user_id,
     )
 
+    from neos.workflow.runtime.select import runtime_name
+
+    if runtime_name() == "native":
+        return await _respond_native(body, current_user, pending_approval)
+
     # 그래프가 초기화되어 있어야 함
     if not multi_agent_workflow._graph_initialized or not multi_agent_workflow._graph_uses_checkpointer:
         raise HTTPException(
@@ -270,17 +276,77 @@ async def respond_to_approval(
     asyncio.create_task(_resume(), name=f"approval_resume_{session_id}")
 
     # allowlist 등록 (선택적, H3에서 이미 검증 완료)
-    if body.add_to_allowlist and body.skill_name:
-        await _add_to_allowlist(
-            user_id=current_user.user_id,
-            skill_name=body.skill_name,
-        )
+    return await _finish_response(body, current_user)
 
-    return ApprovalResponseResult(
-        status="resumed",
-        session_id=session_id,
-        decision=decision,
+
+class _StreamNodeEvents(NullEventHandler):
+    """재개된 턴의 노드 완료를 승인 스트림으로 흘린다 -- LangGraph 가지의 node_complete 와 같은 모양."""
+
+    def __init__(self, session_id: str) -> None:
+        self._session_id = session_id
+
+    async def on_node_complete(self, node_name, result) -> None:
+        await stream_manager.add_event(self._session_id, "node_complete", {"node": node_name})
+
+
+async def _respond_native(body, current_user, pending_approval) -> ApprovalResponseResult:
+    from neos.workflow.runtime.approvals import Refusal
+    from neos.workflow.runtime.select import native_approvals
+
+    session_id = body.session_id
+    approvals = native_approvals()
+    pending = await approvals.pending_for_session(session_id)
+    if pending is None or body.request_id not in pending.request_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 request_id입니다. 해당 세션의 pending approval이 아닙니다.",
+        )
+    # LangGraph 가지와 같은 검사 -- 작업 행의 대기 항목이 DB 행의 스킬과 맞아야 한다.
+    matching = next(
+        (p for p in pending.pending if isinstance(p, Mapping) and p.get("request_id") == body.request_id),
+        None,
     )
+    if not matching or matching.get("skill_name") != pending_approval["skill_name"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="skill_name이 해당 request_id의 스킬과 일치하지 않습니다.",
+        )
+    if body.add_to_allowlist and body.skill_name and pending_approval["skill_name"] != body.skill_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="skill_name이 해당 request_id의 스킬과 일치하지 않습니다.",
+        )
+    session = stream_manager.get_session(session_id)
+    if session:
+        require_stream_session_owner(session, current_user)
+    else:
+        session = stream_manager.create_session(session_id, current_user.user_id)
+        require_stream_session_owner(session, current_user)
+    ticket = await approvals.decide(pending.work_id, body.request_id, body.decision, actor=current_user.user_id)
+    if isinstance(ticket, Refusal):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT if ticket.reason == "conflict" else status.HTTP_400_BAD_REQUEST,
+            detail=f"승인을 처리할 수 없습니다: {ticket.reason}",
+        )
+    await _mark_approval_resolved(body.request_id, current_user.user_id)
+
+    async def _resume() -> None:
+        try:
+            result = await approvals.resume(ticket, _StreamNodeEvents(session_id))
+            await stream_manager.add_event(session_id, "completed", {"response": result.get("response") or ""})
+        except Exception as error:  # noqa: BLE001
+            logger.error(f"[ApprovalHandler] native resume failed: session={session_id}: {error}")
+            await stream_manager.add_event(session_id, "error", {"message": str(error)})
+
+    asyncio.create_task(_resume(), name=f"approval_resume_{session_id}")
+    return await _finish_response(body, current_user)
+
+
+async def _finish_response(body, current_user) -> ApprovalResponseResult:
+    """두 런타임 가지가 같은 꼬리를 쓴다 -- allowlist 등록과 응답 모양."""
+    if body.add_to_allowlist and body.skill_name:
+        await _add_to_allowlist(user_id=current_user.user_id, skill_name=body.skill_name)
+    return ApprovalResponseResult(status="resumed", session_id=body.session_id, decision=body.decision)
 
 
 @router.get(
