@@ -16,7 +16,7 @@ Task 3-4 의 `validate_topology` 가 소비할 수 있는 순수 데이터 구�
 
 **기능 플래그.** `_create_workflow_graph` 는 `settings.RECURSIVE_AGENT_ENABLED`
 / `HYPER_DEEP_AGENT_ENABLED` / `DEEP_ANALYSIS_ENABLED` / `EXECUTION_APPROVAL_ENABLED`
-/ `A2UI_ENABLED` 다섯 개 플래그로 노드 등록과 라우팅 테이블 내용을 분기한다.
+/ `A2UI_ENABLED` / `SKILL_EXECUTION_ENABLED` 여섯 개 플래그로 노드 등록과 라우팅 테이블 내용을 분기한다.
 런타임 `settings` 값을 읽는 대신 `flags` 인자로 각 분기를 결정한다 -- 배포
 설정과 무관하게 항상 같은 토폴로지를 검증해야 회귀 가드로서 의미가 있고,
 기본값을 전부 켠 상태로 두면 가장 넓은(따라서 위반을 가장 많이 드러내는)
@@ -48,6 +48,7 @@ _FLAG_ATTR_TO_KEY: dict[str, str] = {
     "DEEP_ANALYSIS_ENABLED": "deep_analysis",
     "EXECUTION_APPROVAL_ENABLED": "execution_approval",
     "A2UI_ENABLED": "a2ui",
+    "SKILL_EXECUTION_ENABLED": "skill_execution",
 }
 
 # 기본값은 전부 켠 상태 -- "가장 넓은 그래프가 가장 많은 위반을 드러낸다" (브리프).

@@ -132,7 +132,8 @@ def discover_single_skill(
             description=metadata['description'],
             capabilities=metadata['capabilities'],
             version=metadata.get('version', '1.0.0'),
-            skill_dir=skill_dir
+            skill_dir=skill_dir,
+            auto_execute=bool(metadata.get('auto_execute', False)),
         )
     except Exception as e:
         logger.error(f"Failed to create SkillInfo for {metadata['name']}: {e}")

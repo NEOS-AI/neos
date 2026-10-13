@@ -5,6 +5,7 @@ import logging
 import re
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, join_text, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,54 @@ class ResearchAssistantSkill(BaseSkill):
             **kwargs
         )
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        # `content` 는 없다 -- 공통 실행 노드가 1단계 결과로 채운다 (spec §3.3-4).
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["analyze_source", "summarize", "extract_references"],
+                    "description": "What to do with the collected sources (default summarize)",
+                },
+                "options": {
+                    "type": "object",
+                    "properties": {
+                        "extract_key_points": {"type": "boolean"},
+                        "max_length": {"type": "integer", "minimum": 100, "maximum": 2000},
+                    },
+                    "description": "analyze_source: extract_key_points; summarize: max_length",
+                },
+            },
+            "required": [],
+        }
+
     async def initialize(self) -> bool:
         """스킬 초기화"""
         self.is_available = True
         logger.info("Research Assistant skill initialized successfully")
         return True
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        data = result.data if isinstance(result.data, dict) else {}
+        if "summary" in data:
+            return [make_result(self.name, title="Summary of collected sources", content=data["summary"], score=0.7)]
+        if "total_references" in data:
+            refs = [*data.get("urls", []), *data.get("dois", [])]
+            if not refs:
+                return []
+            return [make_result(self.name, title="References in collected sources", content="\n".join(refs), score=0.6)]
+        if "quality_score" in data:
+            return [
+                make_result(
+                    self.name,
+                    title="Source quality analysis",
+                    content=join_text(f"quality score: {data['quality_score']}/100", *data.get("key_points", [])),
+                    score=0.6,
+                )
+            ]
+        return []
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """리서치 작업 실행

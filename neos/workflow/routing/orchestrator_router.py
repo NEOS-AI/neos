@@ -184,6 +184,20 @@ class OrchestratorRouter:
     def _engine_enabled(engine: DeepEngine) -> bool:
         return bool(getattr(settings, engine.enabled_flag, False))
 
+    def route_after_skill_execution(self, state: "AgentState") -> str:
+        """공통 스킬 실행 노드의 출구 (spec 2026-10-11 §2).
+
+        조건부 엣지 함수는 상태에 쓸 수 없어 셀렉터 뒤 라우터의 결정을 남길 수
+        없다 -- 그래서 다시 계산한다. `route()` 가 skip/use 를 낼 때 그 값은 항상
+        `base_route()` 의 값이고(마지막 줄), `base_route` 는 실행 노드가 쓰는
+        `search_results` 를 읽지 않으므로 실행 전후 답이 같다.
+        """
+        if state.get("approval_outcome") == "approved":
+            return WorkflowPathway.USE_ORCHESTRATORS.value
+        if self.base_route(state) == WorkflowPathway.SKIP_ORCHESTRATORS.value:
+            return WorkflowPathway.SKIP_ORCHESTRATORS.value
+        return WorkflowPathway.USE_ORCHESTRATORS.value
+
     def base_route(self, state: "AgentState") -> str:
         priority = _PRIORITY_ROUTING_MAP.get(state.get("query_intent", ""))
         if priority:

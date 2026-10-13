@@ -557,6 +557,8 @@ class MultiAgentWorkflow:
         # (엣지는 아래 엣지 절에 있다 -- `test_create_workflow_graph` 가
         # 첫 add_edge 가 START 에서 나가는 것임을 고정한다.)
         workflow.add_node(WorkflowNode.DIRECT_RESPONSE.value, self._direct_response_node)
+        if settings.SKILL_EXECUTION_ENABLED:
+            workflow.add_node(WorkflowNode.SKILL_EXECUTOR.value, self._skill_executor_node)
 
         # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
         if settings.RECURSIVE_AGENT_ENABLED:
@@ -626,6 +628,10 @@ class MultiAgentWorkflow:
                 WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
                 "mission": WorkflowNode.MISSION_PLANNER.value,
             }
+            # spec 2026-10-11 §2: skip·use 는 공통 스킬 실행 노드를 지난다.
+            if settings.SKILL_EXECUTION_ENABLED:
+                _routing_map[WorkflowPathway.SKIP_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
+                _routing_map[WorkflowPathway.USE_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
             if settings.RECURSIVE_AGENT_ENABLED:
                 _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
             if settings.HYPER_DEEP_AGENT_ENABLED:
@@ -679,6 +685,9 @@ class MultiAgentWorkflow:
                 "mission": WorkflowNode.MISSION_PLANNER.value,
                 "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
             }
+            if settings.SKILL_EXECUTION_ENABLED:
+                _else_routing[WorkflowPathway.SKIP_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
+                _else_routing[WorkflowPathway.USE_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
             if settings.A2UI_ENABLED:
                 _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
             workflow.add_conditional_edges(
@@ -689,6 +698,17 @@ class MultiAgentWorkflow:
             if settings.A2UI_ENABLED:
                 workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
                 workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
+
+        # 실행 노드 출구: skip 은 직접 응답, 그 밖(use · approved)은 가설 생성.
+        if settings.SKILL_EXECUTION_ENABLED:
+            workflow.add_conditional_edges(
+                WorkflowNode.SKILL_EXECUTOR.value,
+                self._route_after_skill_executor,
+                {
+                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
+                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
+                },
+            )
 
         # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
         workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
@@ -716,15 +736,18 @@ class MultiAgentWorkflow:
         workflow.add_edge(WorkflowNode.MISSION_INTEGRATOR.value, WorkflowNode.RESP_GENERATOR.value)
 
         # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
-        # approved → 오케스트레이터 경로, rejected → 응답 생성으로 바로 이동
+        # approved → 오케스트레이터 경로(스킬 실행이 켜졌으면 실행 노드 먼저), rejected → 응답 생성
         if settings.EXECUTION_APPROVAL_ENABLED:
+            _approval_routing = {
+                "approved": WorkflowNode.HYPOTHESIS_GENERATION.value,
+                "rejected": WorkflowNode.RESP_GENERATOR.value,
+            }
+            if settings.SKILL_EXECUTION_ENABLED:
+                _approval_routing["approved"] = WorkflowNode.SKILL_EXECUTOR.value
             workflow.add_conditional_edges(
                 WorkflowNode.EXECUTION_APPROVAL.value,
                 self._should_continue_after_approval,
-                {
-                    "approved": WorkflowNode.HYPOTHESIS_GENERATION.value,
-                    "rejected": WorkflowNode.RESP_GENERATOR.value,
-                },
+                _approval_routing,
             )
 
         # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
@@ -921,7 +944,7 @@ class MultiAgentWorkflow:
                 query=user_input["query"],
                 # GS3: 템플릿 어휘는 플래그가 켜졌을 때만 카탈로그에 선다. 꺼져 있으면
                 # `design_contracts is NODE_CONTRACTS` 라 카탈로그와 렌더된 프롬프트가
-                # 바이트 단위로 같다(`test_subagent_node_catalog.py`). 켜지면 정적 31개
+                # 바이트 단위로 같다(`test_subagent_node_catalog.py`). 켜지면 정적 32개
                 # 뒤에 템플릿 줄이 붙는다 -- 프롬프트 파일(v2)은 바꾸지 않는다.
                 catalog=tuple(design_contracts.values()),
                 budget=settings.config.workflow.graph_design_budget_hint,
@@ -1431,9 +1454,11 @@ class MultiAgentWorkflow:
             "query_intent",
             "required_agents",
             "autonomy_level",
+            "refined_query",
         },
         writes={
             "selected_skills",
+            "skill_calls",
             "selected_tools",
             "selection_reasoning",
             "pending_approvals",
@@ -1475,7 +1500,8 @@ class MultiAgentWorkflow:
                 context=selection_context,
                 session_id=session_id,
                 user_id=user_id,
-                detected_language=detected_language
+                detected_language=detected_language,
+                fallback_query=state.get("refined_query") or query,
             )
 
             logger.debug(f"[SkillToolSelector] Selected {len(selection.selected_skills)} skills: {selection.selected_skills}")
@@ -1485,6 +1511,7 @@ class MultiAgentWorkflow:
                 "selected_skills": selection.selected_skills,
                 "selected_tools": selection.selected_tools,
                 "selection_reasoning": selection.reasoning,
+                "skill_calls": [call.to_dict() for call in selection.skill_calls],
             }
 
             from neos.workflow.mission.routing import should_use_mission_runtime
@@ -1550,8 +1577,64 @@ class MultiAgentWorkflow:
             return {
                 "selected_skills": [],
                 "selected_tools": [],
-                "selection_reasoning": f"Selection failed: {str(e)}"
+                "selection_reasoning": f"Selection failed: {str(e)}",
+                "skill_calls": [],
             }
+
+    @node_contract(
+        node=WorkflowNode.SKILL_EXECUTOR,
+        reads={
+            "skill_calls",
+            "skill_execution_done",
+            "execution_steps",
+            "pending_approvals",
+            "approval_outcome",
+        },
+        writes={"search_results", "skill_sources", "skill_execution_done", "execution_steps"},
+        # 전부 `.get()` 기본값 경로 -- 빈 skill_calls 는 빈 갱신이다.
+    )
+    async def _skill_executor_node(self, state: AgentState) -> Dict[str, Any]:
+        """빌트인 스킬 공통 실행 노드 (spec 2026-10-11-builtin-skill-executor §2).
+
+        정적 그래프는 플래그가 켜졌을 때만 이 노드를 배선한다. 그래도 플래그를
+        여기서 다시 보는 이유: 설계 카탈로그는 플래그와 무관하게 계약 전부를
+        싣는다(`design_contracts is NODE_CONTRACTS`) -- 꺼진 채 설계 그래프가 이
+        노드를 골라도 아무것도 하지 않아야 한다.
+        """
+        if not settings.SKILL_EXECUTION_ENABLED or state.get("skill_execution_done"):
+            return {}
+        # 승인 전·거절 뒤에는 돌지 않는다 (spec §2) -- 토폴로지에 기대지 않는다:
+        # 설계 그래프는 이 노드를 승인 앞이나 거절 경로에 둘 수 있다.
+        # skill_execution_done 은 쓰지 않는다 -- 승인 뒤 다시 들어오면 돌아야 한다.
+        if state.get("pending_approvals") or state.get("approval_outcome") == "rejected":
+            return {}
+        calls = state.get("skill_calls") or []
+        if not calls:
+            return {"skill_execution_done": True}
+
+        from neos.skills import executor as skill_executor
+        from neos.skills.manager import skill_manager
+
+        config = settings.config.workflow.skill_execution
+        outcome = await skill_executor.execute_skill_calls(
+            calls,
+            runner=skill_manager,
+            limits=skill_executor.SkillExecutionLimits(
+                timeout_seconds=config.timeout_seconds,
+                max_results_per_skill=config.max_results_per_skill,
+                max_content_chars=config.max_content_chars,
+            ),
+        )
+        return {
+            "search_results": list(outcome.results),
+            # 직접 응답은 이것만 읽는다 -- search_results 는 체크포인트 스레드에서 턴을 넘어 쌓인다
+            "skill_sources": list(outcome.results),
+            "skill_execution_done": True,
+            "execution_steps": [
+                *state.get("execution_steps", []),
+                *(step.to_execution_step() for step in outcome.steps),
+            ],
+        }
 
     @node_contract(
         node=WorkflowNode.CONVERSATION_CTX_PROC,
@@ -1870,7 +1953,8 @@ class MultiAgentWorkflow:
             "approved": 오케스트레이터 경로 (HYPOTHESIS_GENERATION)
             "rejected": 응답 생성 (RESP_GENERATOR)
         """
-        return state.get("approval_outcome", "rejected")
+        # approval_outcome 은 _create_initial_state 가 턴마다 None 으로 되돌린다 -- 키가 있어도 None 일 수 있다
+        return state.get("approval_outcome") or "rejected"
 
     async def _check_approval_allowlist(self, user_id: str, skill_names: list) -> bool:
         """DB에서 user_id의 skill_names 전체가 allowlist에 있는지 확인한다.
@@ -2398,6 +2482,7 @@ class MultiAgentWorkflow:
             "session_id",
             "user_id",
             "execution_steps",
+            "skill_sources",
         },
         writes={
             "final_response",
@@ -2412,6 +2497,7 @@ class MultiAgentWorkflow:
         # `conversation_context` 는 위임 대상이 아니라 그 **헬퍼**
         # (`ResponseGenerator._direct_response_prompt`) 안에서 읽힌다. 추출기는
         # 위임 한 단계까지만 따라가므로 이 키를 확인하지 못한다.
+        # `skill_sources` 도 같은 헬퍼(`_skill_sources`) 안에서 읽힌다 (spec 2026-10-11 §2).
         hand_curated=True,
     )
     async def _direct_response_node(self, state: AgentState) -> Dict[str, Any]:
@@ -2638,6 +2724,10 @@ class MultiAgentWorkflow:
         if mission_route == "mission":
             return mission_route
         return legacy_route
+
+    def _route_after_skill_executor(self, state: AgentState) -> str:
+        """SKILL_EXECUTOR 출구 -- 셀렉터 뒤 결정을 다시 계산한다 (spec §2)."""
+        return self._orchestrator_router.route_after_skill_execution(state)
 
     def _should_use_mission_runtime(self, state: AgentState) -> str:
         """Mission Runtime 후보면 mission branch로 보낸다."""
@@ -3317,6 +3407,11 @@ class MultiAgentWorkflow:
             execution_time_ms=None,
             tokens_used=None,
             api_calls_made=None,
+            # 턴 단위 필드 -- 승인 재개는 aupdate_state + astream(None) 로 가므로 여기를 지나지 않는다
+            skill_calls=None,
+            skill_execution_done=None,
+            skill_sources=None,
+            approval_outcome=None,
             # Phase 4.7: Research Templates
             template_id=None,
             template_config=None,

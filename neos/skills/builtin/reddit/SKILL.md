@@ -1,6 +1,7 @@
 ---
 name: reddit
 type: research
+auto_execute: true
 version: 1.0.0
 description: Reddit 커뮤니티 토론·의견 검색
 capabilities:

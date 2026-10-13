@@ -204,6 +204,12 @@ workflow:
   timeout_seconds: 300
   cache_enabled: true
   cache_ttl: 3600
+  skill_execution:
+    enabled: false
+    max_skills_per_turn: 3
+    timeout_seconds: 15
+    max_results_per_skill: 5
+    max_content_chars: 4000
 
 research_harness:
   enabled: true

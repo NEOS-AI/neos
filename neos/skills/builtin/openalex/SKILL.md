@@ -1,6 +1,7 @@
 ---
 name: openalex
 type: research
+auto_execute: true
 version: 1.0.0
 description: OpenAlex 오픈 학술 메타데이터 검색 - 논문·저자·기관
 capabilities:

@@ -1,9 +1,10 @@
 """ArXiv Skill implementation"""
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,19 @@ class ArxivSkill(BaseSkill):
         )
         self.arxiv_wrapper = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "get_by_id"], "description": "search (default) or get_by_id"},
+                "query": {"type": "string", "description": "Search query, or an ArXiv ID for get_by_id"},
+                "arxiv_id": {"type": "string", "description": "ArXiv ID for get_by_id; query is used when omitted"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of papers (default 5)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """ArXiv API 래퍼 초기화"""
         try:
@@ -48,6 +62,24 @@ class ArxivSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize ArXiv skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        return [
+            make_result(
+                self.name,
+                title=paper.get("title"),
+                content=paper.get("full_summary") or paper.get("summary"),
+                url=paper.get("entry_url"),
+                score=0.95,
+                metadata={
+                    "arxiv_id": paper.get("arxiv_id", ""),
+                    "authors": paper.get("authors", ""),
+                    "published": paper.get("published", ""),
+                    "pdf_url": paper.get("pdf_url", ""),
+                },
+            )
+            for paper in collect_items(result.data, "papers")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """ArXiv 검색 실행

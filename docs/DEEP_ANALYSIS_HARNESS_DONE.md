@@ -367,3 +367,59 @@ D-L2 첫 초안 루브릭이 `/etc/passwd` 를 예로 적어 그 루브릭의 **
   결정적으로 깨졌다(`c042b8b3` 에서 고침)
 - 📌 채널 게이트웨이는 API 프로세스에만 있다 — **기존 스케줄 태스크의 워커 채널 전송은 경고 한 줄로 죽어 있었다**(Q10b 가 발견,
   범위 밖이라 기록만. 남은 것은 로드맵 §11)
+
+---
+
+## 8. 트랙 S — 스킬 체계 P1: 빌트인 스킬 공통 실행 노드 (2026-10-12)
+
+설계 [스펙](superpowers/specs/2026-10-11-builtin-skill-executor-design.md) · [구현 계획](superpowers/plans/2026-10-11-builtin-skill-executor.md).
+`dev` 에 fast-forward 머지(`2b335817..a2df54ef`, 17 커밋). 플래그 `workflow.skill_execution.enabled` — development 에서 켰다,
+스키마 기본·staging·production·테스트 세션은 off.
+
+### 8.1 착수 전 진단 (2026-10-11 코드 대조)
+
+- 스킬 체계가 서로 연결되지 않은 셋이었다 — `SkillManager`(실행형, 빌트인 15) · `MarkdownSkillCatalog`(점진 공개, 코딩 9 + 팩 넷) ·
+  Tool Search 레지스트리(`sync_tool_registry` 호출자 없음). `research_skill_roots()` 도 호출자가 없었다
+- **메인 그래프는 매 질의 셀렉터 LLM 을 부르는데 `selected_skills` 를 실행하는 노드가 없었다** — 승인 정책·research_lessons 만 읽었다.
+  실행은 HDR 의 arxiv·pubmed·wikipedia if 문 셋뿐
+- 등록 경로 둘(기동 = 자동 발견 15 · HDR 폴백 = 수동 목록 6) · 13개 스킬이 기본 스키마 `{query, action, max_results}` 를 물려받아
+  실제 입력과 달랐다 · 셀렉터 프롬프트 언어별 사본 넷 · 폴백이 없는 이름(`bigquery_skill`·`pdf_skill`)을 골랐다
+- `skills/` 최상위 179개 중 178개가 `When to Use`/`Boundaries` 절이 없다 · 109개 디렉터리에 스크립트 · 설명 평균 395자(전부 나열 ≈ 18K 토큰) ·
+  `skills/docx`·`skills/pdf` 가 빌트인과 이름 충돌 — P2 의 재료
+
+### 8.2 무엇이 착지했나
+
+| 층 | 내용 |
+|---|---|
+| 스킬 | `SKILL.md` `auto_execute: true`(검색형 10 + research-assistant) · 등록은 자동 발견 한 경로(수동 목록 삭제) · 11개 `get_input_schema()` 를 `execute` 가 읽는 키와 AST 로 양방향 대조 · `to_search_results()`(스킬이 자기 결과 모양을 안다) |
+| 실행기 | `neos/skills/executor.py` — 상태를 모른다. 1단계 병렬 + 스킬별 타임아웃, 2단계 research-assistant(1단계 본문을 `content` 로), 상한·태깅, `CancelledError` 비삼킴 |
+| 셀렉터 | `skill_calls=[{name, params, reason}]` · `selected_skills` 는 파생 · 모르는 키는 떼고 jsonschema 검증, 실패하면 질의로 대체 · 턴당 3 · 초기화 실패한 스킬은 후보에서 뺀다 · 프롬프트 템플릿 하나 |
+| 그래프 | `SKILL_EXECUTOR` — skip·use·approved 세 진입, 출구는 `OrchestratorRouter.route_after_skill_execution` 이 다시 계산 · 노드 스스로 승인 가드 · 계약 32개 |
+| 응답 | 직접 응답이 그 턴의 `skill_sources` 를 [번호]로 인용하고 번호 출처 목록을 붙인다(LLM 실패 폴백에는 안 붙인다) |
+| 그 밖 | HDR 이 스킬의 변환을 재사용(행 모양 그대로, URL 없음은 `""`) · FE 라벨 `skill_execution` · README · CONFIGURATION · ROADMAP 낡은 줄 |
+
+### 8.3 리뷰가 잡은 것 — 전부 단일 턴 테스트로는 보이지 않았다
+
+태스크별 리뷰 9회 + 수정 라운드 2회 + 브랜치 전체 리뷰 1회(+ 수정 웨이브 1회, 범위 재리뷰).
+
+- **턴 간 승계 셋** — 웹 채팅은 대화 하나 = 체크포인트 스레드 하나라 `_create_initial_state` 가 리셋하지 않은 필드가 다음 턴으로 간다.
+  ① `skill_execution_done` → 스킬이 대화 첫 턴에만 돌았다 ② `approval_outcome` → 지난 턴의 "approved" 가 skip 턴을 오케스트레이터로 보냈다
+  ③ **스킬 결과가 `search_results`(`operator.add`)에 누적** → 스킬이 안 돈 다음 턴의 직접 응답이 지난 턴 출처로 답했다(최종 리뷰의 Critical).
+  ①② 는 리셋으로, ③ 은 리듀서 없는 `skill_sources` 신설로 고쳤다. 고정은 실제 노드·실제 프롬프트 헬퍼로 2턴을 도는 `MemorySaver` 테스트다.
+  **원인은 계획에 있었다** — 계획의 테스트가 전부 손으로 만든 단일 상태로 노드를 불렀다
+- **리셋이 만든 회귀** — `approval_outcome=None` 리셋 뒤 `state.get("approval_outcome", "rejected")` 의 기본값이 안 먹었다(키가 None 으로
+  존재). `approval_processor` 가 없는 분기에서 라우팅 키 None → 턴 실패. `or "rejected"` 로 고쳤다
+- **설계 그래프는 승인 순서를 보장하지 않는다** — 카탈로그에 계약이 들어가므로 노드가 스스로 `pending_approvals`·rejected 를 본다
+- **인용 번호만 있고 목록이 없었다** — skip 경로는 `_apply_citations` 를 안 탄다
+
+### 8.4 판정 (계획 실행 중 컨트롤러가 내린 것)
+
+- `CronSkill` 은 추상 클래스라 기본 변환 테스트는 테스트 안 하위 클래스로 바꿨다 — 런타임 결함은 로드맵 §11 S-CRON
+- `approval_outcome` 리셋이 안전한 근거: 승인 재개는 `aupdate_state` + `astream(None)`(`approval_handlers.py`)이라 `_create_initial_state` 를 안 탄다
+- 보류: ja/zh 출처 지시문(S-LANG) · 초기화 타임아웃 미기억(S-INIT) · 스펙 예시 정정(S-SPEC) · 기존 결함(S-PEND · S-ORCH · S-MSGPACK) — 로드맵 §11
+
+### 8.5 검증 (머지 시점)
+
+DB 없는 관련 스위트 1566 통과 · 실패 1(`test_reduction_attribution_script::test_sql_counts_match_the_parser_on_a_real_ledger` — Postgres 필요,
+기준 커밋에서도 같다) · 정적 그래프 스냅샷 해시 불변 · CI Ruff 경로 0건 · web 라벨 테스트 6/6 · `tsc --noEmit` 0.
+**라이브 확인은 하지 않았다**(로드맵 §11 S-LIVE).

@@ -1,10 +1,11 @@
 """Wikipedia Skill implementation"""
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 from langchain_community.utilities import WikipediaAPIWrapper
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,21 @@ class WikipediaSkill(BaseSkill):
         )
         self.wikipedia_wrapper = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "get_page"], "description": "search (default) or get_page"},
+                "query": {"type": "string", "description": "Topic to look up"},
+                "page_title": {"type": "string", "description": "Exact page title for get_page"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of articles (default 3)"},
+                "load_all_summaries": {"type": "boolean", "description": "Load summaries for every hit"},
+                "lang": {"type": "string", "description": "Wikipedia language code, e.g. en, ko (default en)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """Wikipedia API 래퍼 초기화"""
         try:
@@ -47,6 +63,20 @@ class WikipediaSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize Wikipedia skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        language = result.data.get("lang", "") if isinstance(result.data, dict) else ""
+        return [
+            make_result(
+                self.name,
+                title=article.get("title"),
+                content=article.get("full_content") or article.get("content"),
+                url=article.get("url"),
+                score=0.85,
+                metadata={"summary": article.get("summary", ""), "language": language},
+            )
+            for article in collect_items(result.data, "articles")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """Wikipedia 검색 실행

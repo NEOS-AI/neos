@@ -34,16 +34,18 @@
 - **절대 수치는 적지 않는다.** 적어야 하면 측정 날짜를 함께 적는다
 - **§4·§5·§12의 설계와 코드가 어긋나면 코드가 이긴다**
 
-**기준 시점: 2026-10-03** (압축 + 같은 날 사람의 결정 묶음 — §11 결정 색인 2026-10-03 행. 압축. 내용 기준은 트랙 Q 2026-10-02 · L 2026-09-24 · J·K 2026-09-28 코드 대조(`403aeb77`) ·
+**기준 시점: 2026-10-09** — 트랙 A·J 를 DECISIONS D116 까지 맞췄다(§1 A·J 행 · §4.5 J4 · §7 · §11). 그 밖은 아래 2026-10-03 기준 그대로다.
+**추가 2026-10-12** — 트랙 S(스킬 체계)를 세우고 P1 이 착지했다(§1 S 행 · 기본 플래그 · §11 · §13 S · [DONE §8](DEEP_ANALYSIS_HARNESS_DONE.md)).
+**이전 기준 2026-10-03** (압축 + 같은 날 사람의 결정 묶음 — §11 결정 색인 2026-10-03 행. 압축. 내용 기준은 트랙 Q 2026-10-02 · L 2026-09-24 · J·K 2026-09-28 코드 대조(`403aeb77`) ·
 그 앞은 2026-09-15). 트랙 Q 의 정본은 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md)
 
 ---
 
-## 1. 한눈에 — 트랙 열세 개
+## 1. 한눈에 — 트랙 열네 개
 
 | 트랙 | 상태 | 남은 것 |
 |---|---|---|
-| **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · ✅ **#23·#24 돌았다(2026-10-03)** — BUDGET2 는 P-1~P-3 셋 다 맞았고(D104), **CITE1 의 원인 = 자기 클레임 침묵 폐기**(`children_join` 이 노드 자신의 verified 를 빼먹는다, D103 수정 규칙 · D104) | 처방 사전 등록 — 좁은 수정(`children_join` 에 자기 클레임) 과 J4 중 하나씩 · verified 119→82 감시(D104 §5) |
+| **A. 심층분석 하네스** | 🟢 출하 기준 6/6 · ✅ #23·#24(2026-10-03) — BUDGET2 는 P-1~P-3 셋 다 맞았고(D104), CITE1 의 원인은 자기 클레임 침묵 폐기(D104) · ✅ **CITE1 닫힘(#29, D113)** — J4 compose 자식으로 `cited/verified` 중앙값 0.43 → 1.00. 게이트를 막는 축은 **인용 없는 단정 문장**(`E_REPORT_UNCITED`)으로 옮겨 갔다 → D114 처방(미인용 미리보기 · 턴 12 · 빈 본문 대체) → **#30 무효**(크레딧 · dirty, D116). 끝난 세 런에서 #24 이래 **처음 게이트를 통과한 리포트**가 나왔고, 막는 축은 다시 `E_REPORT_AGENTIC` 으로 옮겨 갔다(관찰) | **#31** — D117 사전 등록(= #30 다시). 선행: 크레딧 · 깨끗한 트리 · 리팩터 뒤 라이브 dry run 6/6 · verified 119→82 감시(D104 §5) · 🔶 compose 지출(D116 — 프롬프트 캐시 확인 · 브리프의 리듀스 요약), #31 뒤 |
 | **B. 역할 기반 모델 라우팅** | ✅ 안정 | 유지보수. effort 축이 붙었다(K5) |
 | **C. 프론트엔드** | ✅ FE1~FE17 · 이벤트 짝 fixture 셋(DA · 코딩 · 챗 SSE, [DONE §6](DEEP_ANALYSIS_HARNESS_DONE.md)) | 새 kind 는 세 fixture 중 하나를 거친다(§13 C) |
 | **D. 프레임워크 이탈** | 🟢 D1·D3a 완료 | D2 · D4(전송만 SDK로) · D3b. **J가 D4의 수요처가 된다** |
@@ -52,10 +54,11 @@
 | **G. 그래프 계약·검증** | 🟢 C3·C4 live · ✅ **development 에서 켰다**(2026-10-03, `workflow.graph_design_enabled`) | M-0 재측정(사전 등록 완료) · staging·production 기본값은 그대로 off |
 | **H. 플러그인 런타임** | 🟢 H1 완료 · H3 코드 완료 · ✅ **H3 development 에서 켰다**(2026-10-03, G 와 같은 플래그) | H2 · H4 · H5 |
 | **I. 서브에이전트 노드 그래프** | 🟢 GS0~GS5 완료, 플래그 off | M-0 표본 → M-1 사전 등록 → GS6 |
-| **J. 코딩 루프 조사** | 🟢 **J0·J1·J1.5·J2·J3 착지**, 전부 플래그 off — 조사 자식이 게이트된 코딩 도구로 스크립트를 돌리고 그 계산이 진짜 원장 위에서 verified 가 된다([DONE §1](DEEP_ANALYSIS_HARNESS_DONE.md)) | **J4**(#23 판정 뒤) → J5 → J6. ⚠️ 계약 §3.2 downgrade 는 managed·memory provider 에 남았다(§12.11) |
+| **J. 코딩 루프 조사** | 🟢 **J0·J1·J1.5·J2·J3 착지**, 전부 플래그 off — 조사 자식이 게이트된 코딩 도구로 스크립트를 돌리고 그 계산이 진짜 원장 위에서 verified 가 된다([DONE §1](DEEP_ANALYSIS_HARNESS_DONE.md)) | **J4 착지**(D105, `compose_child_enabled` 기본 off — 표본 오버레이에서만 켠다. 판정은 #31) → J5 → J6. ⚠️ 계약 §3.2 downgrade 는 managed·memory provider 에 남았다(§12.11) |
 | **K. Fable 5.1 적응** | 🟢 **표본 없이 되는 K 는 다 썼다** — K0·K1·K1b·K1c·K1d·K2·K2b·K3(기본 off)·K4a·K4b·K5①~④·K6·K7·P-05(기본 off)·K9 모드·오버레이([DONE §2](DEEP_ANALYSIS_HARNESS_DONE.md)) | K5⑤ 벤치 · P-02 interactive 투입 · K10 · K11 · K8. **K3 를 켜는 것은 A1·A2 숫자 뒤** |
 | **L. Jev 확률 판정 층** | 🟢 **L0·L1·L2 완료 · L4 코드 착지 · D-L1·D-L2·D-L3 닫힘**, 핀 `jev-1.13.0`([DONE §3](DEEP_ANALYSIS_HARNESS_DONE.md)) · ✅ **L6 착지(2026-10-03, D99)** — 인용 클레임 판정자 = Jev, #23 부터 · **L3 게이트**는 개발 오버레이(`make dev-jev-enforce`)에서 잠정 경계로 켠다 | 가격 하나 · L4 사후 백테스트(#23 원장) · L5(건너뛰었다 — D99 §3) · L7. ⚠️ `DeterministicGrader` 는 교체 대상이 **아니다** · 경계값은 전부 **잠정**이다 |
 | **Q. 상시 에이전트** (2026-09-30) | ✅ **development 에서 켰다**(2026-10-03 — 상시 에이전트·트리거·예산 봉투+멈춤·알림·상시 질문·비밀 브로커·기기 브리지·묻고 기다리기(Q9, 10-07)는 `neos.development.yaml`, Jev 감시자 Q5b 멈춤·브라우저 Q14a 는 `make dev-jev-enforce`). 🟢 **Q0 결정 · 가드 전부와 능력 대부분 착지**(2026-09-30~10-05): Q1 · Q2(+사용자 규칙) · Q3 · Q4a·b · Q5(섀도)·Q5b · Q6a·b·c · **Q8a~d**(10-05, [설계](Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md)) · **Q9a~d**(10-05, 095, 플래그 off, [설계](Q9_ASK_AND_WAIT_DESIGN_261005.md)) · **Q15a~c**(10-05, 플래그 off, [설계](Q15_VOICE_DESIGN_261005.md) — 음성 DM 이 질문의 답도 된다: 전사 → 답 판정) · Q10a·b · Q11a·b · Q13a~f · Q14a·b·c · Q16a·b·c([DONE §7](DEEP_ANALYSIS_HARNESS_DONE.md)). `PAUSED` 의 작성자가 생겼다(Q10b·Q5b) | 착지했지만 **켤 수 없는 것:** 감시자 경계 실측(Q5b) · B2 배선 + 관리형 브라우저 통로(Q14c) · 벤더 SDK 바인딩·증거·실계정 스모크(Q6c) · **Q15 음성은 라이브 dry run 3/3 전**(development 에서도 off). **아직 없는 항목:** Q7 · Q12 · Q17(트랙 P 테넌트 격리 뒤) · Q18. **별건:** **CH-HIST** 채널 대화가 이전 턴을 보지 않는다 · **CH-RESUME** 채널 승인 뒤 재개 결과가 버려진다(§11) · 스케줄 태스크의 워커 채널 전송 구멍 · Q11 장기 프로세스 op · Q14 규칙을 출처까지 · 실 Redis 시험의 CI 화. 순서는 [dots 분석 §4](OPENAI_DOTS_ANALYSIS_260930.md) |
+| **S. 스킬 체계** (2026-10-11) | 🟢 **P1 착지(2026-10-12)** — 빌트인 스킬은 셀렉터가 `skill_calls`(스키마 검증된 인자)를 내고 공통 실행 노드 `skill_executor` 가 실행한다. 결과는 `search_results`, 직접 응답은 그 턴의 `skill_sources` 로 출처를 인용한다. `workflow.skill_execution.enabled` — development 에서 켰다, 테스트 세션 오버레이는 끈다([DONE §8](DEEP_ANALYSIS_HARNESS_DONE.md)) | **P2** 플러그인 스킬(`skills/` 최상위 179개 + 팩 넷) 동적 선택 + 코딩 샌드박스 실행 — 새 스펙 먼저 · P1 라이브 dry run 한 번 · 후속(§11) · D3b 가 넘겨받을 런타임 불변식 다섯(§13 S) |
 
 **기본 플래그** — 두 제품 표면이 아직 프로덕션 기본 경로에 없다. 줄 번호는 적지 않는다.
 
@@ -75,11 +78,12 @@ WorkflowConfig.subagent_nodes_enabled = False
 #     standing_agents.questions · coding_model.secret_broker · 커넥터·브라우저·기기 브리지 — 전부 off
 #     (정확한 키는 각 설계 문서와 CONFIGURATION.md)
 # L6: jev.judge_enabled              = False   (sample-23.yaml: true, D99)
+# S:  workflow.skill_execution.enabled = False (development: true · tests/fixtures/config/test-session.yaml: false)
 ```
 
 **development 프로파일 (2026-10-03)** — 스키마 기본값은 위 그대로다. `config/neos.development.yaml` 이 켜는 것:
 `graph_design_enabled`(G·H3) · `standing_agents.{enabled, triggers, budget.enforce, notifications, questions}`(Q) ·
-`coding_model.secret_broker`(Q6) · `coding_model.device_bridge`(Q16). `config/samples/dev-jev-enforce.yaml`
+`coding_model.secret_broker`(Q6) · `coding_model.device_bridge`(Q16) · `workflow.skill_execution`(S, 2026-10-12). `config/samples/dev-jev-enforce.yaml`
 (`make dev-jev-enforce`)이 더하는 것: Jev L3 게이트 · Q5b 감시자 멈춤 · L6 판정자 · Q14a 브라우저 — **경계는 전부 잠정값**.
 Jev 를 development.yaml 에 넣지 않는 이유: 테스트·CI 가 그 프로파일을 읽는다(실호출 과금 · 401 폴백 오염).
 **켤 수 없어 켜지 않은 것:** Q14c·Q6c(B2 배선·벤더 증거 전에는 팩토리가 거절) · Q11 MCP(연결할 서버가 정해지지 않았다 — 서버 없이 켠 플래그는 아무것도 하지 않는다)
@@ -280,7 +284,7 @@ ComputedEvidence
 | ~~**J1.5**~~ ✅ | `execute.v1` → 계산 클레임 → 재실행 → verified, 진짜 원장 위에서 (2026-09-28) — [DONE §1.2](DEEP_ANALYSIS_HARNESS_DONE.md). 📌 남긴 규칙: 조사 게이트는 **재실행 가능성**으로 판정한다(§12.3) · 스크립트 blob(`sandbox-script://`)은 증거·입력이 될 수 없다(I4) · 계산의 premises ID 는 **다음 라운드에** 공개된다 · research 자식도 계산 클레임을 내되 전제는 **같은 질문**(채점기 규칙 2) | J1 · CHILD-GATE | 없음 |
 | ~~**J2**~~ ✅ | 계산 클레임 채점기 + 재실행 + 이벤트 짝 · **GRADE1** 전용 판정 프롬프트 `judge_computed.md` (2026-09-28) — [DONE §1.3](DEEP_ANALYSIS_HARNESS_DONE.md). 📌 런 매니페스트 `prompts` 에 `judge_computed` 키가 늘었다 | J1 | 없음 |
 | ~~**J3**~~ ✅ | 오프라인 섀도 (2026-09-21). ⚠️ brief 가 **지금** 원장 상태로 조립되므로 "그때 그 패스"의 재현이 아니다 | J2 | 없음(카세트) |
-| ~~**J4**~~ 🟢 | compose 자식 + 클레임 파일 공개 + `check_claims.v1` — **착지(2026-10-03, D105)**, `deep_analysis.compose_child_enabled`(기본 off). 계약과 달리 `code_research_enabled` 와 **따로** 켠다(한 표본에 처방 하나) | ✅ CITE1 원인 판정(D104) | ✅ #25 사전 등록(D105) → #25 무효(배선 결함 셋, D106) → #26 무효(체크포인트 가림 깊이 · **API 사용 한도 소진**, D107). → 선행 둘 충족(키 교체 · 라이브 dry run **3/3 제출**) → #27 무효(재시도가 끝난 첫 자식을 받았다, D109 — 고침) → 재시도를 지나는 dry run **6/6** → #28 무효(**크레딧 잔액 소진**, D111) → 크레딧 충전 → #29(D112) → **판정(D113): P-J1 ✅ 중앙값 0.43 → 1.00 · P-J2 형식상만 · P-J3 ✅. 🔴 전 시도 실패 시 빈 본문** → D114(대체 · 턴 12 · 미인용 미리보기, DB 제약 091) → dry run 6/6 → **#30 사전 등록(D115)** |
+| ~~**J4**~~ 🟢 | compose 자식 + 클레임 파일 공개 + `check_claims.v1` — **착지(2026-10-03, D105)**, `deep_analysis.compose_child_enabled`(기본 off). 계약과 달리 `code_research_enabled` 와 **따로** 켠다(한 표본에 처방 하나) | ✅ CITE1 원인 판정(D104) | ✅ #25 사전 등록(D105) → #25 무효(배선 결함 셋, D106) → #26 무효(체크포인트 가림 깊이 · **API 사용 한도 소진**, D107). → 선행 둘 충족(키 교체 · 라이브 dry run **3/3 제출**) → #27 무효(재시도가 끝난 첫 자식을 받았다, D109 — 고침) → 재시도를 지나는 dry run **6/6** → #28 무효(**크레딧 잔액 소진**, D111) → 크레딧 충전 → #29(D112) → **판정(D113): P-J1 ✅ 중앙값 0.43 → 1.00 · P-J2 형식상만 · P-J3 ✅. 🔴 전 시도 실패 시 빈 본문** → D114(대체 · 턴 12 · 미인용 미리보기, DB 제약 091) → dry run 6/6 → #30 사전 등록(D115) → **#30 무효**(크레딧 소진 · 실행 중 문서 수정으로 영수증 dirty, D116 — 끝난 세 런 중 하나가 게이트 통과) → **#31 사전 등록(D117, = #30 다시)** |
 | **J5** | 라이브 표본 **C-계열**(새 계보, §8 경계 8). research만 → analyze 추가 → compose 추가, **한 표본에 하나씩** | J4 · 사전 등록 | ✅ |
 | **J6** | 분석 스킬 학습: 반복된 스크립트를 스킬 후보로 **staged** — 승인 전 미주입(`learn.write_approval`) | J5 | ✅ |
 
@@ -452,6 +456,10 @@ K10 배칭 넛지 · K8 max_tokens (K5 값 뒤)
 
 > ✅ **2026-10-03: #23·#24 를 돌렸다.** #23 원 규칙 판정은 W-2 로 보류(D102), 귀속 규칙을 고쳐 #24 판독 전에 등록(D103),
 > #24 가 BUDGET2 를 확인하고 CITE1 원인을 **후보 ② 자기 클레임 침묵 폐기**로 묶었다(D104). 아래 실행 순서는 기록으로 남긴다.
+>
+> ✅ **2026-10-05: 인용 생산 사슬은 닫혔다**(#29, D113 — J4 가 `cited/verified` 중앙값을 0.43 → 1.00 으로). 이 절의 병목은 더 이상 지금의 병목이 아니다.
+> 지금 게이트를 막는 축은 **인용 없는 단정 문장**이고(D113 §2), 그 처방(D114)을 실은 #30 은 크레딧 때문에 무효였다(D116). 다음은 **#31**(D117).
+> 실행 순서는 아래 D98 §6 그대로다. 오버레이만 `config/samples/sample-31.yaml` 이다.
 
 **트랙 A에서 코드로 할 수 있는 일은 비었다.** 남은 것은 라이브 표본 하나다.
 
@@ -659,15 +667,16 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 
 | 기다리는 것 | 항목 |
 |---|---|
-| **사람의 손** | 🔴 **Anthropic API 사용 한도 소진**(2026-10-03, 2026-11-01 00:00Z 해제) — 한도를 올리거나 기다린다. 그 전까지 라이브 표본·dry run 불가(D107) · ~~① #23 을 한 번 돌린다~~ ✅ #23·#24 완료(2026-10-03, D102~D104) · ② **Jev 섀도·집행 가동** — `make dev-jev-enforce`(L3 게이트·Q5b 멈춤·L6, 잠정 경계) 또는 `make dev-jev-shadow`(섀도만)로 띄우고 켠 날을 적는다. 쌓이면 `make jev-shadow-report SINCE=<켠 날>` 로 **잠정 경계를 실측값으로 바꾼다**. 호출당 0.4~0.6 초가 붙는다 · ③ **Jev 가격** — 🔴 **공식 페이지에 가격이 공개돼 있지 않다**(2026-10-03 사용자 확인). 사용자가 추후 알려 주면 `models.yaml` 에 등재한다(L0 잔여). 그때까지 L6·L3·Q5b 의 Jev 호출 비용은 원장 지출에 잡히지 않는다 — 지출 계보를 읽을 때 먼저 적는다 · ④ **Q5b 경계 실측** — 지금 값은 잠정이다. ①·② 는 서로 독립이다 |
+| **사람의 손** | 🔴 **#31 의 선행 둘**(D117) — ⓐ **크레딧 충전**: #30 실측으로 표본 하나 ≈ 3~6.5 M 토큰, compose 만 ≈ $9~22(D116). #28·#30 이 둘 다 이것으로 끊겼다 · ⓑ **실행 중 저장소를 건드리지 않는다**: 영수증은 `git status --porcelain` 을 읽으므로 **추적되지 않은 파일 하나도 dirty** 다(#30 무효 사유). 실행 전에 커밋하거나 치운다 · ~~Anthropic API 사용 한도 소진(2026-10-03, D107)~~ 키 교체로 풀렸다(#29 가 돌았다, D112) · ~~① #23 을 한 번 돌린다~~ ✅ #23·#24 완료(2026-10-03, D102~D104) · ② **Jev 섀도·집행 가동** — `make dev-jev-enforce`(L3 게이트·Q5b 멈춤·L6, 잠정 경계) 또는 `make dev-jev-shadow`(섀도만)로 띄우고 켠 날을 적는다. 쌓이면 `make jev-shadow-report SINCE=<켠 날>` 로 **잠정 경계를 실측값으로 바꾼다**. 호출당 0.4~0.6 초가 붙는다 · ③ **Jev 가격** — 🔴 **공식 페이지에 가격이 공개돼 있지 않다**(2026-10-03 사용자 확인). 사용자가 추후 알려 주면 `models.yaml` 에 등재한다(L0 잔여). 그때까지 L6·L3·Q5b 의 Jev 호출 비용은 원장 지출에 잡히지 않는다 — 지출 계보를 읽을 때 먼저 적는다 · ④ **Q5b 경계 실측** — 지금 값은 잠정이다. ①·② 는 서로 독립이다 |
 | **사람의 결정** | 없음 — 2026-10-03 두 번에 걸쳐 전부 닫혔다(아래 결정 색인) |
 | **외부 선행** | **B2 배선**(Q14c 를 켠다 · J production 샌드박스 · **E-S2 의 staging·production**) · **벤더 SDK 바인딩 + 증거 + 실계정 스모크 R1~R11**(Q6c 를 연다) · **트랙 P 테넌트 격리**(Q17) · **W6**(DA 운영 경로 — Q3 를 켠다) |
-| **라이브 표본** | ~~CITE1 후보 판별(#23)~~ #23 돌았다(2026-10-03) — **판정 보류**(W-2, D102) · BUDGET2 효과(#24, D101 — #23 과 같은 Jev 판정자, 사전 등록 완료) · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · **C-계열**(J5) · effort 스윕(K5) · **L5 판정자 섀도**(판정 불변, 지출만 움직인다) |
+| **라이브 표본** | **#31**(D117 — 게이트의 미인용 축 처방, P-K1·P-K2·P-K3·G-1 은 D115 그대로) · ~~CITE1 후보 판별(#23)~~ #23 돌았다(2026-10-03) — **판정 보류**(W-2, D102) · D2 효과 · C1 · S2 두껍게 · A3·A4 · M-0 · **C-계열**(J5) · effort 스윕(K5) · **L5 판정자 섀도**(판정 불변, 지출만 움직인다) |
 | **결정 뒤 구현할 것** (2026-10-03 2차) | **GS-RET** 대화 삭제 시 그래프 자식 체크포인트·전사 삭제 + 요약 보존(GS6 선행) · **Q3c** 상시 질문 diff 에 `source_url` 짝 + "갱신됨" 분류 · **L7′** Jev 핸들 채널 would-branch 섀도 · **트랙 P org 층** — GEPA overlay·레시피 org 공유, org 별 승인자(기본 org 관리자), Q17 조직 소유 에이전트 · **D102 후속** 버킷 귀속을 클레임 id 단위로 다시 세기 · D2 착지 여부 확인 |
 | **결정 뒤 구현할 것** (2026-10-05) | **CH-RESUME** 채널에서 승인한 워크플로우의 재개 결과가 **어디에도 가지 않는다** — `RuntimeWorkflowApprovals.decide` 가 백그라운드 `astream` 의 청크를 버리고 게이트웨이에는 `"{request_id} approved"` 만 돌아온다(Q8b 가 발견, Q8 설계 §8, [코드 읽기]). 웹의 재개 경로 `approval_handlers._resume` 은 최종 응답을 `completed` 이벤트로 내보낸다 — 채널 쪽만 빠졌다 · **CH-HIST** 채널 대화의 이력 결함 — 게이트웨이 `_run_workflow` 가 `enable_history_context=True` 만 켜고 `chat_history` 를 넘기지 않아 Slack·Discord·Telegram 대화가 **채널 안에서도 이전 턴을 보지 않는다**([코드 읽기], 실호출 확인 전 — Q8 설계 §2). Q8 은 상시 에이전트 소유자의 DM 만 고친다. 나머지 채널 대화를 어떻게 고칠지(세션 단위 전사를 둘지)는 착수 때 설계한다 |
 | **후속 — Q9·Q15 에서** (2026-10-07) | **Q9 Q-F** 사람이 연 autonomous 태스크(에이전트 없음)의 무인 DENY 가 `policy_approval_denied` · `denied_by: "user"` 로 적힌다 — 사람이 거절한 것처럼 읽힌다([Q9 설계 §2.2·§11.2](Q9_ASK_AND_WAIT_DESIGN_261005.md)) · **Q9 Q-H** 웹 에이전트 대화(`ChatStreamPipeline`)에서 질문에 답하기 — 지금은 채널 DM 만 답이다 · **Q15 전사 지출이 비용 원장에 없다** — 카탈로그는 토큰 단가, 공급자는 분 단가라 `channel_voice_transcriptions_total{outcome}` 로만 센다([Q15 설계](Q15_VOICE_DESIGN_261005.md)) · **Q15 라이브 dry run 3/3** — OGG 음성 전사 · Slack 앱 오디오 클립 전사(`mimetype` 기록) · 상한 초과 음성은 공급자 호출 0회로 거절. 통과 전에는 어느 프로파일에서도 `channels.voice.enabled` 를 켜지 않는다 |
-| **새 사전 등록** | M-1 · **J4**(점진 공개 조립) · **C-계열 첫 표본** · D6 개정(DA 조사 경로 브라우저 — **필요해지면** 제안) |
-| **새 스펙** | 트랙 F 재개 |
+| **후속 — 스킬 P1 에서** (2026-10-12) | **S-LIVE** development 로 한 번 띄워 arxiv 류 질의 — SSE 에 `skill_executor` 노드, 답 끝 번호 출처 목록. ⚠️ 목록은 `final_response` 에만 붙는다 — FE 가 토큰 스트림만 보이면 안 보일 수 있다(확인 안 함) · **S-CRON** `CronSkill` 이 추상 클래스(`initialize`/`cleanup` 없음)라 `registry.get_skill("cron")` 이 런타임에 실패한다(기존 결함) · **S-PEND** `pending_approvals` 는 턴마다 리셋되지 않는다 — 버려진 승인 뒤 다음 턴에서 라우터는 `needs_approval` 로, 실행 노드는 no-op 으로 간다(기존 결함) · **S-INIT** `initialize` 가 타임아웃되면 `known_unavailable()` 에 남지 않는다 — 느린 스킬이 턴마다 최대 15초 · **S-LANG** 출처 지시문은 ko/en 만(ja/zh 는 en) · **S-MSGPACK** LangGraph 가 `SearchResult` 를 미등록 체크포인트 타입으로 경고한다 — 업그레이드 전에 `allowed_msgpack_modules` 등록(기존) · **S-ORCH** 오케스트레이터 경로는 이전 턴의 `search_results` 를 보고 중복도 있다(기존 — `operator.add` 누적) · **S-SPEC** 스펙 예시 "arxiv 최신 논문" 은 skip 이 아니라 use 경로다(`최신` 은 실시간 키워드) |
+| **새 사전 등록** | M-1 · **C-계열 첫 표본** · D6 개정(DA 조사 경로 브라우저 — **필요해지면** 제안) |
+| **새 스펙** | 트랙 F 재개 · **트랙 S P2** — `skills/` 플러그인 스킬의 색인·동적 선택·코딩 샌드박스 실행(사용자 결정 2026-10-11: 실행까지 허용, FSI·Univer 처럼 서브에이전트 경로). P1 의 `skill_calls` 계약 위에 세운다 |
 | **재료 없음** | **L4** — 코드는 착지했다. #23 의 원장으로 **사후에** 돈다(L6 이 먼저 켜졌으므로 이제 "켜기 전 근거"가 아니라 "켠 뒤 점검"이다, D99 §3) |
 | **측정 없이 못 정함** | `claude-opus-5` 세대 사실(CA12) |
 | **규모가 큰 별건** | D3b · D2 · D4 — 전부 W6 이후. **D4는 J가 수요를 만든다** |
@@ -685,10 +694,12 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 2026-10-03 | **L6** 인용 클레임 판정자 = Jev, #23 부터(D99 — L4·L5 를 건너뛴 위험을 받아들였다) · **D19 개정**(D100) — 자동 후보 생성·자동 롤백 허용, 자동 승격 금지. Q7·GEPA 트랙을 막지 않는다 · **진화 fitness** — Jev·판정자를 **최대한** 쓴다: fitness 의 1차 신호는 Jev 판정과 LLM 판정자다. 결정론 검증기는 **하한(필터)** 으로 남고 `DeterministicGrader` 대체 금지(§9)는 그대로다. ⚠️ 판정자를 향한 보상 해킹은 받아들인 위험 — held-out 세트와 결정론 하한이 감시한다 · **크로스 프로바이더 판정자 허용** — 판정자는 워커와 다른 공급자일 수 있다. 트랙 B 의 "크로스 프로바이더 **폴백** 금지"는 라우팅 축이라 그대로다 · **북극성 일반화**(§3.1) · **테넌트 경계 = user** — 격리 단위·overlay·레시피 공유 범위가 user 다. Q17(조직 에이전트)은 org 단위를 열 때까지 선행 대기 · **D6 유지** — DA 조사 경로 브라우저는 필요해지면 제안(새 사전 등록) · **E-S2·G/H·Q 를 development 에서 켠다**(§1 기본 플래그) · **경계값은 잠정값으로 enforce**(L3·Q5b) |
 | 2026-10-03 (2차) | **D-12 = (b)** 동적 합성(G/H)은 **H4 완료 후** DA 라이브 표본 경로에 허용한다 — 그 전에는 표본 경로에 들어오지 않는다. 허용하는 커밋은 §8 의 새 경계다 · **트랙 I 보존 = (c)** 대화를 지우면 그래프가 띄운 서브에이전트 자식의 체크포인트·전사를 지우고 **요약만 남긴다**(GS6 선행) · **P-02 interactive = (a)** autonomous 에서 효과를 잰 뒤 넣는다(§8 행 11 — 잴 지표는 PLAN A1 베이스라인) · **Q3 재표현 = (c)** `source_url` 로도 짝을 짓되 내용 해시가 다르면 **"갱신됨"** 으로 따로 센다 — 새로 검증·사라짐으로 세지 않는다 · **Jev 세 채널 = (a)** 브레이크(도구 위험, 좁히기만) · 계기판(결과 판정 — L6) · 핸들(분기 — **섀도로 would-branch 만 기록**, 채점 경계는 건드리지 않고 지출 경계만) · **조직 단위** — GEPA overlay·레시피를 **org 안에서 공유**, 승인자는 **org 마다 설정**(기본 org 관리자), **조직 소유 에이전트(Q17) 허용**. 격리의 바닥은 여전히 user 이고 org 는 그 위의 **공유·승인 층**이다 — 트랙 P 의 org 경계가 선행이다 |
 | 2026-10-05 | **Q8 채널 횡단 스레드** — DM 만 · `/new` 는 스레드 보관 후 새로(에이전트 단위) · 웹에서도 스레드에 말한다(지정한 웹 대화 하나) · 에이전트 삭제 때 턴도 삭제 · 채널 이력 결함은 별건 **CH-HIST** · development 에서 켠다 — [dots 분석 §6 결정 16](OPENAI_DOTS_ANALYSIS_260930.md) · [Q8 설계 §11](Q8_CROSS_CHANNEL_THREAD_DESIGN_261005.md) |
+| 2026-10-11 | **트랙 S 스킬 체계** — 코딩 스킬은 코딩 에이전트가 그대로 쓴다 · **빌트인 스킬은 셀렉터가 고르고 공통 실행 노드가 실행한다** · **플러그인 스킬은 동적 선택 + 코딩 샌드박스 실행까지 허용** · P1(빌트인) 먼저 · 자동 실행 범위 = 검색형 10 + research-assistant(2단계), docx·pdf 는 N8 첨부가 담당 · 인자는 셀렉터가 함께 낸다 · 위치는 셀렉터 바로 뒤 직렬(skip·use·approved 진입, 출구 재계산) — [스펙](superpowers/specs/2026-10-11-builtin-skill-executor-design.md) |
 
-> **읽는 법:** **표본 없이 되는 코드는 다 썼다.** 트랙 A의 병목은 설정이 아니라 **#23 을 한 번 돌리는 사람의 손**이다.
-> J4 는 그 판정 뒤다. L6 은 사람의 결정으로 #23 **앞에** 켰다(D99). 남은 K 는 K5 ⑤ 벤치(키와 지출이 든다)와 프롬프트 층(K9 DA 쪽·K10·K11, 결정 먼저)이다.
-> **새 일이 생겼다고 옛 병목이 사라지지 않았다** — 트랙 Q 가 빠르게 착지하는 동안에도 #23 은 그대로다.
+> **읽는 법:** **표본 없이 되는 코드는 다 썼다.** 트랙 A의 병목은 설정이 아니라 **#31 을 한 번 깨끗하게 돌리는 사람의 손**이다
+> (크레딧 · 손대지 않은 트리, 2026-10-09). ~~#23 을 한 번 돌리는 사람의 손 · J4 는 그 판정 뒤~~ — #23·#24 가 돌았고 J4 는 #29 에서 판정됐다(D113). L6 은 사람의 결정으로 #23 **앞에** 켰다(D99). 남은 K 는 K5 ⑤ 벤치(키와 지출이 든다)와 프롬프트 층(K9 DA 쪽·K10·K11, 결정 먼저)이다.
+> **새 일이 생겼다고 옛 병목이 사라지지 않았다** — 트랙 Q 가 빠르게 착지하는 동안에도 표본은 그대로 사람의 손을 기다린다.
+> 그리고 **다른 일이 표본을 무효로 만든다**: #30 은 실행 중 다른 작업의 문서 수정 때문에 dirty 가 됐다(D116).
 
 ### 미해결 인벤토리 (트랙 A 잔여)
 
@@ -709,7 +720,7 @@ cd api_gateway && cargo test --offline && cargo build --offline  # ⚠️ CI에 
 | 🟠 P1 | **K9** | P-02 를 interactive 에도 넣는가 — 스펙은 코드를 고치는 모든 에이전트에 걸라고 적지만 그것은 §8 경계 11 의 행 하나다. autonomous 에서 효과를 본 뒤 정한다. DA 워커의 system 은 `"Follow the user instructions."` 한 줄 — 여기 넣으면 DA 전 호출이 바뀌므로 **#23 전 금지** | 사람 |
 | 🟠 P1 | **K10** | 배칭 넛지 | K2 ✅ |
 | 🟡 P2 | **K8 · K11** | K8: R-08 문구 없음, 카탈로그에 `thinking_budgets` 선언 모델 없음 → `thinking_budget=0`. 발동 조건(`xhigh`/`max`)이 없는 동안 **잠들어 있다** · K11: 코딩 `_tone` 의 `"No play-by-play"` 가 P-07 ② 가 지목한 바로 그 문구다(K4a 상태 줄과도 반대 방향). DA·자식 프롬프트엔 억제 문구 없음 | K8 은 K5 값 뒤 |
-| ⚪ | **J4 · J5 · J6** | 조립 · C-계열 표본 · staged 스킬 | #23 판정 · 사전 등록 |
+| ⚪ | **J5 · J6** | C-계열 표본 · staged 스킬 | 사전 등록 |
 | 🟡 P2 | **L0 잔여** | **가격 하나.** API 가 주지 않고 **공식 페이지에도 없다**(2026-10-03). 사용자가 알려 주기로 했다 | 사람 |
 | 🟡 P2 | **L4 측정** | 코드 착지(`scripts/jev_judge_backtest.py`). 로컬 원장에 채점된 클레임 0건 → **#23 원장으로 사후에** 돈다(L6 점검, D99 §3) | #23 |
 | 🟢 P2 | **L2 섀도·L3 집행 가동** | 오버레이 둘(`jev-l2-shadow.yaml` · `dev-jev-enforce.yaml`)·판독기·`make` 타깃 착지. `development.yaml`·`config/neos.local.yaml` 에 넣지 **않는다**(CI 키 요구 · 테스트가 진짜 Jev 를 부른다). 경계 0.2/0.9 · 멈춤 0.9 · 판정 0.60 은 잠정값 | 사람(기동) |
@@ -992,6 +1003,8 @@ D1 콜렉터 탈-LangChain ──> D1 루프·코딩 확장 ──┐
 D2 스킬화 ────────────────────────────────────┼──> D4 네이티브 전환(전송만) ──> D3b langgraph 제거
 ```
 D3b는 D4의 결과다. citation은 스킬화하지 않는다.
+**D3b 는 트랙 S 의 런타임 불변식 다섯을 넘겨받는다(§13 S).** 스킬 실행 로직 자체는 langgraph 를 모른다 — 걸리는 것은 그래프 런타임의 의미론이다.
+(2026-10-12) "D2 스킬화"(멀티홉) 는 트랙 S 와 이름만 겹친다 — S 는 빌트인·플러그인 스킬 실행 체계, D2 는 DA 멀티홉 수집의 스킬화다.
 
 ### E. 코딩 에이전트
 플랜 14개 완료, E-S2만 남았고 배포 결정이다. 잔여 스트림 정본은 [PLAN_260913.md](PLAN_260913.md).
@@ -1042,6 +1055,41 @@ OpenAI dots(2026-09-29)를 코드와 대조한 결과로 세운 트랙이다. **
 상시 런은 **라이브 표본이 아니다**(§8). 정본은 [OPENAI_DOTS_ANALYSIS_260930.md](OPENAI_DOTS_ANALYSIS_260930.md).
 > ⚠️ ID 주의: 트랙 M·N·O·P 는 [분석 문서 §7.1](NEOS_MOMENTUM_ANALYSIS_20260928.md)이 이미 제안했다. Q0~Q18 은 이 트랙의 것이다.
 > 📌 되돌리지 말 것: USER_ONLY 를 설정으로 **빼는** 경로 · 사용자 allow 가 기본 DENY 를 넘는 평가 순서 · `PAUSED` 를 사람 아닌 것이 푸는 경로 · Jev 가 **재개**시키는 경로(감시자는 멈추게만) · 에이전트에 딸린 데이터를 `user_id` 로 키잡기 · 무인 런의 기기 쓰기·명령(Q16) · 증거 없이 관리형 공급자에 비밀 채널 열기(Q6c) · 비밀 푸는 호출을 배치·프리페치로 앞지르기(Q11 M13).
+
+
+### S. 스킬 체계 (2026-10-11 신설 · P1 착지 2026-10-12)
+스킬은 세 출처다 — **코딩 스킬**(`neos/coding/skills/*.md`, `load_skill.v1` 점진 공개 · 그대로 둔다) · **빌트인 스킬**
+(`neos/skills/builtin/`, `BaseSkill.execute` · P1) · **플러그인 스킬**(`skills/`, 문서형 `SKILL.md` + 스크립트 · P2).
+P1 의 경위는 [DONE §8](DEEP_ANALYSIS_HARNESS_DONE.md), 설계는 [스펙](superpowers/specs/2026-10-11-builtin-skill-executor-design.md).
+
+```
+SKILL_TOOL_SELECTOR ──skip / use──▶ SKILL_EXECUTOR ──출구 재계산──▶ DIRECT_RESPONSE | HYPOTHESIS_GENERATION
+        └─needs_approval─▶ EXECUTION_APPROVAL ─approved─▶ SKILL_EXECUTOR      (rejected → RESP_GENERATOR)
+mission · hyper_deep · recursive · deep_analysis · task_scheduling · ui_frame 은 실행 노드를 지나지 않는다
+```
+
+📌 **되돌리지 말 것**
+- **`selected_skills` 는 `skill_calls` 에서만 파생한다** — 승인 정책은 이름을, 실행 노드는 호출을 본다. 둘을 따로 채우면 승인 우회다
+- **후보는 `SKILL.md` 의 `auto_execute: true` 뿐**(11개) · `get_input_schema()` 는 `execute` 가 읽는 키와 같다(AST 양방향 테스트) ·
+  결과 모양은 스킬이 안다(`to_search_results`). HDR 도 같은 변환을 쓴다 — 사본을 다시 만들지 않는다
+- **직접 응답은 그 턴의 `skill_sources`(리듀서 없음)만 읽는다** — `search_results` 는 `operator.add` 라 턴을 넘어 누적된다
+- **턴 단위 필드는 `_create_initial_state` 에서 리셋한다**(`skill_calls` · `skill_execution_done` · `skill_sources` · `approval_outcome`) —
+  웹 채팅은 대화 하나 = 체크포인트 스레드 하나다. 단일 턴 테스트로는 안 보인다 → 2턴 `MemorySaver` 테스트가 고정한다
+- **노드가 스스로 승인을 지킨다** — `pending_approvals` 가 있거나 `approval_outcome == "rejected"` 면 아무것도 안 한다. 설계 그래프는 순서를 보장하지 않는다
+- **플래그가 꺼지면 정적 그래프가 같다** — 스냅샷 해시 불변. 노드는 꺼진 채 설계 그래프가 골라도 no-op(카탈로그는 플래그와 무관하게 계약 전부)
+
+**D3b 가 넘겨받을 런타임 불변식 다섯** — 스킬 로직(`neos/skills/executor.py` · 셀렉터 파싱 · `route_after_skill_execution`)은
+런타임을 모른다. 런타임을 갈아도 아래가 지켜져야 그대로 붙는다:
+1. **필드별 병합 의미론** — 누적(`search_results`)과 교체(`skill_sources`)를 구분한다. 없으면 "이 턴의 결과" 를 다른 방식(턴 범위 키)으로 표현해야 한다
+2. **턴 간 상태 승계** — 대화 스레드가 상태를 이어 가면 턴 리셋 규칙도 함께 간다. 잇지 않으면 리셋은 무해한 no-op 이 된다
+3. **승인 재개는 초기 상태를 다시 만들지 않는다** — 지금은 `aupdate_state` + `astream(None)`. 이 전제가 `approval_outcome` 리셋을 안전하게 한다
+4. **조건부 라우팅** — 출구는 `add_conditional_edges` + 라우터 함수다. `GraphTopology` 는 조건부 엣지를 모르고 모든 목적지를 펼친다(기존 라우터 전부의 문제)
+5. **배선 검증의 입력** — 정적 토폴로지 추출기·스냅샷 해시·노드 수 테스트는 `_create_workflow_graph` 의 `workflow.add_*` 와 `if settings.X:` 를 AST 로 읽는다
+   (`settings.SKILL_EXECUTION_ENABLED` 별칭은 이 추출기 때문에 있다). 2턴 회귀 테스트도 `StateGraph`+`MemorySaver` 로 쓰였다 — 사양은 유효, 코드는 옮겨야 한다
+
+LLM 호출(셀렉터·직접 응답의 `create_llm`/`HumanMessage`)은 D3b 가 아니라 **D1/D4** 범위다 — 다른 호출부와 같이 옮긴다.
+> ⚠️ ID 주의: 트랙 S 의 **P1·P2**(빌트인·플러그인 하위 프로젝트)는 트랙 **P**(테넌트 격리)·**P-02** 와 무관하고, 트랙 문자 **S** 는
+> 출하 기준 **S1~S10** 과 무관하다. 후속 항목은 `S-` 접두(S-LIVE·S-CRON …)로 적는다.
 
 ---
 

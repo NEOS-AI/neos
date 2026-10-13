@@ -219,8 +219,9 @@ def test_the_expanded_self_loop_is_bounded_and_the_raw_one_is_not() -> None:
 # -- 플래그 off 불변 ----------------------------------------------------------
 
 
-def test_the_registered_static_contracts_are_still_exactly_31_and_template_free() -> None:
-    assert len(NODE_CONTRACTS) == 31
+def test_the_registered_static_contracts_are_still_exactly_32_and_template_free() -> None:
+    # 31 + skill_executor (spec 2026-10-11-builtin-skill-executor)
+    assert len(NODE_CONTRACTS) == 32
     assert not set(NODE_CONTRACTS) & set(SUBAGENT_NODE_TEMPLATES)
 
 

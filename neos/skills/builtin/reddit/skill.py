@@ -1,11 +1,12 @@
 """Reddit Search Skill implementation"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,25 @@ class RedditSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
         self._access_token: Optional[str] = None
+
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "subreddit_search"], "description": "search (default) or subreddit_search"},
+                "query": {"type": "string", "description": "Search query"},
+                "subreddit": {"type": "string", "description": "Restrict search to this subreddit"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "sort": {"type": "string", "enum": ["relevance", "hot", "new", "top"], "description": "Sort order (default relevance)"},
+                "time_filter": {
+                    "type": "string",
+                    "enum": ["hour", "day", "week", "month", "year", "all"],
+                    "description": "Time window (default all)",
+                },
+            },
+            "required": ["query"],
+        }
 
     async def initialize(self) -> bool:
         """Reddit API 클라이언트 초기화 (OAuth2)"""
@@ -87,6 +107,23 @@ class RedditSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize Reddit skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        return [
+            make_result(
+                self.name,
+                title=post.get("title") or post.get("name"),
+                content=post.get("selftext") or post.get("description"),
+                url=post.get("url"),
+                score=0.7,
+                metadata={
+                    "subreddit": post.get("subreddit", ""),
+                    "upvotes": post.get("score"),
+                    "num_comments": post.get("num_comments"),
+                },
+            )
+            for post in collect_items(result.data, "posts", "subreddits")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """Reddit 검색 실행

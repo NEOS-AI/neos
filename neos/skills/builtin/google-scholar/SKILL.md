@@ -1,6 +1,7 @@
 ---
 name: google-scholar
 type: research
+auto_execute: true
 version: 1.0.0
 description: Google Scholar 학술 검색 (SerpAPI 경유)
 capabilities:

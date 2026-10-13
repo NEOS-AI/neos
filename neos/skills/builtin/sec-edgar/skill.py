@@ -1,11 +1,12 @@
 """SEC EDGAR Skill implementation"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,25 @@ class SECEdgarSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["full_text_search", "company_filings"],
+                    "description": "full_text_search (default) or company_filings (query = ticker or CIK)",
+                },
+                "query": {"type": "string", "description": "Full-text search terms, or a ticker/CIK for company_filings"},
+                "form_type": {"type": "string", "description": "Filing form, e.g. 10-K, 10-Q, 8-K"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of filings (default 10)"},
+                "date_from": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"},
+                "date_to": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """SEC EDGAR API 클라이언트 초기화"""
         try:
@@ -55,6 +75,27 @@ class SECEdgarSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize SEC EDGAR skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        results = []
+        for filing in collect_items(result.data, "filings", "companies"):
+            filed = f"({filing['filed_date']})" if filing.get("filed_date") else ""
+            title = " ".join(part for part in (filing.get("company_name"), filing.get("form_type"), filed) if part)
+            results.append(
+                make_result(
+                    self.name,
+                    title=title,
+                    content=join_text(filing.get("description"), filing.get("period_of_report")),
+                    url=filing.get("url"),
+                    score=0.85,
+                    metadata={
+                        "form_type": filing.get("form_type", ""),
+                        "filed_date": filing.get("filed_date", ""),
+                        "cik": filing.get("cik", ""),
+                    },
+                )
+            )
+        return results
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """SEC EDGAR 검색 실행

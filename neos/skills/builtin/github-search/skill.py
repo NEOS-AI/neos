@@ -1,11 +1,12 @@
 """GitHub Search Skill implementation"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,24 @@ class GitHubSearchSkill(BaseSkill):
         )
         self._client: Optional[httpx.AsyncClient] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search_repos", "search_code", "search_issues"],
+                    "description": "search_repos (default), search_code or search_issues",
+                },
+                "query": {"type": "string", "description": "GitHub search query"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "language": {"type": "string", "description": "Programming language filter"},
+                "sort": {"type": "string", "enum": ["best-match", "stars", "forks", "updated"], "description": "Sort order (default best-match)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """GitHub API 클라이언트 초기화"""
         try:
@@ -57,6 +76,25 @@ class GitHubSearchSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize GitHub Search skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        results = []
+        for item in collect_items(result.data, "repositories", "code_results", "issues"):
+            if item.get("repository") and item.get("path"):
+                title = f"{item['repository']}/{item['path']}"
+            else:
+                title = item.get("title") or item.get("name")
+            results.append(
+                make_result(
+                    self.name,
+                    title=title,
+                    content=item.get("description") or item.get("body") or join_text(item.get("path"), item.get("repository")),
+                    url=item.get("url"),
+                    score=0.8,
+                    metadata={"stars": item.get("stars"), "language": item.get("language"), "state": item.get("state")},
+                )
+            )
+        return results
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """GitHub 검색 실행

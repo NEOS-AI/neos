@@ -1,6 +1,7 @@
 ---
 name: pubmed
 type: research
+auto_execute: true
 version: 1.0.0
 description: PubMed 의학/생물학 논문 검색 - 의학, 생명과학, 바이오메디컬 분야
 capabilities:

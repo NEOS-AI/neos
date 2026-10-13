@@ -28,6 +28,8 @@ ALLOWED_FRONTMATTER_FIELDS = {
     "license",
     "compatibility",
     "metadata",
+    # 메인 그래프의 공통 실행 노드가 자동으로 돌려도 되는 스킬 (spec 2026-10-11 §3.1)
+    "auto_execute",
 }
 
 
@@ -207,6 +209,9 @@ def validate_metadata(
         errors.append("Field 'capabilities' must be a list")
     elif not metadata["capabilities"]:
         errors.append("Field 'capabilities' cannot be empty")
+
+    if "auto_execute" in metadata and not isinstance(metadata["auto_execute"], bool):
+        errors.append("Field 'auto_execute' must be a boolean")
 
     return errors
 

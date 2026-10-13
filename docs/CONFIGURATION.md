@@ -1760,6 +1760,23 @@ the workflow attachments, logs (`repr` shows only its length) or any store.
 
 Design: `docs/Q15_VOICE_DESIGN_261005.md`.
 
+### Builtin skill execution
+
+`workflow.skill_execution` wires the common skill executor node into the main graph
+(spec `docs/superpowers/specs/2026-10-11-builtin-skill-executor-design.md`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` (development: `true`) | Wire `skill_executor` after the skill selector on the skip / orchestrate / approved paths. Off = static graph unchanged. |
+| `max_skills_per_turn` | `3` | Upper bound on the selector's `skill_calls`. |
+| `timeout_seconds` | `15` | Per-skill initialize + execute timeout. A timeout skips that skill only. |
+| `max_results_per_skill` | `5` | `SearchResult` items one skill may add. |
+| `max_content_chars` | `4000` | Truncation for each `SearchResult.content`. |
+
+Only skills whose `SKILL.md` sets `auto_execute: true` are candidates. The flat alias
+`settings.SKILL_EXECUTION_ENABLED` exists because the static topology extractor reads
+`if settings.X:` conditions only.
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

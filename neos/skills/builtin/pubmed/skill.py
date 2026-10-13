@@ -1,9 +1,10 @@
 """PubMed Skill implementation"""
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, make_result
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,19 @@ class PubmedSkill(BaseSkill):
         )
         self.pubmed_wrapper = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "get_by_pmid"], "description": "search (default) or get_by_pmid"},
+                "query": {"type": "string", "description": "Biomedical search query, or a PMID for get_by_pmid"},
+                "pmid": {"type": "string", "description": "PubMed ID for get_by_pmid; query is used when omitted"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of papers (default 5)"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """PubMed API 래퍼 초기화"""
         try:
@@ -49,6 +63,23 @@ class PubmedSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize PubMed skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        return [
+            make_result(
+                self.name,
+                title=paper.get("title"),
+                content=paper.get("full_summary") or paper.get("summary"),
+                url=paper.get("pubmed_url"),
+                score=0.95,
+                metadata={
+                    "pmid": paper.get("pmid", ""),
+                    "authors": paper.get("authors", ""),
+                    "published": paper.get("published", ""),
+                },
+            )
+            for paper in collect_items(result.data, "papers")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """PubMed 검색 실행

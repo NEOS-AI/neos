@@ -1,6 +1,7 @@
 ---
 name: sec-edgar
 type: research
+auto_execute: true
 version: 1.0.0
 description: SEC EDGAR 미국 상장사 공시·재무 보고서 검색
 capabilities:

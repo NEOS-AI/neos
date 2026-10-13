@@ -1,11 +1,12 @@
 """Google Scholar Skill implementation via SerpAPI"""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 import httpx
 
 from neos.skills.base import BaseSkill, SkillResult, SkillType
+from neos.skills.base.search_results import SearchResult, collect_items, join_text, make_result
 from neos.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,20 @@ class GoogleScholarSkill(BaseSkill):
         self._client: Optional[httpx.AsyncClient] = None
         self._api_key: Optional[str] = None
 
+    @classmethod
+    def get_input_schema(cls) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["search", "cite"], "description": "search (default) or cite"},
+                "query": {"type": "string", "description": "Scholar search query or paper title for cite"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Number of results (default 10)"},
+                "year_from": {"type": "integer", "description": "Earliest publication year"},
+                "year_to": {"type": "integer", "description": "Latest publication year"},
+            },
+            "required": ["query"],
+        }
+
     async def initialize(self) -> bool:
         """SerpAPI 클라이언트 초기화"""
         try:
@@ -56,6 +71,30 @@ class GoogleScholarSkill(BaseSkill):
         except Exception as e:
             logger.error(f"Failed to initialize Google Scholar skill: {e}")
             return False
+
+    def to_search_results(self, result: SkillResult) -> List[SearchResult]:
+        data = result.data if isinstance(result.data, dict) else {}
+        if "paper_title" in data:
+            return [
+                make_result(
+                    self.name,
+                    title=data.get("paper_title"),
+                    content=f"Cited by {data.get('cited_by_count')}",
+                    url=data.get("cited_by_link"),
+                    score=0.8,
+                )
+            ]
+        return [
+            make_result(
+                self.name,
+                title=paper.get("title"),
+                content=join_text(paper.get("snippet"), paper.get("authors")),
+                url=paper.get("url"),
+                score=0.85,
+                metadata={"year": paper.get("year"), "cited_by_count": paper.get("cited_by_count")},
+            )
+            for paper in collect_items(data, "papers")
+        ]
 
     async def execute(self, params: Dict[str, Any]) -> SkillResult:
         """Google Scholar 검색 실행

@@ -10,6 +10,8 @@
 # 명시적인 `config_path` 나 `NEOS_CONFIG_PATH` 를 주는 테스트는 이 파일을 쓰지 않는다.
 workflow:
   graph_design_enabled: false
+  skill_execution:
+    enabled: false
 standing_agents:
   enabled: false
   triggers:

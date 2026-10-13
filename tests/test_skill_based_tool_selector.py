@@ -134,7 +134,7 @@ class TestSkillBasedToolSelector:
         }
         selection = selector._create_fallback_selection(context)
         assert "data_analysis" in selection.selected_tools
-        assert "bigquery_skill" in selection.selected_skills
+        assert selection.selected_skills == []
 
     @pytest.mark.asyncio
     async def test_select_skills_and_tools_basic(self, selector, mock_skills, mock_tools):

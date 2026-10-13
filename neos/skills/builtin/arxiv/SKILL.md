@@ -1,6 +1,7 @@
 ---
 name: arxiv
 type: research
+auto_execute: true
 version: 1.0.0
 description: ArXiv 학술 논문 검색 - 물리학, 수학, 컴퓨터 과학, AI/ML 등
 capabilities:

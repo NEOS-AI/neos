@@ -148,6 +148,7 @@ YAML_ONLY_FEATURE_FLAG_ENV_KEYS = {
     "RAY_ENABLED": "ray.enabled",
     "EXECUTION_APPROVAL_ENABLED": "execution_approval.enabled",
     "CELERY_ENABLED": "celery.enabled",
+    "SKILL_EXECUTION_ENABLED": "workflow.skill_execution.enabled",
 }
 
 LEGACY_ENV_KEYS = {

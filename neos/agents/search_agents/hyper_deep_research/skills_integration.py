@@ -8,6 +8,7 @@ This module handles integration with external skills/tools:
 """
 
 from typing import Dict, Any, List, Optional
+from dataclasses import asdict
 import asyncio
 import logging
 
@@ -158,7 +159,20 @@ class SkillsIntegrator:
             print("[INFO] 🌐 General topic detected (no specific domain)")
 
         return updated_skills
-    
+
+    def _converted(self, skill_name: str, result) -> List[Dict[str, Any]]:
+        """스킬이 소유한 변환(`to_search_results`)을 쓴다 -- 공통 실행 노드와 같은 코드다."""
+        skill = self.skill_manager.registry.get_skill(skill_name)
+        if skill is None:
+            return []
+        rows = []
+        for item in skill.to_search_results(result):
+            row = asdict(item)
+            # 예전 dict 는 URL 이 없으면 "" 였다 (`SearchResult.url` 은 None). 모양을 그대로 둔다.
+            row["url"] = row["url"] or ""
+            rows.append(row)
+        return rows
+
     async def collect_data_from_skills(
         self,
         query_variations: List[str],
@@ -238,23 +252,10 @@ class SkillsIntegrator:
                 )
 
                 if result.success:
-                    papers = result.data.get("papers", [])
-                    for paper in papers:
-                        results.append({
-                            "title": paper.get("title", ""),
-                            "content": paper.get("full_summary", paper.get("summary", "")),
-                            "url": paper.get("entry_url", ""),
-                            "score": 0.95,
-                            "source": "arxiv",
-                            "metadata": {
-                                "arxiv_id": paper.get("arxiv_id", ""),
-                                "authors": paper.get("authors", ""),
-                                "published": paper.get("published", ""),
-                                "pdf_url": paper.get("pdf_url", "")
-                            }
-                        })
+                    converted = self._converted("arxiv", result)
+                    results.extend(converted)
                     self.stats["arxiv_searches"] += 1
-                    self.stats["arxiv_results"] += len(papers)
+                    self.stats["arxiv_results"] += len(converted)
 
                 await asyncio.sleep(0.5)
 
@@ -285,22 +286,10 @@ class SkillsIntegrator:
                 )
 
                 if result.success:
-                    papers = result.data.get("papers", [])
-                    for paper in papers:
-                        results.append({
-                            "title": paper.get("title", ""),
-                            "content": paper.get("full_summary", paper.get("summary", "")),
-                            "url": paper.get("pubmed_url", ""),
-                            "score": 0.95,
-                            "source": "pubmed",
-                            "metadata": {
-                                "pmid": paper.get("pmid", ""),
-                                "authors": paper.get("authors", ""),
-                                "published": paper.get("published", "")
-                            }
-                        })
+                    converted = self._converted("pubmed", result)
+                    results.extend(converted)
                     self.stats["pubmed_searches"] += 1
-                    self.stats["pubmed_results"] += len(papers)
+                    self.stats["pubmed_results"] += len(converted)
 
                 await asyncio.sleep(0.5)
 
@@ -334,21 +323,10 @@ class SkillsIntegrator:
                 )
 
                 if result.success:
-                    articles = result.data.get("articles", [])
-                    for article in articles:
-                        results.append({
-                            "title": article.get("title", ""),
-                            "content": article.get("full_content", article.get("content", "")),
-                            "url": article.get("url", ""),
-                            "score": 0.85,
-                            "source": "wikipedia",
-                            "metadata": {
-                                "summary": article.get("summary", ""),
-                                "language": wiki_lang
-                            }
-                        })
+                    converted = self._converted("wikipedia", result)
+                    results.extend(converted)
                     self.stats["wikipedia_searches"] += 1
-                    self.stats["wikipedia_results"] += len(articles)
+                    self.stats["wikipedia_results"] += len(converted)
 
                 await asyncio.sleep(0.5)
 

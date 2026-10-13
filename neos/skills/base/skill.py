@@ -1,12 +1,16 @@
 """Abstract base class for Skills"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from pathlib import Path
 import logging
 
 from .result import SkillResult
 from .types import SkillType
+
+
+if TYPE_CHECKING:
+    from neos.workflow.state import SearchResult
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +85,15 @@ class BaseSkill(ABC):
             },
             "required": ["query"],
         }
+
+    def to_search_results(self, result: SkillResult) -> List["SearchResult"]:
+        """실행 결과를 `SearchResult` 목록으로 바꾼다 (spec 2026-10-11 §3.5).
+
+        결과 모양을 아는 것은 스킬 자신이다. `auto_execute: true` 스킬은 반드시
+        오버라이드한다 -- 기본 구현은 아무것도 내지 않는다.
+        """
+        logger.warning("Skill %s does not convert its results to SearchResult", self.name)
+        return []
 
     @abstractmethod
     async def initialize(self) -> bool:
