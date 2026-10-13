@@ -9,6 +9,8 @@
 # 자기 설정으로 검증한다 -- Jev 오버레이를 development.yaml 에 넣지 않은 것과 같은 이유다.
 # 명시적인 `config_path` 나 `NEOS_CONFIG_PATH` 를 주는 테스트는 이 파일을 쓰지 않는다.
 workflow:
+  # spec 2026-10-13 §4.2: 노드가 계약 밖 키를 쓰면 테스트에서 실패시킨다.
+  node_update_policy: raise
   graph_design_enabled: false
   skill_execution:
     enabled: false

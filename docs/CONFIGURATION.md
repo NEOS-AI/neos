@@ -1777,6 +1777,18 @@ Only skills whose `SKILL.md` sets `auto_execute: true` are candidates. The flat 
 `settings.SKILL_EXECUTION_ENABLED` exists because the static topology extractor reads
 `if settings.X:` conditions only.
 
+### Node update policy
+
+`workflow.node_update_policy` decides what happens when a graph node writes a state key
+outside its contract's `writes` (spec `docs/superpowers/specs/2026-10-13-langgraph-removal-native-runner-design.md` §4.2).
+Unchanged keys are never violations.
+
+| Value | Meaning |
+|---|---|
+| `report` | Log and count (`workflow_update_rejected_total`), keep the key. |
+| `drop` | Log, count, and discard the key. **Schema default.** |
+| `raise` | Fail the node with `NodeUpdateRejected`. **Development profile and the test session.** |
+
 ## Staging and Production
 
 Select profile config with bootstrap env:

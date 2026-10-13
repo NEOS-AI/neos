@@ -1092,6 +1092,10 @@ class MultiAgentWorkflow:
             # 쓰기"로 잡는다. original_query 는 이미 이 노드의 requires 라
             # 여기 추가해도 하류 보장에 해가 되지 않는다(복원된 값과 같다).
             "original_query",
+            # QueryClassifier.classify_query 가 끝에서 `state["execution_steps"]
+            # .append({"step": "query_classification", ...})` 로 실행 단계를
+            # 기록한다 -- 위임 체인 안의 쓰기라 추출기는 보지 못한다.
+            "execution_steps",
         },
         # original_query 가 없으면 `state["original_query"]` 에서 즉시 KeyError --
         # 분류할 대상 자체가 없으므로 이 노드의 실행이 무의미하다.
