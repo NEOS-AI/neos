@@ -357,6 +357,13 @@ class EnterpriseMetricsCollector:
             ["op"],
             registry=self.registry,
         )
+        # 작업 기록(spec 2026-10-13 §4.4). 응답을 버리지 않고 넘어간 원장 실패를 센다.
+        self.workflow_work_failures_total = Counter(
+            "workflow_work_failures_total",
+            "Workflow work-ledger writes that failed after the answer was produced (the turn continues)",
+            ["op"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",

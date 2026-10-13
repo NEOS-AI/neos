@@ -109,20 +109,69 @@ async def test_a_stateless_turn_does_not_interrupt(monkeypatch) -> None:
     assert await sessions.load("s-stateless") is None
 
 
+_UNDECODABLE = '{"x": {"__t": "dc", "c": "Gone", "v": {}}}'
+
+
+def _plant_undecodable(sessions, session_id):
+    sessions._rows[session_id] = ("u1", _UNDECODABLE, 1, datetime.now(UTC))
+
+
 async def test_an_undecodable_session_starts_fresh(monkeypatch) -> None:
-    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+    seen: list[list] = []
+
+    def direct(state):
+        seen.append(list(state["search_results"]))
+        return {"search_results": [A] if len(seen) == 1 else [B]}
+
+    workflow = stub_workflow(monkeypatch, _plan(direct), runtime="native")
     sessions, _ = workflow.native_stores
-    sessions._rows["s-bad"] = ("u1", '{"x": {"__t": "dc", "c": "Gone", "v": {}}}', 1, datetime.now(UTC))
-    result = await workflow.execute_workflow(user_input(session_id="s-bad"), event_handler=RecordingHandler())
+    _plant_undecodable(sessions, "s-bad")
+    first = await workflow.execute_workflow(user_input(session_id="s-bad"), event_handler=RecordingHandler())
+    second = await workflow.execute_workflow(user_input(session_id="s-bad"), event_handler=RecordingHandler())
+    assert first["success"] is True and second["success"] is True
+    # 읽지 못한 행은 지워졌다 -- 첫 턴의 저장이 이기고 두 번째 턴이 그것을 이어받는다.
+    assert seen == [[], [A]]
+    assert (await sessions.load("s-bad")).state["search_results"] == [A, B]
+
+
+async def test_a_gate_on_a_previously_undecodable_session_still_waits(monkeypatch) -> None:
+    pending = [{"request_id": "apr_bad", "skill_name": "x"}]
+    plan = StubPlan(
+        nodes={N.SKILL_TOOL_SELECTOR.value: lambda s: {"pending_approvals": pending, "approval_decision": None}},
+        routes={**SKIP_PATH_ROUTES, "_route_after_skill_tool_selector": "needs_approval"},
+    )
+    workflow = stub_workflow(monkeypatch, plan, flags={"execution_approval": True}, runtime="native")
+    sessions, lifecycle = workflow.native_stores
+    _plant_undecodable(sessions, "s-bad-gate")
+    result = await workflow.execute_workflow(user_input(session_id="s-bad-gate"), event_handler=RecordingHandler())
+    assert result.get("interrupted") is True
     assert result["success"] is True
+    record = await lifecycle.store.waiting_for_session("s-bad-gate")
+    assert record.pending["request_ids"] == ["apr_bad"]
+    assert (await sessions.load("s-bad-gate")).state["pending_approvals"] == pending
+
+
+async def test_a_work_ledger_failure_keeps_the_answer(monkeypatch) -> None:
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+    _, lifecycle = workflow.native_stores
+
+    async def down(*args, **kwargs):
+        raise RuntimeError("work store down")
+
+    monkeypatch.setattr(lifecycle, "complete", down)
+    handler = RecordingHandler()
+    result = await workflow.execute_workflow(user_input(session_id="s-ledger"), event_handler=handler)
+    assert result["success"] is True
+    assert result["response"] == "답"
 
 
 async def test_a_parallel_design_falls_back_to_static_on_native(monkeypatch) -> None:
-    from neos.workflow.contracts import NODE_CONTRACTS
-    from neos.workflow.graph_design_ledger import design_graph_or_fallback
+    """네이티브 러너는 순차만 돈다 -- `_resolve_execution_graph` 가 병렬 설계를 거절해 정적으로 폴백한다."""
+    from neos.config.settings import settings
     from neos.workflow.topology import END, GRAPH_ENTRY_WRITES, START, GraphTopology
 
-    chain = (N.QUERY_CLS.value, N.SEARCH_ORCHESTRATOR.value, N.RESP_GENERATOR.value)
+    # 병렬 금지만 빼면 유효한 설계다 -- 다른 위반으로 폴백하면 이 시험은 배선을 고정하지 못한다.
+    chain = (N.QUERY_CLS.value, N.SEARCH_ORCHESTRATOR.value, N.DIRECT_RESPONSE.value)
     fanout = GraphTopology(
         nodes=chain,
         edges=((START, chain[0]), (chain[0], chain[1]), (chain[0], chain[2]), (chain[1], END), (chain[2], END)),
@@ -133,12 +182,11 @@ async def test_a_parallel_design_falls_back_to_static_on_native(monkeypatch) -> 
         async def design(self, request):
             return fanout
 
-    from neos.workflow.graph_designer import DesignRequest
-
-    outcome = await design_graph_or_fallback(
-        designer=Designer(),
-        request=DesignRequest(query="q", catalog=tuple(NODE_CONTRACTS.values()), budget=None),
-        contracts=NODE_CONTRACTS,
-        allow_parallel=False,
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+    monkeypatch.setattr(settings.config.workflow, "graph_design_enabled", True)
+    monkeypatch.setattr(workflow, "_build_graph_designer", lambda: Designer())
+    resolved = await workflow._resolve_execution_graph(
+        user_input={"query": "q", "session_id": "s-fanout"}, use_checkpointer=False, span=None
     )
-    assert outcome.topology is None
+    assert resolved.source == "static"
+    assert resolved.runner is not None

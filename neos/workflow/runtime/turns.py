@@ -105,10 +105,14 @@ class _NativeHandle:
             except Exception:  # noqa: BLE001 -- 응답은 이미 만들어졌다
                 logger.warning("workflow session save failed: %s", self._session_id, exc_info=True)
                 _count("workflow_session_failures_total", op="save")
-        await self._turns.lifecycle.complete(
-            self.work_id,
-            {"final_response": result.get("response"), "author": None, "verified_by": None},
-        )
+        try:
+            await self._turns.lifecycle.complete(
+                self.work_id,
+                {"final_response": result.get("response"), "author": None, "verified_by": None},
+            )
+        except Exception:  # noqa: BLE001 -- 응답은 이미 만들어졌다; 작업 기록 실패가 답을 버리지 않는다
+            logger.warning("work completion could not be recorded: %s", self.work_id, exc_info=True)
+            _count("workflow_work_failures_total", op="complete")
 
     async def failed(self, error: str) -> None:
         await self._turns.lifecycle.fail(self.work_id, error)
@@ -130,6 +134,13 @@ class NativeTurns:
             except Exception:  # noqa: BLE001 -- 디코드·DB 실패는 빈 이어받기로 진행한다(spec §4.3)
                 logger.warning("workflow session load failed: %s", session_id, exc_info=True)
                 _count("workflow_session_failures_total", op="load")
+                # 읽지 못한 행을 지운다 -- 남겨 두면 이 핸들의 version=None 저장이 매번
+                # SessionConflict 로 져서 이어받기가 영영 저장되지 않고 승인 게이트가 실패한다.
+                try:
+                    await self.sessions.reset(session_id)
+                except Exception:  # noqa: BLE001 -- 지우지 못해도 이번 턴은 새로 시작한다
+                    logger.warning("workflow session reset failed: %s", session_id, exc_info=True)
+                    _count("workflow_session_failures_total", op="reset")
         state = carry(saved.state if saved else None, initial_state)
         entry, delivery = entry_and_delivery(user_input)
         work_id = await self.lifecycle.start(
