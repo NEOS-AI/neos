@@ -45,8 +45,9 @@ telemetry:
 storage:
   provider: local
 workflow:
-  # spec 2026-10-13 §4.2: development 에서는 계약 밖 키를 쓰는 노드가 바로 실패한다.
-  node_update_policy: raise
+  # spec 2026-10-13 §4.2: 계약 밖 키는 기록만 한다(스키마 기본값과 같다). 실제 노드로
+  # 라이브 development dry run 을 돌린 뒤 raise 로 올린다 -- Plan 3 단계 5.
+  node_update_policy: report
   # 트랙 G·H (결정 2026-10-03): 설계 서브에이전트가 질의별 그래프를 짠다 -- C3·C4 계약
   # 검증과 H3 시간적 합성이 이 플래그 하나로 켜진다. 스키마 기본값은 여전히 false 다.
   # 트랙 I(`subagent_nodes_enabled`)는 켜지 않는다 -- 별도 결정(GS6 표본 전).

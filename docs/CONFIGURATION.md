@@ -1785,9 +1785,13 @@ Unchanged keys are never violations.
 
 | Value | Meaning |
 |---|---|
-| `report` | Log and count (`workflow_update_rejected_total`), keep the key. |
-| `drop` | Log, count, and discard the key. **Schema default.** |
-| `raise` | Fail the node with `NodeUpdateRejected`. **Development profile and the test session.** |
+| `report` | Log and count (`workflow_update_rejected_total`), keep the key. **Schema default and development profile** — same as the behavior before the policy existed. |
+| `drop` | Log, count, and discard the key. |
+| `raise` | Fail the node with `NodeUpdateRejected`. **Test session** (`tests/fixtures/config/test-session.yaml`). |
+
+Development stays on `report` until a live development dry run with real nodes shows no
+violations (Plan 3 stage 5); then it flips to `raise`. Contract tests run real handlers
+with fake LLMs under `raise` in `tests/workflow/runtime/test_node_contract_probes.py`.
 
 ## Staging and Production
 
