@@ -17,6 +17,12 @@ from tests.workflow.support.stub_workflow import (
 
 pytestmark = [pytest.mark.no_db, pytest.mark.asyncio]
 
+
+@pytest.fixture(params=["langgraph", "native"])
+def runtime(request):
+    return request.param
+
+
 _SUCCESS_KEYS = {
     "success",
     "response",
@@ -54,8 +60,8 @@ def _skip_plan(**nodes):
     return StubPlan(nodes=base, routes=SKIP_PATH_ROUTES)
 
 
-async def test_a_successful_turn_returns_the_contract_keys(monkeypatch) -> None:
-    workflow = stub_workflow(monkeypatch, _skip_plan())
+async def test_a_successful_turn_returns_the_contract_keys(monkeypatch, runtime) -> None:
+    workflow = stub_workflow(monkeypatch, _skip_plan(), runtime=runtime)
     result = await workflow.execute_workflow(
         user_input(), event_handler=RecordingHandler(), use_checkpointer=False
     )
@@ -67,7 +73,7 @@ async def test_a_successful_turn_returns_the_contract_keys(monkeypatch) -> None:
     assert result["channel_source"] == "api"
 
 
-async def test_a_gate_blocked_turn_reports_failure_with_the_blocked_text(monkeypatch) -> None:
+async def test_a_gate_blocked_turn_reports_failure_with_the_blocked_text(monkeypatch, runtime) -> None:
     def blocked(state):
         return {
             **state,
@@ -76,7 +82,7 @@ async def test_a_gate_blocked_turn_reports_failure_with_the_blocked_text(monkeyp
             "harness_failed_checks": ["citations"],
         }
 
-    workflow = stub_workflow(monkeypatch, _skip_plan(**{N.RESEARCH_HARNESS.value: blocked}))
+    workflow = stub_workflow(monkeypatch, _skip_plan(**{N.RESEARCH_HARNESS.value: blocked}), runtime=runtime)
     result = await workflow.execute_workflow(
         user_input(), event_handler=RecordingHandler(), use_checkpointer=False
     )
@@ -86,11 +92,11 @@ async def test_a_gate_blocked_turn_reports_failure_with_the_blocked_text(monkeyp
     assert "research_harness_gate_failed" in result["errors"]
 
 
-async def test_a_failing_node_returns_the_error_shape(monkeypatch) -> None:
+async def test_a_failing_node_returns_the_error_shape(monkeypatch, runtime) -> None:
     def boom(state):
         raise RuntimeError("노드 실패")
 
-    workflow = stub_workflow(monkeypatch, _skip_plan(**{N.DIRECT_RESPONSE.value: boom}))
+    workflow = stub_workflow(monkeypatch, _skip_plan(**{N.DIRECT_RESPONSE.value: boom}), runtime=runtime)
     handler = RecordingHandler()
     result = await workflow.execute_workflow(user_input(), event_handler=handler, use_checkpointer=False)
     assert result["success"] is False
@@ -99,8 +105,8 @@ async def test_a_failing_node_returns_the_error_shape(monkeypatch) -> None:
     assert handler.errors
 
 
-async def test_progress_events_follow_the_nodes_actually_run(monkeypatch) -> None:
-    workflow = stub_workflow(monkeypatch, _skip_plan())
+async def test_progress_events_follow_the_nodes_actually_run(monkeypatch, runtime) -> None:
+    workflow = stub_workflow(monkeypatch, _skip_plan(), runtime=runtime)
     handler = RecordingHandler()
     await workflow.execute_workflow(user_input(), event_handler=handler, use_checkpointer=False)
     assert [name for name, _step, _max in handler.starts] == [

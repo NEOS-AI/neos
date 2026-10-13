@@ -336,6 +336,8 @@ class WorkflowConfig(StrictConfigModel):
     # 같다. 테스트 세션은 raise, development 는 실제 노드로 라이브 dry run 을
     # 돌린 뒤(Plan 3 단계 5) raise 로 올린다.
     node_update_policy: Literal["report", "drop", "raise"] = "report"
+    # 채팅 워크플로 런타임 (spec 2026-10-13 §6.1). 단계 6 까지 기본은 LangGraph 다.
+    runtime: Literal["langgraph", "native"] = "langgraph"
     # 설계 서브에이전트로 질의별 그래프를 짤지 여부. 기본은 꺼짐이다 -- 정적
     # 그래프가 기본 경로다. 질의마다 LLM 으로 토폴로지를 새로 짜는 비용(지연,
     # 비용, 비결정성)은 라우팅에서 "매 요청마다 LLM 으로 난이도를 분류"하는

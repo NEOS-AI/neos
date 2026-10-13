@@ -63,6 +63,8 @@ class ExecutionGraph:
     # (`neos.workflow.subagent_nodes.SubagentNodeHost`). 템플릿이 없으면 None.
     # 실행 스코프를 발급하고, 끝날 때 살아 있는 자식을 취소하는 자리다.
     subagent_host: Any = None
+    # 네이티브 런타임(spec 2026-10-13 §4.2)의 러너. LangGraph 런타임이면 None.
+    runner: Any = None
 
 
 def current_static_flags() -> dict[str, bool]:

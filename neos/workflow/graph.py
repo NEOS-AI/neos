@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 import asyncio
+import dataclasses
 import hashlib
 import logging
 from langgraph.graph import StateGraph, START, END
@@ -580,6 +581,58 @@ class MultiAgentWorkflow:
         span: Any,
         event_handler: Any = None,
     ) -> ExecutionGraph:
+        """이번 호출이 실행할 그래프. 네이티브 런타임이면 같은 배선으로 러너를 붙인다(spec §4.2).
+
+        네이티브에서는 병렬 설계를 거절해 정적 그래프로 폴백한다(§4.10) -- 러너는 순차만 돈다.
+        """
+        from neos.workflow.runtime.select import runtime_name
+
+        native = runtime_name() == "native"
+        execution_graph = await self._resolve_langgraph_execution_graph(
+            user_input=user_input,
+            use_checkpointer=use_checkpointer,
+            span=span,
+            event_handler=event_handler,
+            allow_parallel=not native,
+        )
+        if not native:
+            return execution_graph
+        return dataclasses.replace(
+            execution_graph, runner=self._native_runner(execution_graph, use_checkpointer=use_checkpointer)
+        )
+
+    def _native_runner(self, execution_graph: ExecutionGraph, *, use_checkpointer: bool):
+        from neos.workflow.runtime.designed import designed_wiring
+        from neos.workflow.runtime.runner import WorkflowRunner
+        from neos.workflow.wiring import resolve_wiring
+
+        if execution_graph.source == "designed" and execution_graph.topology is not None:
+            wiring = designed_wiring(
+                execution_graph.topology,
+                self,
+                subagent_host=execution_graph.subagent_host,
+                gated_nodes=frozenset(_INTERRUPT_GATED_NODES),
+            )
+        else:
+            wiring = resolve_wiring(current_static_flags())
+        return WorkflowRunner(
+            wiring,
+            self,
+            step_limit=_recursion_limit_for(execution_graph),
+            # 승인 게이트는 상태를 저장하는 경로에서만 -- LangGraph 와 같다.
+            interrupt_before=wiring.interrupt_before if use_checkpointer else (),
+            wrap=self._node_wrapper(),
+        )
+
+    async def _resolve_langgraph_execution_graph(
+        self,
+        *,
+        user_input: Dict[str, Any],
+        use_checkpointer: bool,
+        span: Any,
+        event_handler: Any = None,
+        allow_parallel: bool = True,
+    ) -> ExecutionGraph:
         """이번 호출이 실행할 그래프를 정한다.
 
         반환값을 **호출 스코프로만** 흘린다 -- 인스턴스 속성에 얹으면
@@ -676,6 +729,7 @@ class MultiAgentWorkflow:
             contracts=design_contracts,
             expand=expand,
             subagent=subagent_rules,
+            allow_parallel=allow_parallel,
             # `must_write` 는 기본값(`{"final_response"}`)을 쓴다 -- 덮으면
             # "응답 없는 설계를 허용한다" 는 뜻이고 챗 경로에서 그것은
             # 언제나 오답이다. `mandatory`(노드 이름 기반)는 넘기지 않는다:
@@ -885,9 +939,12 @@ class MultiAgentWorkflow:
 
         진행 추적의 계약(어느 노드가 몇 번째로 나오는가)을 검증하려면 실제
         LLM 없이 chunk 를 흘려보낼 수 있어야 한다. 프로덕션 동작은 그대로
-        `compiled.astream` 이다.
+        `compiled.astream` 이다. 네이티브 런타임이면 러너의 chunk 를 낸다.
+        `config["neos_start_at"]` 은 승인 재개 지점이다.
         """
 
+        if execution_graph.runner is not None:
+            return execution_graph.runner.stream(initial_state, start_at=config.get("neos_start_at"))
         return execution_graph.compiled.astream(initial_state, config)
 
 
@@ -2749,6 +2806,7 @@ class MultiAgentWorkflow:
             await self._record_session_start(user_input)
 
             execution_graph = None
+            turn_handle = None
             try:
                 # 캐시가 전부 빗나간 뒤에만 그래프를 정한다. 반환값은 이 호출의
                 # 로컬이며 인스턴스에 남지 않는다(G2-c).
@@ -2829,6 +2887,17 @@ class MultiAgentWorkflow:
                     record_node_start, record_node_end,
                 )
 
+                # 네이티브 런타임: 세션을 이어받아 시작 상태를 만들고 작업을 연다(spec §4.3·§4.4).
+                if execution_graph.runner is not None:
+                    from neos.workflow.runtime.select import native_turns
+
+                    turn = await native_turns().begin(user_input, initial_state, stateful=use_checkpointer)
+                    start_state, turn_handle = turn.state, turn.handle
+                else:
+                    from neos.workflow.runtime.turns import NULL_TURN
+
+                    start_state, turn_handle = initial_state, NULL_TURN
+
                 trackable_nodes = set(execution_graph.nodes)
                 # 분기 때문에 실제 실행 수는 이보다 적을 수 있다 -- 이름이
                 # 그 사실을 말하게 둔다. `total_steps` 라고 부르면 다음 사람이
@@ -2842,7 +2911,7 @@ class MultiAgentWorkflow:
                     )
 
                 current_step = 0
-                final_state = dict(initial_state)
+                final_state = dict(start_state)
                 interrupted = False
                 wf_id = user_input.get("session_id", "")
                 # 실제로 직전 chunk 에서 본 노드들. 목록 인덱스로 추정하지
@@ -2852,7 +2921,7 @@ class MultiAgentWorkflow:
                 previous_nodes: list[str] = []
                 seen_nodes: set[str] = set()
 
-                async for chunk in self.graph_astream_source(execution_graph, initial_state, config):
+                async for chunk in self.graph_astream_source(execution_graph, start_state, config):
                     chunk_nodes = [
                         name for name in chunk if name in trackable_nodes
                     ]
@@ -2916,13 +2985,21 @@ class MultiAgentWorkflow:
                     record_node_end(finished, wf_id)
 
                 if interrupted:
-                    return await self._interrupted_result(
-                        execution_graph, config, user_input, initial_state, span, event_handler
+                    if execution_graph.runner is not None:
+                        await turn_handle.interrupted(final_state, execution_graph.runner.outcome.next_node)
+                    interrupted_result = await self._interrupted_result(
+                        final_state, user_input, initial_state, span, event_handler
                     )
+                    if turn_handle.work_id is not None:
+                        interrupted_result["work_id"] = turn_handle.work_id
+                    return interrupted_result
 
                 # 결과 생성
                 add_span_event(span, "generating_result")
                 result = self._create_workflow_result(final_state)
+                await turn_handle.completed(final_state, result)
+                if turn_handle.work_id is not None:
+                    result["work_id"] = turn_handle.work_id
 
                 # 성공적인 결과 캐싱
                 if (
@@ -3001,6 +3078,12 @@ class MultiAgentWorkflow:
                 add_span_event(span, "workflow_error", {"error": str(e)})
                 set_span_attributes(span, {"workflow.error": True, "error.message": str(e)})
 
+                if turn_handle is not None:
+                    try:
+                        await turn_handle.failed(str(e))
+                    except Exception:  # noqa: BLE001 -- 실패 기록이 실패 보고를 막지 않는다
+                        logger.warning("work failure could not be recorded", exc_info=True)
+
                 # 에러 이벤트
                 await event_handler.on_workflow_error(e)
 
@@ -3013,12 +3096,15 @@ class MultiAgentWorkflow:
                 return self._create_error_result(e, initial_state)
 
     async def _interrupted_result(
-        self, execution_graph, config, user_input, initial_state, span, event_handler
+        self, final_state, user_input, initial_state, span, event_handler
     ) -> Dict[str, Any]:
-        """interrupt_before=EXECUTION_APPROVAL 발동 -- SSE approval_request 를 내보내고 중단 결과를 돌려준다."""
+        """승인 게이트에서 멈췄다 -- SSE approval_request 를 내보내고 중단 결과를 돌려준다.
+
+        대기 목록은 접힌 상태에서 읽는다(spec §4.2) -- 그래프 상태를 다시 읽지 않으므로
+        PostgreSQL 체크포인터의 R1 이 승인 이벤트를 막지 않고, 두 런타임이 같은 코드를 지난다.
+        """
         add_span_event(span, "workflow_interrupted_for_approval")
-        current_graph_state = await execution_graph.compiled.aget_state(config)
-        pending = current_graph_state.values.get("pending_approvals", [])
+        pending = list(final_state.get("pending_approvals") or [])
         session_id = user_input.get("session_id", "")
         await event_handler.on_approval_request(pending, session_id)
         logger.info(

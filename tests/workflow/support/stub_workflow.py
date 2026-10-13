@@ -112,16 +112,35 @@ def stub_workflow(
     flags: Mapping[str, bool] = FLAGS_OFF,
     checkpointer: Any = None,
     node_update_policy: str = "report",
+    runtime: str = "langgraph",
 ):
     """`node_update_policy` 기본값이 report 인 이유: 스텁은 계약 목록을 시험하지 않는다.
     테스트 세션이 raise 를 걸어도(Plan 1 Task 7) 스텁이 계약 밖 키를 써서 실패하면
     시험하려던 것(결과 계약·누적·승인)이 아니라 스텁 모양 때문에 깨진다. 정책 자체는
     `tests/workflow/runtime/test_node_updates.py` 가 시험한다. 이 설정은 Task 6 에서
-    생긴다 -- 그 전에는 없는 필드라 건너뛴다(엄격한 설정 모델은 모르는 속성 대입을 거절한다)."""
+    생긴다 -- 그 전에는 없는 필드라 건너뛴다(엄격한 설정 모델은 모르는 속성 대입을 거절한다).
+
+    `runtime='native'` 면 메모리 세션·작업 저장소를 꽂는다. `workflow.native_stores` 로 꺼내 본다.
+    네이티브도 Plan 3 까지는 `_ensure_graph_initialized` 로 정적 LangGraph 를 컴파일하므로,
+    체크포인터를 넘기지 않으면 메모리 체크포인터를 쓴다 -- 실제 `get_checkpointer()` 가
+    PostgreSQL 에 닿지 않게 한다."""
     settings = graph_module.settings
     for attr, key in FLAG_ATTR_TO_KEY.items():
         monkeypatch.setattr(settings, attr, bool(flags.get(key, False)))
     monkeypatch.setattr(settings.config.workflow, "graph_design_enabled", False)
+    monkeypatch.setattr(settings.config.workflow, "runtime", runtime)
+    native_stores = None
+    if runtime == "native":
+        from neos.workflow.runtime import select
+        from neos.workflow.runtime.sessions import InMemorySessionStore
+        from neos.workflow.runtime.turns import NativeTurns
+        from neos.workflow.runtime.work import InMemoryWorkStore, WorkLifecycle
+
+        sessions, lifecycle = InMemorySessionStore(), WorkLifecycle(InMemoryWorkStore())
+        monkeypatch.setattr(select, "_turns", NativeTurns(sessions, lifecycle, max_carried_items=200))
+        native_stores = (sessions, lifecycle)
+        if checkpointer is None:
+            checkpointer = memory_checkpointer()
     if hasattr(settings.config.workflow, "node_update_policy"):
         monkeypatch.setattr(settings.config.workflow, "node_update_policy", node_update_policy)
     monkeypatch.setattr(settings, "SMART_CACHE_ENABLED", False)
@@ -144,6 +163,7 @@ def stub_workflow(
         monkeypatch.setattr(
             workflow, branch.router, _as_router(branch.router, plan.routes.get(branch.router))
         )
+    workflow.native_stores = native_stores
     return workflow
 
 
