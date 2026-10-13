@@ -1774,8 +1774,25 @@ Design: `docs/Q15_VOICE_DESIGN_261005.md`.
 | `max_content_chars` | `4000` | Truncation for each `SearchResult.content`. |
 
 Only skills whose `SKILL.md` sets `auto_execute: true` are candidates. The flat alias
-`settings.SKILL_EXECUTION_ENABLED` exists because the static topology extractor reads
-`if settings.X:` conditions only.
+`settings.SKILL_EXECUTION_ENABLED` keeps the six wiring flags symmetric: the wiring table
+reads every flag through the same flat-attribute map (`neos.workflow.wiring.FLAG_ATTR_TO_KEY`),
+so this one is not a special case.
+
+### Node update policy
+
+`workflow.node_update_policy` decides what happens when a graph node writes a state key
+outside its contract's `writes` (spec `docs/superpowers/specs/2026-10-13-langgraph-removal-native-runner-design.md` §4.2).
+Unchanged keys are never violations.
+
+| Value | Meaning |
+|---|---|
+| `report` | Log and count (`workflow_update_rejected_total`), keep the key. **Schema default and development profile** — same as the behavior before the policy existed. |
+| `drop` | Log, count, and discard the key. |
+| `raise` | Fail the node with `NodeUpdateRejected`. **Test session** (`tests/fixtures/config/test-session.yaml`). |
+
+Development stays on `report` until a live development dry run with real nodes shows no
+violations (Plan 3 stage 5); then it flips to `raise`. Contract tests run real handlers
+with fake LLMs under `raise` in `tests/workflow/runtime/test_node_contract_probes.py`.
 
 ## Staging and Production
 

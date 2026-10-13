@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from typing import AsyncGenerator, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -28,6 +29,7 @@ from neos.api.dependencies.resource_access import require_stream_session_owner
 from neos.database.connection import db_manager
 from neos.database.models import User
 from neos.workflow.graph import multi_agent_workflow
+from neos.workflow.runtime.node_updates import apply_update
 from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for
 from neos.workflow.stream_manager import StreamEvent, stream_manager
 
@@ -234,17 +236,23 @@ async def respond_to_approval(
     # 클라이언트는 GET /api/v1/approval/stream/{session_id}로 재구독하여 결과를 받는다.
     async def _resume():
         try:
-            final_state = None
+            # 노드 경계 정규화 뒤 chunk 는 그 노드의 부분 갱신이다 -- 마지막 chunk 가 아니라
+            # 승인 시점의 상태에 갱신을 접어 결과를 읽는다 (execute_workflow 와 같은 규칙).
+            final_state = {
+                **dict(current_graph_state.values),
+                "approval_decision": decision,
+            }
             async for chunk in resume_graph.astream(None, config=config):
-                for node_name, state in chunk.items():
+                for node_name, update in chunk.items():
                     await stream_manager.add_event(
                         session_id, "node_complete", {"node": node_name}
                     )
-                    final_state = state
+                    if node_name == "__interrupt__":
+                        continue
+                    if isinstance(update, Mapping):
+                        final_state = apply_update(final_state, update)
 
-            final_response = (
-                final_state.get("final_response", "") if final_state else ""
-            )
+            final_response = final_state.get("final_response", "") or ""
             await stream_manager.add_event(
                 session_id, "completed", {"response": final_response}
             )

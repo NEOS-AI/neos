@@ -91,3 +91,72 @@ async def test_a_designed_resume_records_which_topology_it_used(monkeypatch, cap
 
     expected_hash = topology_hash(topology)
     assert any(expected_hash in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_resume_completed_event_carries_the_final_response(monkeypatch):
+    """노드 경계 정규화 뒤 마지막 chunk 는 부분 갱신이다 -- 재개 결과는 접힌 상태에서 읽는다.
+
+    마지막 노드가 전체 상태를 돌려줘도 변하지 않은 `final_response` 는 갱신에서
+    빠진다. 마지막 chunk 만 보면 `completed` 가 빈 응답을 싣는다."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from neos.api.handlers import approval_handlers
+
+    values = {
+        "final_response": "승인 전에 만든 답",
+        "pending_approvals": [{"request_id": "r1", "skill_name": "s"}],
+    }
+
+    class _Graph:
+        checkpointer = None
+
+        async def aget_state(self, config):
+            return SimpleNamespace(values=values)
+
+        async def aupdate_state(self, config, values):
+            return None
+
+        async def astream(self, _input, config=None):
+            yield {"__interrupt__": ()}
+            yield {"skill_executor": {"execution_steps": [{"step": 1}]}}
+            yield {"research_harness": {"harness_verdict": "pass"}}  # final_response 는 변하지 않았다
+
+    graph = _Graph()
+    events: list[tuple[str, dict]] = []
+
+    class _Streams:
+        def get_session(self, session_id):
+            return object()
+
+        async def add_event(self, session_id, kind, payload):
+            events.append((kind, payload))
+
+    async def _owner(**kwargs):
+        return {"skill_name": "s"}
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    async def _resolve(**kwargs):
+        return graph
+
+    monkeypatch.setattr(approval_handlers, "multi_agent_workflow", SimpleNamespace(
+        _graph_initialized=True, _graph_uses_checkpointer=True, graph=graph))
+    monkeypatch.setattr(approval_handlers, "stream_manager", _Streams())
+    monkeypatch.setattr(approval_handlers, "_require_pending_approval_owner", _owner)
+    monkeypatch.setattr(approval_handlers, "require_stream_session_owner", lambda *a, **k: None)
+    monkeypatch.setattr(approval_handlers, "_resolve_resume_graph", _resolve)
+    monkeypatch.setattr(approval_handlers, "_mark_approval_resolved", _noop)
+
+    body = approval_handlers.ApprovalResponse(
+        session_id="s1", request_id="r1", decision="approved", skill_name="s"
+    )
+    await approval_handlers.respond_to_approval(body, SimpleNamespace(user_id="u1"))
+    for _ in range(50):
+        if any(kind == "completed" for kind, _ in events):
+            break
+        await asyncio.sleep(0.01)
+
+    assert ("completed", {"response": "승인 전에 만든 답"}) in events

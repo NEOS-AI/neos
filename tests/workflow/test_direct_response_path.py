@@ -140,17 +140,9 @@ async def test_the_summarizer_preserves_what_the_direct_node_wrote(monkeypatch):
 
 
 def test_the_skip_pathway_no_longer_points_at_the_summarizer():
-    """배선 자체를 고정한다 -- 누가 되돌리면 여기서 걸린다."""
-    import inspect
+    """배선 자체를 고정한다 -- 누가 되돌리면 여기서 걸린다. 배선의 원천은 표다."""
+    from neos.workflow.wiring import resolve_wiring
 
-    from neos.workflow.graph import MultiAgentWorkflow
-
-    source = inspect.getsource(MultiAgentWorkflow._create_workflow_graph)
-    skip = WorkflowPathway.SKIP_ORCHESTRATORS.value
-
-    for line in source.splitlines():
-        if "WorkflowPathway.SKIP_ORCHESTRATORS.value:" in line:
-            assert WorkflowNode.DIRECT_RESPONSE.value.upper() in line.upper(), (
-                f"skip 경로가 다시 요약기로 간다: {line.strip()}"
-            )
-    assert skip
+    wiring = resolve_wiring({"skill_execution": False})
+    selector = next(b for b in wiring.branches if b.source == WorkflowNode.SKILL_TOOL_SELECTOR.value)
+    assert wiring.path_map(selector)[WorkflowPathway.SKIP_ORCHESTRATORS.value] == WorkflowNode.DIRECT_RESPONSE.value

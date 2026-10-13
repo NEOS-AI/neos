@@ -166,6 +166,8 @@ _REQUIRED_FRONTEND_COMMANDS = (
 
 _RUFF_KERNEL_DIRS = (
     "neos/workflow/deep_analysis",
+    "neos/workflow/runtime",
+    "neos/workflow/wiring.py",
     "neos/coding",
     "neos/subagent",
     "neos/fsi",
@@ -174,6 +176,9 @@ _RUFF_KERNEL_DIRS = (
     "neos/learn",
     "neos/jev",
     "tests/workflow/deep_analysis",
+    "tests/workflow/runtime",
+    "tests/workflow/test_wiring.py",
+    "tests/workflow/test_import_boundaries.py",
     "tests/coding",
     "tests/subagent",
     "tests/fsi",

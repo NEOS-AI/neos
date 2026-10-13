@@ -85,6 +85,8 @@ jobs:
         run: >-
           uv run --frozen ruff check
           neos/workflow/deep_analysis
+          neos/workflow/runtime
+          neos/workflow/wiring.py
           neos/coding
           neos/subagent
           neos/fsi
@@ -93,6 +95,9 @@ jobs:
           neos/learn
           neos/jev
           tests/workflow/deep_analysis
+          tests/workflow/runtime
+          tests/workflow/test_wiring.py
+          tests/workflow/test_import_boundaries.py
           tests/coding
           tests/subagent
           tests/fsi

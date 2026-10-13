@@ -331,6 +331,14 @@ class EnterpriseMetricsCollector:
             ["outcome"],
             registry=self.registry,
         )
+        # 노드가 계약의 writes 밖 키를 썼다 (spec 2026-10-13 §4.2). 올리는 곳은
+        # neos/workflow/runtime/node_updates.py 한 곳이다.
+        self.workflow_update_rejected_total = Counter(
+            "workflow_update_rejected_total",
+            "Workflow node updates outside the node contract's writes",
+            ["node", "key"],
+            registry=self.registry,
+        )
         self.coding_lease_contention_total = Counter(
             "coding_lease_contention_total",
             "Durable coding execution lease outcomes",
