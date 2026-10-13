@@ -6,7 +6,6 @@
 
 import itertools
 import json
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -14,7 +13,7 @@ import pytest
 from neos.workflow.enums import WorkflowNode as N
 from neos.workflow.enums import WorkflowPathway as P
 from neos.workflow.graph_design_ledger import topology_hash
-from neos.workflow.topology import START
+from neos.workflow.topology import END, START
 from neos.workflow.wiring import (
     BRANCHES,
     DEFAULT_FLAGS,
@@ -118,17 +117,26 @@ def test_the_table_hash_matches_the_captured_static_hash(flags) -> None:
     assert topology_hash(topology_of(resolve_wiring(flags))) == captured[_flag_id(flags)]
 
 
-# -- AST 추출기와의 동등성 (Task 5 에서 추출기와 함께 지운다) -----------------
+# -- 조립된 LangGraph 그래프와 표의 동등성 -------------------------------------
 
 
 @pytest.mark.parametrize("flags", list(_all_flag_combinations()), ids=_flag_id)
-def test_the_table_equals_the_ast_extraction(flags) -> None:
-    """노드 집합 · 엣지 다중집합 · 반복 상한이 옛 추출기와 같다. 해시만 보면 무엇이
-    다른지 말하지 않으므로 집합으로 비교한다(메모리: 개수가 아니라 이름으로)."""
-    from neos.workflow.topology_export import static_topology
+def test_the_compiled_graph_has_exactly_the_tables_edges(flags) -> None:
+    """어댑터가 표를 빠짐없이 옮겼는가. LangGraph 의 `get_graph()` 는 같은 쌍을 한 번만
+    내므로 집합으로 비교한다(다중집합은 위의 해시 테스트가 지킨다)."""
+    from langgraph.graph import StateGraph
 
-    old = static_topology(flags=flags)
-    new = topology_of(resolve_wiring(flags))
-    assert set(new.nodes) == set(old.nodes)
-    assert Counter(new.edges) == Counter(old.edges)
-    assert dict(new.loop_bounds) == dict(old.loop_bounds)
+    from neos.workflow.runtime.langgraph_adapter import compile_wiring
+    from neos.workflow.state import AgentState
+
+    class _Owner:
+        def __getattr__(self, name):
+            return lambda state: {}
+
+    wiring = resolve_wiring(flags)
+    compiled = compile_wiring(wiring, _Owner(), graph_factory=StateGraph, state_schema=AgentState)
+    drawn = compiled.get_graph()
+    lg_edges = {(edge.source, edge.target) for edge in drawn.edges}
+    table_edges = set(topology_of(wiring).edges)
+    assert lg_edges == table_edges
+    assert set(drawn.nodes) - {START, END} == {spec.name for spec in wiring.nodes}

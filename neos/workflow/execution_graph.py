@@ -8,16 +8,9 @@
 이 모듈은 `graph.py` 를 직접 임포트하지 않는다 -- `compiled: Any` 로
 충분해서 `MultiAgentWorkflow` 의 타입이 필요 없다. `graph.py` 는
 `from .execution_graph import ...` 를 모듈 상단에서 실행하므로
-`graph.py → execution_graph → topology_export → graph.py` 순환이 실제로
-존재한다. `topology_export.static_topology` 는 `graph_module` 을 함수
-본문 안에서 지역 임포트로만 쓴다(모듈 로드 시점에는 임포트조차 하지
-않는다) -- 그래서 어느 쪽이 먼저 임포트되든(`graph.py` 가 먼저든,
-`execution_graph`/`topology_export` 가 먼저든) 순환의 되돌아오는 변이
-함수 정의가 끝난 뒤에만 일어나 ImportError 없이 통과한다. 이전에는 그
-임포트문 자체가 `topology_export` 모듈 스코프에 있어서 진입 방향에
-따라 깨졌다 -- `topology_export`/`execution_graph` 를 먼저 임포트하면
-`graph.py` 가 아직 `_FLAG_ATTR_TO_KEY` 정의 이전인 `topology_export`
-로 되돌아와 실패했다.
+`graph.py → execution_graph → topology_export` 방향으로만 임포트한다. 예전에는
+`topology_export` 가 소스를 읽으려 `graph.py` 로 되돌아가는 순환이 있었으나,
+정적 토폴로지를 배선 표(`wiring`)에서 내게 되면서 그 순환은 없어졌다.
 """
 
 from collections.abc import Mapping
@@ -28,13 +21,14 @@ from typing import Any, Literal
 from neos.config.settings import settings
 from neos.workflow.graph_design_ledger import topology_hash
 from neos.workflow.topology import GraphTopology
-from neos.workflow.topology_export import _FLAG_ATTR_TO_KEY, static_topology
+from neos.workflow.topology_export import static_topology
+from neos.workflow.wiring import FLAG_ATTR_TO_KEY
 
-# `topology_export` 의 플래그 키를 공개 표면으로 다시 내보낸다. 본체가
-# `_FLAG_ATTR_TO_KEY` 를 그대로 쓰는 것은 매핑을 두 벌 유지하지 않기
+# `wiring` 의 플래그 키를 공개 표면으로 다시 내보낸다. 본체가
+# `FLAG_ATTR_TO_KEY` 를 그대로 쓰는 것은 매핑을 두 벌 유지하지 않기
 # 위해서고, 이 상수는 **테스트와 바깥 호출자가 private 이름을 임포트하지
 # 않게** 하기 위한 것이다.
-STATIC_FLAG_KEYS: frozenset[str] = frozenset(_FLAG_ATTR_TO_KEY.values())
+STATIC_FLAG_KEYS: frozenset[str] = frozenset(FLAG_ATTR_TO_KEY.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,21 +68,21 @@ class ExecutionGraph:
 def current_static_flags() -> dict[str, bool]:
     """실행 시점 `settings` 를 `topology_export` 의 플래그 키로 옮긴다.
 
-    매핑을 손으로 다시 쓰지 않고 `_FLAG_ATTR_TO_KEY` 를 재사용한다 -- 키가
+    매핑을 손으로 다시 쓰지 않고 `wiring.FLAG_ATTR_TO_KEY` 를 재사용한다 -- 키가
     하나라도 빠지면 `static_topology` 가 그 자리를 기본값('켬')으로 조용히
     채우고, 실제로 꺼진 기능이 켜진 것으로 계산된 해시가 나온다.
     """
 
     return {
         key: bool(getattr(settings, attr))
-        for attr, key in _FLAG_ATTR_TO_KEY.items()
+        for attr, key in FLAG_ATTR_TO_KEY.items()
     }
 
 
 @lru_cache(maxsize=64)
 def _static_topology_facts(flags_items: tuple[tuple[str, bool], ...]) -> tuple[tuple[str, ...], str]:
-    """`static_topology` 는 `inspect.getsource` + `ast.parse` 를 돈다 --
-    요청마다 하면 안 된다. 플래그 조합은 6비트라 상한이 64개이고, 배포 중
+    """`static_topology` 는 표를 해석한다 -- 플래그 조합은 64개라 캐시한다.
+    플래그 조합은 6비트라 상한이 64개이고, 배포 중
     플래그가 바뀌지 않으므로 실질 1회다. `lru_cache` 를 쓰려고 인자를
     해시 가능한 튜플로 받는다."""
 

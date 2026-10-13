@@ -22,7 +22,7 @@ from .contracts import NODE_CONTRACTS, node_contract
 from .graph_designer import DesignRequest
 from .graph_design_ledger import LedgerEvent, design_graph_or_fallback, topology_hash
 from .graph_designer_llm import LlmGraphDesigner
-from .enums import WorkflowNode, WorkflowPathway, IntentType, AutonomyLevel
+from .enums import WorkflowNode, IntentType, AutonomyLevel
 from .state import AgentState, WorkflowConfig
 from .harness.cache_policy import should_cache_harness_result
 from .topology import (
@@ -514,7 +514,7 @@ class MultiAgentWorkflow:
 
     async def _create_workflow_graph(self, use_checkpointer: bool = True) -> StateGraph:
         """
-        워크플로우 그래프 생성 (Enterprise Edition with PostgreSQL Checkpointer)
+        정적 그래프를 배선 표(`neos.workflow.wiring`)에서 조립한다 (PostgreSQL 체크포인터 선택).
 
         Args:
             use_checkpointer: Whether to use PostgreSQL checkpointer for state persistence
@@ -522,306 +522,25 @@ class MultiAgentWorkflow:
         """
         logger.debug(f"Creating workflow graph (checkpointer={'enabled' if use_checkpointer else 'disabled'})...")
 
-        workflow = StateGraph(AgentState)
+        from neos.workflow.runtime.langgraph_adapter import compile_wiring
+        from neos.workflow.wiring import resolve_wiring
 
-        # 노드 추가
-        workflow.add_node(WorkflowNode.REFINEMENT_CHECKER.value, self._check_refinement_node)
-        workflow.add_node(WorkflowNode.QUERY_REFINEMENT.value, self._refine_query_node)
-        workflow.add_node(WorkflowNode.RESEARCH_CONTINUATION.value, self._research_continuation_node)  # Phase 2.2
-        workflow.add_node(WorkflowNode.CONVERSATION_CTX_PROC.value, self._process_conversation_context_node)
-        workflow.add_node(WorkflowNode.QUERY_CLS.value, self._classify_query_node)
-        workflow.add_node(WorkflowNode.SKILL_TOOL_SELECTOR.value, self._select_skills_tools_node)
-        workflow.add_node(WorkflowNode.HYPOTHESIS_GENERATION.value, self._hypothesis_generation_node)  # Phase 2.5
-        workflow.add_node(WorkflowNode.SEARCH_ORCHESTRATOR.value, self._orchestrate_search_node)
-        workflow.add_node(WorkflowNode.HYPOTHESIS_EVALUATION.value, self._hypothesis_evaluation_node)  # Phase 2.5
-        workflow.add_node(WorkflowNode.REPLANNER.value, self._replanner_node)  # Phase 2.4
-        workflow.add_node(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, self._orchestrate_analysis_node)
-        workflow.add_node(WorkflowNode.GENERATION_ORCHESTRATOR.value, self._orchestrate_generation_node)
-        workflow.add_node(WorkflowNode.RESULT_INTEGRATOR.value, self._integrate_results_node)
-        workflow.add_node(WorkflowNode.FACT_CHECK.value, self._fact_check_node)
-        workflow.add_node(WorkflowNode.QUALITY_VALIDATOR.value, self._validate_quality_node)
-        workflow.add_node(WorkflowNode.RESEARCH_HARNESS.value, self._research_harness_node)
-        workflow.add_node(
-            WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
-            self._research_harness_repair_node,
-        )
-        workflow.add_node(WorkflowNode.SELF_REFLECTION.value, self._self_reflection_node)  # Phase 2.6
-        workflow.add_node(WorkflowNode.MISSION_PLANNER.value, self._mission_planner_node)
-        workflow.add_node(WorkflowNode.MISSION_APPROVAL.value, self._mission_approval_node)
-        workflow.add_node(WorkflowNode.MISSION_EXECUTOR.value, self._mission_executor_node)
-        workflow.add_node(WorkflowNode.MISSION_VALIDATOR.value, self._mission_validator_node)
-        workflow.add_node(WorkflowNode.MISSION_INTEGRATOR.value, self._mission_integrator_node)
-        workflow.add_node(WorkflowNode.RESP_GENERATOR.value, self._generate_response_node)
-        # G1-a: `skip_orchestrators` 는 요약할 결과를 만드는 노드를 하나도
-        # 지나지 않는다. 이 노드가 그 자리에서 직접 답을 만든다.
-        # (엣지는 아래 엣지 절에 있다 -- `test_create_workflow_graph` 가
-        # 첫 add_edge 가 START 에서 나가는 것임을 고정한다.)
-        workflow.add_node(WorkflowNode.DIRECT_RESPONSE.value, self._direct_response_node)
-        if settings.SKILL_EXECUTION_ENABLED:
-            workflow.add_node(WorkflowNode.SKILL_EXECUTOR.value, self._skill_executor_node)
-
-        # ROMA: Recursive Orchestrator 노드 (피처 플래그로 격리)
-        if settings.RECURSIVE_AGENT_ENABLED:
-            workflow.add_node(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, self._recursive_orchestrator_node)
-
-        # HyperDeep Recursive Orchestrator 노드 (피처 플래그로 격리)
-        if settings.HYPER_DEEP_AGENT_ENABLED:
-            workflow.add_node(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, self._hyper_deep_orchestrator_node)
-
-        # Phase 3b(D23): Deep Analysis 디스패치 노드 (피처 플래그로 격리)
-        if settings.DEEP_ANALYSIS_ENABLED:
-            workflow.add_node(WorkflowNode.DEEP_ANALYSIS_DISPATCH.value, self._deep_analysis_dispatch_node)
-
-        # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드
-        # interrupt_before=[EXECUTION_APPROVAL]로 중단 → resume 후 이 노드 실행
-        if settings.EXECUTION_APPROVAL_ENABLED:
-            workflow.add_node(WorkflowNode.EXECUTION_APPROVAL.value, self._execution_approval_node)
-
-        # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
-        workflow.add_node(WorkflowNode.TASK_SCHEDULING_NODE.value, self._handle_task_scheduling_node)
-
-        # 엣지 정의
-        # 1. START → refinement_checker (가장 먼저 쿼리 개선 필요 여부 체크)
-        workflow.add_edge(START, WorkflowNode.REFINEMENT_CHECKER.value)
-        # G1-a: 직접 응답 노드는 답을 만든 뒤 응답 생성기로 넘어가고,
-        # 거기서 `_preserve_existing_response` 가 그 답을 그대로 반환한다.
-        workflow.add_edge(WorkflowNode.DIRECT_RESPONSE.value, WorkflowNode.RESP_GENERATOR.value)
-
-        # 2. refinement_checker → 조건부 분기 (개선 필요 여부 + continuation 체크)
-        workflow.add_conditional_edges(
-            WorkflowNode.REFINEMENT_CHECKER.value,
-            self._should_refine_or_continue,
-            {
-                "refine_query": WorkflowNode.QUERY_REFINEMENT.value,
-                "continue_research": WorkflowNode.RESEARCH_CONTINUATION.value,  # Phase 2.2
-                "skip_refinement": WorkflowNode.CONVERSATION_CTX_PROC.value,
-            }
-        )
-
-        # 3. query_refinement_agent → conversation_context_processor (개선 후 정상 흐름)
-        workflow.add_edge(WorkflowNode.QUERY_REFINEMENT.value, WorkflowNode.CONVERSATION_CTX_PROC.value)
-
-        # 3b. research_continuation → conversation_context_processor (Phase 2.2)
-        workflow.add_edge(WorkflowNode.RESEARCH_CONTINUATION.value, WorkflowNode.CONVERSATION_CTX_PROC.value)
-
-        # 4. conversation_context_processor → 조건부 분기 (히스토리 활용 여부)
-        workflow.add_conditional_edges(
-            WorkflowNode.CONVERSATION_CTX_PROC.value,
-            self._should_process_context,
-            {
-                "process_context": WorkflowNode.QUERY_CLS.value,  # 히스토리 처리 완료 → 분류
-                "skip_context": WorkflowNode.QUERY_CLS.value      # 히스토리 없음 → 바로 분류
-            }
-        )
-
-        # 주의: conversation_context_processor 자체는 항상 실행되지만,
-        # 내부에서 히스토리가 없으면 스킵하는 로직이 있음
-        workflow.add_edge(WorkflowNode.QUERY_CLS.value, WorkflowNode.SKILL_TOOL_SELECTOR.value)
-
-        # 조건부 분기: 도구/에이전트가 필요 없으면 orchestrator 건너뛰고 바로 응답 생성
-        # ROMA / HyperDeep / Approval / A2UI 활성화 시 확장 경로 추가
-        if (settings.RECURSIVE_AGENT_ENABLED or settings.HYPER_DEEP_AGENT_ENABLED
-                or settings.DEEP_ANALYSIS_ENABLED
-                or settings.EXECUTION_APPROVAL_ENABLED or settings.A2UI_ENABLED):
-            _routing_map = {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
-                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
-                "mission": WorkflowNode.MISSION_PLANNER.value,
-            }
-            # spec 2026-10-11 §2: skip·use 는 공통 스킬 실행 노드를 지난다.
-            if settings.SKILL_EXECUTION_ENABLED:
-                _routing_map[WorkflowPathway.SKIP_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
-                _routing_map[WorkflowPathway.USE_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
-            if settings.RECURSIVE_AGENT_ENABLED:
-                _routing_map["recursive"] = WorkflowNode.RECURSIVE_ORCHESTRATOR.value
-            if settings.HYPER_DEEP_AGENT_ENABLED:
-                _routing_map["hyper_deep"] = WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value
-            if settings.DEEP_ANALYSIS_ENABLED:
-                _routing_map["deep_analysis"] = WorkflowNode.DEEP_ANALYSIS_DISPATCH.value
-            # Phase 2: 승인 대기 경로 (최우선 — _should_use_recursive_agent에서 먼저 체크)
-            if settings.EXECUTION_APPROVAL_ENABLED:
-                _routing_map["needs_approval"] = WorkflowNode.EXECUTION_APPROVAL.value
-            # Phase 4: 스케줄 등록 경로
-            _routing_map["task_scheduling"] = WorkflowNode.TASK_SCHEDULING_NODE.value
-            # Phase 8: A2UI — UI 폼 생성 단락 경로
-            if settings.A2UI_ENABLED:
-                _routing_map["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
-
-            workflow.add_conditional_edges(
-                WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._route_after_skill_tool_selector,
-                _routing_map,
-            )
-            # G1-b: 두 재귀 경로는 **스스로 `final_response` 를 만든다.** 예전에는
-            # 거기서 RESULT_INTEGRATOR 로 합류시켰는데, 그 뒤의 레거시 체인
-            # (result_integrator → fact_check → quality_validator)은
-            # search/analysis/generation 결과를 입력으로 요구한다. 재귀 경로는
-            # 그 셋을 하나도 채우지 않으므로 체인 전체가 **빈 입력 위에서**
-            # 돌았다 -- integrated_results 는 비고, quality_validator 는 빈
-            # 상태로 점수를 매겨 REGENERATE 를 낼 수 있었다. 그러면 ROMA 가
-            # 이미 낸 답을 두고 레거시 파이프라인이 통째로 헛돈다.
-            #
-            # 답을 만든 노드는 응답 생성기로 바로 간다 -- task_scheduling_node ·
-            # mission_integrator · direct_response 와 같은 모양이고, 거기서
-            # `_preserve_existing_response` 가 그 답을 그대로 돌려준다.
-            if settings.RECURSIVE_AGENT_ENABLED:
-                workflow.add_edge(WorkflowNode.RECURSIVE_ORCHESTRATOR.value, WorkflowNode.RESP_GENERATOR.value)
-            if settings.HYPER_DEEP_AGENT_ENABLED:
-                workflow.add_edge(WorkflowNode.HYPER_DEEP_ORCHESTRATOR.value, WorkflowNode.RESP_GENERATOR.value)
-            if settings.DEEP_ANALYSIS_ENABLED:
-                # 디스패치 노드는 END로 단락한다 — 챗 턴은 job 핸들을 낸 뒤
-                # 즉시 끝나야 하며(AC2), 후속 노드가 기다릴 결과가 없다.
-                workflow.add_edge(WorkflowNode.DEEP_ANALYSIS_DISPATCH.value, END)
-            # Phase 8: UI_FRAME_GENERATOR 노드 등록 + END 단락 경로
-            if settings.A2UI_ENABLED:
-                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
-                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
-        else:
-            # A2UI_ENABLED에 따라 라우팅 맵과 노드 등록을 동시에 조건부 처리
-            # (노드 미등록 상태에서 라우팅 맵에 키만 있으면 LangGraph 경고 발생)
-            _else_routing = {
-                WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
-                WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
-                "mission": WorkflowNode.MISSION_PLANNER.value,
-                "task_scheduling": WorkflowNode.TASK_SCHEDULING_NODE.value,
-            }
-            if settings.SKILL_EXECUTION_ENABLED:
-                _else_routing[WorkflowPathway.SKIP_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
-                _else_routing[WorkflowPathway.USE_ORCHESTRATORS.value] = WorkflowNode.SKILL_EXECUTOR.value
-            if settings.A2UI_ENABLED:
-                _else_routing["ui_frame"] = WorkflowNode.UI_FRAME_GENERATOR.value
-            workflow.add_conditional_edges(
-                WorkflowNode.SKILL_TOOL_SELECTOR.value,
-                self._route_after_skill_tool_selector,
-                _else_routing,
-            )
-            if settings.A2UI_ENABLED:
-                workflow.add_node(WorkflowNode.UI_FRAME_GENERATOR.value, self._ui_frame_generator_node)
-                workflow.add_edge(WorkflowNode.UI_FRAME_GENERATOR.value, END)
-
-        # 실행 노드 출구: skip 은 직접 응답, 그 밖(use · approved)은 가설 생성.
-        if settings.SKILL_EXECUTION_ENABLED:
-            workflow.add_conditional_edges(
-                WorkflowNode.SKILL_EXECUTOR.value,
-                self._route_after_skill_executor,
-                {
-                    WorkflowPathway.SKIP_ORCHESTRATORS.value: WorkflowNode.DIRECT_RESPONSE.value,
-                    WorkflowPathway.USE_ORCHESTRATORS.value: WorkflowNode.HYPOTHESIS_GENERATION.value,
-                },
-            )
-
-        # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
-        workflow.add_edge(WorkflowNode.TASK_SCHEDULING_NODE.value, WorkflowNode.RESP_GENERATOR.value)
-
-        # Mission Runtime: plan -> optional approval -> serial executor -> validators -> response
-        workflow.add_conditional_edges(
-            WorkflowNode.MISSION_PLANNER.value,
-            self._should_continue_after_mission_planner,
-            {
-                "approval_unavailable": WorkflowNode.RESP_GENERATOR.value,
-                "needs_approval": WorkflowNode.MISSION_APPROVAL.value,
-                "execute": WorkflowNode.MISSION_EXECUTOR.value,
-            },
-        )
-        workflow.add_conditional_edges(
-            WorkflowNode.MISSION_APPROVAL.value,
-            self._should_continue_after_approval,
-            {
-                "approved": WorkflowNode.MISSION_EXECUTOR.value,
-                "rejected": WorkflowNode.RESP_GENERATOR.value,
-            },
-        )
-        workflow.add_edge(WorkflowNode.MISSION_EXECUTOR.value, WorkflowNode.MISSION_VALIDATOR.value)
-        workflow.add_edge(WorkflowNode.MISSION_VALIDATOR.value, WorkflowNode.MISSION_INTEGRATOR.value)
-        workflow.add_edge(WorkflowNode.MISSION_INTEGRATOR.value, WorkflowNode.RESP_GENERATOR.value)
-
-        # Phase 2 (OpenClaw Execution Approval): EXECUTION_APPROVAL → 분기
-        # approved → 오케스트레이터 경로(스킬 실행이 켜졌으면 실행 노드 먼저), rejected → 응답 생성
-        if settings.EXECUTION_APPROVAL_ENABLED:
-            _approval_routing = {
-                "approved": WorkflowNode.HYPOTHESIS_GENERATION.value,
-                "rejected": WorkflowNode.RESP_GENERATOR.value,
-            }
-            if settings.SKILL_EXECUTION_ENABLED:
-                _approval_routing["approved"] = WorkflowNode.SKILL_EXECUTOR.value
-            workflow.add_conditional_edges(
-                WorkflowNode.EXECUTION_APPROVAL.value,
-                self._should_continue_after_approval,
-                _approval_routing,
-            )
-
-        # Phase 2.5: HYPOTHESIS_GENERATION → SEARCH → HYPOTHESIS_EVALUATION → ANALYSIS
-        workflow.add_edge(WorkflowNode.HYPOTHESIS_GENERATION.value, WorkflowNode.SEARCH_ORCHESTRATOR.value)
-        workflow.add_edge(WorkflowNode.SEARCH_ORCHESTRATOR.value, WorkflowNode.HYPOTHESIS_EVALUATION.value)
-        # Phase 2.4: HYPOTHESIS_EVALUATION → 조건부 replanning
-        workflow.add_conditional_edges(
-            WorkflowNode.HYPOTHESIS_EVALUATION.value,
-            self._should_replan,
-            {
-                "replan": WorkflowNode.REPLANNER.value,
-                "skip_replan": WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
-            }
-        )
-
-        # Phase 2.4: REPLANNER → 추가 검색 필요 시 loop back, 아니면 진행
-        workflow.add_conditional_edges(
-            WorkflowNode.REPLANNER.value,
-            self._should_continue_research,
-            {
-                "continue_search": WorkflowNode.HYPOTHESIS_GENERATION.value,  # loop back
-                "proceed": WorkflowNode.ANALYSIS_ORCHESTRATOR.value,
-            }
-        )
-        workflow.add_edge(WorkflowNode.ANALYSIS_ORCHESTRATOR.value, WorkflowNode.GENERATION_ORCHESTRATOR.value)
-        workflow.add_edge(WorkflowNode.GENERATION_ORCHESTRATOR.value, WorkflowNode.RESULT_INTEGRATOR.value)
-        workflow.add_edge(WorkflowNode.RESULT_INTEGRATOR.value, WorkflowNode.FACT_CHECK.value)
-        workflow.add_edge(WorkflowNode.FACT_CHECK.value, WorkflowNode.QUALITY_VALIDATOR.value)
-
-        # 조건부 엣지 (품질 검증 결과에 따라)
-        workflow.add_conditional_edges(
-            WorkflowNode.QUALITY_VALIDATOR.value,
-            self._should_regenerate,
-            {
-                WorkflowPathway.REGENERATE.value: WorkflowNode.HYPOTHESIS_GENERATION.value,  # 품질이 낮으면 가설 생성부터 다시
-                WorkflowPathway.PROCEED.value: WorkflowNode.SELF_REFLECTION.value,
-            }
-        )
-
-        # Phase 2.6: self_reflection → response_generator
-        workflow.add_edge(WorkflowNode.SELF_REFLECTION.value, WorkflowNode.RESP_GENERATOR.value)
-
-        workflow.add_edge(WorkflowNode.RESP_GENERATOR.value, WorkflowNode.RESEARCH_HARNESS.value)
-        workflow.add_conditional_edges(
-            WorkflowNode.RESEARCH_HARNESS.value,
-            _should_route_to_harness_repair,
-            {
-                "repair": WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
-                "end": END,
-            },
-        )
-        workflow.add_edge(
-            WorkflowNode.RESEARCH_HARNESS_REPAIR.value,
-            WorkflowNode.RESEARCH_HARNESS.value,
-        )
-
-        # Conditionally use checkpointer
+        wiring = resolve_wiring(current_static_flags())
         if use_checkpointer:
             checkpointer = await get_checkpointer()
             logger.debug("[WorkflowGraph] Created with PostgreSQL checkpointer for horizontal scaling")
-            # Phase 2 (OpenClaw Execution Approval): interrupt_before는 checkpointer 경로에만 적용
-            # stateless 경로(use_checkpointer=False)에서는 interrupt가 동작하지 않으므로 제외
-            interrupt_nodes = (
-                [
-                    WorkflowNode.EXECUTION_APPROVAL.value,
-                    WorkflowNode.MISSION_APPROVAL.value,
-                ]
-                if settings.EXECUTION_APPROVAL_ENABLED
-                else []
+            # 승인 게이트(interrupt_before)는 체크포인터 경로에만 건다 -- stateless 경로에서는
+            # 중단해도 재개할 지점이 없다.
+            return compile_wiring(
+                wiring,
+                self,
+                graph_factory=StateGraph,
+                state_schema=AgentState,
+                checkpointer=checkpointer,
+                interrupt_before=wiring.interrupt_before,
             )
-            return workflow.compile(checkpointer=checkpointer, interrupt_before=interrupt_nodes)
-        else:
-            logger.debug("[WorkflowGraph] Created without checkpointer (stateless mode)")
-            return workflow.compile()
+        logger.debug("[WorkflowGraph] Created without checkpointer (stateless mode)")
+        return compile_wiring(wiring, self, graph_factory=StateGraph, state_schema=AgentState)
 
 
     async def _ensure_graph_initialized(self, use_checkpointer: bool = True):

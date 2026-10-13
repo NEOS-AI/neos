@@ -158,28 +158,50 @@ NODES: tuple[NodeSpec, ...] = (
     NodeSpec(N.MISSION_VALIDATOR.value, "_mission_validator_node"),
     NodeSpec(N.MISSION_INTEGRATOR.value, "_mission_integrator_node"),
     NodeSpec(N.RESP_GENERATOR.value, "_generate_response_node"),
+    # G1-a: `skip_orchestrators` 는 요약할 결과를 만드는 노드를 하나도 지나지 않는다.
+    # 이 노드가 그 자리에서 직접 답을 만든다.
     NodeSpec(N.DIRECT_RESPONSE.value, "_direct_response_node"),
     NodeSpec(N.SKILL_EXECUTOR.value, "_skill_executor_node", _on("skill_execution")),
     NodeSpec(N.RECURSIVE_ORCHESTRATOR.value, "_recursive_orchestrator_node", _on("recursive")),
     NodeSpec(N.HYPER_DEEP_ORCHESTRATOR.value, "_hyper_deep_orchestrator_node", _on("hyper_deep")),
     NodeSpec(N.DEEP_ANALYSIS_DISPATCH.value, "_deep_analysis_dispatch_node", _on("deep_analysis")),
+    # Phase 2 (OpenClaw Execution Approval): 민감 스킬 사용자 승인 노드. `INTERRUPTS` 가
+    # 이 노드 앞에서 멈추고, 재개되면 이 노드가 실행된다.
     NodeSpec(N.EXECUTION_APPROVAL.value, "_execution_approval_node", _on("execution_approval")),
+    # Phase 4 (OpenClaw Cron): 자연어 스케줄 등록 노드
     NodeSpec(N.TASK_SCHEDULING_NODE.value, "_handle_task_scheduling_node"),
+    # Phase 8: A2UI -- UI 폼 생성 단락 경로. 노드 등록과 라우팅 맵 키를 같은 플래그로
+    # 함께 켠다(노드 미등록 상태에서 라우팅 맵에 키만 있으면 LangGraph 경고가 난다).
     NodeSpec(N.UI_FRAME_GENERATOR.value, "_ui_frame_generator_node", _on("a2ui")),
 )
 
 EDGES: tuple[Edge, ...] = (
     Edge(START, N.REFINEMENT_CHECKER.value),
+    # G1-a: 직접 응답 노드는 답을 만든 뒤 응답 생성기로 넘어가고, 거기서
+    # `_preserve_existing_response` 가 그 답을 그대로 반환한다.
     Edge(N.DIRECT_RESPONSE.value, N.RESP_GENERATOR.value),
     Edge(N.QUERY_REFINEMENT.value, N.CONVERSATION_CTX_PROC.value),
     Edge(N.RESEARCH_CONTINUATION.value, N.CONVERSATION_CTX_PROC.value),
     Edge(N.QUERY_CLS.value, N.SKILL_TOOL_SELECTOR.value),
+    # G1-b: 두 재귀 경로는 **스스로 `final_response` 를 만든다.** 예전에는 거기서
+    # RESULT_INTEGRATOR 로 합류시켰는데, 그 뒤의 레거시 체인(result_integrator →
+    # fact_check → quality_validator)은 search/analysis/generation 결과를 입력으로
+    # 요구한다. 재귀 경로는 그 셋을 하나도 채우지 않으므로 체인 전체가 **빈 입력
+    # 위에서** 돌았다 -- integrated_results 는 비고, quality_validator 는 빈 상태로
+    # 점수를 매겨 REGENERATE 를 낼 수 있었다. 그러면 ROMA 가 이미 낸 답을 두고
+    # 레거시 파이프라인이 통째로 헛돈다.
+    #
+    # 답을 만든 노드는 응답 생성기로 바로 간다 -- task_scheduling_node ·
+    # mission_integrator · direct_response 와 같은 모양이고, 거기서
+    # `_preserve_existing_response` 가 그 답을 그대로 돌려준다.
     Edge(N.RECURSIVE_ORCHESTRATOR.value, N.RESP_GENERATOR.value, _on("recursive")),
     Edge(N.HYPER_DEEP_ORCHESTRATOR.value, N.RESP_GENERATOR.value, _on("hyper_deep")),
     # 디스패치 노드는 END 로 단락한다 -- 챗 턴은 job 핸들을 낸 뒤 즉시 끝난다(AC2).
     Edge(N.DEEP_ANALYSIS_DISPATCH.value, END, _on("deep_analysis")),
     Edge(N.UI_FRAME_GENERATOR.value, END, _on("a2ui")),
+    # Phase 4 (OpenClaw Cron): TASK_SCHEDULING_NODE → 바로 응답 생성
     Edge(N.TASK_SCHEDULING_NODE.value, N.RESP_GENERATOR.value),
+    # Mission Runtime: plan -> optional approval -> serial executor -> validators -> response
     Edge(N.MISSION_EXECUTOR.value, N.MISSION_VALIDATOR.value),
     Edge(N.MISSION_VALIDATOR.value, N.MISSION_INTEGRATOR.value),
     Edge(N.MISSION_INTEGRATOR.value, N.RESP_GENERATOR.value),
@@ -216,6 +238,7 @@ BRANCHES: tuple[Branch, ...] = (
         N.SKILL_TOOL_SELECTOR.value,
         "_route_after_skill_tool_selector",
         (
+            # spec 2026-10-11 §2: skip·use 는 스킬 실행이 켜졌으면 공통 스킬 실행 노드를 지난다.
             Route(P.SKIP_ORCHESTRATORS.value, N.DIRECT_RESPONSE.value, _off("skill_execution")),
             Route(P.SKIP_ORCHESTRATORS.value, N.SKILL_EXECUTOR.value, _on("skill_execution")),
             Route(P.USE_ORCHESTRATORS.value, N.HYPOTHESIS_GENERATION.value, _off("skill_execution")),
@@ -224,11 +247,15 @@ BRANCHES: tuple[Branch, ...] = (
             Route("recursive", N.RECURSIVE_ORCHESTRATOR.value, _on("recursive")),
             Route("hyper_deep", N.HYPER_DEEP_ORCHESTRATOR.value, _on("hyper_deep")),
             Route("deep_analysis", N.DEEP_ANALYSIS_DISPATCH.value, _on("deep_analysis")),
+            # Phase 2: 승인 대기 경로(최우선 -- `_should_use_recursive_agent` 가 먼저 본다)
             Route("needs_approval", N.EXECUTION_APPROVAL.value, _on("execution_approval")),
+            # Phase 4: 스케줄 등록 경로
             Route("task_scheduling", N.TASK_SCHEDULING_NODE.value),
+            # Phase 8: A2UI -- UI 폼 생성 단락 경로
             Route("ui_frame", N.UI_FRAME_GENERATOR.value, _on("a2ui")),
         ),
     ),
+    # 실행 노드 출구: skip 은 직접 응답, 그 밖(use · approved)은 가설 생성.
     Branch(
         N.SKILL_EXECUTOR.value,
         "_route_after_skill_executor",
@@ -255,6 +282,8 @@ BRANCHES: tuple[Branch, ...] = (
             Route("rejected", N.RESP_GENERATOR.value),
         ),
     ),
+    # Phase 2: approved → 오케스트레이터 경로(스킬 실행이 켜졌으면 실행 노드 먼저),
+    # rejected → 응답 생성
     Branch(
         N.EXECUTION_APPROVAL.value,
         "_should_continue_after_approval",
@@ -299,7 +328,8 @@ BRANCHES: tuple[Branch, ...] = (
     ),
 )
 
-# 사람 승인 게이트. 체크포인터가 있는 경로에서만 쓰인다(호출자가 정한다).
+# 사람 승인 게이트. 체크포인터가 있는 경로에서만 쓰인다(호출자가 정한다) --
+# stateless 경로에서는 중단해도 재개할 지점이 없다.
 INTERRUPTS: tuple[Interrupt, ...] = (
     Interrupt(N.EXECUTION_APPROVAL.value, _on("execution_approval")),
     Interrupt(N.MISSION_APPROVAL.value, _on("execution_approval")),

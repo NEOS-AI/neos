@@ -133,7 +133,7 @@ def topology_of(wiring) -> GraphTopology             # 추출기 · 스냅샷 �
   적으면 폭발한다)
 - `handler`·`router` 는 `MultiAgentWorkflow` 의 메서드 이름이다. 노드 핸들러와 `node_contract` 는 바꾸지 않는다
 - **토폴로지 동일성**: 단계 2 의 첫 커밋에서 `topology_of(resolve_wiring(flags))` 가 기존 AST 추출 결과와 **노드·엣지 집합으로**
-  같음을 모든 플래그 조합에서 확인한 뒤 AST 추출기와 `settings.SKILL_EXECUTION_ENABLED` 별칭(추출기 때문에 있던 것)을 지운다
+  같음을 모든 플래그 조합에서 확인한 뒤 AST 추출기를 지운다. `settings.SKILL_EXECUTION_ENABLED` 별칭은 **둔다** — 여섯 배선 플래그가 모두 같은 별칭 지도(`wiring.FLAG_ATTR_TO_KEY`)로 실행 시점 값을 읽으므로 하나만 지우면 비대칭이 된다(Plan 1 에서 정함)
 - LangGraph 어댑터(`neos/workflow/runtime/langgraph_adapter.py`, 단계 7 에서 삭제)는 같은 표에서 `StateGraph` 를 조립한다
 
 ### 4.2 러너 — `neos/workflow/runtime/runner.py`
