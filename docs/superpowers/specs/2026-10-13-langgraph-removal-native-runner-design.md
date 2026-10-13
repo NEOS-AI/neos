@@ -122,16 +122,17 @@ class Edge:       source: str; target: str; flag: str | None = None
 class Branch:     source: str; router: str; path_map: Mapping[str, str]; flag: str | None = None
 
 STATIC_WIRING: tuple[NodeSpec | Edge | Branch, ...]
-def build_static_wiring(settings) -> Wiring          # flag 가 켜진 항목만
+def resolve_wiring(flags) -> Wiring          # flag 가 켜진 항목만
 def wiring_from_topology(topology, host) -> Wiring   # 설계 그래프 (§4.10)
 def topology_of(wiring) -> GraphTopology             # 추출기 · 스냅샷 해시 · 노드 수 테스트의 입력
 ```
 
 - 지금 `_create_workflow_graph` 의 `if settings.X:` 블록은 항목의 `flag` 가 된다. 경로 맵 안의 플래그별 대상(예: 스킬 실행이
-  켜지면 skip·use 가 `SKILL_EXECUTOR` 로)은 같은 `source` 의 `Branch` 를 플래그별로 둘 두어 표현하고, `build_static_wiring` 이
-  켜진 쪽 하나만 고른다 — 한 `source` 에 켜진 `Branch` 가 둘이면 조립 오류다
+  켜지면 skip·use 가 `SKILL_EXECUTOR` 로)은 **경로(`Route`)마다 `requires`** 를 두어 표현한다. `resolve_wiring` 은 켜진 경로만
+  남기고, 한 라벨에 켜진 경로가 둘이면 `WiringError` 다(Plan 1 에서 정함 — 라벨 아홉 × 플래그 여섯의 조합을 `Branch` 사본으로
+  적으면 폭발한다)
 - `handler`·`router` 는 `MultiAgentWorkflow` 의 메서드 이름이다. 노드 핸들러와 `node_contract` 는 바꾸지 않는다
-- **토폴로지 동일성**: 단계 2 의 첫 커밋에서 `topology_of(build_static_wiring(s))` 가 기존 AST 추출 결과와 **노드·엣지 집합으로**
+- **토폴로지 동일성**: 단계 2 의 첫 커밋에서 `topology_of(resolve_wiring(flags))` 가 기존 AST 추출 결과와 **노드·엣지 집합으로**
   같음을 모든 플래그 조합에서 확인한 뒤 AST 추출기와 `settings.SKILL_EXECUTION_ENABLED` 별칭(추출기 때문에 있던 것)을 지운다
 - LangGraph 어댑터(`neos/workflow/runtime/langgraph_adapter.py`, 단계 7 에서 삭제)는 같은 표에서 `StateGraph` 를 조립한다
 

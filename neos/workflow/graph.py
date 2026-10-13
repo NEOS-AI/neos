@@ -2729,6 +2729,10 @@ class MultiAgentWorkflow:
         """SKILL_EXECUTOR 출구 -- 셀렉터 뒤 결정을 다시 계산한다 (spec §2)."""
         return self._orchestrator_router.route_after_skill_execution(state)
 
+    def _route_after_research_harness(self, state: AgentState) -> str:
+        """배선 표의 분기 라우터는 메서드 이름으로 가리킨다 -- 모듈 함수에 이름을 준다."""
+        return _should_route_to_harness_repair(state)
+
     def _should_use_mission_runtime(self, state: AgentState) -> str:
         """Mission Runtime 후보면 mission branch로 보낸다."""
         from neos.workflow.mission import routing as mission_routing
