@@ -87,6 +87,47 @@ def test_in_place_mutation_becomes_an_update() -> None:
     assert before == {"execution_steps": [{"step": 1}]}
 
 
+def test_a_partial_return_keeps_in_place_appends_on_the_working_copy() -> None:
+    """부분 dict 를 돌려주는 노드가 사본에 제자리로 붙인 것도 갱신이다 (fact_check 의 execution_steps)."""
+    before = {"execution_steps": [{"step": 1}], "x": None}
+
+    async def node(state):
+        state["execution_steps"].append({"step": 2})
+        return {"x": "결과"}
+
+    import asyncio
+
+    update = asyncio.run(wrap_node("node", node, policy="raise")(before))
+    assert update == {"x": "결과", "execution_steps": [{"step": 1}, {"step": 2}]}
+    assert before == {"execution_steps": [{"step": 1}], "x": None}
+
+
+def test_a_full_state_return_through_wrap_node_keeps_only_what_changed() -> None:
+    before = {"search_results": [A], "final_response": None, "quality_score": 0.5}
+
+    async def node(state):
+        state["search_results"] = state["search_results"] + [B]
+        return {**state, "final_response": "답"}
+
+    import asyncio
+
+    update = asyncio.run(wrap_node("node", node, policy="raise")(before))
+    assert update == {"search_results": [B], "final_response": "답"}
+
+
+def test_a_none_return_keeps_in_place_appends() -> None:
+    before = {"execution_steps": [{"step": 1}], "x": 1}
+
+    def node(state):
+        state["execution_steps"].append({"step": 2})
+        return None
+
+    import asyncio
+
+    update = asyncio.run(wrap_node("node", node, policy="raise")(before))
+    assert update == {"execution_steps": [{"step": 1}, {"step": 2}]}
+
+
 def test_raise_policy_rejects_keys_outside_writes() -> None:
     with pytest.raises(NodeUpdateRejected) as error:
         _norm({}, {"x": 1, "final_response": "답"}, writes=frozenset({"x"}))

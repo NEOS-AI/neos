@@ -14,7 +14,8 @@ Plan 2 의 네이티브 러너가 같은 함수를 쓴다.
 - 그 밖의 필드: 이전 값과 같으면(동일 객체이거나 `==`) 갱신이 아니다. 비교가 예외를
   던지면 바뀐 것으로 본다
 - 노드에는 상태의 **작업 사본**을 넘긴다 -- 제자리 변경(`append`)이 이전 값을 바꾸면
-  변경이 보이지 않는다
+  변경이 보이지 않는다. 갱신은 `{**사본, **반환값}` 을 이전 상태와 비교해 만든다 --
+  부분 dict 를 돌려주는 노드의 제자리 변경도 잃지 않는다
 - 계약의 `writes` 밖 키: `report` 는 기록만, `drop` 은 버림, `raise` 는 거절
 """
 
@@ -159,9 +160,13 @@ def wrap_node(node: str, handler: Callable, *, policy: UpdatePolicy) -> Callable
 
     @functools.wraps(handler)
     async def run(state):
-        result = handler(working_copy(state))
+        working = working_copy(state)
+        result = handler(working)
         if inspect.isawaitable(result):
             result = await result
-        return normalize_update(node, state, result, writes=writes, policy=policy)
+        # 부분 dict 를 돌려주면서 사본에 제자리로 붙이는 노드가 있다(fact_check 의
+        # execution_steps). 사본과 반환값을 합친 모습을 이전 상태와 비교해야 그 변경이
+        # 사라지지 않는다. `None` 반환이면 제자리 변경만 갱신이다.
+        return normalize_update(node, state, {**working, **(result or {})}, writes=writes, policy=policy)
 
     return run
