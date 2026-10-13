@@ -1774,8 +1774,9 @@ Design: `docs/Q15_VOICE_DESIGN_261005.md`.
 | `max_content_chars` | `4000` | Truncation for each `SearchResult.content`. |
 
 Only skills whose `SKILL.md` sets `auto_execute: true` are candidates. The flat alias
-`settings.SKILL_EXECUTION_ENABLED` exists because the static topology extractor reads
-`if settings.X:` conditions only.
+`settings.SKILL_EXECUTION_ENABLED` keeps the six wiring flags symmetric: the wiring table
+reads every flag through the same flat-attribute map (`neos.workflow.wiring.FLAG_ATTR_TO_KEY`),
+so this one is not a special case.
 
 ### Node update policy
 

@@ -114,20 +114,28 @@ ROMA·HyperDeep·미션이 만든 `final_response` 도 `RESEARCH_HARNESS` 를 �
 ### 4.1 배선 표 — `neos/workflow/wiring.py`
 
 ```python
-@dataclass(frozen=True)
-class NodeSpec:   name: str; handler: str; flag: str | None = None
-@dataclass(frozen=True)
-class Edge:       source: str; target: str; flag: str | None = None
-@dataclass(frozen=True)
-class Branch:     source: str; router: str; path_map: Mapping[str, str]; flag: str | None = None
+Requires = tuple[tuple[str, bool], ...]     # (플래그 키, 기대값) -- 전부 맞아야 켜진다
 
-STATIC_WIRING: tuple[NodeSpec | Edge | Branch, ...]
-def resolve_wiring(flags) -> Wiring          # flag 가 켜진 항목만
-def wiring_from_topology(topology, host) -> Wiring   # 설계 그래프 (§4.10)
-def topology_of(wiring) -> GraphTopology             # 추출기 · 스냅샷 해시 · 노드 수 테스트의 입력
+@dataclass(frozen=True)
+class NodeSpec:   name: str; handler: str; requires: Requires = ()
+@dataclass(frozen=True)
+class Edge:       source: str; target: str; requires: Requires = ()
+@dataclass(frozen=True)
+class Route:      label: str; target: str; requires: Requires = ()
+@dataclass(frozen=True)
+class Branch:     source: str; router: str; routes: tuple[Route, ...]; requires: Requires = ()
+@dataclass(frozen=True)
+class Interrupt:  node: str; requires: Requires = ()
+
+NODES: tuple[NodeSpec, ...]; EDGES: tuple[Edge, ...]; BRANCHES: tuple[Branch, ...]; INTERRUPTS: tuple[Interrupt, ...]
+FLAG_ATTR_TO_KEY: dict[str, str]             # settings 속성 → 플래그 키 (여섯 개)
+def resolve_wiring(flags) -> Wiring          # requires 가 맞는 항목만, 닫혀 있지 않으면 WiringError
+def wiring_from_topology(topology, host) -> Wiring   # 설계 그래프 (§4.10, Plan 2)
+def topology_of(wiring) -> GraphTopology             # 스냅샷 해시 · 노드 수 테스트의 입력
 ```
 
-- 지금 `_create_workflow_graph` 의 `if settings.X:` 블록은 항목의 `flag` 가 된다. 경로 맵 안의 플래그별 대상(예: 스킬 실행이
+- 지금 `_create_workflow_graph` 의 `if settings.X:` 블록은 항목의 `requires` 가 된다(켜짐은 `(키, True)`, 꺼짐 경로는
+  `(키, False)`). 경로 맵 안의 플래그별 대상(예: 스킬 실행이
   켜지면 skip·use 가 `SKILL_EXECUTOR` 로)은 **경로(`Route`)마다 `requires`** 를 두어 표현한다. `resolve_wiring` 은 켜진 경로만
   남기고, 한 라벨에 켜진 경로가 둘이면 `WiringError` 다(Plan 1 에서 정함 — 라벨 아홉 × 플래그 여섯의 조합을 `Branch` 사본으로
   적으면 폭발한다)
@@ -151,9 +159,21 @@ class WorkflowRunner:
 - **리듀서는 `AgentState` 의 `Annotated` 메타데이터에서 읽는다**(`typing.get_type_hints(include_extras=True)`) — `operator.add` 누적,
   `merge_node_dict` 병합, 그 밖은 교체. 표에 다시 적지 않는다
 - **갱신은 계약의 `writes` 안의 키만.** 핸들러가 `NODE_CONTRACTS[node].writes` 밖의 키를 내면 러너가 거절한다(테스트·development
-  에서 예외, 그 밖에서는 해당 키를 버리고 `workflow_update_rejected_total{node,key}`). R5 를 닫기 위해 전체 상태를 돌려주던
-  노드(응답 생성기 · `RESEARCH_HARNESS` · `RESEARCH_HARNESS_REPAIR` · 가설 생성·평가)는 **갱신분만** 돌려주도록 고친다.
-  `writes_hand_curated=True` 인 계약도 이 검사를 받는다 — 목록이 틀리면 지금 드러나야 한다
+  에서 예외, 그 밖에서는 해당 키를 버리고 `workflow_update_rejected_total{node,key}`). `writes_hand_curated=True` 인 계약도
+  이 검사를 받는다 — 목록이 틀리면 지금 드러나야 한다
+- **(Plan 1 에서 정함) R5 는 노드를 하나씩 고치지 않고 노드 경계 정규화로 닫았다** — `neos/workflow/runtime/node_updates.wrap_node`
+  가 노드에 상태의 작업 사본을 넘기고, `{**사본, **반환값}` 을 이전 상태와 비교해 "이번 노드의 갱신" 만 남긴다(누적 필드는 새
+  항목만, 그 밖은 바뀐 키만). 전체 상태를 돌려주는 노드도, 부분 dict 를 돌려주며 사본에 제자리로 붙이는 노드도 같은 갱신을 낸다.
+  LangGraph 어댑터와 네이티브 러너가 같은 함수를 쓴다
+- **(Plan 1 에서 정함) 턴 결과는 모든 chunk 를 `node_updates.apply_update`(리듀서 의미론: 누적·병합·교체)로 접은 전체 상태다**
+  — 마지막 chunk 를 결과로 읽던 R4 를 LangGraph 경로에서도 닫았다. 승인 재개(`approval_handlers._resume`)도 같은 함수로 접는다
+- **(Plan 1 에서 정함) 정책은 `workflow.node_update_policy`(`report`·`drop`·`raise`) 다.** 스키마 기본값과 development 는
+  `report`(지금 동작과 같다 — 기록만 하고 키를 둔다), 테스트 세션(`tests/fixtures/config/test-session.yaml`)은 `raise`.
+  development 는 실제 노드로 라이브 dry run 을 돌려 위반이 없음을 본 뒤(Plan 3 단계 5) `raise` 로 올린다. 위에 적은 "테스트·
+  development 에서 예외, 그 밖에서는 버림" 은 그때의 목표 상태다
+- **(Plan 1 에서 정함) R3 는 LangGraph 경로에서 `__interrupt__` chunk 를 승인 요청으로 바꿔 닫았지만, 올바른 체크포인터를
+  전제로 한다.** PostgreSQL 체크포인터에서는 승인 인터럽트가 여전히 R1(`aget_tuple` 이 `CheckpointTuple` 이 아니다)에 걸린다 —
+  Plan 2 의 세션 저장소가 닫는다
 - `step_limit` 은 지금의 `_recursion_limit_for` 계산 그대로. 넘으면 `StepLimitExceeded`
 - `interrupt_before` 노드에 닿으면 **실행 전에** `Interrupted(next_node, state)` 로 끝난다. 예외가 아니라 결과다
 - `Completed.state` 는 **병합된 전체 상태**다(R4)

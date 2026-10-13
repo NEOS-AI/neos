@@ -140,3 +140,19 @@ def test_the_compiled_graph_has_exactly_the_tables_edges(flags) -> None:
     table_edges = set(topology_of(wiring).edges)
     assert lg_edges == table_edges
     assert set(drawn.nodes) - {START, END} == {spec.name for spec in wiring.nodes}
+
+
+def test_every_node_spec_names_its_contract_handler() -> None:
+    """표의 `handler` 문자열이 그 노드 계약의 핸들러와 같다 -- 표와 `@node_contract` 가
+    서로 다른 메서드를 가리키면 배선은 맞아도 엉뚱한 핸들러가 돈다."""
+    import neos.workflow.graph  # noqa: F401 -- 계약을 등록한다
+    from neos.workflow.contracts import NODE_CONTRACTS
+
+    wiring = resolve_wiring({key: True for key in DEFAULT_FLAGS})
+    mismatched = {
+        spec.name: (spec.handler, NODE_CONTRACTS[spec.name].handler.__name__)
+        for spec in wiring.nodes
+        if spec.handler != NODE_CONTRACTS[spec.name].handler.__name__
+    }
+    assert mismatched == {}
+    assert len(wiring.nodes) == len(NODE_CONTRACTS)

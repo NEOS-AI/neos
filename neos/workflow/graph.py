@@ -2754,9 +2754,10 @@ class MultiAgentWorkflow:
                 # 로컬이며 인스턴스에 남지 않는다(G2-c).
                 #
                 # 이 호출이 `try` **안**에 있어야 하는 이유: 정적 경로조차
-                # `static_topology` 를 거쳐 `inspect.getsource` + `ast.parse` 를
-                # 돈다. 소스를 못 읽거나(`OSError`) 추출이 실패하면
-                # (`_StaticExtractionError`) 밖에서는 아무도 받지 않아 예외가
+                # `static_topology` 를 거쳐 배선표를 푼다(`wiring.resolve_wiring`)
+                # -- 표가 플래그 조합과 맞지 않으면 `WiringError`/`ValueError` 가
+                # 난다. 설계 경로는 거기에 설계자·서브에이전트 호스트·임시 그래프
+                # 조립 실패가 더해진다. `try` 밖이면 그 예외를 아무도 받지 않아
                 # 그대로 호출자에게 나가고, `on_workflow_error` 도 에러 결과도
                 # 없다. 그것도 **플래그가 꺼진 경로**에서 그렇다 -- 꺼진 run 이
                 # 이전과 구별되지 않아야 한다는 이 기능의 전제와 정면으로

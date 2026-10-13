@@ -1,17 +1,21 @@
 """노드 반환값 → 이번 노드의 갱신 (spec 2026-10-13 §4.2, R5)."""
 
-import numpy as np
+import operator
+from typing import Annotated, NotRequired, TypedDict
+
 import pytest
 
 from neos.workflow.runtime.node_updates import (
     NodeUpdateRejected,
+    UnknownReducer,
+    _kinds_of,
     apply_update,
     normalize_update,
     reducer_kinds,
     working_copy,
     wrap_node,
 )
-from neos.workflow.state import SearchResult
+from neos.workflow.state import SearchResult, merge_node_dict
 
 pytestmark = pytest.mark.no_db
 
@@ -30,6 +34,28 @@ def test_reducer_kinds_come_from_the_state_annotations() -> None:
     assert kinds["errors"] == "append"
     assert kinds["subagent_runs"] == "merge"
     assert "final_response" not in kinds
+
+
+def test_reducer_kinds_name_each_reducer_explicitly() -> None:
+    class Schema(TypedDict):
+        items: Annotated[list, operator.add]
+        runs: NotRequired[Annotated[dict, merge_node_dict]]
+        plain: Annotated[str, "설명 문자열은 리듀서가 아니다"]
+
+    assert _kinds_of(Schema) == {"items": "append", "runs": "merge"}
+
+
+def test_an_unknown_reducer_is_refused_rather_than_guessed() -> None:
+    """모르는 리듀서를 merge 로 짐작하면 apply_update 가 LangGraph 와 다르게 합친다."""
+
+    def keep_last(left, right):
+        return right
+
+    class Schema(TypedDict):
+        last: Annotated[list, keep_last]
+
+    with pytest.raises(UnknownReducer, match="last"):
+        _kinds_of(Schema)
 
 
 def test_a_full_state_return_keeps_only_what_changed() -> None:
@@ -67,9 +93,18 @@ def test_runtime_keys_are_never_updates() -> None:
     assert _norm({}, {"_event_handler": object(), "x": 1}) == {"x": 1}
 
 
+class _Ambiguous:
+    """numpy 배열처럼 `==` 가 진릿값을 주지 못하고 예외를 던지는 값."""
+
+    def __eq__(self, other):
+        raise ValueError("ambiguous truth value")
+
+    __hash__ = object.__hash__
+
+
 def test_values_whose_equality_raises_count_as_changed() -> None:
-    before = {"x": np.array([1, 2])}
-    result = {"x": np.array([1, 2])}
+    before = {"x": _Ambiguous()}
+    result = {"x": _Ambiguous()}
     assert "x" in _norm(before, result)
 
 

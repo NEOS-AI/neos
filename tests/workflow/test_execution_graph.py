@@ -269,8 +269,8 @@ async def test_a_failure_while_resolving_the_graph_takes_the_normal_error_path(
     monkeypatch,
 ) -> None:
     """`_resolve_execution_graph` 는 정적 경로에서도 `static_topology` 를 거쳐
-    `inspect.getsource` + `ast.parse` 를 돈다 -- `_StaticExtractionError` 나
-    `OSError` 가 여기서 나올 수 있다. 이 호출이 `try` 밖에 있으면 그 예외가
+    배선표를 푼다 -- `WiringError`/`ValueError` 가 여기서 나올 수 있고, 설계
+    경로는 설계자 조립 실패가 더해진다. 이 호출이 `try` 밖에 있으면 그 예외가
     핸들러 없이 그대로 밖으로 나가 `on_workflow_error` 도 에러 결과도 없다.
     그것도 **플래그가 꺼진 경로**에서 그렇다 -- 꺼진 run 이 이전과 구별되지
     않아야 한다는 전제와 어긋난다."""

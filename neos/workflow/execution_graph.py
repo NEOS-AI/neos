@@ -66,7 +66,7 @@ class ExecutionGraph:
 
 
 def current_static_flags() -> dict[str, bool]:
-    """실행 시점 `settings` 를 `topology_export` 의 플래그 키로 옮긴다.
+    """실행 시점 `settings` 를 `wiring.FLAG_ATTR_TO_KEY` 의 플래그 키로 옮긴다.
 
     매핑을 손으로 다시 쓰지 않고 `wiring.FLAG_ATTR_TO_KEY` 를 재사용한다 -- 키가
     하나라도 빠지면 `static_topology` 가 그 자리를 기본값('켬')으로 조용히
@@ -81,7 +81,7 @@ def current_static_flags() -> dict[str, bool]:
 
 @lru_cache(maxsize=64)
 def _static_topology_facts(flags_items: tuple[tuple[str, bool], ...]) -> tuple[tuple[str, ...], str]:
-    """`static_topology` 는 표를 해석한다 -- 플래그 조합은 64개라 캐시한다.
+    """`static_topology` 는 표를 해석한다 -- 그 결과를 캐시한다.
     플래그 조합은 6비트라 상한이 64개이고, 배포 중
     플래그가 바뀌지 않으므로 실질 1회다. `lru_cache` 를 쓰려고 인자를
     해시 가능한 튜플로 받는다."""

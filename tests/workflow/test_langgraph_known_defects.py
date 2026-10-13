@@ -48,7 +48,11 @@ async def test_r1_checkpointer_returns_a_checkpoint_tuple() -> None:
 
 
 async def test_r3_an_approval_gate_interrupts_and_asks(monkeypatch) -> None:
-    """R4/R3 는 Task 6 에서 닫혔다 -- 회귀 가드"""
+    """R3 회귀 가드: `interrupt_before` 는 `astream` 에서 던지지 않고 `__interrupt__` chunk 를
+    낸다 -- 그 chunk 를 승인 요청(`interrupted` 결과 + `on_approval_request`)으로 바꿔야 한다.
+
+    LangGraph 경로에서, 올바른 체크포인터를 전제로 닫혔다 (PostgreSQL 체크포인터는 R1 이
+    남아 있다). 여기서는 MemorySaver 로 돈다."""
     pending = [{"request_id": "apr_1"}]
     plan = StubPlan(
         nodes={N.SKILL_TOOL_SELECTOR.value: lambda s: {"pending_approvals": pending, "approval_decision": None}},
@@ -65,7 +69,9 @@ async def test_r3_an_approval_gate_interrupts_and_asks(monkeypatch) -> None:
 
 
 async def test_r4_the_result_reads_the_whole_state(monkeypatch) -> None:
-    """R4/R3 는 Task 6 에서 닫혔다 -- 회귀 가드"""
+    """R4 회귀 가드: 턴 결과는 마지막 노드의 부분 갱신이 아니라 모든 갱신을
+    `node_updates.apply_update` 로 접은 전체 상태에서 읽는다 -- 마지막 노드(하네스)가
+    갱신분만 돌려줘도 응답 생성기의 `final_response` 가 결과에 남는다."""
     plan = StubPlan(
         nodes={
             N.RESP_GENERATOR.value: lambda s: {

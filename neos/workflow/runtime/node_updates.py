@@ -42,23 +42,47 @@ class NodeUpdateRejected(ValueError):
         self.keys = keys
 
 
+class UnknownReducer(TypeError):
+    """`AgentState` 에 이 모듈이 의미를 모르는 리듀서가 붙었다."""
+
+
+def _kinds_of(schema: type) -> dict[str, Literal["append", "merge"]]:
+    """`Annotated` 메타데이터의 리듀서를 이름으로 알아본다.
+
+    `operator.add` 는 이어 붙이기, `merge_node_dict` 는 dict 병합이다. 그 밖의
+    호출 가능한 메타데이터는 거절한다 -- merge 로 짐작하면 `apply_update` 가
+    LangGraph 리듀서와 다르게 합쳐도 아무도 모른다.
+    """
+    from neos.workflow.state import merge_node_dict
+
+    known: dict[Any, Literal["append", "merge"]] = {
+        operator.add: "append",
+        merge_node_dict: "merge",
+    }
+    kinds: dict[str, Literal["append", "merge"]] = {}
+    for key, hint in typing.get_type_hints(schema, include_extras=True).items():
+        while typing.get_origin(hint) in (typing.NotRequired, typing.Required):
+            hint = typing.get_args(hint)[0]
+        if typing.get_origin(hint) is not typing.Annotated:
+            continue
+        for item in typing.get_args(hint)[1:]:
+            if not callable(item):
+                continue
+            if item not in known:
+                raise UnknownReducer(
+                    f"{schema.__name__}.{key}: 리듀서 {item!r} 의 병합 의미를 모른다 -- "
+                    "node_updates._kinds_of 에 종류를 추가할 것"
+                )
+            kinds[key] = known[item]
+    return kinds
+
+
 @functools.lru_cache(maxsize=1)
 def reducer_kinds() -> dict[str, Literal["append", "merge"]]:
     """`AgentState` 의 `Annotated` 메타데이터에서 리듀서 종류를 읽는다 -- 표에 다시 적지 않는다."""
     from neos.workflow.state import AgentState
 
-    kinds: dict[str, Literal["append", "merge"]] = {}
-    for key, hint in typing.get_type_hints(AgentState, include_extras=True).items():
-        while typing.get_origin(hint) in (typing.NotRequired, typing.Required):
-            hint = typing.get_args(hint)[0]
-        if typing.get_origin(hint) is not typing.Annotated:
-            continue
-        metadata = typing.get_args(hint)[1:]
-        if operator.add in metadata:
-            kinds[key] = "append"
-        elif any(callable(item) for item in metadata):
-            kinds[key] = "merge"
-    return kinds
+    return _kinds_of(AgentState)
 
 
 def working_copy(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -152,7 +176,12 @@ def normalize_update(
 
 
 def wrap_node(node: str, handler: Callable, *, policy: UpdatePolicy) -> Callable:
-    """계약이 있는 노드는 `writes` 로 검사하고, 없는 노드(서브에이전트 템플릿)는 정규화만 한다."""
+    """노드 하나를 노드 경계 정규화로 감싼다.
+
+    계약이 있는 노드는 `writes` 로 검사하고, 계약이 없는 이름은 정규화만 한다.
+    서브에이전트 템플릿 노드는 여기를 지나지 않는다 -- `build_ephemeral_workflow`
+    가 `subagent_host.handler_for(...)` 를 감싸지 않고 그대로 붙인다.
+    """
     from neos.workflow.contracts import NODE_CONTRACTS
 
     contract = NODE_CONTRACTS.get(node)
