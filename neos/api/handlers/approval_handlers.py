@@ -279,6 +279,9 @@ async def respond_to_approval(
     return await _finish_response(body, current_user)
 
 
+_INVALID_REQUEST_DETAIL = "유효하지 않은 request_id입니다. 해당 세션의 pending approval이 아닙니다."
+
+
 class _StreamNodeEvents(NullEventHandler):
     """재개된 턴의 노드 완료를 승인 스트림으로 흘린다 -- LangGraph 가지의 node_complete 와 같은 모양."""
 
@@ -294,13 +297,15 @@ async def _respond_native(body, current_user, pending_approval) -> ApprovalRespo
     from neos.workflow.runtime.select import native_approvals
 
     session_id = body.session_id
+    # LangGraph 가지와 같은 순서 -- 남의 스트림은 대기 조회·검증보다 먼저 404 로 숨는다.
+    session = stream_manager.get_session(session_id)
+    if session:
+        require_stream_session_owner(session, current_user)
+
     approvals = native_approvals()
     pending = await approvals.pending_for_session(session_id)
     if pending is None or body.request_id not in pending.request_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="유효하지 않은 request_id입니다. 해당 세션의 pending approval이 아닙니다.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_REQUEST_DETAIL)
     # LangGraph 가지와 같은 검사 -- 작업 행의 대기 항목이 DB 행의 스킬과 맞아야 한다.
     matching = next(
         (p for p in pending.pending if isinstance(p, Mapping) and p.get("request_id") == body.request_id),
@@ -316,18 +321,19 @@ async def _respond_native(body, current_user, pending_approval) -> ApprovalRespo
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="skill_name이 해당 request_id의 스킬과 일치하지 않습니다.",
         )
-    session = stream_manager.get_session(session_id)
-    if session:
-        require_stream_session_owner(session, current_user)
-    else:
+    if not session:
         session = stream_manager.create_session(session_id, current_user.user_id)
         require_stream_session_owner(session, current_user)
+
     ticket = await approvals.decide(pending.work_id, body.request_id, body.decision, actor=current_user.user_id)
     if isinstance(ticket, Refusal):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT if ticket.reason == "conflict" else status.HTTP_400_BAD_REQUEST,
-            detail=f"승인을 처리할 수 없습니다: {ticket.reason}",
-        )
+        # 내부 사유 코드를 내보내지 않는다 -- LangGraph 가지의 문구·상태 코드로 옮긴다.
+        if ticket.reason == "conflict":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="이미 처리된 승인입니다.")
+        if ticket.reason == "not_owner":
+            # `_require_pending_approval_owner` 와 같다 -- 남의 승인은 있는지조차 드러내지 않는다.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_INVALID_REQUEST_DETAIL)
     await _mark_approval_resolved(body.request_id, current_user.user_id)
 
     async def _resume() -> None:
