@@ -190,3 +190,58 @@ async def test_a_parallel_design_falls_back_to_static_on_native(monkeypatch) -> 
     )
     assert resolved.source == "static"
     assert resolved.runner is not None
+
+
+async def test_a_cancelled_turn_marks_the_work_failed(monkeypatch) -> None:
+    """클라이언트가 끊겨 턴이 취소돼도 작업 행이 `running` 으로 남지 않는다."""
+    import asyncio
+
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+    entered = asyncio.Event()
+
+    async def hang(state):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(workflow, "_direct_response_node", hang)
+    task = asyncio.create_task(
+        workflow.execute_workflow(user_input(session_id="s-cancel"), event_handler=RecordingHandler())
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    _, lifecycle = workflow.native_stores
+    rows = [r for r in lifecycle.store._rows.values() if r.session_id == "s-cancel"]
+    assert [(r.status, r.result) for r in rows] == [("failed", {"error": "cancelled"})]
+
+
+async def test_a_post_turn_failure_fails_the_work_instead_of_completing_it(monkeypatch) -> None:
+    """`completed` 는 턴 뒤 단계(캐시·완료 이벤트·에피소드·세션 기록)가 끝난 뒤에 남는다."""
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("에피소드 저장 실패")
+
+    monkeypatch.setattr(workflow, "_save_episode_memory", broken)
+    result = await workflow.execute_workflow(user_input(session_id="s-post"), event_handler=RecordingHandler())
+    assert result["success"] is False
+    _, lifecycle = workflow.native_stores
+    rows = [r for r in lifecycle.store._rows.values() if r.session_id == "s-post"]
+    assert [r.status for r in rows] == ["failed"]
+
+
+async def test_the_work_completes_after_the_post_turn_steps(monkeypatch) -> None:
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}), runtime="native")
+    _, lifecycle = workflow.native_stores
+    during: list[str] = []
+
+    async def _complete(result):
+        rows = [r for r in lifecycle.store._rows.values() if r.session_id == "s-order"]
+        during.extend(r.status for r in rows)
+
+    handler = RecordingHandler()
+    handler.on_workflow_complete = _complete
+    result = await workflow.execute_workflow(user_input(session_id="s-order"), event_handler=handler)
+    assert during == ["running"]
+    assert (await lifecycle.store.get(result["work_id"])).status == "completed"

@@ -3032,9 +3032,6 @@ class MultiAgentWorkflow:
                 # 결과 생성
                 add_span_event(span, "generating_result")
                 result = self._create_workflow_result(final_state)
-                await turn_handle.completed(final_state, result)
-                if turn_handle.work_id is not None:
-                    result["work_id"] = turn_handle.work_id
 
                 # 성공적인 결과 캐싱 -- 재개 턴은 질의가 없다(빈 키로 캐시하지 않는다).
                 if (
@@ -3093,6 +3090,11 @@ class MultiAgentWorkflow:
                 await self._finish_subagent_scope(
                     execution_graph, initial_state, "workflow_finished"
                 )
+                # 작업 완료는 턴 뒤 단계(캐시·완료 이벤트·에피소드·세션 기록)가 끝난 뒤에 남긴다 --
+                # 그 단계가 실패하면 작업은 `completed` 가 아니라 `failed` 로 닫힌다.
+                await turn_handle.completed(final_state, result)
+                if turn_handle.work_id is not None:
+                    result["work_id"] = turn_handle.work_id
                 logger.debug("[ExecuteWorkflow] Completed successfully")
                 return result
 
@@ -3104,6 +3106,16 @@ class MultiAgentWorkflow:
                             execution_graph, initial_state, "workflow_cancelled"
                         )
                     )
+                # 작업 행을 `running` 으로 남기지 않는다(네이티브 런타임; LangGraph 는 NULL_TURN).
+                try:
+                    if turn_handle is not None:
+                        await asyncio.shield(turn_handle.failed("cancelled"))
+                    elif resume is not None:
+                        from neos.workflow.runtime.select import native_turns
+
+                        await asyncio.shield(native_turns().lifecycle.fail(resume.work_id, "cancelled"))
+                except Exception:  # noqa: BLE001 -- 기록 실패가 취소 전파를 막지 않는다
+                    logger.warning("cancelled work could not be recorded", exc_info=True)
                 raise
             except Exception as e:
                 import traceback
