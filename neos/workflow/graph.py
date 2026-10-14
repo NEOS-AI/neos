@@ -2827,8 +2827,11 @@ class MultiAgentWorkflow:
                 if resume is not None:
                     # 재개는 설계를 다시 하지 않는다 -- 저장된 토폴로지로 그래프를 복원한다(spec §4.5).
                     from neos.workflow.runtime.designed import resume_execution_graph
-                    from neos.workflow.runtime.select import native_turns
+                    from neos.workflow.runtime.select import native_turns, runtime_name
                     from neos.workflow.runtime.turns import ResumeUnavailable
+
+                    if runtime_name() != "native":
+                        raise RuntimeError("승인 재개 티켓은 네이티브 런타임에서만 쓴다")
 
                     saved = await native_turns().sessions.load(resume.session_id)
                     if saved is None:
@@ -2926,8 +2929,6 @@ class MultiAgentWorkflow:
                     else:
                         turn = await native_turns().begin(user_input, initial_state, stateful=use_checkpointer)
                     start_state, turn_handle = turn.state, turn.handle
-                elif resume is not None:
-                    raise RuntimeError("승인 재개 티켓은 네이티브 런타임에서만 쓴다")
                 else:
                     from neos.workflow.runtime.turns import NULL_TURN
 
@@ -3111,9 +3112,10 @@ class MultiAgentWorkflow:
                     if turn_handle is not None:
                         await asyncio.shield(turn_handle.failed("cancelled"))
                     elif resume is not None:
-                        from neos.workflow.runtime.select import native_turns
+                        from neos.workflow.runtime.select import native_turns, runtime_name
 
-                        await asyncio.shield(native_turns().lifecycle.fail(resume.work_id, "cancelled"))
+                        if runtime_name() == "native":
+                            await asyncio.shield(native_turns().lifecycle.fail(resume.work_id, "cancelled"))
                 except Exception:  # noqa: BLE001 -- 기록 실패가 취소 전파를 막지 않는다
                     logger.warning("cancelled work could not be recorded", exc_info=True)
                 raise
@@ -3133,10 +3135,12 @@ class MultiAgentWorkflow:
                         logger.warning("work failure could not be recorded", exc_info=True)
                 elif resume is not None:
                     # 재개 턴이 핸들을 얻기 전에 실패했다(ResumeUnavailable 등) -- 작업을 닫는다.
+                    # LangGraph 런타임에 잘못 온 티켓이면 네이티브 저장소를 만들지 않는다.
                     try:
-                        from neos.workflow.runtime.select import native_turns
+                        from neos.workflow.runtime.select import native_turns, runtime_name
 
-                        await native_turns().lifecycle.fail(resume.work_id, str(e))
+                        if runtime_name() == "native":
+                            await native_turns().lifecycle.fail(resume.work_id, str(e))
                     except Exception:  # noqa: BLE001
                         logger.warning("resumed work failure could not be recorded", exc_info=True)
 

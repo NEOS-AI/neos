@@ -136,6 +136,9 @@ class NativeTurns:
                 logger.info("superseded wait already moved: %s", record.work_id)
 
     async def begin(self, user_input: Mapping[str, Any], initial_state: Mapping[str, Any], *, stateful: bool) -> TurnStart:
+        if user_input.get("session_id") is None:
+            # "None" 이라는 세션 하나에 모든 무명 턴이 모이지 않게 한다.
+            raise ValueError("session_id is required")
         session_id = str(user_input["session_id"])
         user_id = str(user_input.get("user_id") or "")
         saved = None

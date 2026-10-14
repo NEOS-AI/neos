@@ -275,7 +275,6 @@ async def respond_to_approval(
 
     asyncio.create_task(_resume(), name=f"approval_resume_{session_id}")
 
-    # allowlist 등록 (선택적, H3에서 이미 검증 완료)
     return await _finish_response(body, current_user)
 
 

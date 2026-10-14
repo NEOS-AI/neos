@@ -149,9 +149,13 @@ def init_worker(**kwargs):
     sync_live_overlay(model_config.catalog)
 
     # 네이티브 런타임이면 코딩 태스크를 작업 기록에 잇는다 (spec 2026-10-13 §4.4).
-    from neos.workflow.runtime.coding_link import install_coding_link
+    # main.py 와 같다 -- 잇기 실패가 워커 기동을 막지 않는다.
+    try:
+        from neos.workflow.runtime.coding_link import install_coding_link
 
-    install_coding_link()
+        install_coding_link()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"coding work link install failed: {e}")
 
     logger.info("Celery worker ready")
 

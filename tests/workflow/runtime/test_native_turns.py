@@ -245,3 +245,33 @@ async def test_the_work_completes_after_the_post_turn_steps(monkeypatch) -> None
     result = await workflow.execute_workflow(user_input(session_id="s-order"), event_handler=handler)
     assert during == ["running"]
     assert (await lifecycle.store.get(result["work_id"])).status == "completed"
+
+
+async def test_a_turn_without_a_session_id_is_refused(monkeypatch) -> None:
+    """`str(None)` 로 키를 만들면 무명 턴이 전부 "None" 세션 하나를 나눠 쓴다."""
+    from neos.workflow.runtime.sessions import InMemorySessionStore
+    from neos.workflow.runtime.turns import NativeTurns
+    from neos.workflow.runtime.work import InMemoryWorkStore, WorkLifecycle
+
+    turns = NativeTurns(InMemorySessionStore(), WorkLifecycle(InMemoryWorkStore()), max_carried_items=10)
+    with pytest.raises(ValueError, match="session_id is required"):
+        await turns.begin({"session_id": None, "user_id": "u1"}, {}, stateful=True)
+
+
+async def test_a_resume_ticket_on_the_langgraph_runtime_is_an_error(monkeypatch) -> None:
+    from neos.workflow.runtime import select
+    from neos.workflow.runtime.approvals import ResumeTicket
+
+    workflow = stub_workflow(monkeypatch, _plan(lambda s: {}))
+    monkeypatch.setattr(select, "_turns", None)
+    ticket = ResumeTicket(
+        work_id="wk_x", session_id="s-lg", user_id="u1", next_node=N.EXECUTION_APPROVAL.value,
+        decision="approved", request_id="apr_1", session_version=1,
+    )
+    handler = RecordingHandler()
+    result = await workflow.execute_workflow(
+        {"user_id": "u1", "session_id": "s-lg", "query": ""}, handler, use_checkpointer=True, resume=ticket
+    )
+    assert result["success"] is False
+    assert [type(e).__name__ for e in handler.errors] == ["RuntimeError"]
+    assert select._turns is None  # LangGraph 런타임에서 네이티브 저장소를 만들지 않았다
