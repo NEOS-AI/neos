@@ -288,12 +288,9 @@ async def _inject_timeout_rejection(session_id: str, request_id: str) -> bool:
     if runtime_name() == "native":
         from neos.workflow.runtime.select import native_approvals
 
-        approvals = native_approvals()
-        pending = await approvals.pending_for_session(session_id)
-        if pending is None:
-            return False
         # 워커에서도 동작한다 -- 그래프 객체가 아니라 작업 행을 읽는다(spec §4.5, R6).
-        return await approvals.expire(pending.work_id, request_id)
+        # request_id 로 찾는다 -- 최신 대기 행이 다른 요청이면 옛 대기가 영영 닫히지 않는다.
+        return await native_approvals().expire(session_id, request_id)
 
     from neos.workflow.graph import multi_agent_workflow
     from neos.workflow.resume_graph import ResumeGraphUnavailable, resume_graph_for

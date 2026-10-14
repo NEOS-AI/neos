@@ -60,3 +60,23 @@ async def test_a_timeout_expires_the_waiting_work_without_resuming(monkeypatch) 
 async def test_a_timeout_without_waiting_work_does_nothing(monkeypatch) -> None:
     await _native_workflow(monkeypatch, wait=False)
     assert await _inject_timeout_rejection(_SESSION, "apr_1") is False
+
+
+async def test_a_timeout_expires_a_superseded_wait_by_its_request_id(monkeypatch) -> None:
+    """같은 세션에 대기 행이 둘이면 최신 행이 아니라 그 request_id 를 가진 행을 닫는다."""
+    lifecycle, reached = await _native_workflow(monkeypatch, wait=False)
+
+    async def _wait(request_id):
+        work_id = await lifecycle.start(
+            "web", "workflow", user_id="u1", session_id=_SESSION,
+            delivery={"kind": "sse", "conversation_id": _SESSION},
+        )
+        await lifecycle.interrupt(work_id, {"next_node": N.EXECUTION_APPROVAL.value, "request_ids": [request_id], "pending": []})
+        return work_id
+
+    older = await _wait("apr_old")
+    newer = await _wait("apr_new")
+    assert await _inject_timeout_rejection(_SESSION, "apr_old") is True
+    assert (await lifecycle.store.get(older)).status == "expired"
+    assert (await lifecycle.store.get(newer)).status == "waiting_approval"
+    assert reached == []

@@ -60,6 +60,10 @@ class WorkStore(Protocol):
 
     async def waiting_for_session(self, session_id: str) -> WorkRecord | None: ...
 
+    async def waiting_rows_for_session(self, session_id: str) -> list[WorkRecord]: ...
+
+    async def waiting_by_request(self, session_id: str, request_id: str) -> WorkRecord | None: ...
+
     async def by_ref(self, kind: str, ref_id: str) -> WorkRecord | None: ...
 
     async def transition(
@@ -107,6 +111,17 @@ class InMemoryWorkStore:
     async def waiting_for_session(self, session_id: str) -> WorkRecord | None:
         waiting = [r for r in self._rows.values() if r.session_id == session_id and r.status == "waiting_approval"]
         return max(waiting, key=lambda r: r.updated_at, default=None)
+
+    async def waiting_rows_for_session(self, session_id: str) -> list[WorkRecord]:
+        waiting = [r for r in self._rows.values() if r.session_id == session_id and r.status == "waiting_approval"]
+        return sorted(waiting, key=lambda r: r.updated_at, reverse=True)
+
+    async def waiting_by_request(self, session_id: str, request_id: str) -> WorkRecord | None:
+        matching = [
+            r for r in await self.waiting_rows_for_session(session_id)
+            if request_id in ((r.pending or {}).get("request_ids") or [])
+        ]
+        return matching[0] if matching else None
 
     async def by_ref(self, kind: str, ref_id: str) -> WorkRecord | None:
         return next((r for r in self._rows.values() if r.kind == kind and r.ref_id == ref_id), None)
@@ -192,6 +207,29 @@ class PostgresWorkStore:
                 WHERE session_id = :s AND status = 'waiting_approval'
                 ORDER BY updated_at DESC LIMIT 1""",
             {"s": session_id},
+        )
+
+    async def waiting_rows_for_session(self, session_id: str) -> list[WorkRecord]:
+        async with await self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        f"""SELECT {_COLUMNS} FROM workflow_runs
+                            WHERE session_id = :s AND status = 'waiting_approval'
+                            ORDER BY updated_at DESC"""
+                    ),
+                    {"s": session_id},
+                )
+            ).all()
+        return [_row(row) for row in rows]
+
+    async def waiting_by_request(self, session_id: str, request_id: str) -> WorkRecord | None:
+        return await self._one(
+            f"""SELECT {_COLUMNS} FROM workflow_runs
+                WHERE session_id = :s AND status = 'waiting_approval'
+                  AND pending -> 'request_ids' @> CAST(:r AS JSONB)
+                ORDER BY updated_at DESC LIMIT 1""",
+            {"s": session_id, "r": json.dumps([request_id])},
         )
 
     async def by_ref(self, kind: str, ref_id: str) -> WorkRecord | None:

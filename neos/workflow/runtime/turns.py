@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from neos.workflow.runtime.sessions import SessionConflict, SessionStore, carry, trim
-from neos.workflow.runtime.work import WorkLifecycle, entry_and_delivery
+from neos.workflow.runtime.work import WorkConflict, WorkLifecycle, entry_and_delivery
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,8 @@ class _NativeHandle:
                 "next_node": next_node,
                 "request_ids": [str(item.get("request_id")) for item in pending if isinstance(item, Mapping)],
                 "pending": pending,
+                # 재개는 이 버전의 세션 위에서만 돈다 -- 그 사이 다른 턴이 저장했으면 거절한다.
+                "session_version": self._version,
             },
         )
 
@@ -124,11 +126,21 @@ class NativeTurns:
         self.lifecycle = lifecycle
         self.max_carried_items = max_carried_items
 
+    async def _expire_waits(self, session_id: str) -> None:
+        """새 턴이 시작되면 그 세션의 승인 대기는 전부 낡았다 -- 옛 승인이 새 상태 위에서 재개되지 않게 닫는다."""
+        for record in await self.lifecycle.store.waiting_rows_for_session(session_id):
+            try:
+                await self.lifecycle.expire(record.work_id, expected_version=record.version)
+            except WorkConflict:
+                # 동시에 결정·타임아웃이 잡았다 -- 그 재개는 세션 버전 검사가 막는다.
+                logger.info("superseded wait already moved: %s", record.work_id)
+
     async def begin(self, user_input: Mapping[str, Any], initial_state: Mapping[str, Any], *, stateful: bool) -> TurnStart:
         session_id = str(user_input["session_id"])
         user_id = str(user_input.get("user_id") or "")
         saved = None
         if stateful:
+            await self._expire_waits(session_id)
             try:
                 saved = await self.sessions.load(session_id)
             except Exception:  # noqa: BLE001 -- 디코드·DB 실패는 빈 이어받기로 진행한다(spec §4.3)
@@ -157,6 +169,12 @@ class NativeTurns:
         saved = await self.sessions.load(ticket.session_id)
         if saved is None:
             raise ResumeUnavailable(f"{ticket.session_id}: 저장된 세션이 없다")
+        recorded = getattr(ticket, "session_version", None)
+        if recorded is None or saved.version != recorded:
+            # 승인을 기다리던 그 상태가 아니다 -- 새 턴의 상태 위에서 옛 결정을 돌리지 않는다.
+            raise ResumeUnavailable(
+                f"{ticket.session_id}: 세션이 승인 대기 뒤에 바뀌었다 (version {saved.version} != {recorded})"
+            )
         pending = [
             item for item in (saved.state.get("pending_approvals") or [])
             if not (isinstance(item, Mapping) and str(item.get("request_id")) == ticket.request_id)

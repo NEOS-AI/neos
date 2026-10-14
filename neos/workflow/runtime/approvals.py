@@ -31,6 +31,8 @@ class ResumeTicket:
     next_node: str
     decision: str
     request_id: str
+    # 승인 대기를 저장한 세션 버전 -- 재개는 세션이 그때 그대로일 때만 돈다(옛 행은 None → 거절).
+    session_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,7 @@ class WorkflowApprovals:
             next_node=str(record.pending["next_node"]),
             decision=decision,
             request_id=request_id,
+            session_version=record.pending.get("session_version"),
         )
 
     async def resume(self, ticket: ResumeTicket, event_handler: Any = None) -> Mapping[str, Any]:
@@ -87,14 +90,13 @@ class WorkflowApprovals:
             resume=ticket,
         )
 
-    async def expire(self, work_id: str, request_id: str) -> bool:
-        record = await self._lifecycle.store.get(work_id)
-        if record is None or record.status != "waiting_approval" or not record.pending:
-            return False
-        if request_id not in (record.pending.get("request_ids") or []):
+    async def expire(self, session_id: str, request_id: str) -> bool:
+        """타임아웃 -- 최신 대기 행이 아니라 그 request_id 를 가진 대기 행을 닫는다."""
+        record = await self._lifecycle.store.waiting_by_request(session_id, request_id)
+        if record is None:
             return False
         try:
-            await self._lifecycle.expire(work_id, expected_version=record.version)
+            await self._lifecycle.expire(record.work_id, expected_version=record.version)
         except WorkConflict:
             return False
         return True

@@ -93,6 +93,25 @@ async def test_children_and_refs(lifecycle) -> None:
     assert record.work_id == child and record.parent_work_id == parent
 
 
+@pytest.mark.asyncio
+async def test_waiting_rows_and_the_request_lookup(lifecycle) -> None:
+    """한 세션에 대기 행이 둘이어도 둘 다 보이고, request_id 로 옛 행을 찾는다(최신 행이 아니다)."""
+    older = await _start(lifecycle, "test-work-s7")
+    await lifecycle.interrupt(older, {"next_node": "x", "request_ids": ["apr_old"], "pending": []})
+    newer = await _start(lifecycle, "test-work-s7")
+    await lifecycle.interrupt(newer, {"next_node": "x", "request_ids": ["apr_new"], "pending": []})
+    rows = await lifecycle.store.waiting_rows_for_session("test-work-s7")
+    assert sorted(r.work_id for r in rows) == sorted([older, newer])
+    assert (await lifecycle.store.waiting_by_request("test-work-s7", "apr_old")).work_id == older
+    assert (await lifecycle.store.waiting_by_request("test-work-s7", "apr_new")).work_id == newer
+    assert await lifecycle.store.waiting_by_request("test-work-s7", "apr_none") is None
+    assert await lifecycle.store.waiting_by_request("test-work-other", "apr_old") is None
+    record = await lifecycle.store.get(older)
+    await lifecycle.expire(older, expected_version=record.version)
+    assert await lifecycle.store.waiting_by_request("test-work-s7", "apr_old") is None
+    assert [r.work_id for r in await lifecycle.store.waiting_rows_for_session("test-work-s7")] == [newer]
+
+
 @pytest.mark.no_db
 @pytest.mark.parametrize(
     ("user_input", "entry", "delivery"),
