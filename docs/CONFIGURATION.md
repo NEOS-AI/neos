@@ -1794,6 +1794,25 @@ Development stays on `report` until a live development dry run with real nodes s
 violations (Plan 3 stage 5); then it flips to `raise`. Contract tests run real handlers
 with fake LLMs under `raise` in `tests/workflow/runtime/test_node_contract_probes.py`.
 
+### Workflow runtime and session
+
+`workflow.runtime` picks the engine that runs the chat workflow (spec
+`docs/superpowers/specs/2026-10-13-langgraph-removal-native-runner-design.md` §6.1).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `runtime` | `langgraph` | `langgraph` runs the compiled LangGraph graph. `native` runs the native sequential runner over the wiring table (no LangGraph). **`native` is for trial use only until Plan 3** flips the default; keep it off in staging and production. |
+| `session.max_carried_items` | `200` | On save, how many recent items each accumulating (`operator.add`) state field keeps in the carried session. The value is provisional; Plan 3's live dry run settles it. |
+
+Both are plain YAML keys (no flat env alias); set them in a profile or overlay file:
+
+```yaml
+workflow:
+  runtime: native
+  session:
+    max_carried_items: 200
+```
+
 ## Staging and Production
 
 Select profile config with bootstrap env:
