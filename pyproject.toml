@@ -83,7 +83,7 @@ dependencies = [
 
 [project.optional-dependencies]
 reranker = [
-    "cohere>=5.0.0",
+    "cohere>=7.2.0",
 ]
 sandbox = [
     "RestrictedPython>=7.4",
